@@ -66,6 +66,7 @@ sonarcloud-check:
   script:
     - apt update
     - apt install --assume-yes python3
+    - apt install --assume-yes pip3
     - pip3 install virtualenv
     - virtualenv venv
     - source venv/bin/activate
