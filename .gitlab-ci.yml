@@ -67,7 +67,7 @@ sonarcloud-check:
     paths:
       - .sonar/cache  
   dependencies: 
-    - test
+    - check-job
   script:
     - apt update
     - apt install --assume-yes python3
