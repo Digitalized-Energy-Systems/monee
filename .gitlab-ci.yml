@@ -64,6 +64,7 @@ sonarcloud-check:
     paths:
       - .sonar/cache
   script:
+    - apt update
     - apt install python3
     - pip install virtualenv
     - virtualenv venv
