@@ -64,6 +64,7 @@ sonarcloud-check:
     paths:
       - .sonar/cache
   script:
+    - apk install lapack blas python-dev
     - pip install virtualenv
     - virtualenv venv
     - source venv/bin/activate
