@@ -38,10 +38,13 @@ check-job:
     - pip3 install pytest
     - pip3 install coverage
     - coverage run --source ./monee -m pytest
+    - coverage xml
     - coverage report
 
 pylint-job:
   stage: review
+  artifacts:
+    untracked: true
   script:         
     - pip install virtualenv
     - virtualenv venv
@@ -62,7 +65,9 @@ sonarcloud-check:
   cache:
     key: "${CI_JOB_NAME}"
     paths:
-      - .sonar/cache
+      - .sonar/cache  
+  dependencies: 
+    - test
   script:
     - apt update
     - apt install --assume-yes python3
