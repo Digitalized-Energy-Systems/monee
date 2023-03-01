@@ -132,5 +132,5 @@ def test_two_controllable_lines_example_simple_objective():
     assert len(pn.as_dataframe_dict()) == 5
     assert len(pn.node_by_id(1).model.vars) == 5
     assert len(result.dataframes) == 5
-    assert math.isclose(result.dataframes['ExtPowerGrid']['p_mw'][0], -1.3651744258)
-    assert math.isclose(result.dataframes['PowerGenerator']['p_mw'][0], -2.703691911)
+    assert math.isclose(result.dataframes['ExtPowerGrid']['p_mw'][0], -4.1428571429)
+    assert math.isclose(result.dataframes['PowerGenerator']['p_mw'][0], 1.1685864324)

@@ -207,7 +207,7 @@ class Network:
         return dataframe_dict
 
     
-    def model_dict_to_results(model_dict):
+    def model_dict_to_results(self, model_dict):
         result_dict = {}
         for k, v in model_dict.items():
             result_value = v
