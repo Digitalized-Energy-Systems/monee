@@ -17,14 +17,6 @@ cache:
     - .cache/pip
     - venv/
 
-before_script:
-    - apt-get --assume-yes install python3.8
-    - pip install virtualenv
-    - virtualenv venv
-    - source venv/bin/activate
-    - pip3 install -r requirements.txt
-    - pip3 install -e .
-
 build-job:
   stage: build
   script:
@@ -33,6 +25,11 @@ build-job:
 check-job:
   stage: test
   script:
+    - pip install virtualenv
+    - virtualenv venv
+    - source venv/bin/activate
+    - pip3 install -r requirements.txt
+    - pip3 install -e .
     - pip3 install pytest
     - pip3 install coverage
     - coverage run --source ./monee -m pytest
@@ -41,6 +38,11 @@ check-job:
 pylint-job:
   stage: review
   script:         
+    - pip install virtualenv
+    - virtualenv venv
+    - source venv/bin/activate
+    - pip3 install -r requirements.txt
+    - pip3 install -e .
     - pip3 install pylint
     - pylint monee
   allow_failure: 
@@ -57,6 +59,13 @@ sonarcloud-check:
     paths:
       - .sonar/cache
   script:
+    - apt-get --assume-yes remove 'python.*'
+    - apt-get --assume-yes install python3.8
+    - pip install virtualenv
+    - virtualenv venv
+    - source venv/bin/activate
+    - pip3 install -r requirements.txt
+    - pip3 install -e .
     - sonar-scanner
   only:
     - merge_requests
@@ -73,6 +82,11 @@ upload-job:
   except:
     - branches
   script:
+    - pip install virtualenv
+    - virtualenv venv
+    - source venv/bin/activate
+    - pip3 install -r requirements.txt
+    - pip3 install -e .
     - pip3 install twine
     - python setup.py sdist bdist_wheel
     - twine check dist/*
