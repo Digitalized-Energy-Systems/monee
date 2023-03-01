@@ -1,0 +1,42 @@
+import math
+
+import monee.model.phys.nl.hydraulics as ml
+
+def test_calc_pipe_area():
+    area = ml.calc_pipe_area(2)
+
+    assert area == math.pi
+
+def test_calc_pipe_area_sub_1():
+    area = ml.calc_pipe_area(0.1)
+
+    assert math.isclose(area, 0.007853981633974483)
+
+def test_calc_nikurdse_friction_factor():
+    nikurdse_friction = ml.calc_nikurdse(2, 0.7)
+
+    assert math.isclose(nikurdse_friction, 0.23752148174158597)
+
+def test_balance_equation():
+    balance = ml.junction_mass_flow_balance([1, -1, 2, -2])
+
+    assert balance
+
+def test_reynolds_equation():
+    reynolds_correct = ml.reynolds_equation(321, 321, 2, 0.1, 20)
+
+    assert reynolds_correct
+
+def test_pipe_pressure():
+    pressure_bound = ml.pipe_pressure(10, 20, 0, 25)
+    pressure_bound_2 = ml.pipe_pressure(10, 20, 10, 20)
+
+    assert not pressure_bound
+    assert pressure_bound_2
+
+def test_pipe_mass_flow_constraint():
+    mass_flow_bound = ml.pipe_mass_flow(10, 1, 10)
+    mass_flow_bound_2 = ml.pipe_mass_flow(10, 1, 0)
+
+    assert mass_flow_bound
+    assert not mass_flow_bound_2

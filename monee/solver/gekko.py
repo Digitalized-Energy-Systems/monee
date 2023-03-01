@@ -67,31 +67,6 @@ class GEKKOSolver:
             for child in network.childs_by_ids(node.child_ids):
                 GEKKOSolver.withdraw_gekko_vars_attr(child.model)
 
-    @staticmethod
-    def model_dict_to_results(model_dict):
-        result_dict = {}
-        for k, v in model_dict.items():
-            result_value = v
-            if isinstance(v, (Var, Const)):
-                result_value = v.value
-            result_dict[k] = result_value
-        return result_dict
-
-    @staticmethod
-    def generate_result_dataframe(network):
-        result_dict_list_dict = {}
-        model_containers = network.nodes + network.childs + network.branches
-        for container in model_containers:
-            model_type_name = type(container.model).__name__
-            if model_type_name not in result_dict_list_dict:
-                result_dict_list_dict[model_type_name] = []
-            result_dict_list_dict[model_type_name].append(
-                GEKKOSolver.model_dict_to_results(container.model.__dict__)
-            )
-        dataframe_dict = {}
-        for result_type, dict_list in result_dict_list_dict.items():
-            dataframe_dict[result_type] = pandas.DataFrame(dict_list)
-        return dataframe_dict
 
     def solve(self, input_network: Network):
         m = GEKKO()
@@ -177,6 +152,6 @@ class GEKKOSolver:
         GEKKOSolver.withdraw_gekko_vars(nodes, branches, network)
 
         solver_result = SolverResult(
-            network, GEKKOSolver.generate_result_dataframe(network)
+            network, network.as_result_dataframe_dict()
         )
         return solver_result

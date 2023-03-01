@@ -2,26 +2,26 @@ import numpy as np
 import math
 
 
-def calc_pipe_area(diameter):
-    return math.pi * diameter**2 / 4
+def calc_pipe_area(diameter_m):
+    return math.pi * diameter_m**2 / 4
 
 
 # prandtl nikurdse formula
 # https://core.ac.uk/download/pdf/38640864.pdf
-def calc_nikurdse(d, k):
-    return 1 / (2 * np.log10(d / k) + 1.14) ** 2
+def calc_nikurdse(internal_diameter_m, roughness):
+    return 1 / (2 * np.log10(internal_diameter_m / roughness) + 1.14) ** 2
 
 
-def reynolds_equation(rey_var, flow_var, d, dynamic_visc, pipe_area):
-    return rey_var == flow_var * d / (dynamic_visc * pipe_area)
+def reynolds_equation(rey_var, flow_var, diameter_m, dynamic_visc, pipe_area):
+    return rey_var == flow_var * diameter_m / (dynamic_visc * pipe_area)
 
 
 def junction_mass_flow_balance(flows):
     return sum(flows) == 0
 
 
-def pipe_pressure(pd_min, pd_max, p_i, p_j):
-    return pd_min <= p_i - p_j and p_i - p_j <= pd_max
+def pipe_pressure(pd_min_pa, pd_max_pa, from_pressure_pa, to_pressure_pa):
+    return pd_min_pa <= abs(from_pressure_pa - to_pressure_pa) and abs(from_pressure_pa - to_pressure_pa) <= pd_max_pa
 
 
 def pipe_mass_flow(max_v, min_v, v):

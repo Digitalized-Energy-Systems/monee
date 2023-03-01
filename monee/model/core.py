@@ -205,3 +205,28 @@ class Network:
         for result_type, dict_list in input_dict_list_dict.items():
             dataframe_dict[result_type] = pandas.DataFrame(dict_list)
         return dataframe_dict
+
+    
+    def model_dict_to_results(model_dict):
+        result_dict = {}
+        for k, v in model_dict.items():
+            result_value = v
+            if isinstance(v, (Var, Const)):
+                result_value = v.value
+            result_dict[k] = result_value
+        return result_dict
+
+    def as_result_dataframe_dict(self):
+        result_dict_list_dict = {}
+        model_containers = self.nodes + self.childs + self.branches
+        for container in model_containers:
+            model_type_name = type(container.model).__name__
+            if model_type_name not in result_dict_list_dict:
+                result_dict_list_dict[model_type_name] = []
+            result_dict_list_dict[model_type_name].append(
+                self.model_dict_to_results(container.model.__dict__)
+            )
+        dataframe_dict = {}
+        for result_type, dict_list in result_dict_list_dict.items():
+            dataframe_dict[result_type] = pandas.DataFrame(dict_list)
+        return dataframe_dict
