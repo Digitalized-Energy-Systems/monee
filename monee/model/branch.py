@@ -227,7 +227,7 @@ class WaterPipe(BranchModel):
             ohfmodel.heat_transfer_loss(
                 heat_transfer_flow_loss_var=self.heat_loss,
                 t_var=(from_node_model.vars["t_k"] + to_node_model.vars["t_k"]) / 2,
-                alpha_insulation=self.lambda_insulation_w_per_k,
+                k_insulation_w_per_k=self.lambda_insulation_w_per_k,
                 ext_t=self.temperature_ext_k,
                 pipe_length=self.length_m,
                 pipe_inside_diameter=self.diameter_m,

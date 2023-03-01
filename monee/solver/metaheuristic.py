@@ -4,7 +4,7 @@ import copy
 INDEX_SIGMA = -1
 INDEX_FITNESS = -2
 
-def is_productive():
+def is_productive(node, without_load=True):
     pass
 
 class Evaluator:
