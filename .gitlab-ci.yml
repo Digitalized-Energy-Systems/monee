@@ -31,7 +31,7 @@ check-job:
     - coverage report
 
 pylint-job:
-  stage: test
+  stage: review
   script:         
     - pip3 install pylint
     - pylint monee
@@ -40,7 +40,7 @@ pylint-job:
       - 1
 
 sonarcloud-check:
-  stage: test
+  stage: review
   image:
     name: sonarsource/sonar-scanner-cli:latest
     entrypoint: [""]
