@@ -20,6 +20,11 @@ cache:
 build-job:
   stage: build
   script:
+    - pip install virtualenv
+    - virtualenv venv
+    - source venv/bin/activate
+    - pip3 install -r requirements.txt
+    - pip3 install -e .
     - echo "Build success"
 
 check-job:
@@ -52,15 +57,13 @@ pylint-job:
 sonarcloud-check:
   stage: review
   image:
-    name: sonarsource/sonar-scanner-cli:latest
+    name: sonarsource/sonar-scanner-cli:4.4
     entrypoint: [""]
   cache:
     key: "${CI_JOB_NAME}"
     paths:
       - .sonar/cache
   script:
-    - apt-get --assume-yes remove 'python.*'
-    - apt-get --assume-yes install python3.8
     - pip install virtualenv
     - virtualenv venv
     - source venv/bin/activate
