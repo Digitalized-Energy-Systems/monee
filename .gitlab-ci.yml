@@ -29,6 +29,8 @@ build-job:
 
 check-job:
   stage: test
+  artifacts:
+    untracked: true
   script:
     - pip install virtualenv
     - virtualenv venv
@@ -43,8 +45,6 @@ check-job:
 
 pylint-job:
   stage: review
-  artifacts:
-    untracked: true
   script:         
     - pip install virtualenv
     - virtualenv venv
