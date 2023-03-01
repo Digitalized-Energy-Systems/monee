@@ -56,6 +56,8 @@ sonarcloud-check:
     paths:
       - .sonar/cache
   script:
+    - apt remove python*
+    - apt install python3.8
     - sonar-scanner
   only:
     - merge_requests
