@@ -2,8 +2,10 @@ import json
 from monee.model.core import Network, Var, component_list
 import inspect
 
+
 class PersistenceException(Exception):
     pass
+
 
 def init_model(model_type, preprocessed_dict):
     model = None
@@ -12,12 +14,21 @@ def init_model(model_type, preprocessed_dict):
     }
     if model_type in model_type_dict:
         model_cls = model_type_dict[model_type]
-        #model = model_cls.__new__(model_cls)
-        model = model_cls(**{argname:0 for argname,_ in list(inspect.signature(model_cls.__init__).parameters.items())[1:]})
+        # model = model_cls.__new__(model_cls)
+        model = model_cls(
+            **{
+                argname: 0
+                for argname, _ in list(
+                    inspect.signature(model_cls.__init__).parameters.items()
+                )[1:]
+            }
+        )
         for key, value in preprocessed_dict.items():
             setattr(model, key, value)
     else:
-        raise PersistenceException(f"The type {model_type} is not known! Maybe you forgot to decorate your model class with @model?")
+        raise PersistenceException(
+            f"The type {model_type} is not known! Maybe you forgot to decorate your model class with @model?"
+        )
     return model
 
 
@@ -92,16 +103,23 @@ def write_omef_network(file, network: Network):
     nodes = network.nodes
     branches = network.branches
     childs = network.childs
+    compounds = network.compounds
 
     node_dict_list = []
     branch_dict_list = []
     child_dict_list = []
+    compound_dict_list = []
     for node in nodes:
-        node_dict_list.append(node_to_dict(node, grids))
+        if not network.is_blacklisted(node):
+            node_dict_list.append(node_to_dict(node, grids))
     for branch in branches:
-        branch_dict_list.append(branch_to_dict(branch, grids))
+        if not network.is_blacklisted(branch):
+            branch_dict_list.append(branch_to_dict(branch, grids))
     for child in childs:
-        child_dict_list.append(child_to_dict(child))
+        if not network.is_blacklisted(child):
+            child_dict_list.append(child_to_dict(child))
+    for compound in compounds:
+        compound_dict_list.append(compound_to_dict(compound))
 
     to_serialize = dict(
         grids={
@@ -121,6 +139,15 @@ def child_to_dict(child):
         id=child.id,
         values=model_to_dict(child.model),
         model_type=type(child.model).__name__,
+    )
+
+
+def compound_to_dict(compound):
+    return dict(
+        id=compound.id,
+        values=model_to_dict(compound.model),
+        model_type=type(compound.model).__name__,
+        connected_to=compound.node_name_to_id_dict,
     )
 
 

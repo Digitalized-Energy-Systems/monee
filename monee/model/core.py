@@ -16,7 +16,7 @@ class Var:
         self.value = value
         self.max = max
         self.min = min
-    
+
     def __neg__(self):
         return Var(value=-self.value, max=self.max, min=self.min)
 
@@ -44,9 +44,18 @@ class BranchModel(GenericModel):
         pass
 
 
-class MultiGridBranchModel(GenericModel):
+class MultiGridBranchModel(BranchModel):
     @abstractmethod
-    def equations(self, grids, from_models, to_models, **kwargs):
+    def equations(self, grids, from_node_model, to_node_model, **kwargs):
+        pass
+
+
+class CompoundModel(GenericModel):
+    @abstractmethod
+    def create(self, network):
+        pass
+
+    def equations(self, network, **kwargs):
         pass
 
 
@@ -64,6 +73,20 @@ class Child:
         self.id = child_id
         self.model = model
         self.constraints = constraints
+
+
+class Compound:
+    def __init__(
+        self,
+        compound_id,
+        model: CompoundModel,
+        constraints,
+        node_name_to_id_dict,
+    ) -> None:
+        self.id = compound_id
+        self.model = model
+        self.constraints = constraints
+        self.node_name_to_id_dict = node_name_to_id_dict
 
 
 class Node:
@@ -101,8 +124,15 @@ class Network:
 
         self._network_internal = nx.MultiGraph()
         self._childs = []
+        self._compounds = []
         self._constraints = []
         self._objectives = []
+        self.__blacklist = []
+        self.__force_blacklist = False
+
+    @property
+    def compounds(self):
+        return self._compounds
 
     @property
     def constraints(self):
@@ -118,6 +148,9 @@ class Network:
 
     def childs_by_ids(self, child_ids):
         return [self._childs[child_id] for child_id in child_ids]
+
+    def is_blacklisted(self, obj):
+        return obj in self.__blacklist
 
     @property
     def nodes(self) -> List[Node]:
@@ -139,9 +172,14 @@ class Network:
     def branch_by_id(self, branch_id):
         return self._network_internal.edges[branch_id]["internal_branch"]
 
+    def __insert_to_blacklist_if_forced(self, obj):
+        if self.__force_blacklist:
+            self.__blacklist.append(obj)
+
     def child(self, model, constraints=None, overwrite_id=None):
         child_id = overwrite_id or len(self.childs)
         child = Child(child_id, model, constraints)
+        self.__insert_to_blacklist_if_forced(child)
         self.childs.append(child)
         return child_id
 
@@ -152,6 +190,7 @@ class Network:
         node = Node(
             node_id, model, child_ids, constraints, grid or self.default_grid_model
         )
+        self.__insert_to_blacklist_if_forced(node)
 
         self._network_internal.add_node(node_id, internal_node=node)
         return node_id
@@ -160,8 +199,21 @@ class Network:
         from_node = self.node_by_id(from_node_id)
         to_node = self.node_by_id(to_node_id)
         branch = Branch(
-            model, from_node, to_node, constraints, grid or self.default_grid_model
+            model,
+            from_node,
+            to_node,
+            constraints,
+            grid
+            or (
+                from_node.grid
+                if from_node.grid == to_node.grid
+                else {
+                    type(from_node.grid): from_node.grid,
+                    type(to_node.grid): to_node.grid,
+                }
+            ),
         )
+        self.__insert_to_blacklist_if_forced(branch)
         branch_id = (
             from_node_id,
             to_node_id,
@@ -173,6 +225,22 @@ class Network:
         to_node.add_to_branch(branch)
         from_node.add_from_branch(branch)
         return branch_id
+
+    def compound(self, model: CompoundModel, constraints=None, **connected_nodes):
+        compound_id = len(self._compounds)
+        compound = Compound(
+            compound_id=compound_id,
+            model=model,
+            constraints=constraints,
+            node_name_to_id_dict=connected_nodes,
+        )
+        self._compounds.append(compound)
+        self.__force_blacklist = True
+        model.create(
+            self, {k: self.node_by_id(v) for (k, v) in connected_nodes.items()}
+        )
+        self.__force_blacklist = False
+        return compound_id
 
     def constraint(self, constraint_equation):
         self._constraints.append(constraint_equation)
@@ -206,7 +274,6 @@ class Network:
             dataframe_dict[result_type] = pandas.DataFrame(dict_list)
         return dataframe_dict
 
-    
     def model_dict_to_results(self, model_dict):
         result_dict = {}
         for k, v in model_dict.items():

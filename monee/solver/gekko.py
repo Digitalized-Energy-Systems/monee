@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from gekko import GEKKO
 from gekko.gk_variable import GKVariable
 from gekko.gk_operators import GK_Operators
-from monee.model.core import Network, Var, GenericModel, Node, Branch, Const
+from monee.model.core import Network, Var, GenericModel, Node, Branch, Const, Compound
 import pandas
 
 
@@ -13,6 +13,21 @@ import pandas
 class SolverResult:
     network: Network
     dataframes: Dict[str, pandas.DataFrame]
+
+    def __str__(self) -> str:
+        result_str = str(self.network)
+        result_str += "\n"
+        for cls_str, dataframe in self.dataframes.items():
+            result_str += cls_str
+            result_str += "\n"
+            result_str += dataframe.to_string()
+            result_str += "\n"
+            result_str += "\n"
+        return result_str
+
+
+def _as_iter(possible_iter):
+    return possible_iter if hasattr(possible_iter, "__iter__") else [possible_iter]
 
 
 class GEKKOSolver:
@@ -33,7 +48,11 @@ class GEKKOSolver:
 
     @staticmethod
     def inject_gekko_vars(
-        gekko_model: GEKKO, nodes: List[Node], branches: List[Branch], network: Network
+        gekko_model: GEKKO,
+        nodes: List[Node],
+        branches: List[Branch],
+        compounds: List[Compound],
+        network: Network,
     ):
         for branch in branches:
             GEKKOSolver.inject_gekko_vars_attr(gekko_model, branch.model)
@@ -41,6 +60,9 @@ class GEKKOSolver:
             GEKKOSolver.inject_gekko_vars_attr(gekko_model, node.model)
             for child in network.childs_by_ids(node.child_ids):
                 GEKKOSolver.inject_gekko_vars_attr(gekko_model, child.model)
+
+        for compound in compounds:
+            GEKKOSolver.inject_gekko_vars_attr(gekko_model, compound.model)
 
     @staticmethod
     def withdraw_gekko_vars_attr(target: GenericModel):
@@ -59,7 +81,7 @@ class GEKKOSolver:
                 )
 
     @staticmethod
-    def withdraw_gekko_vars(nodes, branches, network):
+    def withdraw_gekko_vars(nodes, branches, compounds, network):
         for branch in branches:
             GEKKOSolver.withdraw_gekko_vars_attr(branch.model)
         for node in nodes:
@@ -67,6 +89,8 @@ class GEKKOSolver:
             for child in network.childs_by_ids(node.child_ids):
                 GEKKOSolver.withdraw_gekko_vars_attr(child.model)
 
+        for compound in compounds:
+            GEKKOSolver.withdraw_gekko_vars_attr(compound.model)
 
     def solve(self, input_network: Network):
         m = GEKKO()
@@ -91,8 +115,9 @@ class GEKKOSolver:
                 child.model.overwrite(node.model)
 
         branches = network.branches
+        compounds = network.compounds
 
-        GEKKOSolver.inject_gekko_vars(m, nodes, branches, network)
+        GEKKOSolver.inject_gekko_vars(m, nodes, branches, compounds, network)
 
         for branch in branches:
             grid = branch.grid or network.default_grid_model
@@ -105,12 +130,14 @@ class GEKKOSolver:
                     )
                 )
             m.Equations(
-                branch.model.equations(
-                    grid,
-                    branch.from_node.model,
-                    branch.to_node.model,
-                    sin_impl=m.sin,
-                    cos_impl=m.cos,
+                _as_iter(
+                    branch.model.equations(
+                        grid,
+                        branch.from_node.model,
+                        branch.to_node.model,
+                        sin_impl=m.sin,
+                        cos_impl=m.cos,
+                    )
                 )
             )
         for node in nodes:
@@ -126,15 +153,22 @@ class GEKKOSolver:
                     )
                 )
             m.Equations(
-                node.model.equations(
-                    grid,
-                    [branch.model for branch in node.from_branches],
-                    [branch.model for branch in node.to_branches],
-                    [child.model for child in node_childs],
+                _as_iter(
+                    node.model.equations(
+                        grid,
+                        [branch.model for branch in node.from_branches],
+                        [branch.model for branch in node.to_branches],
+                        [child.model for child in node_childs],
+                    )
                 )
             )
             for child in node_childs:
-                m.Equations(child.model.equations(grid, node))
+                m.Equations(_as_iter(child.model.equations(grid, node)))
+
+        for compound in compounds:
+            for constraint in compound.constraints:
+                m.Equation(constraint(compound.model))
+            m.Equations(_as_iter(compound.model.equations(network)))
 
         for constraint in network.constraints:
             m.Equation(constraint(network))
@@ -149,9 +183,7 @@ class GEKKOSolver:
             m.Obj(obj)
         m.solve()
 
-        GEKKOSolver.withdraw_gekko_vars(nodes, branches, network)
+        GEKKOSolver.withdraw_gekko_vars(nodes, branches, compounds, network)
 
-        solver_result = SolverResult(
-            network, network.as_result_dataframe_dict()
-        )
+        solver_result = SolverResult(network, network.as_result_dataframe_dict())
         return solver_result

@@ -258,18 +258,18 @@ class GasPipe(BranchModel):
         diameter_m,
         length_m,
         temperature_ext_k,
-        pipe_roughness,
+        roughness,
     ) -> None:
         super().__init__()
 
         self.diameter_m = diameter_m
         self.length_m = length_m
         self.temperature_ext_k = temperature_ext_k
-        self.pipe_roughness = pipe_roughness
+        self.pipe_roughness = roughness
 
-        self.mass_flow = (Var(1),)
-        self.velocity = (Var(1),)
-        self.reynolds = (Var(1000),)
+        self.mass_flow = Var(1)
+        self.velocity = Var(1)
+        self.reynolds = Var(1000)
 
     def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):
         self._nikurdse = hydraulicsmodel.calc_nikurdse(
