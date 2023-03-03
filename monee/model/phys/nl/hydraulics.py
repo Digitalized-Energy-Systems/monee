@@ -21,7 +21,10 @@ def junction_mass_flow_balance(flows):
 
 
 def pipe_pressure(pd_min_pa, pd_max_pa, from_pressure_pa, to_pressure_pa):
-    return pd_min_pa <= abs(from_pressure_pa - to_pressure_pa) and abs(from_pressure_pa - to_pressure_pa) <= pd_max_pa
+    return (
+        pd_min_pa <= abs(from_pressure_pa - to_pressure_pa)
+        and abs(from_pressure_pa - to_pressure_pa) <= pd_max_pa
+    )
 
 
 def pipe_mass_flow(max_v, min_v, v):

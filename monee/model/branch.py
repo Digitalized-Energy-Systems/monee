@@ -267,8 +267,10 @@ class GasPipe(BranchModel):
         self.temperature_ext_k = temperature_ext_k
         self.pipe_roughness = roughness
 
-        self.mass_flow = Var(1)
-        self.velocity = Var(1)
+        self.from_mass_flow = Var(1)
+        self.to_mass_flow = Var(1)
+        self.from_velocity = Var(1)
+        self.to_velocity = Var(1)
         self.reynolds = Var(1000)
 
     def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):
@@ -294,7 +296,7 @@ class GasPipe(BranchModel):
         return (
             hydraulicsmodel.reynolds_equation(
                 self.reynolds,
-                self.mass_flow,
+                (self.from_mass_flow + self.to_mass_flow) / 2,
                 self.diameter_m,
                 grid.dynamic_visc,
                 self._pipe_area,
@@ -303,13 +305,18 @@ class GasPipe(BranchModel):
                 from_node_model.vars["pressure_pa"],
                 to_node_model.vars["pressure_pa"],
                 w=w,
-                f_a=self.mass_flow,
+                f_a=(self.from_mass_flow + self.to_mass_flow) / 2,
                 rey=self.reynolds,
                 nikurdse=self._nikurdse,
             ),
             hydraulicsmodel.flow_rate_equation(
-                mean_flow_velocity=self.velocity,
-                flow_rate=self.mass_flow,
+                mean_flow_velocity=self.from_velocity,
+                flow_rate=self.from_mass_flow,
+                diameter=self.diameter_m,
+            ),
+            hydraulicsmodel.flow_rate_equation(
+                mean_flow_velocity=self.to_velocity,
+                flow_rate=self.to_mass_flow,
                 diameter=self.diameter_m,
             ),
         )

@@ -81,5 +81,5 @@ def test_small_p2g_network():
     print(result)
 
     assert len(result.dataframes) == 11
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], 0.8)
+    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], 1.0600693422)
     assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.085966845873)

@@ -189,7 +189,7 @@ class GasToPower(MultiGridBranchModel):
 
         self.p_to_mw = p_mw_setpoint
         self.q_to_mvar = q_mvar_setpoint
-        self.mass_flow = Var(1)
+        self.from_mass_flow = Var(1)
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
         return self.p_to_mw == self.efficiency * self.mass_flow * (
@@ -208,11 +208,11 @@ class PowerToGas(MultiGridBranchModel):
 
         self.p_from_mw = Var(1)
         self.q_from_mvar = consume_q_mvar_setpoint
-        self.mass_flow = -mass_flow_setpoint
+        self.to_mass_flow = -mass_flow_setpoint
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
         return (
-            self.mass_flow
+            self.to_mass_flow
             == self.efficiency
             * self.p_from_mw
             * (1 / grids[GasGrid].higher_heating_value * 3600)
