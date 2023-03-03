@@ -14,7 +14,7 @@ from .core import (
     MultiGridBranchModel,
 )
 from .node import Bus, Junction
-from .branch import GenericPowerBranch, GasPipe, PowerBranch, PowerLine
+from .branch import GenericPowerBranch, GasPipe, PowerBranch, PowerLine, WaterPipe
 from .child import ExtHydrGrid, ExtPowerGrid, PowerGenerator, PowerLoad, Sink, Source
 from .multi import CHP, GasToPower, PowerToGas, PowerToHeat
 from .grid import create_gas_grid, create_water_grid, create_power_grid

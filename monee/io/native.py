@@ -14,7 +14,6 @@ def init_model(model_type, preprocessed_dict):
     }
     if model_type in model_type_dict:
         model_cls = model_type_dict[model_type]
-        # model = model_cls.__new__(model_cls)
         model = model_cls(
             **{
                 argname: 0
@@ -49,7 +48,6 @@ def native_dict_to_network(dict_struct) -> Network:
     grid_by_name = dict_struct["grids"]
     for k, v in grid_by_name.items():
         values_grid_dict = v["values"]
-        preprocessed_dict = preprocess_dict(values_grid_dict)
         model = init_model(v["model_type"], values_grid_dict)
         grid_by_name[k] = model
         if network.default_grid_model is None:
@@ -76,6 +74,16 @@ def native_dict_to_network(dict_struct) -> Network:
             grid=grid_by_name[node_dict["grid_id"]],
             overwrite_id=node_dict["id"],
         )
+    if "compounds" in dict_struct:
+        compounds = dict_struct["compounds"]
+        for compound_dict in compounds:
+            values_compound_dict = compound_dict["values"]
+            preprocessed_dict = preprocess_dict(values_compound_dict)
+            model = init_model(compound_dict["model_type"], preprocessed_dict)
+            network.compound(
+                model,
+                **compound_dict["connected_to"],
+            )
     for branch_dict in branches:
         values_branch_dict = branch_dict["values"]
         preprocessed_dict = preprocess_dict(values_branch_dict)
@@ -129,6 +137,7 @@ def write_omef_network(file, network: Network):
         nodes=node_dict_list,
         childs=child_dict_list,
         branches=branch_dict_list,
+        compounds=compound_dict_list,
     )
     with open(file, "w") as write_fp:
         json.dump(to_serialize, write_fp, indent=3, default=vars)
@@ -147,15 +156,15 @@ def compound_to_dict(compound):
         id=compound.id,
         values=model_to_dict(compound.model),
         model_type=type(compound.model).__name__,
-        connected_to=compound.node_name_to_id_dict,
+        connected_to=compound.connected_to,
     )
 
 
 def fetch_grid_to_dict(grid_dict, grid_from_model):
-    if not grid_from_model.name in grid_dict:
+    if grid_from_model.name not in grid_dict:
         grid_dict[grid_from_model.name] = grid_from_model
     elif grid_dict[grid_from_model.name] is not grid_from_model:
-        raise Exception(
+        raise PersistenceException(
             f"You must not define multiple grids with the same name: {grid_from_model.name}"
         )
 

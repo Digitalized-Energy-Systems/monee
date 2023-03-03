@@ -56,11 +56,13 @@ class CompoundModel(GenericModel):
         pass
 
     def equations(self, network, **kwargs):
+        # optional override
         pass
 
 
 class ChildModel(GenericModel):
     def overwrite(self, node_model):
+        # optional override
         pass
 
     @abstractmethod
@@ -81,12 +83,12 @@ class Compound:
         compound_id,
         model: CompoundModel,
         constraints,
-        node_name_to_id_dict,
+        connected_to,
     ) -> None:
         self.id = compound_id
         self.model = model
         self.constraints = constraints
-        self.node_name_to_id_dict = node_name_to_id_dict
+        self.connected_to = connected_to
 
 
 class Node:
@@ -167,9 +169,15 @@ class Network:
         ]
 
     def node_by_id(self, node_id):
+        if node_id not in self._network_internal.nodes:
+            raise ValueError(
+                f"The node id '{node_id}' is not valid. The valid ids are {self._network_internal.nodes.keys()}"
+            )
         return self._network_internal.nodes[node_id]["internal_node"]
 
     def branch_by_id(self, branch_id):
+        if branch_id not in self._network_internal.edges:
+            raise ValueError(f"The node id '{branch_id}' is not valid.")
         return self._network_internal.edges[branch_id]["internal_branch"]
 
     def __insert_to_blacklist_if_forced(self, obj):
@@ -232,12 +240,12 @@ class Network:
             compound_id=compound_id,
             model=model,
             constraints=constraints,
-            node_name_to_id_dict=connected_nodes,
+            connected_to=connected_nodes,
         )
         self._compounds.append(compound)
         self.__force_blacklist = True
         model.create(
-            self, {k: self.node_by_id(v) for (k, v) in connected_nodes.items()}
+            self, **{k: self.node_by_id(v) for (k, v) in connected_nodes.items()}
         )
         self.__force_blacklist = False
         return compound_id
@@ -248,7 +256,8 @@ class Network:
     def objective(self, objective_function):
         self._objectives.append(objective_function)
 
-    def model_dict_to_input(self, model_dict):
+    @staticmethod
+    def _model_dict_to_input(model_dict):
         input_dict = {}
         for k, v in model_dict.items():
             input_value = v
@@ -267,14 +276,15 @@ class Network:
             if model_type_name not in input_dict_list_dict:
                 input_dict_list_dict[model_type_name] = []
             input_dict_list_dict[model_type_name].append(
-                self.model_dict_to_input(container.model.__dict__)
+                Network._model_dict_to_input(container.model.__dict__)
             )
         dataframe_dict = {}
         for result_type, dict_list in input_dict_list_dict.items():
             dataframe_dict[result_type] = pandas.DataFrame(dict_list)
         return dataframe_dict
 
-    def model_dict_to_results(self, model_dict):
+    @staticmethod
+    def _model_dict_to_results(model_dict):
         result_dict = {}
         for k, v in model_dict.items():
             result_value = v
@@ -291,7 +301,7 @@ class Network:
             if model_type_name not in result_dict_list_dict:
                 result_dict_list_dict[model_type_name] = []
             result_dict_list_dict[model_type_name].append(
-                self.model_dict_to_results(container.model.__dict__)
+                Network._model_dict_to_results(container.model.__dict__)
             )
         dataframe_dict = {}
         for result_type, dict_list in result_dict_list_dict.items():

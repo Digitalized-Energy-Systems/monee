@@ -175,16 +175,16 @@ class WaterPipe(BranchModel):
         self,
         diameter_m,
         length_m,
-        temperature_ext_k,
-        pipe_roughness,
-        lambda_insulation_w_per_k,
-        insulation_thickness_m,
+        temperature_ext_k=293,
+        roughness=0.001,
+        lambda_insulation_w_per_k=0.01,
+        insulation_thickness_m=0.1,
     ) -> None:
         super().__init__()
         self.diameter_m = diameter_m
         self.length_m = length_m
         self.temperature_ext_k = temperature_ext_k
-        self.pipe_roughness = pipe_roughness
+        self.pipe_roughness = roughness
         self.lambda_insulation_w_per_k = lambda_insulation_w_per_k
         self.insulation_thickness_m = insulation_thickness_m
 

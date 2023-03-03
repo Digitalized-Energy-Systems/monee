@@ -8,6 +8,16 @@ from gekko.gk_operators import GK_Operators
 from monee.model.core import Network, Var, GenericModel, Node, Branch, Const, Compound
 import pandas
 
+DEFAULT_SOLVER_OPTIONS = [
+    "minlp_maximum_iterations 500",
+    "minlp_max_iter_with_int_sol 10",
+    "minlp_as_nlp 0",
+    "nlp_maximum_iterations 50",
+    "minlp_branch_method 1",
+    "minlp_integer_tol 0.05",
+    "minlp_gap_tol 0.01",
+]
+
 
 @dataclass
 class SolverResult:
@@ -31,6 +41,7 @@ def _as_iter(possible_iter):
 
 
 class GEKKOSolver:
+    @staticmethod
     def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel):
         for key, value in target.__dict__.items():
             if type(value) == Var:
@@ -95,15 +106,7 @@ class GEKKOSolver:
     def solve(self, input_network: Network):
         m = GEKKO()
         m.options.SOLVER = 1
-        m.solver_options = [
-            "minlp_maximum_iterations 500",
-            "minlp_max_iter_with_int_sol 10",
-            "minlp_as_nlp 0",
-            "nlp_maximum_iterations 50",
-            "minlp_branch_method 1",
-            "minlp_integer_tol 0.05",
-            "minlp_gap_tol 0.01",
-        ]
+        m.solver_options = DEFAULT_SOLVER_OPTIONS
 
         network = deepcopy(input_network)
         nodes = network.nodes
@@ -119,27 +122,38 @@ class GEKKOSolver:
 
         GEKKOSolver.inject_gekko_vars(m, nodes, branches, compounds, network)
 
-        for branch in branches:
-            grid = branch.grid or network.default_grid_model
-            for constraint in branch.constraints:
-                m.Equation(
-                    constraint(
-                        grid,
-                        branch.from_node.model,
-                        branch.to_node.model,
-                    )
-                )
-            m.Equations(
-                _as_iter(
-                    branch.model.equations(
-                        grid,
-                        branch.from_node.model,
-                        branch.to_node.model,
-                        sin_impl=m.sin,
-                        cos_impl=m.cos,
-                    )
-                )
-            )
+        self.process_equations_branches(m, network, branches)
+        self.process_equations_nodes_childs(m, network, nodes)
+        self.process_equations_compounds(m, network, compounds)
+        self.process_oxf_components(m, network)
+
+        m.solve()
+
+        GEKKOSolver.withdraw_gekko_vars(nodes, branches, compounds, network)
+
+        solver_result = SolverResult(network, network.as_result_dataframe_dict())
+        return solver_result
+
+    def process_oxf_components(self, m, network):
+        for constraint in network.constraints:
+            m.Equation(constraint(network))
+
+        obj = None
+        for objective in network.objectives:
+            if obj != None:
+                obj = obj + objective(network)
+            else:
+                obj = objective(network)
+        if obj is not None:
+            m.Obj(obj)
+
+    def process_equations_compounds(self, m, network, compounds):
+        for compound in compounds:
+            for constraint in compound.constraints:
+                m.Equation(constraint(compound.model))
+            m.Equations(_as_iter(compound.model.equations(network)))
+
+    def process_equations_nodes_childs(self, m, network, nodes):
         for node in nodes:
             node_childs = network.childs_by_ids(node.child_ids)
             grid = node.grid or network.default_grid_model
@@ -165,25 +179,25 @@ class GEKKOSolver:
             for child in node_childs:
                 m.Equations(_as_iter(child.model.equations(grid, node)))
 
-        for compound in compounds:
-            for constraint in compound.constraints:
-                m.Equation(constraint(compound.model))
-            m.Equations(_as_iter(compound.model.equations(network)))
-
-        for constraint in network.constraints:
-            m.Equation(constraint(network))
-
-        obj = None
-        for objective in network.objectives:
-            if obj != None:
-                obj = obj + objective(network)
-            else:
-                obj = objective(network)
-        if obj is not None:
-            m.Obj(obj)
-        m.solve()
-
-        GEKKOSolver.withdraw_gekko_vars(nodes, branches, compounds, network)
-
-        solver_result = SolverResult(network, network.as_result_dataframe_dict())
-        return solver_result
+    def process_equations_branches(self, m, network, branches):
+        for branch in branches:
+            grid = branch.grid or network.default_grid_model
+            for constraint in branch.constraints:
+                m.Equation(
+                    constraint(
+                        grid,
+                        branch.from_node.model,
+                        branch.to_node.model,
+                    )
+                )
+            m.Equations(
+                _as_iter(
+                    branch.model.equations(
+                        grid,
+                        branch.from_node.model,
+                        branch.to_node.model,
+                        sin_impl=m.sin,
+                        cos_impl=m.cos,
+                    )
+                )
+            )

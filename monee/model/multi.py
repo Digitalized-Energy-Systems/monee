@@ -29,7 +29,8 @@ class HeatTransferBranch(WaterPipe):
 
 @model
 class EmptyControlNode(NodeModel):
-    pass
+    def equations(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
+        pass
 
 
 @model
@@ -37,10 +38,10 @@ class CHP(CompoundModel):
     def __init__(
         self,
         diameter_m,
-        temperature_ext_k,
         efficiency,
         mass_flow_setpoint,
         q_mvar_setpoint=0,
+        temperature_ext_k=293,
     ) -> None:
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
@@ -65,9 +66,7 @@ class CHP(CompoundModel):
             self.temperature_ext_k,
             self.efficiency,
         )
-        self._gas_to_heat.create(
-            network, gas_node, heat_node, heat_return_node, power_node
-        )
+        self._gas_to_heat.create(network, gas_node, heat_node, heat_return_node)
 
         network.branch(
             GasToPower(self.efficiency, self.p_mw, q_mvar_setpoint=self.q_mvar),
@@ -103,12 +102,12 @@ class GasToHeat(CompoundModel):
             EmptyControlNode(),
             child_ids=[network.child(Sink(mass_flow=self.sink_mass_flow))],
         )
-        network.branch(GenericTransferBranch(), gas_node, node_id_control)
+        network.branch(GenericTransferBranch(), gas_node.id, node_id_control)
         network.branch(
             HeatTransferBranch(
                 self.heat_energy_mw, self.diameter_m, self.temperature_ext_k
             ),
-            heat_return_node,
+            heat_return_node.id,
             node_id_control,
         )
         network.branch(
@@ -116,7 +115,7 @@ class GasToHeat(CompoundModel):
                 self.heat_energy_mw, self.diameter_m, self.temperature_ext_k
             ),
             node_id_control,
-            heat_node,
+            heat_node.id,
         )
 
     def equations(self, network, **kwargs):
