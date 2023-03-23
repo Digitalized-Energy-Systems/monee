@@ -1,6 +1,9 @@
 import math
 from . import hydraulics
 
+# J/(kg*K)
+SPECIFIC_HEAT_CAP_WATER = 4184
+
 
 def to_celsius(t_k):
     return t_k - 273.15
@@ -33,22 +36,18 @@ def heat_transfer_loss(
 
 
 def heat_transfer_pipe(
-    heat_transfer_var,
     heat_transfer_flow_loss_var,
     t_1_var,
     t_2_var,
-    heat_transfer_coefficient_var,
-    diameter,
+    mass_flow_var,
 ):
-    return (
-        heat_transfer_var - heat_transfer_flow_loss_var
-        == heat_transfer_coefficient_var
-        * hydraulics.calc_pipe_area(diameter)
-        * (t_1_var - t_2_var)
+    return t_1_var - t_2_var == heat_transfer_flow_loss_var / (
+        SPECIFIC_HEAT_CAP_WATER * -mass_flow_var
     )
 
 
-def heat_transfer_coefficient_inside_pipe(
+# Dittus-Bölter correlation
+def heat_transfer_coefficient_inside_pipe_db(
     heat_transfer_coefficient_var,
     reynolds_var,
     t_1_var,
@@ -58,8 +57,25 @@ def heat_transfer_coefficient_inside_pipe(
 ):
     return heat_transfer_coefficient_var == (
         0.023
-        * thermal_conductivity
-        / pipe_inside_diameter
-        * reynolds_var**0.8
+        * (thermal_conductivity / pipe_inside_diameter)
+        * abs(reynolds_var) ** 0.8
         * calc_prandtl((t_1_var + t_2_var) / 2) ** 0.3
+    )
+
+
+# Gnielinski correlation
+def heat_transfer_coefficient_inside_pipe(
+    heat_transfer_coefficient_var,
+    reynolds_var,
+    t_1_var,
+    t_2_var,
+    pipe_inside_diameter,
+    thermal_conductivity=0.598,
+):
+    prandtl = calc_prandtl((t_1_var + t_2_var) / 2)
+    friction_f = abs(reynolds_var) / 64
+    return heat_transfer_coefficient_var == (
+        (thermal_conductivity / pipe_inside_diameter)
+        * ((friction_f / 8) * (abs(reynolds_var) - 1000) * prandtl)
+        / (1 + 12.7 * (friction_f / 8) ** 0.5 * (prandtl ** (2 / 3) - 1))
     )

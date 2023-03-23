@@ -72,8 +72,26 @@ class Junction(NodeModel):
         self, from_branch_models, to_branch_models, connected_node_models
     ):
         return (
-            [model.vars["from_mass_flow"] for model in from_branch_models]
-            + [model.vars["to_mass_flow"] for model in to_branch_models]
+            [
+                model.vars["from_mass_flow"]
+                for model in from_branch_models
+                if "from_mass_flow" in model.vars
+            ]
+            + [
+                model.vars["to_mass_flow"]
+                for model in to_branch_models
+                if "to_mass_flow" in model.vars
+            ]
+            + [
+                model.vars["mass_flow"]
+                for model in from_branch_models
+                if "mass_flow" in model.vars
+            ]
+            + [
+                -model.vars["mass_flow"]
+                for model in to_branch_models
+                if "mass_flow" in model.vars
+            ]
             + [model.vars["mass_flow"] for model in connected_node_models]
         )
 

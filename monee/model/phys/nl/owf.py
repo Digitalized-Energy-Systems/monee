@@ -12,6 +12,6 @@ def darcy_weisbach_equation(
     diameter,
     fluid_density,
 ):
-    return p_start_var - p_end_var == ((64 / reynolds_var) + nikurdse) * pipe_length * (
-        fluid_density / 2
-    ) * (mean_flow_velocity_var**2 / diameter)
+    return p_start_var - p_end_var == (
+        (64 / abs(reynolds_var)) + nikurdse
+    ) * pipe_length * (fluid_density / 2) * (mean_flow_velocity_var**2 / diameter)

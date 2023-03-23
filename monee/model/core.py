@@ -301,7 +301,7 @@ class Network:
             if model_type_name not in result_dict_list_dict:
                 result_dict_list_dict[model_type_name] = []
             result_dict_list_dict[model_type_name].append(
-                Network._model_dict_to_results(container.model.__dict__)
+                Network._model_dict_to_results(container.model.vars)
             )
         dataframe_dict = {}
         for result_type, dict_list in result_dict_list_dict.items():

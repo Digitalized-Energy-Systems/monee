@@ -177,8 +177,8 @@ class WaterPipe(BranchModel):
         length_m,
         temperature_ext_k=293,
         roughness=0.001,
-        lambda_insulation_w_per_k=0.01,
-        insulation_thickness_m=0.1,
+        lambda_insulation_w_per_k=0.00001,
+        insulation_thickness_m=0.035,
     ) -> None:
         super().__init__()
         self.diameter_m = diameter_m
@@ -191,9 +191,7 @@ class WaterPipe(BranchModel):
         self.mass_flow = Var(1)
         self.velocity = Var(1)
         self.heat_loss = Var(1)
-        self.heat_flow = Var(1)
         self.reynolds = Var(1000)
-        self.heat_transfer_coefficient = Var(0.1)
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         self._nikurdse = hydraulicsmodel.calc_nikurdse(
@@ -234,19 +232,48 @@ class WaterPipe(BranchModel):
                 pipe_outside_diameter=self.diameter_m + self.insulation_thickness_m,
             ),
             ohfmodel.heat_transfer_pipe(
-                heat_transfer_var=self.heat_flow,
                 heat_transfer_flow_loss_var=self.heat_loss,
                 t_1_var=from_node_model.vars["t_k"],
                 t_2_var=to_node_model.vars["t_k"],
-                heat_transfer_coefficient_var=self.heat_transfer_coefficient,
+                mass_flow_var=self.mass_flow,
+            ),
+        )
+
+
+@model
+class HeatExchanger(BranchModel):
+    def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
+        super().__init__()
+        self.diameter_m = diameter_m
+        self.temperature_ext_k = temperature_ext_k
+
+        self.mass_flow = Var(1)
+        self.velocity = Var(1)
+        self.reynolds = Var(1000)
+        self.q_w = -q_mw * 10**6
+
+    def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
+        self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
+
+        return (
+            hydraulicsmodel.reynolds_equation(
+                self.reynolds,
+                self.mass_flow,
+                self.diameter_m,
+                grid.dynamic_visc,
+                self._pipe_area,
+            ),
+            from_node_model.vars["pressure_pa"] == to_node_model.vars["pressure_pa"],
+            hydraulicsmodel.flow_rate_equation(
+                mean_flow_velocity=self.velocity,
+                flow_rate=self.mass_flow,
                 diameter=self.diameter_m,
             ),
-            ohfmodel.heat_transfer_coefficient_inside_pipe(
-                self.heat_transfer_coefficient,
-                self.reynolds,
-                from_node_model.vars["t_k"],
-                to_node_model.vars["t_k"],
-                self.diameter_m,
+            ohfmodel.heat_transfer_pipe(
+                heat_transfer_flow_loss_var=self.q_w,
+                t_1_var=from_node_model.vars["t_k"],
+                t_2_var=to_node_model.vars["t_k"],
+                mass_flow_var=self.mass_flow,
             ),
         )
 
