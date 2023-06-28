@@ -138,6 +138,8 @@ class GEKKOSolver:
 
         if optimization_problem is not None:
             self.process_oxf_components(m, network, optimization_problem)
+        else:
+            self.process_internal_oxf_components(m, network)
 
         m.solve()
 
@@ -145,6 +147,19 @@ class GEKKOSolver:
 
         solver_result = SolverResult(network, network.as_result_dataframe_dict())
         return solver_result
+
+    def process_internal_oxf_components(self, m, network):
+        for constraint in network.constraints:
+            m.Equation(constraint(network))
+
+        obj = None
+        for objective in network.objectives:
+            if obj != None:
+                obj = obj + objective(network)
+            else:
+                obj = objective(network)
+        if obj is not None:
+            m.Obj(obj)
 
     def process_oxf_components(
         self, m, network: Network, optimization_problem: OptimizationProblem

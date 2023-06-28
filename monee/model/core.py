@@ -132,6 +132,8 @@ class Network:
         self._network_internal = nx.MultiGraph()
         self._childs = []
         self._compounds = []
+        self._constraints = []
+        self._objectives = []
         self.__blacklist = []
         self.__force_blacklist = False
 
@@ -148,6 +150,14 @@ class Network:
             )
             for model_container in model_container_list
         ]
+
+    @property
+    def constraints(self):
+        return self._constraints
+
+    @property
+    def objectives(self):
+        return self._objectives
 
     @property
     def compounds(self):

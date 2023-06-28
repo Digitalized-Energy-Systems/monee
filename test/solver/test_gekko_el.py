@@ -112,10 +112,10 @@ def test_simple_trafo():
     solver = GEKKOSolver()
 
     result = solver.solve(pn)
-    print(result)
 
     assert len(pn.as_dataframe_dict()) == 5
-    assert False
+    assert result.dataframes["Bus"]["vm_pu"][0] == 1
+    assert result.dataframes["Bus"]["vm_pu"][1] == 0.9840819483
 
 
 def test_two_lines_example():

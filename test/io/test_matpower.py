@@ -41,6 +41,3 @@ def test_import_simbench_net():
     result = solver.solve(network)
 
     assert len(result.dataframes["Bus"]) == 129
-
-
-0
