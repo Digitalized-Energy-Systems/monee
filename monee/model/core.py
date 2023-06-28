@@ -1,7 +1,8 @@
-from typing import List
+from typing import List, Dict
 from abc import ABC, abstractmethod
 import networkx as nx
 import pandas
+import copy
 
 component_list = []
 
@@ -27,6 +28,10 @@ class Const:
 
 
 class GenericModel(ABC):
+    def __init__(self, **kwargs) -> None:
+        super().__init__()
+        self._ext_data = kwargs
+
     @property
     def vars(self):
         return {k: v for (k, v) in self.__dict__.items() if k[0] != "_"}
@@ -127,22 +132,26 @@ class Network:
         self._network_internal = nx.MultiGraph()
         self._childs = []
         self._compounds = []
-        self._constraints = []
-        self._objectives = []
         self.__blacklist = []
         self.__force_blacklist = False
+
+    def all_models(self):
+        model_container_list = self.childs + self.compounds + self.branches + self.nodes
+        return [model_container.model for model_container in model_container_list]
+
+    def all_models_with_grid(self):
+        model_container_list = self.childs + self.compounds + self.branches + self.nodes
+        return [
+            (
+                model_container.model,
+                (model_container.grid if hasattr(model_container, "grid") else None),
+            )
+            for model_container in model_container_list
+        ]
 
     @property
     def compounds(self):
         return self._compounds
-
-    @property
-    def constraints(self):
-        return self._constraints
-
-    @property
-    def objectives(self):
-        return self._objectives
 
     @property
     def childs(self):
@@ -184,12 +193,22 @@ class Network:
         if self.__force_blacklist:
             self.__blacklist.append(obj)
 
-    def child(self, model, constraints=None, overwrite_id=None):
+    def child(self, model, attach_to_node_id=None, constraints=None, overwrite_id=None):
         child_id = overwrite_id or len(self.childs)
         child = Child(child_id, model, constraints)
         self.__insert_to_blacklist_if_forced(child)
         self.childs.append(child)
+        if attach_to_node_id is not None:
+            self.node_by_id(attach_to_node_id).child_ids.append(child_id)
         return child_id
+
+    def child_to(self, model, node_id, constraints=None, overwrite_id=None):
+        return self.child(
+            model,
+            attach_to_node_id=node_id,
+            constraints=constraints,
+            overwrite_id=overwrite_id,
+        )
 
     def node(
         self, model, child_ids=None, constraints=None, grid=None, overwrite_id=None
@@ -307,3 +326,11 @@ class Network:
         for result_type, dict_list in result_dict_list_dict.items():
             dataframe_dict[result_type] = pandas.DataFrame(dict_list)
         return dataframe_dict
+
+    def copy(self):
+        return copy.deepcopy(self)
+
+    def clear_childs(self):
+        self._childs = []
+        for node in self.nodes:
+            node.child_ids = []

@@ -71,6 +71,8 @@ def fill_branch_dict(branch_mat, branch_dict_list):
         branch_dict["values"]["g_to"] = 0
         branch_dict["values"]["b_to"] = branch_row[4] / 2
         branch_dict["values"]["tap"] = 1 if branch_row[8] == 0 else branch_row[8]
+        # 1 / (    1 - branch_row[8] )
+        # 1 if branch_row[8] == 0 else branch_row[8]
         branch_dict["values"]["shift"] = branch_row[9]
         branch_dict["model_type"] = "GenericPowerBranch"
         branch_dict_list.append(branch_dict)
@@ -96,7 +98,7 @@ def fill_child_dict(gen_mat, node_dict_list, child_dict_list):
             child_dict["values"]["q_mvar"] = gen_row[2]
         for node_dict in node_dict_list:
             if node_dict["id"] == gen_row[0]:
-                node_dict["child_ids"].append(int(gen_row[0]))
+                node_dict["child_ids"].append(child_dict["id"])
         child_dict_list.append(child_dict)
 
 
@@ -116,10 +118,11 @@ def fill_node_dict(bus_mat, node_dict_list, child_dict_list):
 
         if bus_row[2] != 0 or bus_row[3] != 0:
             node_dict["child_ids"].append(len(child_dict_list))
+            model_type = "PowerLoad" if bus_row[2] >= 0 else "PowerGenerator"
             child_dict_list.append(
                 dict(
                     id=len(child_dict_list),
-                    model_type="PowerLoad",
+                    model_type=model_type,
                     values=dict(p_mw=bus_row[2], q_mvar=bus_row[3]),
                 )
             )

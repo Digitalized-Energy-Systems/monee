@@ -3,6 +3,8 @@ from abc import abstractmethod, ABC
 
 import numpy as np
 
+from monee.model.grid import PowerGrid
+
 from .core import BranchModel, Var, model
 from .grid import WaterGrid, GasGrid, PowerGrid
 
@@ -40,10 +42,10 @@ class GenericPowerBranch(BranchModel):
         self.g_to = g_to
         self.b_to = b_to
 
-        self.p_from_mw = Var(1000000)
-        self.q_from_mvar = Var(1000000)
-        self.p_to_mw = Var(1000000)
-        self.q_to_mvar = Var(1000000)
+        self.p_from_mw = Var(1)
+        self.q_from_mvar = Var(1)
+        self.p_to_mw = Var(1)
+        self.q_to_mvar = Var(1)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
         y = np.linalg.pinv([[self.br_r + self.br_x * 1j]])[0][0]
@@ -52,8 +54,8 @@ class GenericPowerBranch(BranchModel):
         return (
             opfmodel.int_flow_from_p(
                 p_from_var=self.p_from_mw,
-                vm_from_var=from_node_model.vars["vm_pu"],
-                vm_to_var=to_node_model.vars["vm_pu"],
+                vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
+                vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
                 va_from_var=from_node_model.vars["va_degree"],
                 va_to_var=to_node_model.vars["va_degree"],
                 g_branch=g,
@@ -66,8 +68,8 @@ class GenericPowerBranch(BranchModel):
             ),
             opfmodel.int_flow_from_q(
                 q_from_var=self.q_from_mvar,
-                vm_from_var=from_node_model.vars["vm_pu"],
-                vm_to_var=to_node_model.vars["vm_pu"],
+                vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
+                vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
                 va_from_var=from_node_model.vars["va_degree"],
                 va_to_var=to_node_model.vars["va_degree"],
                 g_branch=g,
@@ -80,8 +82,8 @@ class GenericPowerBranch(BranchModel):
             ),
             opfmodel.int_flow_to_p(
                 p_to_var=self.p_to_mw,
-                vm_from_var=from_node_model.vars["vm_pu"],
-                vm_to_var=to_node_model.vars["vm_pu"],
+                vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
+                vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
                 va_from_var=from_node_model.vars["va_degree"],
                 va_to_var=to_node_model.vars["va_degree"],
                 g_branch=g,
@@ -94,8 +96,8 @@ class GenericPowerBranch(BranchModel):
             ),
             opfmodel.int_flow_to_q(
                 q_to_var=self.q_to_mvar,
-                vm_from_var=from_node_model.vars["vm_pu"],
-                vm_to_var=to_node_model.vars["vm_pu"],
+                vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
+                vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
                 va_from_var=from_node_model.vars["va_degree"],
                 va_to_var=to_node_model.vars["va_degree"],
                 g_branch=g,
@@ -152,21 +154,30 @@ class PowerLine(PowerBranch):
 @model
 class Trafo(PowerBranch):
     def __init__(
-        self, vk_percent, vkr_percent, sn_trafo_mva, vn_trafo_lv, tap, shift
+        self,
+        vk_percent=12.2,
+        vkr_percent=0.25,
+        sn_trafo_mva=160,
+        shift=0,
     ) -> None:
-        super().__init__(tap, shift)
+        super().__init__(1, shift)
 
         self.vk_percent = vk_percent
         self.vkr_percent = vkr_percent
         self.sn_trafo_mva = sn_trafo_mva
-        self.vn_trafo_lv = vn_trafo_lv
+        self.vn_trafo_lv = 1
 
-    def calc_r_x(self, grid: PowerGrid, from_node_model, to_node_model):
-        tap_lv = np.square(self.vn_trafo_lv / from_node_model.base_kv) * grid.sn_mva
+    def calc_r_x(self, grid: PowerGrid, lv_model, hv_model):
+        tap_lv = np.square(lv_model.base_kv / hv_model.base_kv) * grid.sn_mva
         z_sc = self.vk_percent / 100.0 / self.sn_trafo_mva * tap_lv
         r_sc = self.vkr_percent / 100.0 / self.sn_trafo_mva * tap_lv
         x_sc = np.sign(z_sc) * np.sqrt((z_sc**2 - r_sc**2).astype(float))
         return r_sc, x_sc
+
+    def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
+        self.tap = 1  # from_node_model.base_kv / to_node_model.base_kv
+
+        return super().equations(grid, from_node_model, to_node_model, **kwargs)
 
 
 @model
@@ -276,6 +287,22 @@ class HeatExchanger(BranchModel):
                 mass_flow_var=self.mass_flow,
             ),
         )
+
+
+@model
+class HeatExchangerLoad(HeatExchanger):
+    def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
+        super().__init__(q_mw, diameter_m, temperature_ext_k)
+
+        self.q_w = q_mw * 10**6
+
+
+@model
+class HeatExchangerGenerator(HeatExchanger):
+    def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
+        super().__init__(q_mw, diameter_m, temperature_ext_k)
+
+        self.q_w = -q_mw * 10**6
 
 
 @model

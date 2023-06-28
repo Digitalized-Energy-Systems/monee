@@ -78,7 +78,7 @@ class CHP(CompoundModel):
     def equations(self, network, **kwargs):
         return (
             self.p_mw + self.heat_energy_mw
-            <= self.mass_flow * 3600 / self._gas_grid.higher_heating_value
+            <= self.mass_flow * 3.6 / self._gas_grid.higher_heating_value
         )
 
 
@@ -192,7 +192,7 @@ class GasToPower(MultiGridBranchModel):
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
         return self.p_to_mw == self.efficiency * self.mass_flow * (
-            3600 * grids[GasGrid].higher_heating_value
+            3.6 * grids[GasGrid].higher_heating_value
         )
 
 
@@ -207,12 +207,12 @@ class PowerToGas(MultiGridBranchModel):
 
         self.p_from_mw = Var(1)
         self.q_from_mvar = consume_q_mvar_setpoint
-        self.to_mass_flow = -mass_flow_setpoint
+        self.to_mass_flow = mass_flow_setpoint
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
         return (
             self.to_mass_flow
             == self.efficiency
             * self.p_from_mw
-            * (1 / grids[GasGrid].higher_heating_value * 3600)
+            * (1 / grids[GasGrid].higher_heating_value * 3.6)
         ), self.p_from_mw > 0

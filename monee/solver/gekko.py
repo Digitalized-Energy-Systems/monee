@@ -1,11 +1,11 @@
 from typing import List, Dict
-from copy import deepcopy
 from dataclasses import dataclass
 
 from gekko import GEKKO
 from gekko.gk_variable import GKVariable
 from gekko.gk_operators import GK_Operators
 from monee.model.core import Network, Var, GenericModel, Node, Branch, Const, Compound
+from monee.problem.core import OptimizationProblem
 import pandas
 
 DEFAULT_SOLVER_OPTIONS = [
@@ -103,12 +103,19 @@ class GEKKOSolver:
         for compound in compounds:
             GEKKOSolver.withdraw_gekko_vars_attr(compound.model)
 
-    def solve(self, input_network: Network):
+    def solve(
+        self, input_network: Network, optimization_problem: OptimizationProblem = None
+    ):
+        # ensure compatibility of gekko models with own models
+        # for creating objectives and constraitns
+        GKVariable.max = property(lambda self: self.UPPER)
+        GKVariable.min = property(lambda self: self.LOWER)
+
         m = GEKKO()
         m.options.SOLVER = 1
         m.solver_options = DEFAULT_SOLVER_OPTIONS
 
-        network = deepcopy(input_network)
+        network = input_network.copy()
         nodes = network.nodes
 
         # prepare for overwritting default node behaviors with
@@ -120,12 +127,17 @@ class GEKKOSolver:
         branches = network.branches
         compounds = network.compounds
 
+        if optimization_problem is not None:
+            optimization_problem._apply(network)
+
         GEKKOSolver.inject_gekko_vars(m, nodes, branches, compounds, network)
 
         self.process_equations_branches(m, network, branches)
         self.process_equations_nodes_childs(m, network, nodes)
         self.process_equations_compounds(m, network, compounds)
-        self.process_oxf_components(m, network)
+
+        if optimization_problem is not None:
+            self.process_oxf_components(m, network, optimization_problem)
 
         m.solve()
 
@@ -134,16 +146,21 @@ class GEKKOSolver:
         solver_result = SolverResult(network, network.as_result_dataframe_dict())
         return solver_result
 
-    def process_oxf_components(self, m, network):
-        for constraint in network.constraints:
-            m.Equation(constraint(network))
+    def process_oxf_components(
+        self, m, network: Network, optimization_problem: OptimizationProblem
+    ):
+        if (
+            optimization_problem.constraints is not None
+            and not optimization_problem.constraints.empty
+        ):
+            m.Equations(optimization_problem.constraints.all(network))
 
         obj = None
-        for objective in network.objectives:
+        for objective in optimization_problem.objectives.all(network):
             if obj != None:
-                obj = obj + objective(network)
+                obj = obj + objective
             else:
-                obj = objective(network)
+                obj = objective
         if obj is not None:
             m.Obj(obj)
 

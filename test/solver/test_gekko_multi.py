@@ -2,9 +2,10 @@ import math
 
 import monee.model as mm
 import monee.solver as ms
+from monee.problem.load_shedding import create_load_shedding_optimization_problem
 
 
-def create_two_line_example_with_2_pipe_example_p2g():
+def create_two_line_example_with_2_pipe_example_p2g(source_flow=0.1):
     pn = mm.Network(mm.create_power_grid("power"))
 
     # POWER
@@ -41,7 +42,9 @@ def create_two_line_example_with_2_pipe_example_p2g():
     # GAS
     gas_grid = mm.create_gas_grid("gas", type="lgas")
     g_node_0 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow=0.1))], grid=gas_grid
+        mm.Junction(),
+        child_ids=[pn.child(mm.Source(mass_flow=source_flow))],
+        grid=gas_grid,
     )
     g_node_1 = pn.node(
         mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())], grid=gas_grid
@@ -76,10 +79,24 @@ def create_two_line_example_with_2_pipe_example_p2g():
 
 def test_small_p2g_network():
     multi_energy_network = create_two_line_example_with_2_pipe_example_p2g()
+
     result = ms.GEKKOSolver().solve(multi_energy_network)
 
-    print(result)
+    assert len(result.dataframes) == 11
+    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], 0.86103583375)
+    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.086315875428)
+
+
+def test_load_shedding_p2g_network():
+    multi_energy_network = create_two_line_example_with_2_pipe_example_p2g(
+        source_flow=1
+    )
+    load_shedding_problem = create_load_shedding_optimization_problem()
+
+    result = ms.GEKKOSolver().solve(
+        multi_energy_network, optimization_problem=load_shedding_problem
+    )
 
     assert len(result.dataframes) == 11
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], 1.0600693422)
-    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.085966845873)
+    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], 0)
+    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], 0)
