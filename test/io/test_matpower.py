@@ -35,7 +35,7 @@ def test_solve_read_network_data_matpower():
 
 
 def test_import_simbench_net():
-    network = read_matpower_case("1-LV-rural3--1-no_sw.mat")
+    network = read_matpower_case("test/data/1-LV-rural3--1-no_sw.mat")
     assert network is not None
     solver = GEKKOSolver()
     result = solver.solve(network)
