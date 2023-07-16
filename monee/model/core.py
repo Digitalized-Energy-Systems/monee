@@ -76,10 +76,11 @@ class ChildModel(GenericModel):
 
 
 class Child:
-    def __init__(self, child_id, model, constraints) -> None:
+    def __init__(self, child_id, model, constraints, name=None) -> None:
         self.id = child_id
         self.model = model
         self.constraints = constraints
+        self.name = name
 
 
 class Compound:
@@ -89,16 +90,25 @@ class Compound:
         model: CompoundModel,
         constraints,
         connected_to,
+        name=None,
     ) -> None:
         self.id = compound_id
         self.model = model
         self.constraints = constraints
         self.connected_to = connected_to
+        self.name = name
 
 
 class Node:
     def __init__(
-        self, node_id, model, child_ids=None, constraints=None, grid=None
+        self,
+        node_id,
+        model,
+        child_ids=None,
+        constraints=None,
+        grid=None,
+        name=None,
+        position=None,
     ) -> None:
         self.id = node_id
         self.model = model
@@ -107,6 +117,8 @@ class Node:
         self.grid = grid
         self.from_branches = []
         self.to_branches = []
+        self.name = name
+        self.position = position
 
     def add_from_branch(self, branch):
         self.from_branches.append(branch)
@@ -116,13 +128,16 @@ class Node:
 
 
 class Branch:
-    def __init__(self, model, from_node, to_node, constraints=None, grid=None) -> None:
+    def __init__(
+        self, model, from_node, to_node, constraints=None, grid=None, name=None
+    ) -> None:
         self.id = None
         self.model = model
         self.from_node = from_node
         self.to_node = to_node
         self.constraints = [] if constraints is None else constraints
         self.grid = grid
+        self.name = name
 
 
 class Network:
@@ -203,36 +218,59 @@ class Network:
         if self.__force_blacklist:
             self.__blacklist.append(obj)
 
-    def child(self, model, attach_to_node_id=None, constraints=None, overwrite_id=None):
+    def child(
+        self,
+        model,
+        attach_to_node_id=None,
+        constraints=None,
+        overwrite_id=None,
+        name=None,
+    ):
         child_id = overwrite_id or len(self.childs)
-        child = Child(child_id, model, constraints)
+        child = Child(child_id, model, constraints, name=name)
         self.__insert_to_blacklist_if_forced(child)
         self.childs.append(child)
         if attach_to_node_id is not None:
             self.node_by_id(attach_to_node_id).child_ids.append(child_id)
         return child_id
 
-    def child_to(self, model, node_id, constraints=None, overwrite_id=None):
+    def child_to(self, model, node_id, constraints=None, overwrite_id=None, name=None):
         return self.child(
             model,
             attach_to_node_id=node_id,
             constraints=constraints,
             overwrite_id=overwrite_id,
+            name=name,
         )
 
     def node(
-        self, model, child_ids=None, constraints=None, grid=None, overwrite_id=None
+        self,
+        model,
+        child_ids=None,
+        constraints=None,
+        grid=None,
+        overwrite_id=None,
+        name=None,
+        position=None,
     ):
         node_id = overwrite_id or len(self._network_internal)
         node = Node(
-            node_id, model, child_ids, constraints, grid or self.default_grid_model
+            node_id,
+            model,
+            child_ids,
+            constraints,
+            grid or self.default_grid_model,
+            name=name,
+            position=position,
         )
         self.__insert_to_blacklist_if_forced(node)
 
         self._network_internal.add_node(node_id, internal_node=node)
         return node_id
 
-    def branch(self, model, from_node_id, to_node_id, constraints=None, grid=None):
+    def branch(
+        self, model, from_node_id, to_node_id, constraints=None, grid=None, name=None
+    ):
         from_node = self.node_by_id(from_node_id)
         to_node = self.node_by_id(to_node_id)
         branch = Branch(
@@ -249,6 +287,7 @@ class Network:
                     type(to_node.grid): to_node.grid,
                 }
             ),
+            name=name,
         )
         self.__insert_to_blacklist_if_forced(branch)
         branch_id = (
