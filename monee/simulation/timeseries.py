@@ -82,8 +82,8 @@ def apply_to_by_id(component, data, timestep):
 def apply_to_child(child, timeseries_data, timestep):
     apply_to_by_id(child, timeseries_data.child_id_data, timestep)
 
-    if child.model._ext_data["name"] in timeseries_data.child_name_data:
-        attr_series_dict = timeseries_data.data[child.model._ext_data["name"]]
+    if child.name in timeseries_data.child_name_data:
+        attr_series_dict = timeseries_data.data[child.name]
         for attr, series in attr_series_dict.items():
             setattr(child.model, attr, series[timestep])
 
