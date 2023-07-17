@@ -12,6 +12,26 @@ from .branch import WaterPipe
 from .child import PowerLoad, Sink
 
 
+class MutableFloat(float):
+    def __init__(self, val):
+        self._val = val
+
+    def __int__(self):
+        return self._val
+
+    def __index__(self):
+        return self._val
+
+    def __str__(self):
+        return str(self._val)
+
+    def __repr__(self):
+        return repr(self._val)
+
+    def set(self, val):
+        self._val = val
+
+
 @model
 class GenericTransferBranch(MultiGridBranchModel):
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
@@ -47,8 +67,8 @@ class CHP(CompoundModel):
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
 
-        self.mass_flow = mass_flow_setpoint
-        self.q_mvar = q_mvar_setpoint
+        self.mass_flow = MutableFloat(mass_flow_setpoint)
+        self.q_mvar = MutableFloat(q_mvar_setpoint)
         self.p_mw = Var(1)
         self.heat_energy_mw = Var(1)
 
@@ -138,13 +158,13 @@ class PowerToHeat(CompoundModel):
         efficiency,
         q_mvar_setpoint=0,
     ) -> None:
-        self.heat_energy_mw = heat_energy_mw
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
 
+        self.heat_energy_mw = MutableFloat(heat_energy_mw)
         self.load_p_mw = Var(1)
-        self.load_q_mvar = q_mvar_setpoint
+        self.load_q_mvar = MutableFloat(q_mvar_setpoint)
 
     def create(
         self,

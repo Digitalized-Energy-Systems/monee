@@ -9,23 +9,42 @@ class TimeseriesData:
     _child_id_to_series: Dict[Any, Dict[str, List]] = {}
     _child_name_to_series: Dict[str, Dict[str, List]] = {}
 
-    def add_child_series(self, child_id: Any, attribute: str, series: List):
-        if child_id not in self._child_id_to_series:
-            self._child_id_to_series[child_id] = {}
-        self._child_id_to_series[child_id][attribute] = series
+    _compound_id_to_series: Dict[Any, Dict[str, List]] = {}
+
+    _branch_id_to_series: Dict[Any, Dict[str, List]] = {}
+
+    def _add_to(self, target_dict, key_one, key_two, value):
+        if key_one not in target_dict:
+            target_dict[key_one] = {}
+        target_dict[key_one][key_two] = value
+
+    def add_compound_series(self, compound_id: int, attribute: str, series: List):
+        self._add_to(self._compound_id_to_series, compound_id, attribute, series)
+
+    def add_branch_series(self, branch_id: int, attribute: str, series: List):
+        self._add_to(self._branch_id_to_series, branch_id, attribute, series)
+
+    def add_child_series(self, child_id: int, attribute: str, series: List):
+        self._add_to(self._child_id_to_series, child_id, attribute, series)
 
     def add_child_series_by_name(self, child_name: str, attribute: str, series: List):
-        if child_name not in self._child_name_to_series:
-            self._child_name_to_series[child_name] = {}
-        self._child_name_to_series[child_name][attribute] = series
+        self._add_to(self._child_name_to_series, child_name, attribute, series)
 
     @property
-    def id_data(self):
+    def child_id_data(self):
         return self._child_id_to_series
 
     @property
-    def name_data(self):
+    def child_name_data(self):
         return self._child_name_to_series
+
+    @property
+    def branch_id_data(self):
+        return self._branch_id_to_series
+
+    @property
+    def compound_id_data(self):
+        return self._compound_id_to_series
 
 
 class TimeseriesResult:
@@ -53,15 +72,28 @@ class TimeseriesResult:
         return self._raw_results
 
 
-def apply_to_child(child, timeseries_data, timestep):
-    if child.id in timeseries_data.id_data:
-        attr_series_dict = timeseries_data.data[child.id]
+def apply_to_by_id(component, data, timestep):
+    if component.id in data:
+        attr_series_dict = data[component.id]
         for attr, series in attr_series_dict.items():
-            setattr(child.model, attr, series[timestep])
-    if child.model._ext_data["name"] in timeseries_data.name_data:
+            setattr(component.model, attr, series[timestep])
+
+
+def apply_to_child(child, timeseries_data, timestep):
+    apply_to_by_id(child, timeseries_data.child_id_data, timestep)
+
+    if child.model._ext_data["name"] in timeseries_data.child_name_data:
         attr_series_dict = timeseries_data.data[child.model._ext_data["name"]]
         for attr, series in attr_series_dict.items():
             setattr(child.model, attr, series[timestep])
+
+
+def apply_to_branch(branch, timeseries_data, timestep):
+    apply_to_by_id(branch, timeseries_data.branch_id_data, timestep)
+
+
+def apply_to_compound(compound, timeseries_data, timestep):
+    apply_to_by_id(compound, timeseries_data.branch_id_data, timestep)
 
 
 def run(
@@ -77,6 +109,10 @@ def run(
         net_copy = net.copy()
         for child in net_copy.childs:
             apply_to_child(child, timeseries_data, step)
+        for branch in net_copy.branches:
+            apply_to_branch(branch, timeseries_data, step)
+        for compound in net_copy.compounds:
+            apply_to_compound(compound, timeseries_data, step)
 
         result_list.append(
             run_energy_flow_optimization(
