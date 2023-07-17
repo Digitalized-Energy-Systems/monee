@@ -203,10 +203,10 @@ def create_p2g(
 
 def create_chp(
     network: mm.Network,
-    power_node,
-    heat_node,
-    heat_return_node,
-    gas_node,
+    power_node_id,
+    heat_node_id,
+    heat_return_node_id,
+    gas_node_id,
     diameter_m,
     efficiency,
     mass_flow_setpoint,
@@ -221,20 +221,20 @@ def create_chp(
             temperature_ext_k=293,
         ),
         constraints=constraints,
-        connected_nodes=dict(
-            power_node=power_node,
-            heat_node=heat_node,
-            heat_return_node=heat_return_node,
-            gas_node=gas_node,
+        connected_node_ids=dict(
+            power_node_id=power_node_id,
+            heat_node_id=heat_node_id,
+            heat_return_node_id=heat_return_node_id,
+            gas_node_id=gas_node_id,
         ),
     )
 
 
 def create_p2h(
     network: mm.Network,
-    power_node,
-    heat_node,
-    heat_return_node,
+    power_node_id,
+    heat_node_id,
+    heat_return_node_id,
     heat_energy_mw,
     diameter_m,
     efficiency,
@@ -251,9 +251,9 @@ def create_p2h(
             q_mvar_setpoint=q_mvar_setpoint,
         ),
         constraints=constraints,
-        connected_nodes=dict(
-            power_node=power_node,
-            heat_node=heat_node,
-            heat_return_node=heat_return_node,
+        connected_node_ids=dict(
+            power_node=power_node_id,
+            heat_node=heat_node_id,
+            heat_return_node=heat_return_node_id,
         ),
     )

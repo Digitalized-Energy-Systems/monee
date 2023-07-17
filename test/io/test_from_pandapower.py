@@ -4,7 +4,6 @@ from monee.io.from_pandapower import from_pandapower_net
 
 def test_from_pandapower_net():
     # GIVEN
-    steps = 3
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
 
     # WHEN

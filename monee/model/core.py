@@ -302,18 +302,22 @@ class Network:
         from_node.add_from_branch(branch)
         return branch_id
 
-    def compound(self, model: CompoundModel, constraints=None, **connected_nodes):
+    def compound(self, model: CompoundModel, constraints=None, **connected_node_ids):
         compound_id = len(self._compounds)
         compound = Compound(
             compound_id=compound_id,
             model=model,
             constraints=constraints,
-            connected_to=connected_nodes,
+            connected_to=connected_node_ids,
         )
         self._compounds.append(compound)
         self.__force_blacklist = True
         model.create(
-            self, **{k: self.node_by_id(v) for (k, v) in connected_nodes.items()}
+            self,
+            **{
+                (k.replace("_id", "") if k.endswith("_id") else k): self.node_by_id(v)
+                for (k, v) in connected_node_ids.items()
+            },
         )
         self.__force_blacklist = False
         return compound_id
