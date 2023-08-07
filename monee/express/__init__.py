@@ -133,6 +133,25 @@ def create_ext_hydr_grid(
     )
 
 
+def create_consume_hydr_grid(
+    network: mm.Network,
+    node_id,
+    mass_flow=1,
+    pressure_pa=1000000,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs
+):
+    return network.child_to(
+        mm.ConsumeHydrGrid(mass_flow=mass_flow, pressure_pa=pressure_pa, **kwargs),
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+    )
+
+
 def create_sink(
     network: mm.Network,
     node_id,
@@ -208,25 +227,25 @@ def create_chp(
     heat_return_node_id,
     gas_node_id,
     diameter_m,
-    efficiency,
+    efficiency_power,
+    efficiency_heat,
     mass_flow_setpoint,
     constraints=None,
 ):
     return network.compound(
         mm.CHP(
             diameter_m,
-            efficiency,
+            efficiency_power,
+            efficiency_heat,
             mass_flow_setpoint,
             q_mvar_setpoint=0,
             temperature_ext_k=293,
         ),
         constraints=constraints,
-        connected_node_ids=dict(
-            power_node_id=power_node_id,
-            heat_node_id=heat_node_id,
-            heat_return_node_id=heat_return_node_id,
-            gas_node_id=gas_node_id,
-        ),
+        power_node_id=power_node_id,
+        heat_node_id=heat_node_id,
+        heat_return_node_id=heat_return_node_id,
+        gas_node_id=gas_node_id,
     )
 
 
@@ -251,9 +270,7 @@ def create_p2h(
             q_mvar_setpoint=q_mvar_setpoint,
         ),
         constraints=constraints,
-        connected_node_ids=dict(
-            power_node=power_node_id,
-            heat_node=heat_node_id,
-            heat_return_node=heat_return_node_id,
-        ),
+        power_node=power_node_id,
+        heat_node=heat_node_id,
+        heat_return_node=heat_return_node_id,
     )

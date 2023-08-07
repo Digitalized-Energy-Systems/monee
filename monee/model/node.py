@@ -65,8 +65,8 @@ class Bus(NodeModel):
 @model
 class Junction(NodeModel):
     def __init__(self) -> None:
-        self.t_k = Var(300)
-        self.pressure_pa = Var(1)
+        self.t_k = Var(350)
+        self.pressure_pa = Var(500000)
 
     def calc_signed_mass_flow(
         self, from_branch_models, to_branch_models, connected_node_models
@@ -92,7 +92,11 @@ class Junction(NodeModel):
                 for model in to_branch_models
                 if "mass_flow" in model.vars
             ]
-            + [model.vars["mass_flow"] for model in connected_node_models]
+            + [
+                model.vars["mass_flow"]
+                for model in connected_node_models
+                if "mass_flow" in model.vars
+            ]
         )
 
     def equations(
@@ -103,8 +107,9 @@ class Junction(NodeModel):
         connected_node_models,
         **kwargs
     ):
-        return junction_mass_flow_balance(
-            self.calc_signed_mass_flow(
-                from_branch_models, to_branch_models, connected_node_models
-            )
+        mass_flow_signed_list = self.calc_signed_mass_flow(
+            from_branch_models, to_branch_models, connected_node_models
         )
+        if mass_flow_signed_list:
+            return junction_mass_flow_balance(mass_flow_signed_list)
+        return []

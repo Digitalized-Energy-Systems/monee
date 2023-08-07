@@ -37,6 +37,9 @@ class SolverResult:
 
 
 def _as_iter(possible_iter):
+    if possible_iter is None:
+        raise Exception(f"None as result for 'equations' is not allowed!")
+
     return possible_iter if hasattr(possible_iter, "__iter__") else [possible_iter]
 
 
@@ -111,7 +114,8 @@ class GEKKOSolver:
         GKVariable.max = property(lambda self: self.UPPER)
         GKVariable.min = property(lambda self: self.LOWER)
 
-        m = GEKKO()
+        m = GEKKO(remote=False)
+        m.open_folder()
         m.options.SOLVER = 1
         m.solver_options = DEFAULT_SOLVER_OPTIONS
 
@@ -122,13 +126,16 @@ class GEKKOSolver:
         # childs
         for node in nodes:
             for child in network.childs_by_ids(node.child_ids):
-                child.model.overwrite(node.model)
+                if child.active:
+                    child.model.overwrite(node.model)
 
         branches = network.branches
         compounds = network.compounds
 
         if optimization_problem is not None:
             optimization_problem._apply(network)
+        else:
+            m.Obj(0)
 
         GEKKOSolver.inject_gekko_vars(m, nodes, branches, compounds, network)
 
@@ -141,7 +148,13 @@ class GEKKOSolver:
         else:
             self.process_internal_oxf_components(m, network)
 
-        m.solve()
+        try:
+            m.options.COLDSTART = 0
+            m.solve(disp=True)
+        except:
+            m.options.COLDSTART = 2
+            m.solve(disp=True)
+            print("Solver not converged. Using Presolve Solution.")
 
         GEKKOSolver.withdraw_gekko_vars(nodes, branches, compounds, network)
 
@@ -181,20 +194,32 @@ class GEKKOSolver:
 
     def process_equations_compounds(self, m, network, compounds):
         for compound in compounds:
+            if not compound.active:
+                continue
             for constraint in compound.constraints:
                 m.Equation(constraint(compound.model))
-            m.Equations(_as_iter(compound.model.equations(network)))
+            equations = compound.model.equations(network)
+            if equations is not None:
+                m.Equations(_as_iter(equations))
 
-    def process_equations_nodes_childs(self, m, network, nodes):
+    def process_equations_nodes_childs(self, m, network: Network, nodes):
         for node in nodes:
+            if not node.active:
+                continue
             node_childs = network.childs_by_ids(node.child_ids)
             grid = node.grid or network.default_grid_model
             for constraint in node.constraints:
                 m.Equation(
                     constraint(
                         grid,
-                        [branch.model for branch in node.from_branches],
-                        [branch.model for branch in node.to_branches],
+                        [
+                            network.branch_by_id(branch_id).model
+                            for branch_id in node.from_branch_ids
+                        ],
+                        [
+                            network.branch_by_id(branch_id).model
+                            for branch_id in node.to_branch_ids
+                        ],
                         node_childs,
                     )
                 )
@@ -202,34 +227,47 @@ class GEKKOSolver:
                 _as_iter(
                     node.model.equations(
                         grid,
-                        [branch.model for branch in node.from_branches],
-                        [branch.model for branch in node.to_branches],
+                        [
+                            network.branch_by_id(branch_id).model
+                            for branch_id in node.from_branch_ids
+                        ],
+                        [
+                            network.branch_by_id(branch_id).model
+                            for branch_id in node.to_branch_ids
+                        ],
                         [child.model for child in node_childs],
                     )
                 )
             )
             for child in node_childs:
+                if not child.active:
+                    continue
                 m.Equations(_as_iter(child.model.equations(grid, node)))
 
     def process_equations_branches(self, m, network, branches):
         for branch in branches:
+            if not branch.active:
+                continue
+
             grid = branch.grid or network.default_grid_model
             for constraint in branch.constraints:
                 m.Equation(
                     constraint(
                         grid,
-                        branch.from_node.model,
-                        branch.to_node.model,
+                        network.node_by_id(branch.from_node_id).model,
+                        network.node_by_id(branch.to_node_id).model,
                     )
                 )
             m.Equations(
                 _as_iter(
                     branch.model.equations(
                         grid,
-                        branch.from_node.model,
-                        branch.to_node.model,
+                        network.node_by_id(branch.from_node_id).model,
+                        network.node_by_id(branch.to_node_id).model,
                         sin_impl=m.sin,
                         cos_impl=m.cos,
+                        if_impl=m.if3,
+                        abs_impl=m.abs3,
                     )
                 )
             )

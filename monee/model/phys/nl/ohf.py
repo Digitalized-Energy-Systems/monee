@@ -18,6 +18,7 @@ def calc_prandtl(t_k):
 def heat_transfer_loss(
     heat_transfer_flow_loss_var,
     t_var,
+    t_var2,
     k_insulation_w_per_k,
     ext_t,
     pipe_length,
@@ -30,7 +31,7 @@ def heat_transfer_loss(
         * math.pi
         * k_insulation_w_per_k
         * pipe_length
-        * (t_var - ext_t)
+        * (((t_var - ext_t) + (t_var2 - ext_t)) / 2)
         / math.log(pipe_outside_diameter / pipe_inside_diameter)
     )
 
@@ -41,9 +42,9 @@ def heat_transfer_pipe(
     t_2_var,
     mass_flow_var,
 ):
-    return t_1_var - t_2_var == heat_transfer_flow_loss_var / (
-        SPECIFIC_HEAT_CAP_WATER * -mass_flow_var
-    )
+    return (t_1_var - t_2_var) * SPECIFIC_HEAT_CAP_WATER * -(
+        mass_flow_var
+    ) == heat_transfer_flow_loss_var
 
 
 # Dittus-Bölter correlation

@@ -1,20 +1,20 @@
-
 from monee.model.core import *
 
-def test_model_decorator():
 
+def test_model_decorator():
     @model
     class TestClass:
         pass
 
     assert TestClass in component_list
 
+
 def test_generic_model_vars():
     class ConcModel(GenericModel):
         def __init__(self) -> None:
             self.public = "A"
             self._not_public = "B"
-    
+
     model = ConcModel()
     assert "public" in model.vars
     assert "_not_public" not in model.vars
@@ -32,8 +32,8 @@ def test_node_base():
     assert node.constraints == [1]
     assert node.child_ids == [1]
 
-    node.add_from_branch("from_branch")
-    node.add_to_branch("to_branch")
+    node.add_from_branch_id("from_branch")
+    node.add_to_branch_id("to_branch")
 
-    assert node.from_branches == ["from_branch"]
-    assert node.to_branches == ["to_branch"]
+    assert node.from_branch_ids == ["from_branch"]
+    assert node.to_branch_ids == ["to_branch"]

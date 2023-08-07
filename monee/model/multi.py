@@ -1,15 +1,15 @@
 from .core import (
     MultiGridBranchModel,
-    NodeModel,
     CompoundModel,
     Var,
     Network,
     Node,
     model,
 )
-from .grid import GasGrid
-from .branch import WaterPipe
-from .child import PowerLoad, Sink
+from .grid import GasGrid, PowerGrid, WaterGrid, NO_GRID
+from .child import PowerLoad, Sink, PowerGenerator
+from .node import Junction, Bus
+from .branch import HeatExchanger
 
 
 class MutableFloat(float):
@@ -34,43 +34,196 @@ class MutableFloat(float):
 
 @model
 class GenericTransferBranch(MultiGridBranchModel):
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+
+        self._mass_flow = Var(1)
+
+        self._p_mw = Var(1)
+        self._q_mvar = Var(1)
+
+    def _fill_el(self):
+        self.p_to_mw = self._p_mw
+        self.p_from_mw = self._p_mw
+        self.q_to_mvar = self._q_mvar
+        self.q_from_mvar = self._q_mvar
+
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
-        for k, v in from_node_model.__dict__:
-            setattr(to_node_model, k, v)
+        if type(grids) == WaterGrid or type(grids) == dict and WaterGrid in grids:
+            self.mass_flow = self._mass_flow
+        if type(grids) == GasGrid or type(grids) == dict and GasGrid in grids:
+            self.to_mass_flow = self._mass_flow
+            self.from_mass_flow = self._mass_flow
+        if type(grids) == PowerGrid or type(grids) == dict and PowerGrid in grids:
+            self._fill_el()
+
+        for k, v in from_node_model.vars.items():
+            if hasattr(to_node_model, k):
+                setattr(to_node_model, k, v)
+        return []
 
 
 @model
-class HeatTransferBranch(WaterPipe):
-    def __init__(self, heat_energy_mw, diameter_m, temperature_ext_k) -> None:
-        super().__init__(diameter_m, 0.01, temperature_ext_k, 0, 1, diameter_m / 2)
+class GasToHeatControlNode(Junction):
+    def __init__(
+        self, gas_consumption, heat_energy_mw, efficiency, hhv, **kwargs
+    ) -> None:
+        super().__init__(**kwargs)
+        self.gas_consumption = gas_consumption
+        self.heat_energy_mw = heat_energy_mw
+        self.efficiency = efficiency
+        self.hhv = hhv
 
-        self.heat_loss = heat_energy_mw
+    def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
+        heat_to_branches = [
+            branch for branch in to_branch_models if "mass_flow" in branch.vars
+        ]
+        heat_from_branches = [
+            branch for branch in from_branch_models if "mass_flow" in branch.vars
+        ]
+        gas_to_branches = [
+            branch for branch in to_branch_models if "to_mass_flow" in branch.vars
+        ]
+
+        return (
+            sum(
+                self.calc_signed_mass_flow(  #
+                    heat_from_branches, heat_to_branches, []  #
+                )  #
+            )
+            == 0,
+            sum(
+                self.calc_signed_mass_flow(
+                    gas_to_branches, [], [Sink(self.gas_consumption)]
+                )
+            )
+            == 0,
+            self.heat_energy_mw
+            == self.efficiency * self.gas_consumption * 3600 / self.hhv,
+        )
 
 
 @model
-class EmptyControlNode(NodeModel):
-    def equations(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
-        pass
+class PowerToHeatControlNode(Junction, Bus):
+    def __init__(
+        self, load_p_mw, load_q_mvar, heat_energy_mw, efficiency, **kwargs
+    ) -> None:
+        super().__init__(**kwargs)
+        self.load_p_mw = load_p_mw
+        self.load_q_mvar = load_q_mvar
+        self.heat_energy_mw = heat_energy_mw
+        self.efficiency = efficiency
+
+    def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
+        heat_to_branches = [
+            branch for branch in to_branch_models if "mass_flow" in branch.vars
+        ]
+        heat_from_branches = [
+            branch for branch in from_branch_models if "mass_flow" in branch.vars
+        ]
+        power_to_branches = [
+            branch for branch in to_branch_models if "p_from_mw" in branch.vars
+        ]
+        power_eqs = self.calc_signed_power_values(
+            [], power_to_branches, [PowerLoad(self.load_p_mw, self.load_q_mvar)]
+        )
+
+        return (
+            sum(
+                self.calc_signed_mass_flow(  #
+                    heat_from_branches, heat_to_branches, []  #
+                )  #
+            )
+            == 0,
+            sum(power_eqs[0]) == 0,
+            sum(power_eqs[1]) == 0,
+            self.heat_energy_mw == self.efficiency * self.load_p_mw,
+        )
+
+
+@model
+class CHPControlNode(Junction, Bus):
+    def __init__(
+        self,
+        gas_consumption,
+        efficiency_heat,
+        efficiency_power,
+        hhv,
+        q_mvar=0,
+        **kwargs
+    ) -> None:
+        super().__init__(**kwargs)
+
+        self.gas_consumption = gas_consumption
+        self.efficiency_heat = efficiency_heat
+        self.efficiency_power = efficiency_power
+        self.gen_p_mw = Var(1)
+        self.gen_q_mvar = q_mvar
+        self._hhv = hhv
+
+        # eventually overridden
+        self.t_k = 0
+        self.pressure_pa = 0
+
+    def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
+        heat_to_branches = [
+            branch for branch in to_branch_models if "mass_flow" in branch.vars
+        ]
+        heat_from_branches = [
+            branch for branch in from_branch_models if "mass_flow" in branch.vars
+        ]
+        gas_to_branches = [
+            branch for branch in to_branch_models if "to_mass_flow" in branch.vars
+        ]
+        power_from_branches = [
+            branch for branch in from_branch_models if "p_to_mw" in branch.vars
+        ]
+        power_eqs = self.calc_signed_power_values(
+            power_from_branches, [], [PowerGenerator(self.gen_p_mw, self.gen_q_mvar)]
+        )
+
+        return (
+            sum(
+                self.calc_signed_mass_flow(  #
+                    heat_from_branches, heat_to_branches, []  #
+                )  #
+            )
+            == 0,
+            sum(
+                self.calc_signed_mass_flow(
+                    [], gas_to_branches, [Sink(self.gas_consumption)]
+                )
+            )
+            == 0,
+            sum(power_eqs[0]) == 0,
+            sum(power_eqs[1]) == 0,
+            [branch for branch in heat_from_branches if type(branch) == HeatExchanger][
+                0
+            ].q_w
+            == -self.efficiency_heat * self.gas_consumption * 3600 / self._hhv,
+            self.gen_p_mw
+            == self.efficiency_power * self.gas_consumption * (3.6 * self._hhv),
+        )
 
 
 @model
 class CHP(CompoundModel):
     def __init__(
         self,
-        diameter_m,
-        efficiency,
-        mass_flow_setpoint,
-        q_mvar_setpoint=0,
-        temperature_ext_k=293,
+        diameter_m: float,
+        efficiency_power: float,
+        efficiency_heat: float,
+        mass_flow_setpoint: float,
+        q_mvar_setpoint: float = 0,
+        temperature_ext_k: float = 293,
     ) -> None:
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
-        self.efficiency = efficiency
+        self.efficiency_power = efficiency_power
+        self.efficiency_heat = efficiency_heat
 
         self.mass_flow = MutableFloat(mass_flow_setpoint)
         self.q_mvar = MutableFloat(q_mvar_setpoint)
-        self.p_mw = Var(1)
-        self.heat_energy_mw = Var(1)
 
     def create(
         self,
@@ -80,25 +233,36 @@ class CHP(CompoundModel):
         heat_return_node: Node,
         power_node: Node,
     ):
-        self._gas_to_heat = GasToHeat(
-            self.heat_energy_mw,
-            self.diameter_m,
-            self.temperature_ext_k,
-            self.efficiency,
-        )
-        self._gas_to_heat.create(network, gas_node, heat_node, heat_return_node)
-
-        network.branch(
-            GasToPower(self.efficiency, self.p_mw, q_mvar_setpoint=self.q_mvar),
-            gas_node.id,
-            power_node.id,
-        )
         self._gas_grid = gas_node.grid
-
-    def equations(self, network, **kwargs):
-        return (
-            self.p_mw + self.heat_energy_mw
-            <= self.mass_flow * 3.6 / self._gas_grid.higher_heating_value
+        node_id_control = network.node(
+            CHPControlNode(
+                self.mass_flow,
+                self.efficiency_power,
+                self.efficiency_heat,
+                gas_node.grid.higher_heating_value,
+            ),
+            grid=NO_GRID,
+        )
+        network.branch(
+            GenericTransferBranch(),  #
+            gas_node.id,  #
+            node_id_control,
+        )
+        network.branch(
+            GenericTransferBranch(),
+            heat_return_node.id,
+            node_id_control,
+        )
+        network.branch(
+            HeatExchanger(Var(1), self.diameter_m),
+            node_id_control,
+            heat_node.id,
+            grid=heat_node.grid,
+        )
+        network.branch(
+            GenericTransferBranch(),
+            node_id_control,
+            power_node.id,
         )
 
 
@@ -107,11 +271,11 @@ class GasToHeat(CompoundModel):
     def __init__(
         self, heat_energy_mw, diameter_m, temperature_ext_k, efficiency
     ) -> None:
-        self.heat_energy_mw = heat_energy_mw
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
 
+        self.heat_energy_mw = MutableFloat(heat_energy_mw)
         self.sink_mass_flow = Var(1)
 
     def create(
@@ -119,32 +283,24 @@ class GasToHeat(CompoundModel):
     ):
         self._gas_grid = gas_node.grid
         node_id_control = network.node(
-            EmptyControlNode(),
-            child_ids=[network.child(Sink(mass_flow=self.sink_mass_flow))],
+            GasToHeatControlNode(
+                self.sink_mass_flow,
+                self.heat_energy_mw,
+                self.efficiency,
+                gas_node.grid.higher_heating_value,
+            ),
+            grid=NO_GRID,
         )
         network.branch(GenericTransferBranch(), gas_node.id, node_id_control)
         network.branch(
-            HeatTransferBranch(
-                self.heat_energy_mw, self.diameter_m, self.temperature_ext_k
-            ),
+            GenericTransferBranch(),
             heat_return_node.id,
             node_id_control,
         )
         network.branch(
-            HeatTransferBranch(
-                self.heat_energy_mw, self.diameter_m, self.temperature_ext_k
-            ),
+            GenericTransferBranch(),
             node_id_control,
             heat_node.id,
-        )
-
-    def equations(self, network, **kwargs):
-        return (
-            self.heat_energy_mw
-            == self.efficiency
-            * self.sink_mass_flow
-            * 3600
-            / self._gas_grid.higher_heating_value
         )
 
 
@@ -174,29 +330,22 @@ class PowerToHeat(CompoundModel):
         heat_return_node: Node,
     ):
         node_id_control = network.node(
-            EmptyControlNode(),
-            child_ids=[
-                network.child(PowerLoad(p_mw=self.load_p_mw, q_mvar=self.load_q_mvar))
-            ],
-        )
-        network.branch(GenericTransferBranch(), power_node, node_id_control)
-        network.branch(
-            HeatTransferBranch(
-                self.heat_energy_mw, self.diameter_m, self.temperature_ext_k
+            PowerToHeatControlNode(
+                self.load_p_mw, self.load_q_mvar, self.heat_energy_mw, self.efficiency
             ),
-            heat_return_node,
+            grid=NO_GRID,
+        )
+        network.branch(GenericTransferBranch(), power_node.id, node_id_control)
+        network.branch(
+            GenericTransferBranch(),
+            heat_return_node.id,
             node_id_control,
         )
         network.branch(
-            HeatTransferBranch(
-                self.heat_energy_mw, self.diameter_m, self.temperature_ext_k
-            ),
+            GenericTransferBranch(),
             node_id_control,
-            heat_node,
+            heat_node.id,
         )
-
-    def equations(self, network, **kwargs):
-        return self.heat_energy_mw == self.efficiency * self.load_p_mw
 
 
 @model
@@ -211,7 +360,7 @@ class GasToPower(MultiGridBranchModel):
         self.from_mass_flow = Var(1)
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
-        return self.p_to_mw == self.efficiency * self.mass_flow * (
+        return self.p_to_mw == self.efficiency * self.from_mass_flow * (
             3.6 * grids[GasGrid].higher_heating_value
         )
 

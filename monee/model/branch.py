@@ -199,7 +199,7 @@ class WaterPipe(BranchModel):
         self.lambda_insulation_w_per_k = lambda_insulation_w_per_k
         self.insulation_thickness_m = insulation_thickness_m
 
-        self.mass_flow = Var(1)
+        self.mass_flow = Var(0.1)
         self.velocity = Var(1)
         self.heat_loss = Var(1)
         self.reynolds = Var(1000)
@@ -222,11 +222,12 @@ class WaterPipe(BranchModel):
                 from_node_model.vars["pressure_pa"],
                 to_node_model.vars["pressure_pa"],
                 self.reynolds,
-                self.velocity,
+                self.mass_flow,
                 self._nikurdse,
                 self.length_m,
                 self.diameter_m,
                 grid.fluid_density,
+                **kwargs
             ),
             hydraulicsmodel.flow_rate_equation(
                 mean_flow_velocity=self.velocity,
@@ -235,7 +236,8 @@ class WaterPipe(BranchModel):
             ),
             ohfmodel.heat_transfer_loss(
                 heat_transfer_flow_loss_var=self.heat_loss,
-                t_var=(from_node_model.vars["t_k"] + to_node_model.vars["t_k"]) / 2,
+                t_var=from_node_model.vars["t_k"],
+                t_var2=to_node_model.vars["t_k"],
                 k_insulation_w_per_k=self.lambda_insulation_w_per_k,
                 ext_t=self.temperature_ext_k,
                 pipe_length=self.length_m,
@@ -250,6 +252,12 @@ class WaterPipe(BranchModel):
             ),
         )
 
+        """
+
+        :return: _description_
+        :rtype: _type_
+        """
+
 
 @model
 class HeatExchanger(BranchModel):
@@ -260,21 +268,15 @@ class HeatExchanger(BranchModel):
 
         self.mass_flow = Var(1)
         self.velocity = Var(1)
-        self.reynolds = Var(1000)
+        self.reynolds = 0
         self.q_w = -q_mw * 10**6
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
 
         return (
-            hydraulicsmodel.reynolds_equation(
-                self.reynolds,
-                self.mass_flow,
-                self.diameter_m,
-                grid.dynamic_visc,
-                self._pipe_area,
-            ),
-            from_node_model.vars["pressure_pa"] == to_node_model.vars["pressure_pa"],
+            # from_node_model.vars["pressure_pa"] == to_node_model.vars["pressure_pa"],
+            # self.mass_flow <= 0,
             hydraulicsmodel.flow_rate_equation(
                 mean_flow_velocity=self.velocity,
                 flow_rate=self.mass_flow,

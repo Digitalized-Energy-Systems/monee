@@ -13,7 +13,7 @@ def calc_nikurdse(internal_diameter_m, roughness):
 
 
 def reynolds_equation(rey_var, flow_var, diameter_m, dynamic_visc, pipe_area):
-    return rey_var == flow_var * diameter_m / (dynamic_visc * pipe_area)
+    return rey_var == abs(flow_var) * diameter_m / (dynamic_visc * pipe_area)
 
 
 def junction_mass_flow_balance(flows):

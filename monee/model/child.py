@@ -59,6 +59,18 @@ class ExtHydrGrid(NoVarChildModel):
 
 
 @model
+class ConsumeHydrGrid(NoVarChildModel):
+    def __init__(self, mass_flow=0.1, pressure_pa=1000000, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.mass_flow = -mass_flow
+
+        self.pressure_pa = pressure_pa
+
+    def overwrite(self, node_model):
+        node_model.pressure_pa = Const(self.pressure_pa)
+
+
+@model
 class Sink(NoVarChildModel):
     def __init__(self, mass_flow, **kwargs) -> None:
         super().__init__(**kwargs)
