@@ -171,7 +171,7 @@ class Network:
 
         self._network_internal = nx.MultiGraph()
         self._child_dict = {}
-        self._compounds = {}
+        self._compound_dict = {}
         self._constraints = []
         self._objectives = []
         self.__blacklist = []
@@ -232,7 +232,7 @@ class Network:
 
     @property
     def compounds(self):
-        return list(self._compounds.values())
+        return list(self._compound_dict.values())
 
     @property
     def childs(self):
@@ -245,16 +245,16 @@ class Network:
         del self._child_dict[child_id]
 
     def remove_compound(self, compound_id):
-        del self._compounds[compound_id]
+        del self._compound_dict[compound_id]
 
     def child_by_id(self, child_id):
         return self._child_dict[child_id]
 
     def compound_by_id(self, compound_id):
-        return self._compounds[compound_id]
+        return self._compound_dict[compound_id]
 
     def compounds_by_type(self, cls):
-        return [compound for compound in self._compounds if type(compound.model) == cls]
+        return [compound for compound in self.compounds if type(compound.model) == cls]
 
     def childs_by_ids(self, child_ids):
         return [self.child_by_id(child_id) for child_id in child_ids]
@@ -396,8 +396,16 @@ class Network:
         from_node.add_from_branch_id(branch_id)
         return branch_id
 
-    def compound(self, model: CompoundModel, constraints=None, **connected_node_ids):
-        compound_id = len(self._compounds)
+    def compound(
+        self,
+        model: CompoundModel,
+        constraints=None,
+        overwrite_id=None,
+        **connected_node_ids,
+    ):
+        compound_id = overwrite_id or (
+            0 if len(self._compound_dict) == 0 else max(self._compound_dict.keys()) + 1
+        )
         self.__force_blacklist = True
         self.__collect_components = True
         model.create(
@@ -416,7 +424,7 @@ class Network:
             connected_to=connected_node_ids,
             subcomponents=self.__collected_components,
         )
-        self._compounds.append(compound)
+        self._compound_dict[compound_id] = compound
         self.__collected_components = []
         return compound_id
 

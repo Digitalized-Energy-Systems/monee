@@ -252,12 +252,6 @@ class WaterPipe(BranchModel):
             ),
         )
 
-        """
-
-        :return: _description_
-        :rtype: _type_
-        """
-
 
 @model
 class HeatExchanger(BranchModel):

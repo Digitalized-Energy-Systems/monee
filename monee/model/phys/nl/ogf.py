@@ -16,7 +16,7 @@ def junction_pressure(p, p_nom):
 
 
 def pipe_weymouth(p_i, p_j, w, f_a, rey, nikurdse):
-    return p_i - p_j == hydraulics.friction_model(rey, nikurdse) * w * abs(f_a) * f_a
+    return p_i - p_j == hydraulics.friction_model(rey, nikurdse) * w * abs(f_a) * -f_a
 
 
 def normal_pressure(p, p_squared):

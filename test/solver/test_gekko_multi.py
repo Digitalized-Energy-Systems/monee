@@ -347,8 +347,7 @@ def test_simple_chp():
     )
     assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.091089923543)
 
-
-"""
+    """
 def test_chp_deactivation_in_simbench():
     # GIVEN
     net = obtain_simbench_net("1-LV-urban6--2-no_sw")
@@ -365,9 +364,9 @@ def test_chp_deactivation_in_simbench():
     # WHEN
     pre_result = run_energy_flow(net_multi)
     print(pre_result)
-    net_multi.deactivate(net_multi.compounds_by_type(mm.CHP)[0])
-    post_result = run_energy_flow(net_multi)
+    # net_multi.deactivate(net_multi.compounds_by_type(mm.CHP)[0])
+    # post_result = run_energy_flow(net_multi)
 
     # THEN
     assert False
-"""
+    """

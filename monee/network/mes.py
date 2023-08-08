@@ -138,8 +138,8 @@ def create_p2h_in_combined_generated_network(
                 power_node_id=power_node.id,
                 heat_node_id=heat_junc,
                 heat_return_node_id=heat_return_junc,
-                heat_energy_mw=0.1,
-                diameter_m=0.1,
+                heat_energy_mw=0.01 * (random.random() - 0.5),
+                diameter_m=0.0030,
                 efficiency=0.4 * random.random() * 0.5,
             )
 
@@ -159,7 +159,7 @@ def create_chp_in_combined_generated_network(
                 heat_node_id=heat_junc,
                 heat_return_node_id=heat_return_junc,
                 gas_node_id=gas_junc,
-                mass_flow_setpoint=0.1,
+                mass_flow_setpoint=0.08 * (random.random() - 0.5),
                 diameter_m=0.1,
                 efficiency_power=efficiency / 2,
                 efficiency_heat=efficiency / 2,
@@ -189,22 +189,27 @@ def generate_mes_based_on_power_net(
     p2g_density=0.02,
     p2h_density=0.1,
 ):
-    new_mes_net = mm.Network()
+    new_mes_net = net_power.copy()
     bus_to_heat_junc = create_heat_net_for_power(
         net_power, new_mes_net, heat_deployment_rate
     )
-    # bus_to_gas_junc = create_gas_net_for_power(
-    #    net_power, new_mes_net, gas_deployment_rate
-    # )
+    bus_to_gas_junc = create_gas_net_for_power(
+        net_power, new_mes_net, gas_deployment_rate
+    )
 
-    """create_p2h_in_combined_generated_network(
+    """
+    create_p2h_in_combined_generated_network(
         new_mes_net, net_power, bus_to_heat_junc, p2h_density
     )
+    """
     create_chp_in_combined_generated_network(
         new_mes_net, net_power, bus_to_heat_junc, bus_to_gas_junc, chp_density
     )
+    """
+
     create_p2g_in_combined_generated_network(
         new_mes_net, net_power, bus_to_gas_junc, p2g_density
-    )"""
+    )
+    """
 
     return new_mes_net
