@@ -29,7 +29,10 @@ def read_matpower_data(mat_data):
     gen_mat = mpc["gen"][0][0]
 
     grid_dict_list = {
-        "power": {"model_type": "PowerGrid", "values": {"sn_mva": base_mva[0]}}
+        "power": {
+            "model_type": "PowerGrid",
+            "values": {"name": "power", "sn_mva": base_mva[0]},
+        }
     }
     node_dict_list = []
     branch_dict_list = []

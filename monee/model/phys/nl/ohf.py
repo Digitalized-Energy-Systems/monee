@@ -24,6 +24,7 @@ def heat_transfer_loss(
     pipe_length,
     pipe_inside_diameter,
     pipe_outside_diameter,
+    mass_flow_var,
 ):
     return (
         heat_transfer_flow_loss_var
@@ -31,6 +32,7 @@ def heat_transfer_loss(
         * math.pi
         * k_insulation_w_per_k
         * pipe_length
+        * -mass_flow_var
         * (((t_var - ext_t) + (t_var2 - ext_t)) / 2)
         / math.log(pipe_outside_diameter / pipe_inside_diameter)
     )
@@ -40,10 +42,18 @@ def heat_transfer_pipe(
     heat_transfer_flow_loss_var,
     t_1_var,
     t_2_var,
+):
+    return (t_1_var - t_2_var) * SPECIFIC_HEAT_CAP_WATER == heat_transfer_flow_loss_var
+
+
+def heat_exchange_pipe(
+    heat_transfer_flow_loss_var,
+    t_1_var,
+    t_2_var,
     mass_flow_var,
 ):
-    return (t_1_var - t_2_var) * SPECIFIC_HEAT_CAP_WATER * -(
-        mass_flow_var
+    return (t_1_var - t_2_var) * SPECIFIC_HEAT_CAP_WATER * (
+        -mass_flow_var
     ) == heat_transfer_flow_loss_var
 
 

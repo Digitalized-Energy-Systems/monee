@@ -243,46 +243,57 @@ class WaterPipe(BranchModel):
                 pipe_length=self.length_m,
                 pipe_inside_diameter=self.diameter_m,
                 pipe_outside_diameter=self.diameter_m + self.insulation_thickness_m,
+                mass_flow_var=self.mass_flow,
             ),
             ohfmodel.heat_transfer_pipe(
                 heat_transfer_flow_loss_var=self.heat_loss,
                 t_1_var=from_node_model.vars["t_k"],
                 t_2_var=to_node_model.vars["t_k"],
-                mass_flow_var=self.mass_flow,
             ),
         )
 
 
 @model
 class HeatExchanger(BranchModel):
-    def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
+    def __init__(
+        self, q_mw, diameter_m, in_line_operation=False, temperature_ext_k=293
+    ) -> None:
         super().__init__()
+        self._in_line_operation = in_line_operation
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
 
-        self.mass_flow = Var(1)
-        self.velocity = Var(1)
+        self.mass_flow = Var(-0.1)
+        self.velocity = Var(-1)
         self.reynolds = 0
         self.q_w = -q_mw * 10**6
+        self.limit = 0.1
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
 
-        return (
-            # from_node_model.vars["pressure_pa"] == to_node_model.vars["pressure_pa"],
-            # self.mass_flow <= 0,
+        mode_equations = (
+            [from_node_model.vars["pressure_pa"] == to_node_model.vars["pressure_pa"]]
+            if self._in_line_operation
+            else [
+                self.mass_flow * self.q_w <= 0,
+                self.mass_flow > -self.limit,
+                self.mass_flow < self.limit,
+            ]
+        )
+        return [
             hydraulicsmodel.flow_rate_equation(
                 mean_flow_velocity=self.velocity,
                 flow_rate=self.mass_flow,
                 diameter=self.diameter_m,
             ),
-            ohfmodel.heat_transfer_pipe(
+            ohfmodel.heat_exchange_pipe(
                 heat_transfer_flow_loss_var=self.q_w,
                 t_1_var=from_node_model.vars["t_k"],
                 t_2_var=to_node_model.vars["t_k"],
                 mass_flow_var=self.mass_flow,
             ),
-        )
+        ] + mode_equations
 
 
 @model
@@ -317,10 +328,8 @@ class GasPipe(BranchModel):
         self.temperature_ext_k = temperature_ext_k
         self.pipe_roughness = roughness
 
-        self.from_mass_flow = Var(1)
-        self.to_mass_flow = Var(1)
-        self.from_velocity = Var(1)
-        self.to_velocity = Var(1)
+        self.mass_flow = Var(0.1)
+        self.velocity = Var(1)
         self.reynolds = Var(1000)
 
     def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):
@@ -346,7 +355,7 @@ class GasPipe(BranchModel):
         return (
             hydraulicsmodel.reynolds_equation(
                 self.reynolds,
-                (self.from_mass_flow + self.to_mass_flow) / 2,
+                self.mass_flow,
                 self.diameter_m,
                 grid.dynamic_visc,
                 self._pipe_area,
@@ -355,18 +364,13 @@ class GasPipe(BranchModel):
                 from_node_model.vars["pressure_pa"],
                 to_node_model.vars["pressure_pa"],
                 w=w,
-                f_a=(self.from_mass_flow + self.to_mass_flow) / 2,
+                f_a=self.mass_flow,
                 rey=self.reynolds,
                 nikurdse=self._nikurdse,
             ),
             hydraulicsmodel.flow_rate_equation(
-                mean_flow_velocity=self.from_velocity,
-                flow_rate=self.from_mass_flow,
-                diameter=self.diameter_m,
-            ),
-            hydraulicsmodel.flow_rate_equation(
-                mean_flow_velocity=self.to_velocity,
-                flow_rate=self.to_mass_flow,
+                mean_flow_velocity=self.velocity,
+                flow_rate=self.mass_flow,
                 diameter=self.diameter_m,
             ),
         )

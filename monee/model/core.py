@@ -1,4 +1,4 @@
-from typing import List, Dict
+from typing import List
 from abc import ABC, abstractmethod
 import networkx as nx
 import pandas
@@ -12,6 +12,12 @@ def model(cls):
     return cls
 
 
+def upper(var_or_const):
+    if isinstance(var_or_const, Var):
+        return var_or_const.max
+    return var_or_const
+
+
 class Var:
     def __init__(self, value, max=None, min=None) -> None:
         self.value = value
@@ -23,6 +29,26 @@ class Var:
 
     def __mul__(self, other):
         return Var(value=self.value * other, max=self.max, min=self.min)
+
+    def __lt__(self, other):
+        if isinstance(other, (float, int)) and self.max is not None:
+            return self.max < other
+        return False
+
+    def __le__(self, other):
+        if isinstance(other, (float, int)) and self.max is not None:
+            return self.max <= other
+        return False
+
+    def __gt__(self, other):
+        if isinstance(other, (float, int)) and self.min is not None:
+            return self.min > other
+        return False
+
+    def __ge__(self, other):
+        if isinstance(other, (float, int)) and self.min is not None:
+            return self.min >= other
+        return False
 
 
 class Const:
@@ -78,16 +104,44 @@ class ChildModel(GenericModel):
         pass
 
 
-class Child:
-    def __init__(self, child_id, model, constraints, name=None, active=True) -> None:
-        self.id = child_id
+class Component(ABC):
+    def __init__(
+        self,
+        id,
+        model,
+        constraints,
+        grid=None,
+        name=None,
+        active=True,
+        independent=True,
+    ) -> None:
         self.model = model
-        self.constraints = constraints
+        self.id = id
+        self.constraints = [] if constraints is None else constraints
         self.name = name
         self.active = active
+        self.grid = grid
+        self.independent = independent
 
 
-class Compound:
+class Child(Component):
+    def __init__(
+        self,
+        child_id,
+        model,
+        constraints,
+        grid=None,
+        name=None,
+        active=True,
+        independent=True,
+    ) -> None:
+        super().__init__(child_id, model, constraints, grid, name, active, independent)
+
+        self.node_id = None
+        self.independent = independent
+
+
+class Compound(Component):
     def __init__(
         self,
         compound_id,
@@ -95,15 +149,13 @@ class Compound:
         constraints,
         connected_to,
         subcomponents,
+        grid=None,
         name=None,
         active=True,
     ) -> None:
-        self.id = compound_id
-        self.model = model
-        self.constraints = [] if constraints is None else constraints
+        super().__init__(compound_id, model, constraints, grid, name, active, True)
+
         self.connected_to = connected_to
-        self.name = name
-        self.active = active
         self.subcomponents = subcomponents
 
     def component_of_type(self, comp_type):
@@ -114,7 +166,7 @@ class Compound:
         ]
 
 
-class Node:
+class Node(Component):
     def __init__(
         self,
         node_id,
@@ -125,17 +177,15 @@ class Node:
         name=None,
         position=None,
         active=True,
+        independent=True,
     ) -> None:
-        self.id = node_id
-        self.model = model
+        super().__init__(node_id, model, constraints, grid, name, active, independent)
+
         self.child_ids = [] if child_ids is None else child_ids
         self.constraints = [] if constraints is None else constraints
-        self.grid = grid
         self.from_branch_ids = []
         self.to_branch_ids = []
-        self.name = name
         self.position = position
-        self.active = active
 
     def add_from_branch_id(self, branch_id):
         self.from_branch_ids.append(branch_id)
@@ -143,8 +193,19 @@ class Node:
     def add_to_branch_id(self, branch_id):
         self.to_branch_ids.append(branch_id)
 
+    def _remove_branch(self, branch_id):
+        if branch_id in self.to_branch_ids:
+            self.to_branch_ids.remove(branch_id)
+        elif branch_id in self.from_branch_ids:
+            self.from_branch_ids.remove(branch_id)
 
-class Branch:
+    def remove_branch(self, branch_id):
+        switched = (branch_id[1], branch_id[0], branch_id[2])
+        self._remove_branch(branch_id)
+        self._remove_branch(switched)
+
+
+class Branch(Component):
     def __init__(
         self,
         model,
@@ -154,15 +215,12 @@ class Branch:
         grid=None,
         name=None,
         active=True,
+        independent=True,
     ) -> None:
-        self.id = None
-        self.model = model
+        super().__init__(None, model, constraints, grid, name, active, independent)
+
         self.from_node_id = from_node_id
         self.to_node_id = to_node_id
-        self.constraints = [] if constraints is None else constraints
-        self.grid = grid
-        self.name = name
-        self.active = active
 
 
 class Network:
@@ -209,8 +267,10 @@ class Network:
         self.deactivate_by_id(type(component), component.id)
 
     def all_models(self):
-        model_container_list = self.childs + self.compounds + self.branches + self.nodes
-        return [model_container.model for model_container in model_container_list]
+        return [model_container.model for model_container in self.all_components()]
+
+    def all_components(self):
+        return self.childs + self.compounds + self.branches + self.nodes
 
     def all_models_with_grid(self):
         model_container_list = self.childs + self.compounds + self.branches + self.nodes
@@ -247,8 +307,28 @@ class Network:
     def remove_compound(self, compound_id):
         del self._compound_dict[compound_id]
 
+    def remove_branch_between(self, node_one, node_two, key=0):
+        self._network_internal.remove_edge(node_one, node_two, key)
+        self.node_by_id(node_one).remove_branch((node_one, node_two, key))
+        self.node_by_id(node_two).remove_branch((node_one, node_two, key))
+
+    def move_branch(self, branch_id, new_from_id, new_to_id):
+        branch: Branch = self.branch_by_id(branch_id)
+        self.remove_branch_between(branch_id[0], branch_id[1], key=branch_id[2])
+        return self.branch(
+            branch.model,
+            new_from_id,
+            new_to_id,
+            constraints=branch.constraints,
+            grid=branch.grid,
+            name=branch.name,
+        )
+
     def child_by_id(self, child_id):
         return self._child_dict[child_id]
+
+    def childs_by_type(self, cls):
+        return [child for child in self.childs if type(child.model) == cls]
 
     def compound_by_id(self, compound_id):
         return self._compound_dict[compound_id]
@@ -267,6 +347,12 @@ class Network:
 
     def has_branch(self, branch_id):
         return branch_id in self._network_internal.edges
+
+    def get_branch_between(self, node_id_one, node_id_two):
+        return self._network_internal.has_edge(node_id_one, node_id_two)
+
+    def has_branch_between(self, node_id_one, node_id_two):
+        return self._network_internal.has_edge(node_id_one, node_id_two)
 
     @property
     def nodes(self) -> List[Node]:
@@ -294,6 +380,9 @@ class Network:
             raise ValueError(f"The node id '{branch_id}' is not valid.")
         return self._network_internal.edges[branch_id]["internal_branch"]
 
+    def branches_by_type(self, cls):
+        return [branch for branch in self.branches if type(branch.model) == cls]
+
     def __insert_to_blacklist_if_forced(self, obj):
         if self.__force_blacklist:
             self.__blacklist.append(obj)
@@ -313,12 +402,21 @@ class Network:
         child_id = overwrite_id or (
             0 if len(self._child_dict) == 0 else max(self._child_dict.keys()) + 1
         )
-        child = Child(child_id, model, constraints, name=name)
+        child = Child(
+            child_id,
+            model,
+            constraints,
+            name=name,
+            independent=not self.__collect_components,
+        )
         self.__insert_to_blacklist_if_forced(child)
         self.__insert_to_container_if_collect_toggled(child)
         self._child_dict[child_id] = child
         if attach_to_node_id is not None:
-            self.node_by_id(attach_to_node_id).child_ids.append(child_id)
+            child.node_id = attach_to_node_id
+            attaching_node = self.node_by_id(attach_to_node_id)
+            attaching_node.child_ids.append(child_id)
+            child.grid = attaching_node.grid
         return child_id
 
     def child_to(self, model, node_id, constraints=None, overwrite_id=None, name=None):
@@ -354,7 +452,13 @@ class Network:
             grid or self.default_grid_model,
             name=name,
             position=position,
+            independent=not self.__collect_components,
         )
+        if child_ids is not None:
+            for child_id in child_ids:
+                child = self.child_by_id(child_id)
+                child.grid = grid
+                child.id = node_id
         self.__insert_to_blacklist_if_forced(node)
         self.__insert_to_container_if_collect_toggled(node)
 
@@ -381,6 +485,7 @@ class Network:
                 }
             ),
             name=name,
+            independent=not self.__collect_components,
         )
         self.__insert_to_blacklist_if_forced(branch)
         self.__insert_to_container_if_collect_toggled(branch)
@@ -549,3 +654,34 @@ def transform_network(network: Network, graph_transform):
         _clean_up_compound(network, compound)
 
     return network
+
+
+def _add_tuple(a, b):
+    return [a[i] + b[i] for i in range(len(a))]
+
+
+def _div_tuple(a, div):
+    return tuple([a[i] / div for i in range(len(a))])
+
+
+def calc_coordinates(network: Network, component: Component):
+    if type(component) == Node:
+        return component.position
+    elif type(component) == Branch:
+        node_start = network.node_by_id(component.from_node_id)
+        node_end = network.node_by_id(component.from_node_id)
+        return tuple(
+            [
+                (node_start.position[i] + node_end.position[i]) / 2
+                for i in range(len(node_start.position))
+            ]
+        )
+    elif type(component) == Child:
+        return network.node_by_id(component.node_id).position
+    elif type(component) == Compound:
+        position = (0, 0)
+        for connected_node_id in component.connected_to.values():
+            node = network.node_by_id(connected_node_id)
+            position = _add_tuple(position, node.position)
+        return _div_tuple(position, len(component.connected_to))
+    raise Exception(f"This should not happen! The component {component} is unknown.")

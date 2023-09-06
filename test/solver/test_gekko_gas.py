@@ -73,7 +73,7 @@ def test_two_pipes_gas_network():
     gas_net = create_two_pipes_gas_example()
     result = ms.GEKKOSolver().solve(gas_net)
 
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], 0.13484224247)
+    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], 0.1)
     assert len(result.dataframes) == 5
 
 
@@ -81,5 +81,5 @@ def test_two_pipes_line_gas_network():
     gas_net = create_two_pipes_no_branching()
     result = ms.GEKKOSolver().solve(gas_net)
 
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], 0.18138694512)
+    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], 0.2)
     assert len(result.dataframes) == 4

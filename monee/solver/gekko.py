@@ -9,11 +9,10 @@ from monee.problem.core import OptimizationProblem
 import pandas
 
 DEFAULT_SOLVER_OPTIONS = [
-    "minlp_maximum_iterations 500",
+    "minlp_maximum_iterations 250",
     "minlp_max_iter_with_int_sol 10",
     "minlp_as_nlp 0",
-    "nlp_maximum_iterations 500",
-    "nlp_gap_tol 0.01",
+    "nlp_maximum_iterations 250",
     "minlp_branch_method 1",
     "minlp_integer_tol 0.05",
     "minlp_gap_tol 0.01",

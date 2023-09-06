@@ -138,13 +138,16 @@ def create_consume_hydr_grid(
     node_id,
     mass_flow=1,
     pressure_pa=1000000,
+    t_k=293,
     constraints=None,
     overwrite_id=None,
     name=None,
     **kwargs
 ):
     return network.child_to(
-        mm.ConsumeHydrGrid(mass_flow=mass_flow, pressure_pa=pressure_pa, **kwargs),
+        mm.ConsumeHydrGrid(
+            mass_flow=mass_flow, pressure_pa=pressure_pa, t_k=t_k, **kwargs
+        ),
         node_id=node_id,
         constraints=constraints,
         overwrite_id=overwrite_id,
@@ -177,15 +180,24 @@ def create_heat_exchanger(
     q_mw,
     diameter_m=0.10,
     temperature_ext_k=293,
+    in_line_operation=False,
     constraints=None,
     grid=None,
     name=None,
 ):
     return network.branch(
-        mm.HeatExchanger(
+        mm.HeatExchangerLoad(
             q_mw=q_mw,
             diameter_m=diameter_m,
             temperature_ext_k=temperature_ext_k,
+            in_line_operation=in_line_operation,
+        )
+        if q_mw > 0
+        else mm.HeatExchanger(
+            q_mw=q_mw,
+            diameter_m=diameter_m,
+            temperature_ext_k=temperature_ext_k,
+            in_line_operation=in_line_operation,
         ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
@@ -230,6 +242,7 @@ def create_chp(
     efficiency_power,
     efficiency_heat,
     mass_flow_setpoint,
+    in_line_operation=False,
     constraints=None,
 ):
     return network.compound(
@@ -240,6 +253,7 @@ def create_chp(
             mass_flow_setpoint,
             q_mvar_setpoint=0,
             temperature_ext_k=293,
+            in_line_operation=in_line_operation,
         ),
         constraints=constraints,
         power_node_id=power_node_id,
@@ -259,6 +273,7 @@ def create_p2h(
     efficiency,
     temperature_ext_k=293,
     q_mvar_setpoint=0,
+    in_line_operation=False,
     constraints=None,
 ):
     return network.compound(
@@ -268,6 +283,7 @@ def create_p2h(
             temperature_ext_k=temperature_ext_k,
             efficiency=efficiency,
             q_mvar_setpoint=q_mvar_setpoint,
+            in_line_operation=in_line_operation,
         ),
         constraints=constraints,
         power_node=power_node_id,

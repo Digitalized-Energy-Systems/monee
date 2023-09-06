@@ -8,18 +8,29 @@ from monee.model.child import (
     PowerGenerator,
     Source,
 )
-from monee.model.branch import HeatExchangerLoad, HeatExchangerGenerator
+from monee.model.branch import HeatExchangerLoad, HeatExchangerGenerator, HeatExchanger
 from monee.model.node import Bus, Junction
-from monee.model.grid import WaterGrid
+from monee.model.grid import WaterGrid, GasGrid
+from monee.model.multi import CHP, PowerToHeat, PowerToGas
+
+CONTROLLABLE_ATTRIBUTES = ["p_mw", "mass_flow", "q_w"]
+CONTROLLABLE_ATTRIBUTES_CP = ["mass_flow", "heat_energy_mw", "to_mass_flow"]
 
 
 def retrieve_power_uniform(model):
-    if isinstance(model, (HeatExchangerLoad, HeatExchangerGenerator)):
+    if isinstance(model, (HeatExchangerLoad, HeatExchangerGenerator, HeatExchanger)):
         return model.q_w, model.q_w.max
     elif isinstance(model, (PowerLoad, PowerGenerator)):
         return model.p_mw, model.p_mw.max
     elif isinstance(model, (Sink, Source)):
         return -model.mass_flow, -model.mass_flow.min
+    elif isinstance(model, CHP):
+        return -model.mass_flow, -model.mass_flow.min
+    elif isinstance(model, PowerToHeat):
+        return model.heat_energy_mw, model.heat_energy_mw.max
+    elif isinstance(model, PowerToGas):
+        return -model.to_mass_flow, -model.to_mass_flow.min
+
     raise ValueError(f"The model {type(model)} is not a known load.")
 
 
@@ -33,20 +44,22 @@ def calculate_objective(model_to_data):
 
 
 def create_load_shedding_optimization_problem(
-    load_weight=10,
+    load_weight=100,
     bounds_el=(0.9, 1.1),
-    bound_heat=(340, 390),
+    bounds_heat=(340, 390),
     bounds_gas=(900000, 1100000),
+    ext_grid_el_bounds=(-0.25, 0.25),
+    ext_grid_gas_bounds=(-1.5, 1.5),
 ):
     problem = OptimizationProblem()
 
-    controllable_attributes = ["p_mw", "mass_flow", "q_w"]
-    problem.controllable_demands(controllable_attributes)
-    problem.controllable_generators(controllable_attributes)
+    problem.controllable_demands(CONTROLLABLE_ATTRIBUTES)
+    problem.controllable_generators(CONTROLLABLE_ATTRIBUTES)
+    problem.controllable_cps(CONTROLLABLE_ATTRIBUTES_CP)
 
     problem.bounds(bounds_el, lambda m, _: type(m) == Bus, ["vm_pu"])
     problem.bounds(
-        bound_heat, lambda m, g: type(m) == Junction and type(g) == WaterGrid, ["t_k"]
+        bounds_heat, lambda m, g: type(m) == Junction and type(g) == WaterGrid, ["t_k"]
     )
     problem.bounds(bounds_gas, lambda m, _: type(m) == Junction, ["pressure_pa"])
 
@@ -54,14 +67,53 @@ def create_load_shedding_optimization_problem(
     objectives.with_models(problem.controllables_link).data(
         lambda model: load_weight
         if isinstance(model, (HeatExchangerLoad, Sink, PowerLoad))
-        else 1
+        else (
+            load_weight - 1 if isinstance(model, (CHP, PowerToGas, PowerToHeat)) else 1
+        )
     ).calculate(calculate_objective)
 
     constraints = Constraints()
-    constraints.select_types(ExtPowerGrid).equation(lambda model: model.p_mw == 0)
-    constraints.select_types(ExtHydrGrid).equation(lambda model: model.mass_flow == 0)
+    constraints.select_types(ExtPowerGrid).equation(
+        lambda model: model.p_mw >= ext_grid_el_bounds[0]
+    ).equation(lambda model: model.p_mw <= ext_grid_el_bounds[1])
+
+    constraints.select(
+        lambda comp: type(comp.grid) == GasGrid and type(comp.model) == ExtHydrGrid
+    ).equation(lambda model: model.mass_flow >= ext_grid_gas_bounds[0]).equation(
+        lambda model: model.mass_flow <= ext_grid_gas_bounds[1]
+    )
 
     problem.objectives = objectives
+    problem.constraints = constraints
+
+    return problem
+
+
+def create_ls_init_optimization_problem(
+    bounds_el=(0.9, 1.1),
+    bounds_heat=(340, 390),
+    bounds_gas=(900000, 1100000),
+    target_ext_grid_el_feed=-0.1,
+    target_ext_grid_gas_feed=-0.1,
+):
+    problem = OptimizationProblem()
+
+    problem.controllable_generators(CONTROLLABLE_ATTRIBUTES)
+
+    problem.bounds(bounds_el, lambda m, _: type(m) == Bus, ["vm_pu"])
+    problem.bounds(
+        bounds_heat, lambda m, g: type(m) == Junction and type(g) == WaterGrid, ["t_k"]
+    )
+    problem.bounds(bounds_gas, lambda m, _: type(m) == Junction, ["pressure_pa"])
+
+    constraints = Constraints()
+    constraints.select_types(ExtPowerGrid).equation(
+        lambda model: model.p_mw == target_ext_grid_el_feed
+    )
+    constraints.select(
+        lambda comp: type(comp.grid) == GasGrid and type(comp.model) == ExtHydrGrid
+    ).equation(lambda model: model.mass_flow == 0)
+
     problem.constraints = constraints
 
     return problem

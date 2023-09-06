@@ -65,7 +65,7 @@ class Bus(NodeModel):
 @model
 class Junction(NodeModel):
     def __init__(self) -> None:
-        self.t_k = Var(350)
+        self.t_k = Var(352)
         self.pressure_pa = Var(500000)
 
     def calc_signed_mass_flow(

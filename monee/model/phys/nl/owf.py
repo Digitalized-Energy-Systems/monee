@@ -1,6 +1,3 @@
-import math
-
-
 # https://apps.dtic.mil/sti/citations/AD0874542
 def darcy_weisbach_equation(
     p_start_var,

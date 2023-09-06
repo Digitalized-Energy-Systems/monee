@@ -9,7 +9,7 @@ from .core import (
 from .grid import GasGrid, PowerGrid, WaterGrid, NO_GRID
 from .child import PowerLoad, Sink, PowerGenerator
 from .node import Junction, Bus
-from .branch import HeatExchanger
+from .branch import HeatExchanger, GasPipe, WaterPipe
 
 
 class MutableFloat(float):
@@ -51,9 +51,10 @@ class GenericTransferBranch(MultiGridBranchModel):
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
         if type(grids) == WaterGrid or type(grids) == dict and WaterGrid in grids:
             self.mass_flow = self._mass_flow
+            self.heat_mass_flow = self._mass_flow
         if type(grids) == GasGrid or type(grids) == dict and GasGrid in grids:
-            self.to_mass_flow = self._mass_flow
-            self.from_mass_flow = self._mass_flow
+            self.mass_flow = self._mass_flow
+            self.gas_mass_flow = self._mass_flow
         if type(grids) == PowerGrid or type(grids) == dict and PowerGrid in grids:
             self._fill_el()
 
@@ -167,13 +168,17 @@ class CHPControlNode(Junction, Bus):
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
         heat_to_branches = [
-            branch for branch in to_branch_models if "mass_flow" in branch.vars
+            branch
+            for branch in to_branch_models
+            if "heat_mass_flow" in branch.vars or type(branch) == HeatExchanger
         ]
         heat_from_branches = [
-            branch for branch in from_branch_models if "mass_flow" in branch.vars
+            branch
+            for branch in from_branch_models
+            if "heat_mass_flow" in branch.vars or type(branch) == HeatExchanger
         ]
         gas_to_branches = [
-            branch for branch in to_branch_models if "to_mass_flow" in branch.vars
+            branch for branch in to_branch_models if "gas_mass_flow" in branch.vars
         ]
         power_from_branches = [
             branch for branch in from_branch_models if "p_to_mw" in branch.vars
@@ -216,14 +221,24 @@ class CHP(CompoundModel):
         mass_flow_setpoint: float,
         q_mvar_setpoint: float = 0,
         temperature_ext_k: float = 293,
+        in_line_operation: bool = False,
     ) -> None:
+        self._in_line_operation = in_line_operation
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
         self.efficiency_power = efficiency_power
         self.efficiency_heat = efficiency_heat
 
-        self.mass_flow = MutableFloat(mass_flow_setpoint)
-        self.q_mvar = MutableFloat(q_mvar_setpoint)
+        self.mass_flow = (
+            mass_flow_setpoint
+            if type(mass_flow_setpoint) == Var
+            else MutableFloat(mass_flow_setpoint)
+        )
+        self.q_mvar = (
+            q_mvar_setpoint
+            if type(q_mvar_setpoint) == Var
+            else MutableFloat(q_mvar_setpoint)
+        )
 
     def create(
         self,
@@ -242,6 +257,7 @@ class CHP(CompoundModel):
                 gas_node.grid.higher_heating_value,
             ),
             grid=NO_GRID,
+            position=power_node.position,
         )
         network.branch(
             GenericTransferBranch(),  #
@@ -254,7 +270,9 @@ class CHP(CompoundModel):
             node_id_control,
         )
         network.branch(
-            HeatExchanger(Var(1), self.diameter_m),
+            HeatExchanger(
+                Var(0.01), self.diameter_m, in_line_operation=self._in_line_operation
+            ),
             node_id_control,
             heat_node.id,
             grid=heat_node.grid,
@@ -269,8 +287,14 @@ class CHP(CompoundModel):
 @model
 class GasToHeat(CompoundModel):
     def __init__(
-        self, heat_energy_mw, diameter_m, temperature_ext_k, efficiency
+        self,
+        heat_energy_mw,
+        diameter_m,
+        temperature_ext_k,
+        efficiency,
+        in_line_operation=False,
     ) -> None:
+        self._in_line_operation = in_line_operation
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
@@ -290,6 +314,7 @@ class GasToHeat(CompoundModel):
                 gas_node.grid.higher_heating_value,
             ),
             grid=NO_GRID,
+            position=gas_node.position,
         )
         network.branch(GenericTransferBranch(), gas_node.id, node_id_control)
         network.branch(
@@ -298,7 +323,11 @@ class GasToHeat(CompoundModel):
             node_id_control,
         )
         network.branch(
-            GenericTransferBranch(),
+            HeatExchanger(
+                self.heat_energy_mw,
+                self.diameter_m,
+                in_line_operation=self._in_line_operation,
+            ),
             node_id_control,
             heat_node.id,
         )
@@ -313,14 +342,24 @@ class PowerToHeat(CompoundModel):
         temperature_ext_k,
         efficiency,
         q_mvar_setpoint=0,
+        in_line_operation=False,
     ) -> None:
+        self._in_line_operation = in_line_operation
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
 
-        self.heat_energy_mw = MutableFloat(heat_energy_mw)
+        self.heat_energy_mw = (
+            heat_energy_mw
+            if type(heat_energy_mw) == Var
+            else MutableFloat(heat_energy_mw)
+        )
         self.load_p_mw = Var(1)
-        self.load_q_mvar = MutableFloat(q_mvar_setpoint)
+        self.load_q_mvar = (
+            q_mvar_setpoint
+            if type(q_mvar_setpoint) == Var
+            else MutableFloat(q_mvar_setpoint)
+        )
 
     def create(
         self,
@@ -334,6 +373,7 @@ class PowerToHeat(CompoundModel):
                 self.load_p_mw, self.load_q_mvar, self.heat_energy_mw, self.efficiency
             ),
             grid=NO_GRID,
+            position=power_node.position,
         )
         network.branch(GenericTransferBranch(), power_node.id, node_id_control)
         network.branch(
@@ -342,7 +382,11 @@ class PowerToHeat(CompoundModel):
             node_id_control,
         )
         network.branch(
-            GenericTransferBranch(),
+            HeatExchanger(
+                self.heat_energy_mw,
+                self.diameter_m,
+                in_line_operation=self._in_line_operation,
+            ),
             node_id_control,
             heat_node.id,
         )

@@ -1,8 +1,18 @@
-from typing import Dict, Any, List, Tuple
+from abc import ABC, abstractmethod
+from typing import Dict, Any, List, Tuple, Union, Callable
 from monee.model import Network
-from monee import run_energy_flow_optimization
+from monee.simulation.core import solve
 
 import pandas
+
+
+def _merge_inner_dicts_to(target_dict, extend_dict):
+    for key, inner_dict in target_dict.items():
+        for key_two, inner_dict_two in extend_dict.items():
+            if key == key_two:
+                new_inner_dict = {**inner_dict_two, **inner_dict}
+                target_dict[key] = new_inner_dict
+    return target_dict
 
 
 class TimeseriesData:
@@ -45,6 +55,29 @@ class TimeseriesData:
     @property
     def compound_id_data(self):
         return self._compound_id_to_series
+
+    def extend(self, td):
+        self._child_id_to_series = {**td.child_id_data, **self._child_id_to_series}
+        self._child_name_to_series = {
+            **td.child_name_data,
+            **self._child_name_to_series,
+        }
+        self._branch_id_to_series = {**td.branch_id_data, **self._branch_id_to_series}
+        self._compound_id_to_series = {
+            **td.compound_id_data,
+            **self._compound_id_to_series,
+        }
+
+        _merge_inner_dicts_to(self._child_id_to_series, td.child_id_data)
+        _merge_inner_dicts_to(self._child_name_to_series, td.child_name_data)
+        _merge_inner_dicts_to(self._branch_id_to_series, td.branch_id_data)
+        _merge_inner_dicts_to(self._compound_id_to_series, td.compound_id_data)
+
+    def __add__(self, other):
+        new_td = TimeseriesData()
+        new_td.extend(self)
+        new_td.extend(other)
+        return new_td
 
 
 class TimeseriesResult:
@@ -96,16 +129,29 @@ def apply_to_compound(compound, timeseries_data, timestep):
     apply_to_by_id(compound, timeseries_data.branch_id_data, timestep)
 
 
+class StepHook(ABC):
+    def pre_run(self, net, base_net, step):
+        pass
+
+    def post_run(self, net, base_net, step):
+        pass
+
+
 def run(
     net: Network,
     timeseries_data: TimeseriesData,
     steps: int,
+    step_hooks: List[Union[StepHook, Callable]],
     solver=None,
     optimization_problem=None,
 ):
     result_list = []
 
     for step in range(steps):
+        for step_hook in step_hooks:
+            if isinstance(step_hook, StepHook):
+                step_hook.pre_run(net_copy, net, step)
+
         net_copy = net.copy()
         for child in net_copy.childs:
             apply_to_child(child, timeseries_data, step)
@@ -115,8 +161,13 @@ def run(
             apply_to_compound(compound, timeseries_data, step)
 
         result_list.append(
-            run_energy_flow_optimization(
-                net_copy, optimization_problem=optimization_problem, solver=solver
-            )
+            solve(net_copy, optimization_problem=optimization_problem, solver=solver)
         )
+
+        for step_hook in step_hooks:
+            if isinstance(step_hook, StepHook):
+                step_hook.post_run(net_copy, net, step)
+            else:
+                step_hook(net_copy, net, step)
+
     return TimeseriesResult(result_list)

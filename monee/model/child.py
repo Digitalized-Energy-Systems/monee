@@ -10,6 +10,7 @@ class NoVarChildModel(ChildModel):
 class PowerGenerator(NoVarChildModel):
     def __init__(self, p_mw, q_mvar, **kwargs) -> None:
         super().__init__(**kwargs)
+
         self.p_mw = -p_mw
         self.q_mvar = -q_mvar
 
@@ -18,6 +19,7 @@ class PowerGenerator(NoVarChildModel):
 class ExtPowerGrid(NoVarChildModel):
     def __init__(self, p_mw, q_mvar, vm_pu, va_degree, **kwargs) -> None:
         super().__init__(**kwargs)
+
         self.p_mw = Var(p_mw)
         self.q_mvar = Var(q_mvar)
 
@@ -60,14 +62,16 @@ class ExtHydrGrid(NoVarChildModel):
 
 @model
 class ConsumeHydrGrid(NoVarChildModel):
-    def __init__(self, mass_flow=0.1, pressure_pa=1000000, **kwargs) -> None:
+    def __init__(self, mass_flow=0.1, pressure_pa=1000000, t_k=293, **kwargs) -> None:
         super().__init__(**kwargs)
         self.mass_flow = -mass_flow
 
         self.pressure_pa = pressure_pa
+        self.t_k = t_k
 
     def overwrite(self, node_model):
         node_model.pressure_pa = Const(self.pressure_pa)
+        # node_model.t_k = Const(self.t_k)
 
 
 @model

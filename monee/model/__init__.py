@@ -6,7 +6,9 @@ from .core import (
     Branch,
     Var,
     Const,
+    Component,
     model,
+    upper,
     BranchModel,
     ChildModel,
     NodeModel,
@@ -14,6 +16,7 @@ from .core import (
     MultiGridBranchModel,
     transform_network,
     to_spanning_tree,
+    calc_coordinates,
 )
 from .node import Bus, Junction
 from .branch import (
@@ -23,6 +26,9 @@ from .branch import (
     PowerLine,
     WaterPipe,
     HeatExchanger,
+    HeatExchangerGenerator,
+    HeatExchangerLoad,
+    Trafo,
 )
 from .child import (
     ExtHydrGrid,

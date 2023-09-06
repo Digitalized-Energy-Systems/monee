@@ -1,7 +1,9 @@
 from typing import Dict, List
 from monee.model.core import GenericModel, Network, Var
 from monee.model.child import PowerLoad, Sink, Source, PowerGenerator
-from monee.model.branch import HeatExchangerLoad, HeatExchangerGenerator
+from monee.model.branch import HeatExchangerLoad, HeatExchangerGenerator, HeatExchanger
+from monee.model.grid import GasGrid
+from monee.model.multi import PowerToGas, CHP, PowerToHeat
 import functools
 
 
@@ -111,19 +113,24 @@ class Constraints:
     def __init__(self) -> None:
         self._constraints = []
 
-    def select(self, model_selection_function) -> Constraint:
+    def select(self, component_selection_function) -> Constraint:
         constraint = Constraint(
             lambda network: [
-                model
-                for model in network.all_models()
-                if model_selection_function(model)
+                component.model
+                for component in network.all_components()
+                if component_selection_function(component)
             ],
         )
         self._constraints.append(constraint)
         return constraint
 
     def select_types(self, model_cls_tuple) -> Constraint:
-        return self.select(lambda model: isinstance(model, model_cls_tuple))
+        return self.select(
+            lambda component: isinstance(component.model, model_cls_tuple)
+        )
+
+    def select_grids(self, grid_cls_tuple) -> Constraint:
+        return self.select(lambda component: isinstance(component.grid, grid_cls_tuple))
 
     def with_models(self, models) -> Constraint:
         constraint = Constraint(models)
@@ -151,29 +158,33 @@ class OptimizationProblem:
         self._objectives: Objectives = None
         self._constraints: Constraints = None
 
-    def _apply(self, network):
+    def _apply(self, network: Network):
         for appliable in self._controllable_appliables:
             appliable(network)
         for model, attributes in self._controllable_to_attr.items():
             for attribute in attributes:
                 if hasattr(model, attribute):
                     val = getattr(model, attribute)
-                    setattr(
-                        model,
-                        attribute,
-                        Var(
-                            val,
-                            max=0 if val <= 0 else val,
-                            min=0 if val > 0 else val,
-                        ),
-                    )
+                    if type(val) != Var:
+                        setattr(
+                            model,
+                            attribute,
+                            Var(
+                                val,
+                                max=0 if val <= 0 else val,
+                                min=0 if val > 0 else val,
+                            ),
+                        )
 
-        for min, max, model_condition, attributes in self._bounds_for_controllables:
-            model_grid_list = network.all_models_with_grid()
-            for model, grid in model_grid_list:
-                if model_condition(model, grid):
+        for min, max, component_condition, attributes in self._bounds_for_controllables:
+            component_list = network.all_components()
+            for component in component_list:
+                if (
+                    component_condition(component.model, component.grid)
+                    and component.independent
+                ):
                     for attribute in attributes:
-                        var = getattr(model, attribute)
+                        var = getattr(component.model, attribute)
                         var.max = max
                         var.min = min
 
@@ -182,32 +193,38 @@ class OptimizationProblem:
             self._controllable_to_attr[model] = []
         self._controllable_to_attr[model] += attributes or list(model.vars.keys())
 
-    def bounds(self, minmax, model_condition=lambda _: True, attributes=None):
+    def bounds(self, minmax, component_condition=lambda _: True, attributes=None):
         self._bounds_for_controllables.append(
-            (minmax[0], minmax[1], model_condition, attributes)
+            (minmax[0], minmax[1], component_condition, attributes)
         )
 
-    def controllable(self, model_condition=lambda _: True, attributes=None):
-        def apply_controllable(network):
-            model_list = network.all_models()
-            for model in model_list:
-                if model_condition(model):
-                    self.add_to_controllable(model, attributes)
+    def controllable(self, component_condition=lambda _: True, attributes=None):
+        def apply_controllable(network: Network):
+            component_list = network.all_components()
+            for component in component_list:
+                if component.independent and component_condition(component):
+                    self.add_to_controllable(component.model, attributes)
 
         self._controllable_appliables.append(apply_controllable)
         return self
 
     def controllable_all(self, attributes):
         self.controllable(
-            model_condition=lambda _: True,
+            component_condition=lambda _: True,
             attributes=attributes,
         )
         return self
 
     def controllable_demands(self, attributes):
         self.controllable(
-            model_condition=lambda model: isinstance(
-                model, (HeatExchangerLoad, Sink, PowerLoad)
+            component_condition=lambda component: isinstance(
+                component.model, (HeatExchangerLoad, PowerLoad)
+            )
+            or (type(component.model) == Sink and type(component.grid) == GasGrid)
+            or (
+                type(component.model) == HeatExchanger
+                and type(component.model.q_w) != Var
+                and component.model.q_w > 0
             ),
             attributes=attributes,
         )
@@ -215,8 +232,17 @@ class OptimizationProblem:
 
     def controllable_generators(self, attributes):
         self.controllable(
-            model_condition=lambda model: isinstance(
-                model, (HeatExchangerGenerator, PowerGenerator, Source)
+            component_condition=lambda component: isinstance(
+                component.model, (HeatExchangerGenerator, PowerGenerator, Source)
+            ),
+            attributes=attributes,
+        )
+        return self
+
+    def controllable_cps(self, attributes):
+        self.controllable(
+            component_condition=lambda component: isinstance(
+                component.model, (CHP, PowerToHeat, PowerToGas)
             ),
             attributes=attributes,
         )
