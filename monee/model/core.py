@@ -18,6 +18,12 @@ def upper(var_or_const):
     return var_or_const
 
 
+def value(var_or_const):
+    if isinstance(var_or_const, (Const, Var)):
+        return var_or_const.value
+    return var_or_const
+
+
 class Var:
     def __init__(self, value, max=None, min=None) -> None:
         self.value = value

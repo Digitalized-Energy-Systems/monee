@@ -298,16 +298,20 @@ class HeatExchanger(BranchModel):
 
 @model
 class HeatExchangerLoad(HeatExchanger):
-    def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
-        super().__init__(q_mw, diameter_m, temperature_ext_k)
+    def __init__(
+        self, q_mw, diameter_m, in_line_operation=False, temperature_ext_k=293
+    ) -> None:
+        super().__init__(q_mw, diameter_m, in_line_operation, temperature_ext_k)
 
         self.q_w = q_mw * 10**6
 
 
 @model
 class HeatExchangerGenerator(HeatExchanger):
-    def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
-        super().__init__(q_mw, diameter_m, temperature_ext_k)
+    def __init__(
+        self, q_mw, diameter_m, in_line_operation=False, temperature_ext_k=293
+    ) -> None:
+        super().__init__(q_mw, diameter_m, in_line_operation, temperature_ext_k)
 
         self.q_w = -q_mw * 10**6
 

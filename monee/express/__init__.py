@@ -187,12 +187,12 @@ def create_heat_exchanger(
 ):
     return network.branch(
         mm.HeatExchangerLoad(
-            q_mw=q_mw,
+            q_mw=-q_mw,
             diameter_m=diameter_m,
             temperature_ext_k=temperature_ext_k,
             in_line_operation=in_line_operation,
         )
-        if q_mw > 0
+        if q_mw < 0
         else mm.HeatExchanger(
             q_mw=q_mw,
             diameter_m=diameter_m,

@@ -1,12 +1,17 @@
-from typing import List, Dict
+from typing import List, Dict, Set
 from dataclasses import dataclass
+
+import logging
 
 from gekko import GEKKO
 from gekko.gk_variable import GKVariable
 from gekko.gk_operators import GK_Operators
 from monee.model.core import Network, Var, GenericModel, Node, Branch, Const, Compound
+from monee.model.child import ExtHydrGrid, ExtPowerGrid
 from monee.problem.core import OptimizationProblem
 import pandas
+
+import networkx as nx
 
 DEFAULT_SOLVER_OPTIONS = [
     "minlp_maximum_iterations 250",
@@ -43,6 +48,65 @@ def _as_iter(possible_iter):
     return possible_iter if hasattr(possible_iter, "__iter__") else [possible_iter]
 
 
+def ignore_branch(branch, network: Network, ignored_nodes):
+    ig = (
+        not branch.active
+        or ignore_node(network.node_by_id(branch.id[0]), ignored_nodes)
+        or ignore_node(network.node_by_id(branch.id[1]), ignored_nodes)
+    )
+    print(f"ignored branch {branch.id}")
+    return ig
+
+
+def ignore_node(node, ignored_nodes):
+    ig = not node.active or node.id in ignored_nodes
+    print(f"ignored node {node.id}")
+    return ig
+
+
+def ignore_child(child, ignored_nodes):
+    ig = not child.active or child.node_id in ignored_nodes
+    print(f"ignored child {child.id}")
+    return ig
+
+
+def ignore_compound(compound, ignored_nodes):
+    ig = not compound.active or any(
+        [value in ignored_nodes for value in compound.connected_to.values()]
+    )
+    print(f"ignored compound {compound.id}")
+    return ig
+
+
+def generate_real_topology(nx_net):
+    net_copy = nx_net.copy()
+    for edge in nx_net.edges.data():
+        branch = edge[2]["internal_branch"]
+        if not branch.active:
+            net_copy.remove_edge(edge[0], edge[1], 0)
+    return net_copy
+
+
+def find_ignored_nodes(network: Network):
+    ignored_nodes = set()
+    real_topology = generate_real_topology(network._network_internal)
+    components = nx.connected_components(real_topology)
+    for component in components:
+        component_leading = False
+        for node in component:
+            int_node: Node = real_topology.nodes[node]["internal_node"]
+            for child_id in int_node.child_ids:
+                child = network.child_by_id(child_id)
+                if isinstance(child.model, (ExtPowerGrid, ExtHydrGrid)):
+                    component_leading = True
+                    break
+            if component_leading:
+                break
+        if not component_leading:
+            ignored_nodes.update(component)
+    return ignored_nodes
+
+
 class GEKKOSolver:
     @staticmethod
     def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel):
@@ -61,21 +125,40 @@ class GEKKOSolver:
                 )
 
     @staticmethod
+    def inject_nans(target: GenericModel):
+        for key, value in target.__dict__.items():
+            if isinstance(value, (Var, Const)):
+                setattr(
+                    target,
+                    key,
+                    float("nan"),
+                )
+
+    @staticmethod
     def inject_gekko_vars(
         gekko_model: GEKKO,
         nodes: List[Node],
         branches: List[Branch],
         compounds: List[Compound],
         network: Network,
+        ignored_nodes: Set,
     ):
         for branch in branches:
+            if ignore_branch(branch, network, ignored_nodes):
+                GEKKOSolver.inject_nans(branch.model)
             GEKKOSolver.inject_gekko_vars_attr(gekko_model, branch.model)
         for node in nodes:
+            if ignore_node(node, ignored_nodes):
+                GEKKOSolver.inject_nans(node.model)
             GEKKOSolver.inject_gekko_vars_attr(gekko_model, node.model)
             for child in network.childs_by_ids(node.child_ids):
+                if ignore_child(child, ignored_nodes):
+                    GEKKOSolver.inject_nans(child.model)
                 GEKKOSolver.inject_gekko_vars_attr(gekko_model, child.model)
 
         for compound in compounds:
+            if ignore_compound(compound, ignored_nodes):
+                GEKKOSolver.inject_nans(compound.model)
             GEKKOSolver.inject_gekko_vars_attr(gekko_model, compound.model)
 
     @staticmethod
@@ -110,21 +193,24 @@ class GEKKOSolver:
         self, input_network: Network, optimization_problem: OptimizationProblem = None
     ):
         # ensure compatibility of gekko models with own models
-        # for creating objectives and constraitns
+        # for creating objectives and constraints
         GKVariable.max = property(lambda self: self.UPPER)
         GKVariable.min = property(lambda self: self.LOWER)
 
         m = GEKKO(remote=False)
-        m.open_folder()
         m.options.SOLVER = 1
         m.solver_options = DEFAULT_SOLVER_OPTIONS
 
         network = input_network.copy()
+
+        ignored_nodes = find_ignored_nodes(network)
         nodes = network.nodes
 
         # prepare for overwritting default node behaviors with
         # childs
         for node in nodes:
+            if ignore_node(node, ignored_nodes):
+                continue
             for child in network.childs_by_ids(node.child_ids):
                 if child.active:
                     child.model.overwrite(node.model)
@@ -137,11 +223,13 @@ class GEKKOSolver:
         else:
             m.Obj(0)
 
-        GEKKOSolver.inject_gekko_vars(m, nodes, branches, compounds, network)
+        GEKKOSolver.inject_gekko_vars(
+            m, nodes, branches, compounds, network, ignored_nodes
+        )
 
-        self.process_equations_branches(m, network, branches)
-        self.process_equations_nodes_childs(m, network, nodes)
-        self.process_equations_compounds(m, network, compounds)
+        self.process_equations_branches(m, network, branches, ignored_nodes)
+        self.process_equations_nodes_childs(m, network, nodes, ignored_nodes)
+        self.process_equations_compounds(m, network, compounds, ignored_nodes)
 
         if optimization_problem is not None:
             self.process_oxf_components(m, network, optimization_problem)
@@ -151,10 +239,14 @@ class GEKKOSolver:
         try:
             m.options.COLDSTART = 0
             m.solve(disp=True)
-        except:
-            m.options.COLDSTART = 2
-            m.solve(disp=True)
-            print("Solver not converged. Using Presolve Solution.")
+        except Exception as e:
+            logging.error("Solver not converged.")
+
+            import matplotlib.pyplot as plt
+
+            nx.draw_networkx(real_topology, node_size=10, font_size=5)
+            plt.savefig("debug-network.pdf")
+            raise e
 
         GEKKOSolver.withdraw_gekko_vars(nodes, branches, compounds, network)
 
@@ -192,9 +284,9 @@ class GEKKOSolver:
         if obj is not None:
             m.Obj(obj)
 
-    def process_equations_compounds(self, m, network, compounds):
+    def process_equations_compounds(self, m, network, compounds, ignored_nodes):
         for compound in compounds:
-            if not compound.active:
+            if ignore_compound(compound, ignored_nodes):
                 continue
             for constraint in compound.constraints:
                 m.Equation(constraint(compound.model))
@@ -202,9 +294,9 @@ class GEKKOSolver:
             if equations is not None:
                 m.Equations(_as_iter(equations))
 
-    def process_equations_nodes_childs(self, m, network: Network, nodes):
+    def process_equations_nodes_childs(self, m, network: Network, nodes, ignored_nodes):
         for node in nodes:
-            if not node.active:
+            if ignore_node(node, ignored_nodes):
                 continue
             node_childs = network.childs_by_ids(node.child_ids)
             grid = node.grid or network.default_grid_model
@@ -230,23 +322,29 @@ class GEKKOSolver:
                         [
                             network.branch_by_id(branch_id).model
                             for branch_id in node.from_branch_ids
+                            if not ignore_branch(
+                                network.branch_by_id(branch_id), network, ignored_nodes
+                            )
                         ],
                         [
                             network.branch_by_id(branch_id).model
                             for branch_id in node.to_branch_ids
+                            if not ignore_branch(
+                                network.branch_by_id(branch_id), network, ignored_nodes
+                            )
                         ],
                         [child.model for child in node_childs],
                     )
                 )
             )
             for child in node_childs:
-                if not child.active:
+                if ignore_child(child, ignored_nodes):
                     continue
                 m.Equations(_as_iter(child.model.equations(grid, node)))
 
-    def process_equations_branches(self, m, network, branches):
+    def process_equations_branches(self, m, network, branches, ignored_nodes):
         for branch in branches:
-            if not branch.active:
+            if ignore_branch(branch, network, ignored_nodes):
                 continue
 
             grid = branch.grid or network.default_grid_model

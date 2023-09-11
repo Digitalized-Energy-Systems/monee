@@ -150,9 +150,10 @@ def run(
     for step in range(steps):
         for step_hook in step_hooks:
             if isinstance(step_hook, StepHook):
-                step_hook.pre_run(net_copy, net, step)
+                step_hook.pre_run(net, step)
 
         net_copy = net.copy()
+
         for child in net_copy.childs:
             apply_to_child(child, timeseries_data, step)
         for branch in net_copy.branches:

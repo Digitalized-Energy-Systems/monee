@@ -9,6 +9,7 @@ from .core import (
     Component,
     model,
     upper,
+    value,
     BranchModel,
     ChildModel,
     NodeModel,
@@ -40,4 +41,11 @@ from .child import (
     ConsumeHydrGrid,
 )
 from .multi import CHP, GasToPower, PowerToGas, PowerToHeat, GenericTransferBranch
-from .grid import create_gas_grid, create_water_grid, create_power_grid
+from .grid import (
+    create_gas_grid,
+    create_water_grid,
+    create_power_grid,
+    GasGrid,
+    WaterGrid,
+    PowerGrid,
+)
