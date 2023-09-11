@@ -240,7 +240,11 @@ class GEKKOSolver:
 
             import matplotlib.pyplot as plt
 
-            nx.draw_networkx(real_topology, node_size=10, font_size=5)
+            nx.draw_networkx(
+                generate_real_topology(network._network_internal),
+                node_size=10,
+                font_size=5,
+            )
             plt.savefig("debug-network.pdf")
             raise e
 
