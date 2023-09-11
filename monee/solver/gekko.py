@@ -54,19 +54,16 @@ def ignore_branch(branch, network: Network, ignored_nodes):
         or ignore_node(network.node_by_id(branch.id[0]), ignored_nodes)
         or ignore_node(network.node_by_id(branch.id[1]), ignored_nodes)
     )
-    print(f"ignored branch {branch.id}")
     return ig
 
 
 def ignore_node(node, ignored_nodes):
     ig = not node.active or node.id in ignored_nodes
-    print(f"ignored node {node.id}")
     return ig
 
 
 def ignore_child(child, ignored_nodes):
     ig = not child.active or child.node_id in ignored_nodes
-    print(f"ignored child {child.id}")
     return ig
 
 
@@ -74,7 +71,6 @@ def ignore_compound(compound, ignored_nodes):
     ig = not compound.active or any(
         [value in ignored_nodes for value in compound.connected_to.values()]
     )
-    print(f"ignored compound {compound.id}")
     return ig
 
 
