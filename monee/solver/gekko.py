@@ -15,12 +15,18 @@ import networkx as nx
 
 DEFAULT_SOLVER_OPTIONS = [
     "minlp_maximum_iterations 250",
-    "minlp_max_iter_with_int_sol 10",
+    "minlp_max_iter_with_int_sol 500",
     "minlp_as_nlp 0",
     "nlp_maximum_iterations 250",
-    "minlp_branch_method 1",
-    "minlp_integer_tol 0.05",
-    "minlp_gap_tol 0.01",
+    "minlp_as_nlp 1",
+    "minlp_branch_method 3",
+    "minlp_gap_tol 1.0e-2",
+    "minlp_integer_tol 1.0e-2",
+    "minlp_integer_max 2.0e9",
+    "minlp_integer_leaves 1",
+    "minlp_print_level 1",
+    "objective_convergence_tolerance 1.0e-5",
+    "constraint_convergence_tolerance 1.0e-5",
 ]
 
 
@@ -44,7 +50,6 @@ class SolverResult:
 def _as_iter(possible_iter):
     if possible_iter is None:
         raise Exception(f"None as result for 'equations' is not allowed!")
-
     return possible_iter if hasattr(possible_iter, "__iter__") else [possible_iter]
 
 
@@ -123,11 +128,17 @@ class GEKKOSolver:
     @staticmethod
     def inject_nans(target: GenericModel):
         for key, value in target.__dict__.items():
+            if isinstance(value, (Const)):
+                setattr(
+                    target,
+                    key,
+                    Const(float("nan")),
+                )
             if isinstance(value, (Var, Const)):
                 setattr(
                     target,
                     key,
-                    float("nan"),
+                    Var(float("nan"), max=value.max, min=value.min),
                 )
 
     @staticmethod
@@ -142,19 +153,23 @@ class GEKKOSolver:
         for branch in branches:
             if ignore_branch(branch, network, ignored_nodes):
                 GEKKOSolver.inject_nans(branch.model)
+                continue
             GEKKOSolver.inject_gekko_vars_attr(gekko_model, branch.model)
         for node in nodes:
             if ignore_node(node, ignored_nodes):
                 GEKKOSolver.inject_nans(node.model)
+                continue
             GEKKOSolver.inject_gekko_vars_attr(gekko_model, node.model)
             for child in network.childs_by_ids(node.child_ids):
                 if ignore_child(child, ignored_nodes):
                     GEKKOSolver.inject_nans(child.model)
+                    continue
                 GEKKOSolver.inject_gekko_vars_attr(gekko_model, child.model)
 
         for compound in compounds:
             if ignore_compound(compound, ignored_nodes):
                 GEKKOSolver.inject_nans(compound.model)
+                continue
             GEKKOSolver.inject_gekko_vars_attr(gekko_model, compound.model)
 
     @staticmethod
@@ -333,7 +348,11 @@ class GEKKOSolver:
                                 network.branch_by_id(branch_id), network, ignored_nodes
                             )
                         ],
-                        [child.model for child in node_childs],
+                        [
+                            child.model
+                            for child in node_childs
+                            if not ignore_child(child, ignored_nodes)
+                        ],
                     )
                 )
             )
@@ -366,6 +385,7 @@ class GEKKOSolver:
                         cos_impl=m.cos,
                         if_impl=m.if3,
                         abs_impl=m.abs3,
+                        max_impl=m.max2,
                     )
                 )
             )

@@ -434,11 +434,14 @@ def test_simple_chp():
 def test_simbench_ls_optimization():
     random.seed(42)
 
+    net_simbench = obtain_simbench_net("1-LV-urban6--2-no_sw")
+    for child in net_simbench.childs_by_type(mm.PowerGenerator):
+        child.model.p_mw = child.model.p_mw * 4
     net_multi = mn.generate_mes_based_on_power_net(
-        obtain_simbench_net("1-LV-urban6--2-no_sw"),
-        heat_deployment_rate=1,
-        gas_deployment_rate=1,
+        net_simbench, heat_deployment_rate=1, gas_deployment_rate=1, p2g_density=0.1
     )
+
+    run_energy_flow(net_multi)
 
     bounds_el = (
         BOUND_EL[1] * (1 - BOUND_EL[2]),

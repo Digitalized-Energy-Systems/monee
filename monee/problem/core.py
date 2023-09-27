@@ -217,15 +217,16 @@ class OptimizationProblem:
 
     def controllable_demands(self, attributes):
         self.controllable(
-            component_condition=lambda component: isinstance(
-                component.model, (HeatExchangerLoad, PowerLoad)
+            component_condition=lambda component: (
+                isinstance(component.model, (HeatExchangerLoad, PowerLoad))
+                or (type(component.model) == Sink and type(component.grid) == GasGrid)
+                or (
+                    type(component.model) == HeatExchanger
+                    and type(component.model.q_w) != Var
+                    and component.model.q_w > 0
+                )
             )
-            or (type(component.model) == Sink and type(component.grid) == GasGrid)
-            or (
-                type(component.model) == HeatExchanger
-                and type(component.model.q_w) != Var
-                and component.model.q_w > 0
-            ),
+            and component.active,
             attributes=attributes,
         )
         return self
@@ -234,7 +235,8 @@ class OptimizationProblem:
         self.controllable(
             component_condition=lambda component: isinstance(
                 component.model, (HeatExchangerGenerator, PowerGenerator, Source)
-            ),
+            )
+            and component.active,
             attributes=attributes,
         )
         return self
@@ -243,7 +245,8 @@ class OptimizationProblem:
         self.controllable(
             component_condition=lambda component: isinstance(
                 component.model, (CHP, PowerToHeat, PowerToGas)
-            ),
+            )
+            and component.active,
             attributes=attributes,
         )
         return self

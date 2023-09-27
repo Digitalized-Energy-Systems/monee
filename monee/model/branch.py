@@ -18,7 +18,9 @@ from monee.model.phys.constant import UNIV_GAS_CONST
 
 @model
 class GenericPowerBranch(BranchModel):
-    def __init__(self, tap, shift, br_r, br_x, g_fr, b_fr, g_to, b_to) -> None:
+    def __init__(
+        self, tap, shift, br_r, br_x, g_fr, b_fr, g_to, b_to, max_i_ka=0.319
+    ) -> None:
         """_summary_
 
         Args:
@@ -41,11 +43,17 @@ class GenericPowerBranch(BranchModel):
         self.b_fr = b_fr
         self.g_to = g_to
         self.b_to = b_to
+        self.max_i_ka = max_i_ka
 
         self.p_from_mw = Var(1)
         self.q_from_mvar = Var(1)
+        self.i_from_ka = Var(1)
+        self.loading_from_percent = Var(1)
         self.p_to_mw = Var(1)
         self.q_to_mvar = Var(1)
+        self.i_to_ka = Var(1)
+        self.loading_to_percent = Var(1)
+        self.loading_percent = Var(1)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
         y = np.linalg.pinv([[self.br_r + self.br_x * 1j]])[0][0]
@@ -107,6 +115,20 @@ class GenericPowerBranch(BranchModel):
                 cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
                 sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
                 b_to=self.b_to,
+            ),
+            self.i_from_ka
+            == (self.p_from_mw**2 + self.q_from_mvar**2)
+            / (from_node_model.vars["vm_pu"] * from_node_model.vars["base_kv"])
+            / np.sqrt(3),
+            self.i_to_ka
+            == (self.p_to_mw**2 + self.q_to_mvar**2)
+            / (to_node_model.vars["vm_pu"] * to_node_model.vars["base_kv"])
+            / np.sqrt(3),
+            self.loading_to_percent == self.i_to_ka / self.max_i_ka,
+            self.loading_from_percent == self.i_from_ka / self.max_i_ka,
+            self.loading_percent
+            == (kwargs["max_impl"] if "max_impl" in kwargs else max)(
+                self.loading_from_percent, self.loading_to_percent
             ),
         )
 
@@ -268,6 +290,7 @@ class HeatExchanger(BranchModel):
         self.reynolds = 0
         self.q_w = -q_mw * 10**6
         self.limit = 0.1
+        self.active = True
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
@@ -288,7 +311,7 @@ class HeatExchanger(BranchModel):
                 diameter=self.diameter_m,
             ),
             ohfmodel.heat_exchange_pipe(
-                heat_transfer_flow_loss_var=self.q_w,
+                heat_transfer_flow_loss_var=self.q_w if self.active else 0,
                 t_1_var=from_node_model.vars["t_k"],
                 t_2_var=to_node_model.vars["t_k"],
                 mass_flow_var=self.mass_flow,

@@ -240,6 +240,12 @@ class CHP(CompoundModel):
             else MutableFloat(q_mvar_setpoint)
         )
 
+    def set_active(self, activation_flag):
+        if activation_flag:
+            self._control_node.gas_consumption = self.mass_flow
+        else:
+            self._control_node.gas_consumption = 0
+
     def create(
         self,
         network: Network,
@@ -249,13 +255,14 @@ class CHP(CompoundModel):
         power_node: Node,
     ):
         self._gas_grid = gas_node.grid
+        self._control_node = CHPControlNode(
+            self.mass_flow,
+            self.efficiency_power,
+            self.efficiency_heat,
+            gas_node.grid.higher_heating_value,
+        )
         node_id_control = network.node(
-            CHPControlNode(
-                self.mass_flow,
-                self.efficiency_power,
-                self.efficiency_heat,
-                gas_node.grid.higher_heating_value,
-            ),
+            self._control_node,
             grid=NO_GRID,
             position=power_node.position,
         )
@@ -361,6 +368,12 @@ class PowerToHeat(CompoundModel):
             else MutableFloat(q_mvar_setpoint)
         )
 
+    def set_active(self, activation_flag):
+        if activation_flag:
+            self._control_node.heat_energy_mw = self.heat_energy_mw
+        else:
+            self._control_node.heat_energy_mw = 0
+
     def create(
         self,
         network: Network,
@@ -368,10 +381,11 @@ class PowerToHeat(CompoundModel):
         heat_node: Node,
         heat_return_node: Node,
     ):
+        self._control_node = PowerToHeatControlNode(
+            self.load_p_mw, self.load_q_mvar, self.heat_energy_mw, self.efficiency
+        )
         node_id_control = network.node(
-            PowerToHeatControlNode(
-                self.load_p_mw, self.load_q_mvar, self.heat_energy_mw, self.efficiency
-            ),
+            self._control_node,
             grid=NO_GRID,
             position=power_node.position,
         )

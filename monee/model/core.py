@@ -251,12 +251,19 @@ class Network:
         if cls == Node:
             self.node_by_id(id).active = active
         elif cls == Branch:
-            self.branch_by_id(id).active = active
+            branch = self.branch_by_id(id)
+            if "active" in branch.model.vars:
+                branch.model.active = active
+            else:
+                branch.active = active
         elif cls == Compound:
             compound: Compound = self.compound_by_id(id)
-            for component in compound.subcomponents:
-                component.active = active
-            self.compound_by_id(id).active = active
+            if hasattr(compound.model, "set_active"):
+                compound.model.set_active(active)
+            else:
+                for component in compound.subcomponents:
+                    self._set_active(type(component), component.id, active)
+                self.compound_by_id(id).active = active
         elif cls == Child:
             self.child_by_id(id).active = active
 
@@ -301,7 +308,7 @@ class Network:
         return list(self._compound_dict.values())
 
     @property
-    def childs(self):
+    def childs(self) -> List[Child]:
         return list(self._child_dict.values())
 
     def has_child(self, child_id):
