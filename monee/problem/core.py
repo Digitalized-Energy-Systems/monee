@@ -226,7 +226,8 @@ class OptimizationProblem:
                     and component.model.q_w > 0
                 )
             )
-            and component.active,
+            and component.active
+            and not component.ignored,
             attributes=attributes,
         )
         return self
@@ -236,7 +237,8 @@ class OptimizationProblem:
             component_condition=lambda component: isinstance(
                 component.model, (HeatExchangerGenerator, PowerGenerator, Source)
             )
-            and component.active,
+            and component.active
+            and not component.ignored,
             attributes=attributes,
         )
         return self
@@ -246,7 +248,8 @@ class OptimizationProblem:
             component_condition=lambda component: isinstance(
                 component.model, (CHP, PowerToHeat, PowerToGas)
             )
-            and component.active,
+            and component.active
+            and not component.ignored,
             attributes=attributes,
         )
         return self

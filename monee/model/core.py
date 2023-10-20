@@ -128,6 +128,7 @@ class Component(ABC):
         self.active = active
         self.grid = grid
         self.independent = independent
+        self.ignored = False
 
 
 class Child(Component):
@@ -317,8 +318,30 @@ class Network:
     def remove_child(self, child_id):
         del self._child_dict[child_id]
 
+    def compound_of_node(self, node_id):
+        for compound in self.compounds:
+            for subcomponent in compound.subcomponents:
+                if isinstance(subcomponent, Node):
+                    if subcomponent.id == node_id:
+                        return compound
+        return None
+
+    def remove_node(self, node_id):
+        self._network_internal.remove_node(node_id)
+
+    def remove_branch(self, branch_id):
+        branch: Branch = self.branch_by_id(branch_id)
+        self.remove_branch_between(branch.from_node_id, branch.to_node_id)
+
     def remove_compound(self, compound_id):
+        compound: Compound = self.compound_by_id(compound_id)
         del self._compound_dict[compound_id]
+        for subcomponent in compound.subcomponents:
+            if isinstance(subcomponent, Node):
+                self.remove_node(subcomponent.id)
+            if isinstance(subcomponent, Branch):
+                if self.has_branch(subcomponent.id):
+                    self.remove_branch(subcomponent.id)
 
     def remove_branch_between(self, node_one, node_two, key=0):
         self._network_internal.remove_edge(node_one, node_two, key)
@@ -349,7 +372,7 @@ class Network:
     def compounds_by_type(self, cls):
         return [compound for compound in self.compounds if type(compound.model) == cls]
 
-    def childs_by_ids(self, child_ids):
+    def childs_by_ids(self, child_ids) -> List[Child]:
         return [self.child_by_id(child_id) for child_id in child_ids]
 
     def is_blacklisted(self, obj):
@@ -390,7 +413,7 @@ class Network:
 
     def branch_by_id(self, branch_id):
         if branch_id not in self._network_internal.edges:
-            raise ValueError(f"The node id '{branch_id}' is not valid.")
+            raise ValueError(f"The branch id '{branch_id}' is not valid.")
         return self._network_internal.edges[branch_id]["internal_branch"]
 
     def branches_by_type(self, cls):

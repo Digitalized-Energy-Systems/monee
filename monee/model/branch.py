@@ -15,6 +15,8 @@ import monee.model.phys.nl.opf as opfmodel
 import monee.model.phys.nl.hydraulics as hydraulicsmodel
 from monee.model.phys.constant import UNIV_GAS_CONST
 
+SQRT_3 = np.sqrt(3)
+
 
 @model
 class GenericPowerBranch(BranchModel):
@@ -53,7 +55,10 @@ class GenericPowerBranch(BranchModel):
         self.q_to_mvar = Var(1)
         self.i_to_ka = Var(1)
         self.loading_to_percent = Var(1)
-        self.loading_percent = Var(1)
+
+    @property
+    def loading_percent(self):
+        return max(self.loading_to_percent.value, self.loading_from_percent.value)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
         y = np.linalg.pinv([[self.br_r + self.br_x * 1j]])[0][0]
@@ -119,17 +124,13 @@ class GenericPowerBranch(BranchModel):
             self.i_from_ka
             == (self.p_from_mw**2 + self.q_from_mvar**2)
             / (from_node_model.vars["vm_pu"] * from_node_model.vars["base_kv"])
-            / np.sqrt(3),
+            / SQRT_3,
             self.i_to_ka
             == (self.p_to_mw**2 + self.q_to_mvar**2)
             / (to_node_model.vars["vm_pu"] * to_node_model.vars["base_kv"])
-            / np.sqrt(3),
+            / SQRT_3,
             self.loading_to_percent == self.i_to_ka / self.max_i_ka,
             self.loading_from_percent == self.i_from_ka / self.max_i_ka,
-            self.loading_percent
-            == (kwargs["max_impl"] if "max_impl" in kwargs else max)(
-                self.loading_from_percent, self.loading_to_percent
-            ),
         )
 
 

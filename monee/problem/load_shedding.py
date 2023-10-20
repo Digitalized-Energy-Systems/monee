@@ -10,7 +10,12 @@ from monee.model.child import (
     PowerGenerator,
     Source,
 )
-from monee.model.branch import HeatExchangerLoad, HeatExchangerGenerator, HeatExchanger
+from monee.model.branch import (
+    HeatExchangerLoad,
+    HeatExchangerGenerator,
+    HeatExchanger,
+    GenericPowerBranch,
+)
 from monee.model.node import Bus, Junction
 from monee.model.grid import WaterGrid, GasGrid
 from monee.model.multi import CHP, PowerToHeat, PowerToGas
@@ -23,7 +28,7 @@ CONTROLLABLE_ATTRIBUTES_CP = ["mass_flow", "heat_energy_mw", "to_mass_flow"]
 def _or_zero(var):
     if type(var) == Var and math.isnan(var.value):
         return 0
-    if math.isnan(var.value.value):
+    if hasattr(var.value, "value") and math.isnan(var.value.value):
         return 0
     return var
 
@@ -59,6 +64,7 @@ def create_load_shedding_optimization_problem(
     bounds_el=(0.9, 1.1),
     bounds_heat=(340, 390),
     bounds_gas=(900000, 1100000),
+    bounds_lp=(0, 1.5),
     ext_grid_el_bounds=(-0.25, 0.25),
     ext_grid_gas_bounds=(-1.5, 1.5),
 ):
@@ -94,6 +100,10 @@ def create_load_shedding_optimization_problem(
         lambda model: model.mass_flow <= ext_grid_gas_bounds[1]
     )
 
+    constraints.select_types(GenericPowerBranch).equation(
+        lambda model: model.loading_from_percent <= bounds_lp[1]
+    ).equation(lambda model: model.loading_to_percent <= bounds_lp[1])
+
     problem.objectives = objectives
     problem.constraints = constraints
 
@@ -104,8 +114,9 @@ def create_ls_init_optimization_problem(
     bounds_el=(0.9, 1.1),
     bounds_heat=(340, 390),
     bounds_gas=(900000, 1100000),
-    target_ext_grid_el_feed=0,
-    target_ext_grid_gas_feed=0.3,
+    bounds_lp=(0, 1.5),
+    ext_grid_el_bounds=(-0.25, 0.25),
+    ext_grid_gas_bounds=(-1.5, 1.5),
 ):
     problem = OptimizationProblem()
 
@@ -119,11 +130,18 @@ def create_ls_init_optimization_problem(
 
     constraints = Constraints()
     constraints.select_types(ExtPowerGrid).equation(
-        lambda model: model.p_mw == target_ext_grid_el_feed
-    )
+        lambda model: model.p_mw >= ext_grid_el_bounds[0]
+    ).equation(lambda model: model.p_mw <= ext_grid_el_bounds[1])
+
     constraints.select(
         lambda comp: type(comp.grid) == GasGrid and type(comp.model) == ExtHydrGrid
-    ).equation(lambda model: model.mass_flow == 0)
+    ).equation(lambda model: model.mass_flow >= ext_grid_gas_bounds[0]).equation(
+        lambda model: model.mass_flow <= ext_grid_gas_bounds[1]
+    )
+
+    constraints.select_types(GenericPowerBranch).equation(
+        lambda model: model.loading_from_percent <= bounds_lp[1]
+    ).equation(lambda model: model.loading_to_percent <= bounds_lp[1])
 
     problem.constraints = constraints
 

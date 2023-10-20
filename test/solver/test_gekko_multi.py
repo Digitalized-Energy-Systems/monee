@@ -433,6 +433,7 @@ def test_simple_chp():
 
 def test_simbench_ls_optimization():
     random.seed(42)
+    import networkx as nx
 
     net_simbench = obtain_simbench_net("1-LV-urban6--2-no_sw")
     for child in net_simbench.childs_by_type(mm.PowerGenerator):
