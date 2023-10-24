@@ -1,13 +1,15 @@
-import os
+import os, uuid
 import pandapower.converter as pc
 from .matpower import read_matpower_case
 from monee.model.child import PowerLoad, PowerGenerator, ExtPowerGrid
 
 
 def from_pandapower_net(net):
-    pc.to_mpc(net, init="flat", filename="temp.mat")
-    monee_net = read_matpower_case("temp.mat")
-    os.remove("temp.mat")
+    id_file = uuid.uuid4()
+    name_file = f"{id_file}.mat"
+    pc.to_mpc(net, init="flat", filename=name_file)
+    monee_net = read_matpower_case(name_file)
+    os.remove(name_file)
     monee_net.clear_childs()
 
     for _, row in net.load.iterrows():
