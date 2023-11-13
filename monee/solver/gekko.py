@@ -124,7 +124,6 @@ def remove_cps(network: Network):
             network.branch(WaterPipe(0, 0), heat_return_node.id, heat_node.id)
     for branch in network.branches:
         if isinstance(branch.model, MultiGridBranchModel):
-            print(branch.model)
             network.remove_branch(branch.id)
 
 
