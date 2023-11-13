@@ -144,6 +144,7 @@ def run(
     step_hooks: List[Union[StepHook, Callable]],
     solver=None,
     optimization_problem=None,
+    solve=True,
 ):
     result_list = []
 
@@ -161,9 +162,12 @@ def run(
         for compound in net_copy.compounds:
             apply_to_compound(compound, timeseries_data, step)
 
-        result_list.append(
-            solve(net_copy, optimization_problem=optimization_problem, solver=solver)
-        )
+        if solve:
+            result_list.append(
+                solve(
+                    net_copy, optimization_problem=optimization_problem, solver=solver
+                )
+            )
 
         for step_hook in step_hooks:
             if isinstance(step_hook, StepHook):
