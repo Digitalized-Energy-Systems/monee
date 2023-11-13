@@ -10,7 +10,7 @@ from monee.io.from_simbench import obtain_simbench_net
 
 BOUND_EL = ("vm_pu", 1, 0.2)
 BOUND_GAS = ("pressure_pa", 500000, 0.3)
-BOUND_HEAT = ("t_k", 352, 0.3)
+BOUND_HEAT = ("t_k", 352, 0.1)
 
 
 def create_two_line_example_with_2_pipe_example_p2g(source_flow=0.1):
@@ -442,7 +442,7 @@ def test_simbench_ls_optimization():
         net_simbench, heat_deployment_rate=1, gas_deployment_rate=1, p2g_density=0.1
     )
 
-    run_energy_flow(net_multi)
+    print(run_energy_flow(net_multi))
 
     bounds_el = (
         BOUND_EL[1] * (1 - BOUND_EL[2]),
@@ -466,4 +466,6 @@ def test_simbench_ls_optimization():
         net_multi, optimization_problem=optimization_problem
     )
 
+    print(result)
+    assert False
     assert result.dataframes["ExtPowerGrid"]["p_mw"][0] == -0.25

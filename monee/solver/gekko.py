@@ -9,7 +9,14 @@ from gekko.gk_operators import GK_Operators
 from monee.model.core import Network, Var, GenericModel, Node, Branch, Const, Compound
 from monee.model.child import ExtHydrGrid, ExtPowerGrid
 from monee.problem.core import OptimizationProblem
-from monee.model.multi import CHP, PowerToHeat, GasToHeat, MultiGridBranchModel
+from monee.model.multi import (
+    CHP,
+    PowerToHeat,
+    GasToHeat,
+    MultiGridBranchModel,
+)
+from monee.model.branch import WaterPipe
+
 import pandas
 
 import networkx as nx
@@ -103,8 +110,21 @@ def remove_cps(network: Network):
     ]
     for comp in relevant_compounds:
         network.remove_compound(comp.id)
+
+        # as CHPs are integrated in the typical topology by replacing the actual in line he
+        if type(comp.model) == CHP:
+            heat_return_node = network.node_by_id(
+                comp.connected_to["heat_return_node_id"]
+            )
+            heat_node = network.node_by_id(comp.connected_to["heat_node_id"])
+            network.branch(WaterPipe(0, 0), heat_return_node.id, heat_node.id)
+        if type(comp.model) == PowerToHeat:
+            heat_return_node = network.node_by_id(comp.connected_to["heat_return_node"])
+            heat_node = network.node_by_id(comp.connected_to["heat_node"])
+            network.branch(WaterPipe(0, 0), heat_return_node.id, heat_node.id)
     for branch in network.branches:
         if isinstance(branch.model, MultiGridBranchModel):
+            print(branch.model)
             network.remove_branch(branch.id)
 
 
