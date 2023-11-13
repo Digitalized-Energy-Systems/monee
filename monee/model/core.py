@@ -84,6 +84,9 @@ class BranchModel(GenericModel):
     def equations(self, grid, from_node_model, to_node_model, **kwargs):
         pass
 
+    def loss_percent(self):
+        return 0
+
 
 class MultiGridBranchModel(BranchModel):
     @abstractmethod
@@ -305,7 +308,7 @@ class Network:
         return self._objectives
 
     @property
-    def compounds(self):
+    def compounds(self) -> List[Compound]:
         return list(self._compound_dict.values())
 
     @property

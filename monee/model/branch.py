@@ -60,6 +60,9 @@ class GenericPowerBranch(BranchModel):
     def loading_percent(self):
         return max(self.loading_to_percent.value, self.loading_from_percent.value)
 
+    def loss_percent(self):
+        return (self.p_from_mw.value - self.p_to_mw.value) / self.p_from_mw.value
+
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
         y = np.linalg.pinv([[self.br_r + self.br_x * 1j]])[0][0]
         g, b = np.real(y), np.imag(y)
@@ -226,6 +229,14 @@ class WaterPipe(BranchModel):
         self.velocity = Var(1)
         self.heat_loss = Var(1)
         self.reynolds = Var(1000)
+        self.t_average_k = Var(350)
+
+    def loss_percent(self):
+        return self.heat_loss.value / (
+            self.mass_flow.value
+            * ohfmodel.SPECIFIC_HEAT_CAP_WATER
+            * self.t_average_k.value
+        )
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         self._nikurdse = hydraulicsmodel.calc_nikurdse(
@@ -273,6 +284,8 @@ class WaterPipe(BranchModel):
                 t_1_var=from_node_model.vars["t_k"],
                 t_2_var=to_node_model.vars["t_k"],
             ),
+            self.t_average_k
+            == abs(from_node_model.vars["t_k"] - to_node_model.vars["t_k"]) / 2,
         )
 
 
