@@ -119,6 +119,8 @@ class Constraints:
                 component.model
                 for component in network.all_components()
                 if component_selection_function(component)
+                and component.active
+                and not component.ignored
             ],
         )
         self._constraints.append(constraint)

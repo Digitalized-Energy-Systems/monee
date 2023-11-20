@@ -34,7 +34,7 @@ DEFAULT_SOLVER_OPTIONS = [
     "minlp_integer_leaves 1",
     "minlp_print_level 1",
     "objective_convergence_tolerance 1.0e-3",
-    "constraint_convergence_tolerance 1.0e-3",
+    "constraint_convergence_tolerance 1.0e-2",
 ]
 
 
@@ -83,9 +83,16 @@ def ignore_child(child, ignored_nodes):
 
 
 def ignore_compound(compound, ignored_nodes):
-    ig = not compound.active or any(
-        [value in ignored_nodes for value in compound.connected_to.values()]
-    )
+    ig = not compound.active
+
+    if any([value in ignored_nodes for value in compound.connected_to.values()]):
+        if hasattr(compound.model, "set_active"):
+            compound.model.set_active(False)
+        else:
+            ig = True
+    else:
+        if hasattr(compound.model, "set_active"):
+            compound.model.set_active(True)
     return ig
 
 
@@ -267,6 +274,7 @@ class GEKKOSolver:
         network = input_network.copy()
 
         ignored_nodes = find_ignored_nodes(network)
+
         nodes = network.nodes
 
         # prepare for overwritting default node behaviors with
@@ -385,32 +393,32 @@ class GEKKOSolver:
                         node_childs,
                     )
                 )
-            m.Equations(
-                _as_iter(
-                    node.model.equations(
-                        grid,
-                        [
-                            network.branch_by_id(branch_id).model
-                            for branch_id in node.from_branch_ids
-                            if not ignore_branch(
-                                network.branch_by_id(branch_id), network, ignored_nodes
-                            )
-                        ],
-                        [
-                            network.branch_by_id(branch_id).model
-                            for branch_id in node.to_branch_ids
-                            if not ignore_branch(
-                                network.branch_by_id(branch_id), network, ignored_nodes
-                            )
-                        ],
-                        [
-                            child.model
-                            for child in node_childs
-                            if not ignore_child(child, ignored_nodes)
-                        ],
-                    )
+            equations = _as_iter(
+                node.model.equations(
+                    grid,
+                    [
+                        network.branch_by_id(branch_id).model
+                        for branch_id in node.from_branch_ids
+                        if not ignore_branch(
+                            network.branch_by_id(branch_id), network, ignored_nodes
+                        )
+                    ],
+                    [
+                        network.branch_by_id(branch_id).model
+                        for branch_id in node.to_branch_ids
+                        if not ignore_branch(
+                            network.branch_by_id(branch_id), network, ignored_nodes
+                        )
+                    ],
+                    [
+                        child.model
+                        for child in node_childs
+                        if not ignore_child(child, ignored_nodes)
+                    ],
                 )
             )
+            m.Equations([eq for eq in equations if type(eq) != bool or not eq])
+
             for child in node_childs:
                 if ignore_child(child, ignored_nodes):
                     continue
