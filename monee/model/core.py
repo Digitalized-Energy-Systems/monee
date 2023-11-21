@@ -14,6 +14,8 @@ def model(cls):
 
 def upper(var_or_const):
     if isinstance(var_or_const, Var):
+        if var_or_const.max is None:
+            return var_or_const.value
         return var_or_const.max
     return var_or_const
 
