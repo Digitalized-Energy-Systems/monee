@@ -409,7 +409,7 @@ class Network:
             for edge in self._network_internal.edges
         ]
 
-    def node_by_id(self, node_id):
+    def node_by_id(self, node_id) -> Node:
         if node_id not in self._network_internal.nodes:
             raise ValueError(
                 f"The node id '{node_id}' is not valid. The valid ids are {self._network_internal.nodes.keys()}"

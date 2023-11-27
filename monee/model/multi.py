@@ -441,5 +441,5 @@ class PowerToGas(MultiGridBranchModel):
             self.to_mass_flow
             == self.efficiency
             * self.p_from_mw
-            * (1 / grids[GasGrid].higher_heating_value * 3.6)
+            * (1 / (grids[GasGrid].higher_heating_value * 3.6))
         ), self.p_from_mw > 0
