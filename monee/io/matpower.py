@@ -110,6 +110,8 @@ def fill_node_dict(bus_mat, node_dict_list, child_dict_list):
     for i in range(len(bus_mat)):
         node_dict = {}
         bus_row = bus_mat[i]
+        if bus_row[12] != 0:
+            continue
         node_dict["id"] = int(bus_row[0])
         node_dict["grid_id"] = "power"
         node_dict["values"] = {}
