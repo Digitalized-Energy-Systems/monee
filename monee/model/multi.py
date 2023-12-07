@@ -34,13 +34,17 @@ class MutableFloat(float):
 
 @model
 class GenericTransferBranch(MultiGridBranchModel):
-    def __init__(self, **kwargs) -> None:
+    def __init__(self, loss=0, **kwargs) -> None:
         super().__init__(**kwargs)
 
         self._mass_flow = Var(1)
 
         self._p_mw = Var(1)
         self._q_mvar = Var(1)
+        self._loss = loss
+
+    def loss_percent(self):
+        return self._loss
 
     def _fill_el(self):
         self.p_to_mw = self._p_mw
@@ -285,7 +289,7 @@ class CHP(CompoundModel):
             grid=heat_node.grid,
         )
         network.branch(
-            GenericTransferBranch(),
+            GenericTransferBranch(loss=1 - self.efficiency_power),
             node_id_control,
             power_node.id,
         )
@@ -323,7 +327,11 @@ class GasToHeat(CompoundModel):
             grid=NO_GRID,
             position=gas_node.position,
         )
-        network.branch(GenericTransferBranch(), gas_node.id, node_id_control)
+        network.branch(
+            GenericTransferBranch(loss=1 - self.efficiency),
+            gas_node.id,
+            node_id_control,
+        )
         network.branch(
             GenericTransferBranch(),
             heat_return_node.id,
@@ -417,6 +425,9 @@ class GasToPower(MultiGridBranchModel):
         self.q_to_mvar = q_mvar_setpoint
         self.from_mass_flow = Var(1)
 
+    def loss_percent(self):
+        return 1 - self.efficiency
+
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
         return self.p_to_mw == self.efficiency * self.from_mass_flow * (
             3.6 * grids[GasGrid].higher_heating_value
@@ -435,6 +446,9 @@ class PowerToGas(MultiGridBranchModel):
         self.p_from_mw = Var(1)
         self.q_from_mvar = consume_q_mvar_setpoint
         self.to_mass_flow = mass_flow_setpoint
+
+    def loss_percent(self):
+        return 1 - self.efficiency
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
         return (

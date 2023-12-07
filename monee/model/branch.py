@@ -233,7 +233,7 @@ class WaterPipe(BranchModel):
 
     def loss_percent(self):
         return self.heat_loss.value / (
-            self.mass_flow.value
+            abs(self.mass_flow.value)
             * ohfmodel.SPECIFIC_HEAT_CAP_WATER
             * self.t_average_k.value
         )
