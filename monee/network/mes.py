@@ -42,7 +42,7 @@ def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
                 target_net,
                 from_node_id=bus_index_to_junction_index[node.id],
                 to_node_id=bus_index_to_end_junction_index[node.id],
-                diameter_m=0.015,
+                diameter_m=0.020,
                 q_mw=-0.02 * random.random(),
                 in_line_operation=True,
             )
@@ -64,7 +64,7 @@ def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=0.015,
+            diameter_m=0.020,
             length_m=get_length(target_net, branch, from_node_id, to_node_id),
             temperature_ext_k=296.15,
             roughness=0.001,
