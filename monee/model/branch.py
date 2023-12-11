@@ -61,7 +61,7 @@ class GenericPowerBranch(BranchModel):
         return max(self.loading_to_percent.value, self.loading_from_percent.value)
 
     def loss_percent(self):
-        return (self.p_from_mw.value - self.p_to_mw.value) / self.p_from_mw.value
+        return abs((self.p_from_mw.value - self.p_to_mw.value) / self.p_from_mw.value)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
         y = np.linalg.pinv([[self.br_r + self.br_x * 1j]])[0][0]
@@ -232,7 +232,7 @@ class WaterPipe(BranchModel):
         self.t_average_k = Var(350)
 
     def loss_percent(self):
-        return self.heat_loss.value / (
+        return abs(self.heat_loss.value) / (
             abs(self.mass_flow.value)
             * ohfmodel.SPECIFIC_HEAT_CAP_WATER
             * self.t_average_k.value
@@ -285,7 +285,7 @@ class WaterPipe(BranchModel):
                 t_2_var=to_node_model.vars["t_k"],
             ),
             self.t_average_k
-            == abs(from_node_model.vars["t_k"] - to_node_model.vars["t_k"]) / 2,
+            == abs(from_node_model.vars["t_k"] + to_node_model.vars["t_k"]) / 2,
         )
 
 
