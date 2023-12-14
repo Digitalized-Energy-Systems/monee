@@ -643,6 +643,19 @@ class Network:
             result_str += "\n"
         return result_str
 
+    def statistics(self):
+        type_to_number = {}
+        model_containers = self.nodes + self.childs + self.branches + self.compounds
+        for container in model_containers:
+            if not container.independent:
+                continue
+            model_type = type(container.model)
+            if model_type in type_to_number:
+                type_to_number[model_type] += 1
+            else:
+                type_to_number[model_type] = 1
+        return type_to_number
+
     def copy(self):
         return copy.deepcopy(self)
 
