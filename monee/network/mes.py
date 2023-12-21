@@ -144,7 +144,7 @@ def create_p2h_in_combined_generated_network(
                     heat_return_node_id=heat_junc,
                     heat_energy_mw=0.01,  # .0002 * random.random(),
                     diameter_m=0.0030,
-                    efficiency=0.4 * random.random() * 0.5,
+                    efficiency=0.4 * 0.5 * 0.5,
                     in_line_operation=True,
                 )
 
@@ -173,7 +173,7 @@ def create_chp_in_combined_generated_network(
                     heat_node_id=heat_junc_two,
                     heat_return_node_id=heat_junc,
                     gas_node_id=gas_junc,
-                    mass_flow_setpoint=0.016 * (random.random()),
+                    mass_flow_setpoint=0.016 * 0.5,
                     diameter_m=0.035,
                     efficiency_power=efficiency / 2,
                     efficiency_heat=efficiency / 2,
@@ -192,7 +192,7 @@ def create_p2g_in_combined_generated_network(
                 from_node_id=power_node.id,
                 to_node_id=gas_junc,
                 efficiency=0.7,
-                mass_flow_setpoint=3.5 * (random.random()),
+                mass_flow_setpoint=3.5 * 0.5,
             )
 
 
