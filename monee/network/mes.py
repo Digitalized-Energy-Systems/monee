@@ -49,12 +49,12 @@ def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
         mx.create_sink(
             target_net,
             bus_index_to_end_junction_index[node.id],
-            mass_flow=0.1 + random.random() * 0.01,
+            mass_flow=0.3 + random.random() * 0.01,
         )
         mx.create_sink(
             target_net,
             bus_index_to_junction_index[node.id],
-            mass_flow=random.random() * 0.01,
+            mass_flow=0.3 + random.random() * 0.01,
         )
 
     for branch in power_net_as_st.branches:
