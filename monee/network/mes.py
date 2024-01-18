@@ -98,7 +98,7 @@ def create_gas_net_for_power(power_net, target_net, gas_deployment_rate):
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=0.0575,
+            diameter_m=0.1575,
             length_m=get_length(target_net, branch, from_node_id, to_node_id),
             grid=gas_grid,
         )
@@ -109,9 +109,14 @@ def create_gas_net_for_power(power_net, target_net, gas_deployment_rate):
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
-                mass_flow=0.0005 * random.random(),
+                mass_flow=0.005 * random.random(),
             )
 
+    mx.create_source(
+        target_net,
+        node_id=bus_index_to_junction_index[power_net_as_st.first_node()],
+        mass_flow=0.05,
+    )
     mx.create_ext_hydr_grid(
         target_net,
         node_id=bus_index_to_junction_index[power_net_as_st.first_node()],
@@ -173,7 +178,7 @@ def create_chp_in_combined_generated_network(
                     heat_node_id=heat_junc_two,
                     heat_return_node_id=heat_junc,
                     gas_node_id=gas_junc,
-                    mass_flow_setpoint=0.016 * random.random(),
+                    mass_flow_setpoint=0.01 * random.random(),
                     diameter_m=0.035,
                     efficiency_power=efficiency / 2,
                     efficiency_heat=efficiency / 2,
@@ -192,7 +197,7 @@ def create_p2g_in_combined_generated_network(
                 from_node_id=power_node.id,
                 to_node_id=gas_junc,
                 efficiency=0.7,
-                mass_flow_setpoint=3.5 * random.random(),
+                mass_flow_setpoint=0.035 * random.random(),
             )
 
 

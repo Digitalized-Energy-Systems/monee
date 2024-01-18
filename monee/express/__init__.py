@@ -133,6 +133,24 @@ def create_ext_hydr_grid(
     )
 
 
+def create_source(
+    network: mm.Network,
+    node_id,
+    mass_flow=1,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs
+):
+    return network.child_to(
+        mm.Source(mass_flow, **kwargs),
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+    )
+
+
 def create_consume_hydr_grid(
     network: mm.Network,
     node_id,
