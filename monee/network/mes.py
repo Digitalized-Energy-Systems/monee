@@ -98,7 +98,7 @@ def create_gas_net_for_power(power_net, target_net, gas_deployment_rate):
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=5.75,
+            diameter_m=0.0575,
             length_m=get_length(target_net, branch, from_node_id, to_node_id),
             grid=gas_grid,
         )
@@ -109,7 +109,7 @@ def create_gas_net_for_power(power_net, target_net, gas_deployment_rate):
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
-                mass_flow=0.05 * random.random(),
+                mass_flow=0.0005 * random.random(),
             )
 
     mx.create_ext_hydr_grid(

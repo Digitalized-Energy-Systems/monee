@@ -438,8 +438,14 @@ def test_simbench_ls_optimization():
     net_simbench = obtain_simbench_net("1-LV-urban6--2-no_sw")
     for child in net_simbench.childs_by_type(mm.PowerGenerator):
         child.model.p_mw = child.model.p_mw * 4
+    cp_density_coeff = 1.5
     net_multi = mn.generate_mes_based_on_power_net(
-        net_simbench, heat_deployment_rate=1, gas_deployment_rate=1, p2g_density=0.1
+        net_simbench,
+        heat_deployment_rate=1,
+        gas_deployment_rate=1,
+        p2g_density=0.1 * cp_density_coeff,
+        p2h_density=0.2 * cp_density_coeff,
+        chp_density=0.2 * cp_density_coeff,
     )
 
     print(run_energy_flow(net_multi))
