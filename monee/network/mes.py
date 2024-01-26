@@ -43,7 +43,7 @@ def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
                 from_node_id=bus_index_to_junction_index[node.id],
                 to_node_id=bus_index_to_end_junction_index[node.id],
                 diameter_m=0.020,
-                q_mw=-0.02 * random.random(),
+                q_mw=(-1 if random.random() > 0.8 else 1) * -0.02 * random.random(),
                 in_line_operation=True,
             )
         mx.create_sink(
@@ -109,13 +109,13 @@ def create_gas_net_for_power(power_net, target_net, gas_deployment_rate):
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
-                mass_flow=0.005 * random.random(),
+                mass_flow=0.01 * random.random(),
             )
 
     mx.create_source(
         target_net,
         node_id=bus_index_to_junction_index[power_net_as_st.first_node()],
-        mass_flow=0.05,
+        mass_flow=0.1,
     )
     mx.create_ext_hydr_grid(
         target_net,
@@ -147,7 +147,7 @@ def create_p2h_in_combined_generated_network(
                     power_node_id=power_node.id,
                     heat_node_id=heat_junc_two,
                     heat_return_node_id=heat_junc,
-                    heat_energy_mw=0.01,  # .0002 * random.random(),
+                    heat_energy_mw=0.015,  # .0002 * random.random(),
                     diameter_m=0.0030,
                     efficiency=0.4 * 0.5 * 0.5,
                     in_line_operation=True,
@@ -178,7 +178,7 @@ def create_chp_in_combined_generated_network(
                     heat_node_id=heat_junc_two,
                     heat_return_node_id=heat_junc,
                     gas_node_id=gas_junc,
-                    mass_flow_setpoint=0.01 * random.random(),
+                    mass_flow_setpoint=0.015 * random.random(),
                     diameter_m=0.035,
                     efficiency_power=efficiency / 2,
                     efficiency_heat=efficiency / 2,
@@ -197,7 +197,7 @@ def create_p2g_in_combined_generated_network(
                 from_node_id=power_node.id,
                 to_node_id=gas_junc,
                 efficiency=0.7,
-                mass_flow_setpoint=0.035 * random.random(),
+                mass_flow_setpoint=0.045 * random.random(),
             )
 
 
