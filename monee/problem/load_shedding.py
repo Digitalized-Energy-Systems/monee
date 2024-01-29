@@ -41,11 +41,11 @@ def retrieve_power_uniform(model):
     elif isinstance(model, (Sink, Source)):
         return -_or_zero(model.mass_flow), -model.mass_flow.min
     elif isinstance(model, CHP):
-        return -_or_zero(model.mass_flow), -model.mass_flow.min
+        return 0, 0
     elif isinstance(model, PowerToHeat):
-        return _or_zero(model.heat_energy_mw), model.heat_energy_mw.max
+        return 0, 0
     elif isinstance(model, PowerToGas):
-        return -_or_zero(model.to_mass_flow), -model.to_mass_flow.min
+        return 0, 0
 
     raise ValueError(f"The model {type(model)} is not a known load.")
 
