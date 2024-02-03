@@ -9,6 +9,7 @@ from .core import (
     Component,
     model,
     upper,
+    lower,
     value,
     BranchModel,
     ChildModel,
