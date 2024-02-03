@@ -33,13 +33,16 @@ def _or_zero(var):
     return var
 
 
+HHV = 0.0116
+
+
 def retrieve_power_uniform(model):
     if isinstance(model, (HeatExchangerLoad, HeatExchangerGenerator, HeatExchanger)):
-        return _or_zero(model.q_w), model.q_w.max
+        return _or_zero(model.q_w) / 1e6, model.q_w.max / 1e6
     elif isinstance(model, (PowerLoad, PowerGenerator)):
         return _or_zero(model.p_mw), model.p_mw.max
     elif isinstance(model, (Sink, Source)):
-        return -_or_zero(model.mass_flow), -model.mass_flow.min
+        return -_or_zero(model.mass_flow) * 3.6 * HHV, -model.mass_flow.min * 3.6 * HHV
     elif isinstance(model, CHP):
         return 0, 0
     elif isinstance(model, PowerToHeat):
@@ -82,10 +85,14 @@ def create_load_shedding_optimization_problem(
 
     objectives = Objectives()
     objectives.with_models(problem.controllables_link).data(
-        lambda model: load_weight
-        if isinstance(model, (HeatExchangerLoad, Sink, PowerLoad))
-        else (
-            load_weight - 1 if isinstance(model, (CHP, PowerToGas, PowerToHeat)) else 1
+        lambda model: (
+            load_weight
+            if isinstance(model, (HeatExchangerLoad, Sink, PowerLoad))
+            else (
+                load_weight - 1
+                if isinstance(model, (CHP, PowerToGas, PowerToHeat))
+                else 1
+            )
         )
     ).calculate(calculate_objective)
 

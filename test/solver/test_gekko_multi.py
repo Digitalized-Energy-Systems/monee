@@ -447,6 +447,7 @@ def test_simbench_ls_optimization():
         p2h_density=0.2 * cp_density_coeff,
         chp_density=0.2 * cp_density_coeff,
     )
+    net_multi.deactivate_by_id(mm.Branch, (226, 227, 0))
 
     print(run_energy_flow(net_multi))
 
