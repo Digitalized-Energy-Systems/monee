@@ -57,7 +57,7 @@ class SolverResult:
 
 def _as_iter(possible_iter):
     if possible_iter is None:
-        raise Exception(f"None as result for 'equations' is not allowed!")
+        raise Exception("None as result for 'equations' is not allowed!")
     return possible_iter if hasattr(possible_iter, "__iter__") else [possible_iter]
 
 
@@ -119,13 +119,13 @@ def remove_cps(network: Network):
         network.remove_compound(comp.id)
 
         # as CHPs are integrated in the typical topology by replacing the actual in line he
-        if type(comp.model) == CHP:
+        if comp.model is CHP:
             heat_return_node = network.node_by_id(
                 comp.connected_to["heat_return_node_id"]
             )
             heat_node = network.node_by_id(comp.connected_to["heat_node_id"])
             network.branch(WaterPipe(0, 0), heat_return_node.id, heat_node.id)
-        if type(comp.model) == PowerToHeat:
+        if comp.model is PowerToHeat:
             heat_return_node = network.node_by_id(comp.connected_to["heat_return_node"])
             heat_node = network.node_by_id(comp.connected_to["heat_node"])
             network.branch(WaterPipe(0, 0), heat_return_node.id, heat_node.id)
@@ -160,13 +160,13 @@ class GEKKOSolver:
     @staticmethod
     def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel):
         for key, value in target.__dict__.items():
-            if type(value) == Var:
+            if value is Var:
                 setattr(
                     target,
                     key,
                     gekko.Var(value.value, lb=value.min, ub=value.max),
                 )
-            if type(value) == Const:
+            if value is Const:
                 setattr(
                     target,
                     key,
@@ -230,13 +230,13 @@ class GEKKOSolver:
     @staticmethod
     def withdraw_gekko_vars_attr(target: GenericModel):
         for key, value in target.__dict__.items():
-            if type(value) == GKVariable:
+            if value is GKVariable:
                 setattr(
                     target,
                     key,
                     Var(value=value.VALUE.value[0], min=value.LOWER, max=value.UPPER),
                 )
-            if type(value) == GK_Operators:
+            if value is GK_Operators:
                 setattr(
                     target,
                     key,
@@ -269,6 +269,7 @@ class GEKKOSolver:
         m = GEKKO(remote=False)
         m.options.SOLVER = solver
         m.options.WEB = 0
+        m.options.IMODE = 4
         m.solver_options = DEFAULT_SOLVER_OPTIONS
 
         network = input_network.copy()
@@ -309,7 +310,7 @@ class GEKKOSolver:
 
         try:
             m.options.COLDSTART = 0
-            m.solve(disp=True)
+            m.solve(disp=False)
         except Exception as e:
             logging.error("Solver not converged.")
 
@@ -337,7 +338,7 @@ class GEKKOSolver:
 
         obj = None
         for objective in network.objectives:
-            if obj != None:
+            if obj is not None:
                 obj = obj + objective(network)
             else:
                 obj = objective(network)
@@ -355,7 +356,7 @@ class GEKKOSolver:
 
         obj = None
         for objective in optimization_problem.objectives.all(network):
-            if obj != None:
+            if obj is None:
                 obj = obj + objective
             else:
                 obj = objective
@@ -417,7 +418,7 @@ class GEKKOSolver:
                     ],
                 )
             )
-            m.Equations([eq for eq in equations if type(eq) != bool or not eq])
+            m.Equations([eq for eq in equations if eq is not bool or not eq])
 
             for child in node_childs:
                 if ignore_child(child, ignored_nodes):
