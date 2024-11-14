@@ -1,25 +1,22 @@
-from typing import List, Dict, Set
+import logging
 from dataclasses import dataclass
 
-import logging
-
+import networkx as nx
+import pandas
 from gekko import GEKKO
-from gekko.gk_variable import GKVariable
 from gekko.gk_operators import GK_Operators
-from monee.model.core import Network, Var, GenericModel, Node, Branch, Const, Compound
+from gekko.gk_variable import GKVariable
+
+from monee.model.branch import WaterPipe
 from monee.model.child import ExtHydrGrid, ExtPowerGrid
-from monee.problem.core import OptimizationProblem
+from monee.model.core import Branch, Compound, Const, GenericModel, Network, Node, Var
 from monee.model.multi import (
     CHP,
-    PowerToHeat,
     GasToHeat,
     MultiGridBranchModel,
+    PowerToHeat,
 )
-from monee.model.branch import WaterPipe
-
-import pandas
-
-import networkx as nx
+from monee.problem.core import OptimizationProblem
 
 DEFAULT_SOLVER_OPTIONS = [
     "minlp_maximum_iterations 250",
@@ -41,7 +38,7 @@ DEFAULT_SOLVER_OPTIONS = [
 @dataclass
 class SolverResult:
     network: Network
-    dataframes: Dict[str, pandas.DataFrame]
+    dataframes: dict[str, pandas.DataFrame]
 
     def __str__(self) -> str:
         result_str = str(self.network)
@@ -146,7 +143,7 @@ def find_ignored_nodes(network: Network):
             int_node: Node = real_topology.nodes[node]["internal_node"]
             for child_id in int_node.child_ids:
                 child = without_cps.child_by_id(child_id)
-                if isinstance(child.model, (ExtPowerGrid, ExtHydrGrid)):
+                if isinstance(child.model, ExtPowerGrid | ExtHydrGrid):
                     component_leading = True
                     break
             if component_leading:
@@ -182,7 +179,7 @@ class GEKKOSolver:
                     key,
                     Const(float("nan")),
                 )
-            if isinstance(value, (Var, Const)):
+            if isinstance(value, Var | Const):
                 setattr(
                     target,
                     key,
@@ -192,11 +189,11 @@ class GEKKOSolver:
     @staticmethod
     def inject_gekko_vars(
         gekko_model: GEKKO,
-        nodes: List[Node],
-        branches: List[Branch],
-        compounds: List[Compound],
+        nodes: list[Node],
+        branches: list[Branch],
+        compounds: list[Compound],
         network: Network,
-        ignored_nodes: Set,
+        ignored_nodes: set,
     ):
         for branch in branches:
             if ignore_branch(branch, network, ignored_nodes):
@@ -311,7 +308,7 @@ class GEKKOSolver:
         try:
             m.options.COLDSTART = 0
             m.solve(disp=False)
-        except Exception as e:
+        except Exception:
             logging.error("Solver not converged.")
 
             import matplotlib.pyplot as plt
@@ -325,7 +322,7 @@ class GEKKOSolver:
                 width=0.4,
             )
             plt.savefig("debug-network.pdf")
-            raise e
+            raise
 
         GEKKOSolver.withdraw_gekko_vars(nodes, branches, compounds, network)
 
