@@ -1,14 +1,16 @@
 import numpy as np
-import copy
 
 INDEX_SIGMA = -1
 INDEX_FITNESS = -2
 
+
 def is_productive(node, without_load=True):
     pass
 
+
 class Evaluator:
     pass
+
 
 class EASolver:
     def __init__(
@@ -81,7 +83,6 @@ class EASolver:
         return population[population[:, INDEX_FITNESS].argsort()][start:]
 
     def solve(self, me_network, step: int, without_load=False):
-
         all_regulatable_nodes = [
             node
             for node in me_network.nodes

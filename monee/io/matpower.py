@@ -1,11 +1,11 @@
 import scipy.io
 
-from .native import native_dict_to_network
+from monee.model.branch import *  # noqa needed for generic creation of models
+from monee.model.child import *  # noqa needed for generic creation of models
+from monee.model.grid import *  # noqa needed for generic creation of models
+from monee.model.node import *  # noqa needed for generic creation of models
 
-from monee.model.grid import *
-from monee.model.node import *
-from monee.model.branch import *
-from monee.model.child import *
+from .native import native_dict_to_network
 
 
 def as_controllable(start_value):

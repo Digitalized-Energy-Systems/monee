@@ -1,12 +1,13 @@
-import math, random
+import math
+import random
 
 import monee.model as mm
-import monee.solver as ms
 import monee.network as mn
 import monee.problem as mp
+import monee.solver as ms
 from monee import run_energy_flow, run_energy_flow_optimization
-from monee.problem.load_shedding import create_load_shedding_optimization_problem
 from monee.io.from_simbench import obtain_simbench_net
+from monee.problem.load_shedding import create_load_shedding_optimization_problem
 
 BOUND_EL = ("vm_pu", 1, 0.2)
 BOUND_GAS = ("pressure_pa", 500000, 0.3)
@@ -433,7 +434,6 @@ def test_simple_chp():
 
 def test_simbench_ls_optimization():
     random.seed(42)
-    import networkx as nx
 
     net_simbench = obtain_simbench_net("1-LV-urban6--2-no_sw")
     for child in net_simbench.childs_by_type(mm.PowerGenerator):

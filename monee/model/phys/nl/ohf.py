@@ -1,5 +1,4 @@
 import math
-from . import hydraulics
 
 # J/(kg*K)
 SPECIFIC_HEAT_CAP_WATER = 4184

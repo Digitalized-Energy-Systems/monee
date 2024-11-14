@@ -1,9 +1,11 @@
-from abc import ABC, abstractmethod
-from typing import Dict, Any, List, Tuple, Union, Callable
-from monee.model import Network
-from monee.simulation.core import solve
+from abc import ABC
+from collections.abc import Callable
+from typing import Any
 
 import pandas
+
+from monee.model import Network
+from monee.simulation.core import solve
 
 
 def _merge_inner_dicts_to(target_dict, extend_dict):
@@ -16,28 +18,28 @@ def _merge_inner_dicts_to(target_dict, extend_dict):
 
 
 class TimeseriesData:
-    _child_id_to_series: Dict[Any, Dict[str, List]] = {}
-    _child_name_to_series: Dict[str, Dict[str, List]] = {}
+    _child_id_to_series: dict[Any, dict[str, list]] = {}
+    _child_name_to_series: dict[str, dict[str, list]] = {}
 
-    _compound_id_to_series: Dict[Any, Dict[str, List]] = {}
+    _compound_id_to_series: dict[Any, dict[str, list]] = {}
 
-    _branch_id_to_series: Dict[Any, Dict[str, List]] = {}
+    _branch_id_to_series: dict[Any, dict[str, list]] = {}
 
     def _add_to(self, target_dict, key_one, key_two, value):
         if key_one not in target_dict:
             target_dict[key_one] = {}
         target_dict[key_one][key_two] = value
 
-    def add_compound_series(self, compound_id: int, attribute: str, series: List):
+    def add_compound_series(self, compound_id: int, attribute: str, series: list):
         self._add_to(self._compound_id_to_series, compound_id, attribute, series)
 
-    def add_branch_series(self, branch_id: int, attribute: str, series: List):
+    def add_branch_series(self, branch_id: int, attribute: str, series: list):
         self._add_to(self._branch_id_to_series, branch_id, attribute, series)
 
-    def add_child_series(self, child_id: int, attribute: str, series: List):
+    def add_child_series(self, child_id: int, attribute: str, series: list):
         self._add_to(self._child_id_to_series, child_id, attribute, series)
 
-    def add_child_series_by_name(self, child_name: str, attribute: str, series: List):
+    def add_child_series_by_name(self, child_name: str, attribute: str, series: list):
         self._add_to(self._child_name_to_series, child_name, attribute, series)
 
     @property
@@ -82,8 +84,8 @@ class TimeseriesData:
 
 class TimeseriesResult:
     def __init__(self, raw) -> None:
-        self._raw_results: List = raw
-        self._type_attr_to_result_df: Dict[Tuple[Any, str], pandas.DataFrame] = {}
+        self._raw_results: list = raw
+        self._type_attr_to_result_df: dict[tuple[Any, str], pandas.DataFrame] = {}
 
     def _create_result_for(self, type, attribute: str):
         rows = []
@@ -141,7 +143,7 @@ def run(
     net: Network,
     timeseries_data: TimeseriesData,
     steps: int,
-    step_hooks: List[Union[StepHook, Callable]],
+    step_hooks: list[StepHook | Callable],
     solver=None,
     optimization_problem=None,
     solve_flag=True,

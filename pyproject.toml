@@ -1,3 +1,78 @@
 [build-system]
-requires = ["setuptools", "wheel"]
-build-backend = "setuptools.build_meta:__legacy__"
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "monee"
+version = "0.1.0"
+authors = [
+  { name="Rico Schrage", email="rico.schrage@uol.de" },
+]
+description = "Framework for calculating the steady-state energy flow and for solving optimization problems in coupled energy grids (gas, heat, electricity)"
+readme = "README.md"
+requires-python = ">=3.10"
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+license = {file="LICENSE"}
+dependencies = [
+    "scipy>=1.10.1",
+    "gekko==1.0.6",
+    "networkx==3.0",
+    "numpy==1.24.2",
+    "pandas==1.5.3"
+]
+
+[project.optional-dependencies]
+simbench = [
+    "simbench>=1.3.0",
+    "pandapower>=2.9.0"
+]
+test = [
+    "pandapipes",
+    "pytest",
+    "simbench",
+    "pandapower"
+]
+
+[project.urls]
+Homepage = "https://monee.readthedocs.io"
+Repository = "https://monee.readthedocs.io"
+Issues = "https://github.com/digitalized-Energy-Systems/monee/issues"
+
+
+[tool.pytest.ini_options]
+asyncio_default_fixture_loop_scope = "function"
+
+[tool.coverage.run]
+omit = ["tests/*"]
+
+[tool.ruff.lint]
+# Enable Pyflakes (`F`) and a subset of the pycodestyle (`E`)  codes by default.
+# Unlike Flake8, Ruff doesn't enable pycodestyle warnings (`W`) or
+# McCabe complexity (`C901`) by default.
+select = ["E", "F", "G", "I", "UP", "AIR", "PIE", "PLR1714", "PLW2901", "TRY201"]
+ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+"__init__.py" = [
+    "I001", # allow unsorted imports in __init__.py
+    "F401", # allow unused imports in __init__.py
+]
+"examples/*" = [
+    "ARG",  # allow unused arguments
+    "F841", # allow unused local variables
+]
+"tests/*" = [
+    "ARG",  # allow unused arguments for pytest fixtures
+    "E741", # allow reused variables
+    "F841", # allow unused local variables
+]

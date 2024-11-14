@@ -1,0 +1,4 @@
+-e .
+pika
+pyzmq
+furo>=2024.8.6
