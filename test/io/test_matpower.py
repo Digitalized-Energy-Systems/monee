@@ -1,7 +1,7 @@
 import os
 
-from peext.scenario.network import create_small_test_multinet
 import pandapower.converter as pc
+from peext.scenario.network import create_small_test_multinet
 
 from monee.io.matpower import read_matpower_case
 from monee.solver.gekko import GEKKOSolver

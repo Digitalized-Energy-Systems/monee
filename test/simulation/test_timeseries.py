@@ -1,6 +1,6 @@
+import monee.model as md
 from monee.io.from_simbench import obtain_simbench_net_with_td
 from monee.simulation.timeseries import run
-import monee.model as md
 
 
 def test_timeseries_with_simbench():

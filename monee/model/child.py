@@ -1,4 +1,4 @@
-from .core import ChildModel, Var, Const, model
+from .core import ChildModel, Const, Var, model
 
 
 class NoVarChildModel(ChildModel):

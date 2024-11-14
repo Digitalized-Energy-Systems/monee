@@ -1,4 +1,4 @@
-from monee.model.core import *
+from monee.model.core import GenericModel, Node, component_list, model
 
 
 def test_model_decorator():

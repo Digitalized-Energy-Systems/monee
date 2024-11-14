@@ -1,9 +1,9 @@
 import os
+
 import pytest
 
 import monee.model as mm
-
-from monee.io.native import write_omef_network, load_to_network, PersistenceException
+from monee.io.native import PersistenceException, load_to_network, write_omef_network
 
 
 def create_compound_test_network():
@@ -107,7 +107,7 @@ def test_write_load_with_compound():
     network = load_to_network("test.nt")
     assert network is not None
     assert len(network.compounds) == 1
-    assert type(network.compounds[0].model) == mm.CHP
+    assert network.compounds[0].model is mm.CHP
     assert len(network.compounds[0].connected_to) == 4
     os.remove("test.nt")
 

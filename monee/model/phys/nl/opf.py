@@ -1,5 +1,6 @@
 import math
 
+
 # per junction
 def power_balance_equation(signed_flows):
     return sum(signed_flows) == 0

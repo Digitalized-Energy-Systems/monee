@@ -1,8 +1,8 @@
-from typing import List
+import copy
 from abc import ABC, abstractmethod
+
 import networkx as nx
 import pandas
-import copy
 
 component_list = []
 
@@ -29,7 +29,7 @@ def lower(var_or_const):
 
 
 def value(var_or_const):
-    if isinstance(var_or_const, (Const, Var)):
+    if isinstance(var_or_const, Const | Var):
         return var_or_const.value
     return var_or_const
 
@@ -47,22 +47,22 @@ class Var:
         return Var(value=self.value * other, max=self.max, min=self.min)
 
     def __lt__(self, other):
-        if isinstance(other, (float, int)) and self.max is not None:
+        if isinstance(other, float | int) and self.max is not None:
             return self.max < other
         return False
 
     def __le__(self, other):
-        if isinstance(other, (float, int)) and self.max is not None:
+        if isinstance(other, float | int) and self.max is not None:
             return self.max <= other
         return False
 
     def __gt__(self, other):
-        if isinstance(other, (float, int)) and self.min is not None:
+        if isinstance(other, float | int) and self.min is not None:
             return self.min > other
         return False
 
     def __ge__(self, other):
-        if isinstance(other, (float, int)) and self.min is not None:
+        if isinstance(other, float | int) and self.min is not None:
             return self.min >= other
         return False
 
@@ -179,11 +179,7 @@ class Compound(Component):
         self.subcomponents = subcomponents
 
     def component_of_type(self, comp_type):
-        return [
-            component
-            for component in self.subcomponents
-            if type(component) == comp_type
-        ]
+        return [component for component in self.subcomponents if component is comp_type]
 
 
 class Node(Component):
@@ -318,11 +314,11 @@ class Network:
         return self._objectives
 
     @property
-    def compounds(self) -> List[Compound]:
+    def compounds(self) -> list[Compound]:
         return list(self._compound_dict.values())
 
     @property
-    def childs(self) -> List[Child]:
+    def childs(self) -> list[Child]:
         return list(self._child_dict.values())
 
     def has_child(self, child_id):
@@ -377,15 +373,15 @@ class Network:
         return self._child_dict[child_id]
 
     def childs_by_type(self, cls):
-        return [child for child in self.childs if type(child.model) == cls]
+        return [child for child in self.childs if child.model is cls]
 
     def compound_by_id(self, compound_id):
         return self._compound_dict[compound_id]
 
     def compounds_by_type(self, cls):
-        return [compound for compound in self.compounds if type(compound.model) == cls]
+        return [compound for compound in self.compounds if compound.model is cls]
 
-    def childs_by_ids(self, child_ids) -> List[Child]:
+    def childs_by_ids(self, child_ids) -> list[Child]:
         return [self.child_by_id(child_id) for child_id in child_ids]
 
     def is_blacklisted(self, obj):
@@ -404,14 +400,14 @@ class Network:
         return self._network_internal.has_edge(node_id_one, node_id_two)
 
     @property
-    def nodes(self) -> List[Node]:
+    def nodes(self) -> list[Node]:
         return [
             self._network_internal.nodes[node]["internal_node"]
             for node in self._network_internal.nodes
         ]
 
     @property
-    def branches(self) -> List[Branch]:
+    def branches(self) -> list[Branch]:
         return [
             self._network_internal.edges[edge]["internal_branch"]
             for edge in self._network_internal.edges
@@ -430,7 +426,7 @@ class Network:
         return self._network_internal.edges[branch_id]["internal_branch"]
 
     def branches_by_type(self, cls):
-        return [branch for branch in self.branches if type(branch.model) == cls]
+        return [branch for branch in self.branches if branch.model is cls]
 
     def __insert_to_blacklist_if_forced(self, obj):
         if self.__force_blacklist:
@@ -620,7 +616,7 @@ class Network:
         result_dict = {}
         for k, v in model_dict.items():
             result_value = v
-            if isinstance(v, (Var, Const)):
+            if isinstance(v, Var | Const):
                 result_value = v.value
             result_dict[k] = result_value
         return result_dict
@@ -727,9 +723,9 @@ def _div_tuple(a, div):
 
 
 def calc_coordinates(network: Network, component: Component):
-    if type(component) == Node:
+    if component is Node:
         return component.position
-    elif type(component) == Branch:
+    elif component is Branch:
         node_start = network.node_by_id(component.from_node_id)
         node_end = network.node_by_id(component.from_node_id)
         return tuple(
@@ -738,9 +734,9 @@ def calc_coordinates(network: Network, component: Component):
                 for i in range(len(node_start.position))
             ]
         )
-    elif type(component) == Child:
+    elif component is Child:
         return network.node_by_id(component.node_id).position
-    elif type(component) == Compound:
+    elif component is Compound:
         position = (0, 0)
         for connected_node_id in component.connected_to.values():
             node = network.node_by_id(connected_node_id)

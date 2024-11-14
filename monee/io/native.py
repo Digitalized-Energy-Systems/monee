@@ -1,6 +1,7 @@
-import json
-from monee.model.core import Network, Var, component_list
 import inspect
+import json
+
+from monee.model.core import Network, Var, component_list
 
 
 class PersistenceException(Exception):
@@ -34,7 +35,7 @@ def init_model(model_type, preprocessed_dict):
 def preprocess_dict(model_dict):
     result = {}
     for k, v in model_dict.items():
-        if type(v) == dict:
+        if v is dict:
             if "max" in v and "min" in v and "value" in v:
                 result[k] = Var(v["value"], v["max"], v["min"])
         else:
@@ -100,7 +101,7 @@ def native_dict_to_network(dict_struct) -> Network:
 
 def load_to_network(file) -> Network:
     dict_struct = None
-    with open(file, "r") as read_fp:
+    with open(file) as read_fp:
         dict_struct = json.load(read_fp)
 
     return native_dict_to_network(dict_struct)

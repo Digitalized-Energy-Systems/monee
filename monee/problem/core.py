@@ -1,10 +1,10 @@
-from typing import Dict, List
-from monee.model.core import GenericModel, Network, Var
-from monee.model.child import PowerLoad, Sink, Source, PowerGenerator
-from monee.model.branch import HeatExchangerLoad, HeatExchangerGenerator, HeatExchanger
-from monee.model.grid import GasGrid
-from monee.model.multi import PowerToGas, CHP, PowerToHeat
 import functools
+
+from monee.model.branch import HeatExchanger, HeatExchangerGenerator, HeatExchangerLoad
+from monee.model.child import PowerGenerator, PowerLoad, Sink, Source
+from monee.model.core import GenericModel, Network, Var
+from monee.model.grid import GasGrid
+from monee.model.multi import CHP, PowerToGas, PowerToHeat
 
 
 class Objective:
@@ -154,9 +154,9 @@ class Constraints:
 
 class OptimizationProblem:
     def __init__(self) -> None:
-        self._controllable_appliables: List = []
-        self._controllable_to_attr: Dict[GenericModel, str] = {}
-        self._bounds_for_controllables: List = []
+        self._controllable_appliables: list = []
+        self._controllable_to_attr: dict[GenericModel, str] = {}
+        self._bounds_for_controllables: list = []
         self._objectives: Objectives = None
         self._constraints: Constraints = None
 
@@ -167,7 +167,7 @@ class OptimizationProblem:
             for attribute in attributes:
                 if hasattr(model, attribute):
                     val = getattr(model, attribute)
-                    if type(val) != Var:
+                    if val is not Var:
                         setattr(
                             model,
                             attribute,
@@ -220,11 +220,11 @@ class OptimizationProblem:
     def controllable_demands(self, attributes):
         self.controllable(
             component_condition=lambda component: (
-                isinstance(component.model, (HeatExchangerLoad, PowerLoad))
-                or (type(component.model) == Sink and type(component.grid) == GasGrid)
+                isinstance(component.model, HeatExchangerLoad | PowerLoad)
+                or (component.model is Sink and component.grid is GasGrid)
                 or (
-                    type(component.model) == HeatExchanger
-                    and type(component.model.q_w) != Var
+                    component.model is HeatExchanger
+                    and component.model.q_w is not Var
                     and component.model.q_w > 0
                 )
             )
@@ -237,7 +237,7 @@ class OptimizationProblem:
     def controllable_generators(self, attributes):
         self.controllable(
             component_condition=lambda component: isinstance(
-                component.model, (HeatExchangerGenerator, PowerGenerator, Source)
+                component.model, HeatExchangerGenerator | PowerGenerator | Source
             )
             and component.active
             and not component.ignored,
@@ -248,7 +248,7 @@ class OptimizationProblem:
     def controllable_cps(self, attributes):
         self.controllable(
             component_condition=lambda component: isinstance(
-                component.model, (CHP, PowerToHeat, PowerToGas)
+                component.model, CHP | PowerToHeat | PowerToGas
             )
             and component.active
             and not component.ignored,

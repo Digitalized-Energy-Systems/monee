@@ -1,8 +1,10 @@
-import monee.model as mm
-import monee.express as mx
-from monee.io.from_simbench import obtain_simbench_net
 import random
+
 from geopy import distance
+
+import monee.express as mx
+import monee.model as mm
+from monee.io.from_simbench import obtain_simbench_net
 
 REF_PA = 500000
 REF_TEMP = 352

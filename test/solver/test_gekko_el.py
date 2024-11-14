@@ -1,12 +1,12 @@
 import math
 
+from monee.model.branch import PowerLine, Trafo
+from monee.model.child import ExtPowerGrid, PowerGenerator, PowerLoad
 from monee.model.core import Network, Var
 from monee.model.grid import PowerGrid
-from monee.solver.gekko import GEKKOSolver
-from monee.model.branch import PowerLine, Trafo
 from monee.model.node import Bus
-from monee.model.child import PowerGenerator, ExtPowerGrid, PowerLoad
 from monee.problem.load_shedding import create_load_shedding_optimization_problem
+from monee.solver.gekko import GEKKOSolver
 
 
 def create_two_line_example_with_vm(vm, controllable_gen=False):

@@ -1,6 +1,6 @@
+import monee.solver as ms
 from monee.model import Network
 from monee.problem import OptimizationProblem
-import monee.solver as ms
 
 
 def solve(net: Network, optimization_problem: OptimizationProblem, solver=None):

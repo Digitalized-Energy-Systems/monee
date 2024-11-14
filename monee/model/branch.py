@@ -1,19 +1,17 @@
 import math
-from abc import abstractmethod, ABC
+from abc import ABC, abstractmethod
 
 import numpy as np
 
-from monee.model.grid import PowerGrid
+import monee.model.phys.nl.hydraulics as hydraulicsmodel
+import monee.model.phys.nl.ogf as ogfmodel
+import monee.model.phys.nl.ohf as ohfmodel
+import monee.model.phys.nl.opf as opfmodel
+import monee.model.phys.nl.owf as owfmodel
+from monee.model.phys.constant import UNIV_GAS_CONST
 
 from .core import BranchModel, Var, model
-from .grid import WaterGrid, GasGrid, PowerGrid
-
-import monee.model.phys.nl.owf as owfmodel
-import monee.model.phys.nl.ohf as ohfmodel
-import monee.model.phys.nl.ogf as ogfmodel
-import monee.model.phys.nl.opf as opfmodel
-import monee.model.phys.nl.hydraulics as hydraulicsmodel
-from monee.model.phys.constant import UNIV_GAS_CONST
+from .grid import GasGrid, PowerGrid, WaterGrid
 
 SQRT_3 = np.sqrt(3)
 
@@ -261,7 +259,7 @@ class WaterPipe(BranchModel):
                 self.length_m,
                 self.diameter_m,
                 grid.fluid_density,
-                **kwargs
+                **kwargs,
             ),
             hydraulicsmodel.flow_rate_equation(
                 mean_flow_velocity=self.velocity,

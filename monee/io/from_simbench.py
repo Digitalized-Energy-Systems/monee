@@ -1,9 +1,8 @@
-from typing import Tuple
 import simbench
 
-from monee.simulation.timeseries import TimeseriesData
 import monee.model as md
 from monee.io.from_pandapower import from_pandapower_net
+from monee.simulation.timeseries import TimeseriesData
 
 
 def _attr_by_type(t):
@@ -40,6 +39,6 @@ def obtain_simbench_net(sb_code) -> md.Network:
     return from_pandapower_net(net)
 
 
-def obtain_simbench_net_with_td(sb_code) -> Tuple[md.Network, TimeseriesData]:
+def obtain_simbench_net_with_td(sb_code) -> tuple[md.Network, TimeseriesData]:
     net = simbench.get_simbench_net(sb_code)
     return from_pandapower_net(net), obtain_simbench_profile_by_pp_net(net)

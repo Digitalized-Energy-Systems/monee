@@ -1,6 +1,6 @@
+from .core import NodeModel, Var, model
 from .phys.nl.hydraulics import junction_mass_flow_balance
 from .phys.nl.opf import power_balance_equation
-from .core import NodeModel, Var, model
 
 
 @model
@@ -48,7 +48,7 @@ class Bus(NodeModel):
         from_branch_models,
         to_branch_models,
         connected_node_models,
-        **kwargs
+        **kwargs,
     ):
         signed_ap, signed_rp = self.calc_signed_power_values(
             from_branch_models, to_branch_models, connected_node_models
@@ -105,7 +105,7 @@ class Junction(NodeModel):
         from_branch_models,
         to_branch_models,
         connected_node_models,
-        **kwargs
+        **kwargs,
     ):
         mass_flow_signed_list = self.calc_signed_mass_flow(
             from_branch_models, to_branch_models, connected_node_models

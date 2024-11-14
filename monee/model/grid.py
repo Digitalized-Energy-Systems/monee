@@ -1,5 +1,6 @@
-from .core import model
 from dataclasses import dataclass
+
+from .core import model
 
 
 @model
