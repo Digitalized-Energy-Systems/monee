@@ -6,12 +6,12 @@
 
 # -- Project information -----------------------------------------------------
 
-project = "mango"
-copyright = "2024, mango team"
-author = "mango team"
+project = "monee"
+copyright = "2024, Rico Schrage"
+author = "Rico Schrage"
 
 # The full version, including alpha/beta/rc tags
-version = release = "2.1.1"
+version = release = "0.1.0"
 
 
 # -- General configuration ---------------------------------------------------
@@ -51,11 +51,8 @@ html_theme = "furo"
 html_static_path = ["_static"]
 
 html_theme_options = {
-    "light_logo": "Logo_mango_ohne_sub.svg",
-    "dark_logo": "Logo_mango_ohne_sub_white.svg",
     "sidebar_hide_name": True,
-    "source_repository": "https://github.com/OFFIS-DAI/mango/",
-    "source_branch": "master",
+    "source_branch": "main",
     "source_directory": "docs/source/",
     "top_of_page_buttons": ["view", "edit"],
 }
