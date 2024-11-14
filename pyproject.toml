@@ -2,6 +2,9 @@
 requires = ["setuptools>=61.0"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+py-modules = []
+
 [project]
 name = "monee"
 version = "0.1.0"
@@ -25,10 +28,10 @@ classifiers = [
 license = {file="LICENSE"}
 dependencies = [
     "scipy>=1.10.1",
-    "gekko==1.0.6",
-    "networkx==3.0",
-    "numpy==1.24.2",
-    "pandas==1.5.3"
+    "gekko>=1.0.6",
+    "networkx>=3.0",
+    "numpy>=1.26.4",
+    "pandas>=1.5.3"
 ]
 
 [project.optional-dependencies]
