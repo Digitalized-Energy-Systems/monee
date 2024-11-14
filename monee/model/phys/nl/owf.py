@@ -8,7 +8,7 @@ def darcy_weisbach_equation(
     pipe_length,
     diameter,
     fluid_density,
-    **kwargs
+    **kwargs,
 ):
     return p_start_var - p_end_var == (
         64 / (reynolds_var + 1) + nikurdse
