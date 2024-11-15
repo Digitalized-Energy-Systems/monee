@@ -43,7 +43,10 @@ test = [
     "pandapipes",
     "pytest",
     "simbench",
-    "pandapower"
+    "pandapower",
+    "pytest-cov",
+    "pytest-asyncio",
+    "pre-commit"
 ]
 
 [project.urls]
