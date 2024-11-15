@@ -40,7 +40,6 @@ simbench = [
     "pandapower>=2.9.0"
 ]
 test = [
-    "pandapipes",
     "pytest",
     "peext",
     "simbench",
