@@ -1,9 +1,13 @@
+import pytest
+
 import monee.model as md
-from monee.io.from_simbench import obtain_simbench_net_with_td
 from monee.simulation.timeseries import run
 
 
+@pytest.mark.pptest
 def test_timeseries_with_simbench():
+    from monee.io.from_simbench import obtain_simbench_net_with_td
+
     # GIVEN
     steps = 3
     net, td = obtain_simbench_net_with_td("1-LV-rural3--1-no_sw")

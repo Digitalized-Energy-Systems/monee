@@ -61,6 +61,10 @@ Homepage = "https://monee.readthedocs.io"
 Repository = "https://monee.readthedocs.io"
 Issues = "https://github.com/Digitalized-Energy-Systems/monee/issues"
 
+[tool.pytest.ini_options]
+markers = [
+    "pptest: marks tests as dependant on pandapower",
+]
 
 [tool.coverage.run]
 omit = ["tests/*"]
