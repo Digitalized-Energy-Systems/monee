@@ -42,6 +42,7 @@ simbench = [
 test = [
     "pandapipes",
     "pytest",
+    "peext",
     "simbench",
     "pandapower",
     "pytest-cov",
