@@ -47,7 +47,8 @@ test = [
     "pandapipes==0.6.0",
     "numpy==1.26.4",
     "pytest-cov",
-    "pre-commit"
+    "pre-commit",
+    "pandas==1.5.3"
 ]
 
 [project.urls]
