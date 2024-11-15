@@ -41,6 +41,11 @@ simbench = [
 ]
 test = [
     "pytest",
+    "pytest-cov",
+    "pre-commit",
+]
+testpp = [
+    "pytest",
     "peext",
     "simbench",
     "pandapower==2.9.0",

@@ -1,13 +1,16 @@
 import os
 
-import pandapower.converter as pc
-from peext.scenario.network import create_small_test_multinet
+import pytest
 
 from monee.io.matpower import read_matpower_case
 from monee.solver.gekko import GEKKOSolver
 
 
+@pytest.mark.pptest
 def test_read_network_data_matpower():
+    import pandapower.converter as pc
+    from peext.scenario.network import create_small_test_multinet
+
     try:
         multinet = create_small_test_multinet()
         power = multinet["nets"]["power"]
@@ -23,7 +26,11 @@ def test_read_network_data_matpower():
         os.remove("a.mat")
 
 
+@pytest.mark.pptest
 def test_solve_read_network_data_matpower():
+    import pandapower.converter as pc
+    from peext.scenario.network import create_small_test_multinet
+
     try:
         multinet = create_small_test_multinet()
         power = multinet["nets"]["power"]

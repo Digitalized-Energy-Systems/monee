@@ -1,9 +1,12 @@
-import simbench
-
-from monee.io.from_pandapower import from_pandapower_net
+import pytest
 
 
+@pytest.mark.pptest
 def test_from_pandapower_net():
+    import simbench
+
+    from monee.io.from_pandapower import from_pandapower_net
+
     # GIVEN
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
 
