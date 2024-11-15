@@ -43,7 +43,7 @@ test = [
     "pytest",
     "peext",
     "simbench",
-    "pandapower",
+    "pandapower==2.9.0",
     "pandapipes==0.6.0",
     "pytest-cov",
     "pre-commit"
