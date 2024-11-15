@@ -259,6 +259,7 @@ class GEKKOSolver:
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
         solver=1,
+        draw_debug=False,
     ):
         # ensure compatibility of gekko models with own models
         # for creating objectives and constraints
@@ -313,17 +314,18 @@ class GEKKOSolver:
         except Exception:
             logging.error("Solver not converged.")
 
-            import matplotlib.pyplot as plt
+            if draw_debug:
+                import matplotlib.pyplot as plt
 
-            remove_cps(network)
+                remove_cps(network)
 
-            nx.draw_networkx(
-                generate_real_topology(network._network_internal),
-                node_size=5,
-                font_size=2,
-                width=0.4,
-            )
-            plt.savefig("debug-network.pdf")
+                nx.draw_networkx(
+                    generate_real_topology(network._network_internal),
+                    node_size=5,
+                    font_size=2,
+                    width=0.4,
+                )
+                plt.savefig("debug-network.pdf")
             raise
 
         GEKKOSolver.withdraw_gekko_vars(nodes, branches, compounds, network)
@@ -353,9 +355,9 @@ class GEKKOSolver:
         ):
             m.Equations(optimization_problem.constraints.all(network))
 
-        obj = None
+        obj = 0
         for objective in optimization_problem.objectives.all(network):
-            if obj is None:
+            if obj is not None:
                 obj = obj + objective
             else:
                 obj = objective

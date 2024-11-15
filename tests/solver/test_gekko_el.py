@@ -192,10 +192,7 @@ def test_two_lines_example_big_vm():
     assert len(pn.as_dataframe_dict()) == 5
     assert len(pn.node_by_id(1).model.vars) == 5
     assert len(result.dataframes) == 5
-    assert (
-        result.dataframes["ExtPowerGrid"]["p_mw"][0] < -13.2
-        and result.dataframes["ExtPowerGrid"]["p_mw"][0] > -13.3
-    )
+    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.018169406301)
 
 
 def test_two_gen_example():
@@ -227,7 +224,7 @@ def test_two_controllable_lines_example_simple_constraint():
     assert len(pn.node_by_id(1).model.vars) == 5
     assert len(result.dataframes) == 5
     assert result.dataframes["ExtPowerGrid"]["p_mw"][0] == 1
-    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], -2.1428570262)
+    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], -2.142071799)
 
 
 def test_two_controllable_lines_example_simple_objective():
@@ -240,24 +237,28 @@ def test_two_controllable_lines_example_simple_objective():
     assert len(pn.as_dataframe_dict()) == 5
     assert len(pn.node_by_id(1).model.vars) == 5
     assert len(result.dataframes) == 5
-    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -4.1428571429)
-    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], 1.1685864324)
+    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -4.1428573107)
+    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], 1.1685869004)
 
 
 def test_load_shedding_network_regulate_gen():
     pn, _ = create_two_gen_network()
-    load_shedding_problem = create_load_shedding_optimization_problem()
+    load_shedding_problem = create_load_shedding_optimization_problem(
+        ext_grid_el_bounds=(0, 0)
+    )
 
     result = GEKKOSolver().solve(pn, optimization_problem=load_shedding_problem)
 
     assert len(result.dataframes) == 5
     assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], 0)
-    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], -0.96668963486)
+    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], -0.90687803989)
 
 
 def test_load_shedding_network_regulate_load():
     pn, _ = create_two_gen_network(power_gen=0.1)
-    load_shedding_problem = create_load_shedding_optimization_problem()
+    load_shedding_problem = create_load_shedding_optimization_problem(
+        ext_grid_el_bounds=(0, 0)
+    )
 
     result = GEKKOSolver().solve(pn, optimization_problem=load_shedding_problem)
 

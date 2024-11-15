@@ -143,12 +143,14 @@ def run(
     net: Network,
     timeseries_data: TimeseriesData,
     steps: int,
-    step_hooks: list[StepHook | Callable],
+    step_hooks: list[StepHook | Callable] = None,
     solver=None,
     optimization_problem=None,
     solve_flag=True,
 ):
     result_list = []
+    if step_hooks is None:
+        step_hooks = []
 
     for step in range(steps):
         for step_hook in step_hooks:

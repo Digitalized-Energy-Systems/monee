@@ -79,4 +79,5 @@ def test_junction_mass_flow():
         connected_node_models=[],
     )
 
-    assert mass_flow == [3, 10]
+    assert mass_flow[0] == 3
+    assert mass_flow[1] == 10

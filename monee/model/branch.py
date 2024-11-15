@@ -290,7 +290,7 @@ class WaterPipe(BranchModel):
 @model
 class HeatExchanger(BranchModel):
     def __init__(
-        self, q_mw, diameter_m, in_line_operation=False, temperature_ext_k=293
+        self, q_mw, diameter_m, in_line_operation=True, temperature_ext_k=293
     ) -> None:
         super().__init__()
         self._in_line_operation = in_line_operation

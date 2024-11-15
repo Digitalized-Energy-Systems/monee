@@ -92,11 +92,11 @@ def create_compound_test_network():
 
     # MULTI
     pn.compound(
-        mm.CHP(0.1, 0.9, 0.1),
-        gas_node=g_node_0,
-        heat_node=h_node_0,
-        heat_return_node=h_node_1,
-        power_node=el_node_0,
+        mm.CHP(0.1, 0.9, 0.1, 1),
+        gas_node_id=g_node_0,
+        heat_node_id=h_node_0,
+        heat_return_node_id=h_node_1,
+        power_node_id=el_node_0,
     )
     return pn
 

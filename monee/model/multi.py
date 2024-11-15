@@ -231,7 +231,7 @@ class CHP(CompoundModel):
         mass_flow_setpoint: float,
         q_mvar_setpoint: float = 0,
         temperature_ext_k: float = 293,
-        in_line_operation: bool = False,
+        in_line_operation: bool = True,
     ) -> None:
         self._in_line_operation = in_line_operation
         self.diameter_m = diameter_m

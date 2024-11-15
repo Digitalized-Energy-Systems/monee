@@ -35,7 +35,7 @@ def init_model(model_type, preprocessed_dict):
 def preprocess_dict(model_dict):
     result = {}
     for k, v in model_dict.items():
-        if v is dict:
+        if type(v) is dict:
             if "max" in v and "min" in v and "value" in v:
                 result[k] = Var(v["value"], v["max"], v["min"])
         else:

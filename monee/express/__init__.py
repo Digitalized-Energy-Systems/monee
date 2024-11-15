@@ -304,7 +304,7 @@ def create_p2h(
             in_line_operation=in_line_operation,
         ),
         constraints=constraints,
-        power_node=power_node_id,
-        heat_node=heat_node_id,
-        heat_return_node=heat_return_node_id,
+        power_node_id=power_node_id,
+        heat_node_id=heat_node_id,
+        heat_return_node_id=heat_return_node_id,
     )
