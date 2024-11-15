@@ -167,7 +167,7 @@ class OptimizationProblem:
             for attribute in attributes:
                 if hasattr(model, attribute):
                     val = getattr(model, attribute)
-                    if val is not Var:
+                    if type(val) is not Var:
                         setattr(
                             model,
                             attribute,
@@ -221,10 +221,10 @@ class OptimizationProblem:
         self.controllable(
             component_condition=lambda component: (
                 isinstance(component.model, HeatExchangerLoad | PowerLoad)
-                or (component.model is Sink and component.grid is GasGrid)
+                or (type(component.model) is Sink and type(component.grid) is GasGrid)
                 or (
-                    component.model is HeatExchanger
-                    and component.model.q_w is not Var
+                    type(component.model) is HeatExchanger
+                    and type(component.model.q_w) is not Var
                     and component.model.q_w > 0
                 )
             )

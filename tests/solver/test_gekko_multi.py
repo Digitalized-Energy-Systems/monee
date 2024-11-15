@@ -183,10 +183,10 @@ def create_multi_chp():
             1,
             0.1,
         ),
-        gas_node=g_node_2,
-        heat_node=w_node_1,
-        heat_return_node=w_node_2,
-        power_node=el_node_2,
+        gas_node_id=g_node_2,
+        heat_node_id=w_node_1,
+        heat_return_node_id=w_node_2,
+        power_node_id=el_node_2,
     )
     return pn
 
@@ -368,8 +368,8 @@ def test_small_p2g_network():
     result = ms.GEKKOSolver().solve(multi_energy_network)
 
     assert len(result.dataframes) == 11
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], 0.86103583375)
-    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.086315875428)
+    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.090487525893)
+    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], 0.8)
 
 
 def test_in_line_p2h():

@@ -107,7 +107,7 @@ def test_write_load_with_compound():
     network = load_to_network("test.nt")
     assert network is not None
     assert len(network.compounds) == 1
-    assert network.compounds[0].model is mm.CHP
+    assert type(network.compounds[0].model) is mm.CHP
     assert len(network.compounds[0].connected_to) == 4
     os.remove("test.nt")
 

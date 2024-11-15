@@ -165,7 +165,7 @@ def test_simple_trafo():
 
     assert len(pn.as_dataframe_dict()) == 5
     assert result.dataframes["Bus"]["vm_pu"][0] == 1
-    assert result.dataframes["Bus"]["vm_pu"][1] == 0.9840819483
+    assert math.isclose(result.dataframes["Bus"]["vm_pu"][1], 0.98425648993)
 
 
 def test_two_lines_example():

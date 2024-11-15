@@ -116,15 +116,17 @@ def remove_cps(network: Network):
         network.remove_compound(comp.id)
 
         # as CHPs are integrated in the typical topology by replacing the actual in line he
-        if comp.model is CHP:
+        if type(comp.model) is CHP:
             heat_return_node = network.node_by_id(
                 comp.connected_to["heat_return_node_id"]
             )
             heat_node = network.node_by_id(comp.connected_to["heat_node_id"])
             network.branch(WaterPipe(0, 0), heat_return_node.id, heat_node.id)
-        if comp.model is PowerToHeat:
-            heat_return_node = network.node_by_id(comp.connected_to["heat_return_node"])
-            heat_node = network.node_by_id(comp.connected_to["heat_node"])
+        if type(comp.model) is PowerToHeat:
+            heat_return_node = network.node_by_id(
+                comp.connected_to["heat_return_node_id"]
+            )
+            heat_node = network.node_by_id(comp.connected_to["heat_node_id"])
             network.branch(WaterPipe(0, 0), heat_return_node.id, heat_node.id)
     for branch in network.branches:
         if isinstance(branch.model, MultiGridBranchModel):
@@ -157,13 +159,13 @@ class GEKKOSolver:
     @staticmethod
     def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel):
         for key, value in target.__dict__.items():
-            if value is Var:
+            if type(value) is Var:
                 setattr(
                     target,
                     key,
                     gekko.Var(value.value, lb=value.min, ub=value.max),
                 )
-            if value is Const:
+            if type(value) is Const:
                 setattr(
                     target,
                     key,
@@ -173,7 +175,7 @@ class GEKKOSolver:
     @staticmethod
     def inject_nans(target: GenericModel):
         for key, value in target.__dict__.items():
-            if isinstance(value, (Const)):
+            if isinstance(value, Const):
                 setattr(
                     target,
                     key,
@@ -227,13 +229,13 @@ class GEKKOSolver:
     @staticmethod
     def withdraw_gekko_vars_attr(target: GenericModel):
         for key, value in target.__dict__.items():
-            if value is GKVariable:
+            if type(value) is GKVariable:
                 setattr(
                     target,
                     key,
                     Var(value=value.VALUE.value[0], min=value.LOWER, max=value.UPPER),
                 )
-            if value is GK_Operators:
+            if type(value) is GK_Operators:
                 setattr(
                     target,
                     key,
@@ -266,7 +268,7 @@ class GEKKOSolver:
         m = GEKKO(remote=False)
         m.options.SOLVER = solver
         m.options.WEB = 0
-        m.options.IMODE = 4
+        m.options.IMODE = 3
         m.solver_options = DEFAULT_SOLVER_OPTIONS
 
         network = input_network.copy()
@@ -415,7 +417,7 @@ class GEKKOSolver:
                     ],
                 )
             )
-            m.Equations([eq for eq in equations if eq is not bool or not eq])
+            m.Equations([eq for eq in equations if type(eq) is not bool or not eq])
 
             for child in node_childs:
                 if ignore_child(child, ignored_nodes):

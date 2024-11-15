@@ -179,7 +179,11 @@ class Compound(Component):
         self.subcomponents = subcomponents
 
     def component_of_type(self, comp_type):
-        return [component for component in self.subcomponents if component is comp_type]
+        return [
+            component
+            for component in self.subcomponents
+            if type(component) is comp_type
+        ]
 
 
 class Node(Component):
@@ -373,13 +377,13 @@ class Network:
         return self._child_dict[child_id]
 
     def childs_by_type(self, cls):
-        return [child for child in self.childs if child.model is cls]
+        return [child for child in self.childs if type(child.model) is cls]
 
     def compound_by_id(self, compound_id):
         return self._compound_dict[compound_id]
 
     def compounds_by_type(self, cls):
-        return [compound for compound in self.compounds if compound.model is cls]
+        return [compound for compound in self.compounds if type(compound.model) is cls]
 
     def childs_by_ids(self, child_ids) -> list[Child]:
         return [self.child_by_id(child_id) for child_id in child_ids]
@@ -426,7 +430,7 @@ class Network:
         return self._network_internal.edges[branch_id]["internal_branch"]
 
     def branches_by_type(self, cls):
-        return [branch for branch in self.branches if branch.model is cls]
+        return [branch for branch in self.branches if type(branch.model) is cls]
 
     def __insert_to_blacklist_if_forced(self, obj):
         if self.__force_blacklist:
@@ -723,9 +727,9 @@ def _div_tuple(a, div):
 
 
 def calc_coordinates(network: Network, component: Component):
-    if component is Node:
+    if type(component) is Node:
         return component.position
-    elif component is Branch:
+    elif type(component) is Branch:
         node_start = network.node_by_id(component.from_node_id)
         node_end = network.node_by_id(component.from_node_id)
         return tuple(
@@ -734,9 +738,9 @@ def calc_coordinates(network: Network, component: Component):
                 for i in range(len(node_start.position))
             ]
         )
-    elif component is Child:
+    elif type(component) is Child:
         return network.node_by_id(component.node_id).position
-    elif component is Compound:
+    elif type(component) is Compound:
         position = (0, 0)
         for connected_node_id in component.connected_to.values():
             node = network.node_by_id(connected_node_id)

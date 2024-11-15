@@ -6,10 +6,10 @@ from monee.model.node import Bus, Junction, Var
 def test_bus_vars():
     bus = Bus(base_kv=1)
 
-    assert bus.p_mw is Var
-    assert bus.q_mvar is Var
-    assert bus.vm_pu is Var
-    assert bus.va_degree is Var
+    assert type(bus.p_mw) is Var
+    assert type(bus.q_mvar) is Var
+    assert type(bus.vm_pu) is Var
+    assert type(bus.va_degree) is Var
 
 
 def test_bus_eq():
@@ -61,8 +61,8 @@ def test_bus_eq_with_child():
 def test_junction_vars():
     junction = Junction()
 
-    assert junction.pressure_pa is Var
-    assert junction.t_k is Var
+    assert type(junction.pressure_pa) is Var
+    assert type(junction.t_k) is Var
 
 
 def test_junction_mass_flow():

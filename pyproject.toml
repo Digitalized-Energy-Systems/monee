@@ -45,18 +45,14 @@ test = [
     "simbench",
     "pandapower",
     "pytest-cov",
-    "pytest-asyncio",
     "pre-commit"
 ]
 
 [project.urls]
 Homepage = "https://monee.readthedocs.io"
 Repository = "https://monee.readthedocs.io"
-Issues = "https://github.com/digitalized-Energy-Systems/monee/issues"
+Issues = "https://github.com/Digitalized-Energy-Systems/monee/issues"
 
-
-[tool.pytest.ini_options]
-asyncio_default_fixture_loop_scope = "function"
 
 [tool.coverage.run]
 omit = ["tests/*"]

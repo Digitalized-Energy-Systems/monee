@@ -53,13 +53,13 @@ class GenericTransferBranch(MultiGridBranchModel):
         self.q_from_mvar = self._q_mvar
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
-        if grids is WaterGrid or grids is dict and WaterGrid in grids:
+        if type(grids) is WaterGrid or type(grids) is dict and WaterGrid in grids:
             self.mass_flow = self._mass_flow
             self.heat_mass_flow = self._mass_flow
-        if grids is GasGrid or grids is dict and GasGrid in grids:
+        if type(grids) is GasGrid or type(grids) is dict and GasGrid in grids:
             self.mass_flow = self._mass_flow
             self.gas_mass_flow = self._mass_flow
-        if grids is PowerGrid or grids is dict and PowerGrid in grids:
+        if type(grids) is PowerGrid or type(grids) is dict and PowerGrid in grids:
             self._fill_el()
 
         for k, v in from_node_model.vars.items():
@@ -178,12 +178,12 @@ class CHPControlNode(Junction, Bus):
         heat_to_branches = [
             branch
             for branch in to_branch_models
-            if "heat_mass_flow" in branch.vars or branch is HeatExchanger
+            if "heat_mass_flow" in branch.vars or type(branch) is HeatExchanger
         ]
         heat_from_branches = [
             branch
             for branch in from_branch_models
-            if "heat_mass_flow" in branch.vars or branch is HeatExchanger
+            if "heat_mass_flow" in branch.vars or type(branch) is HeatExchanger
         ]
         gas_to_branches = [
             branch for branch in to_branch_models if "gas_mass_flow" in branch.vars
@@ -212,7 +212,9 @@ class CHPControlNode(Junction, Bus):
             == 0,
             sum(power_eqs[0]) == 0,
             sum(power_eqs[1]) == 0,
-            [branch for branch in heat_from_branches if branch is HeatExchanger][0].q_w
+            [branch for branch in heat_from_branches if type(branch) is HeatExchanger][
+                0
+            ].q_w
             == -self.efficiency_heat * self.gas_consumption * 3600 / self._hhv,
             self.gen_p_mw
             == self.efficiency_power * self.gas_consumption * (3.6 * self._hhv),
@@ -239,11 +241,13 @@ class CHP(CompoundModel):
 
         self.mass_flow = (
             mass_flow_setpoint
-            if mass_flow_setpoint is Var
+            if type(mass_flow_setpoint) is Var
             else MutableFloat(mass_flow_setpoint)
         )
         self.q_mvar = (
-            q_mvar_setpoint if q_mvar_setpoint is Var else MutableFloat(q_mvar_setpoint)
+            q_mvar_setpoint
+            if type(q_mvar_setpoint) is Var
+            else MutableFloat(q_mvar_setpoint)
         )
 
     def set_active(self, activation_flag):
@@ -367,11 +371,15 @@ class PowerToHeat(CompoundModel):
         self.efficiency = efficiency
 
         self.heat_energy_mw = (
-            heat_energy_mw if heat_energy_mw is Var else MutableFloat(heat_energy_mw)
+            heat_energy_mw
+            if type(heat_energy_mw) is Var
+            else MutableFloat(heat_energy_mw)
         )
         self.load_p_mw = Var(1)
         self.load_q_mvar = (
-            q_mvar_setpoint if q_mvar_setpoint is Var else MutableFloat(q_mvar_setpoint)
+            q_mvar_setpoint
+            if type(q_mvar_setpoint) is Var
+            else MutableFloat(q_mvar_setpoint)
         )
 
     def set_active(self, activation_flag):
