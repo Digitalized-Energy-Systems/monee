@@ -1,0 +1,33 @@
+name: Upload monee
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+      - name: Install dependencies
+        run: |
+          pip install virtualenv
+          virtualenv venv
+          source venv/bin/activate
+          pip3 install -e .[testpp]
+          pip3 install pytest coverage
+      - name: Test+Coverage
+        run: |
+          source venv/bin/activate
+          pytest --cov --cov-report=xml
+      - name: Build package
+        run: |
+          source venv/bin/activate
+          python -m pip install build
+          python -m build
+      - name: Publish package
+        uses: pypa/gh-action-pypi-publish@release/v1
