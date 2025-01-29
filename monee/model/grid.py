@@ -52,7 +52,7 @@ class NoGrid(Grid):
 NO_GRID = NoGrid("None")
 
 
-def create_gas_grid(name, type):
+def create_gas_grid(name, type="lgas"):
     return GasGrid(name, **GAS_GRID_ATTRS[type])
 
 

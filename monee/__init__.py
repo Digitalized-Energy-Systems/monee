@@ -1,6 +1,7 @@
 import monee.model as mm
 import monee.solver as ms
 import monee.problem as mp
+import monee.express as mx
 
 from monee.model import Network
 from monee.simulation import (

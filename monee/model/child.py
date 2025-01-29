@@ -2,6 +2,18 @@ from .core import ChildModel, Const, Var, model
 
 
 class NoVarChildModel(ChildModel):
+    def set(self, n, value):
+        user_attributes = [
+            attr
+            for attr in dir(self)
+            if not attr.startswith("__") and not callable(getattr(self, attr))
+        ]
+        if n < 0 or n >= len(user_attributes):
+            raise IndexError(f"No user-defined attribute at index {n}")
+
+        attr_name = user_attributes[n]
+        setattr(self, attr_name, value)
+
     def equations(self, grid, node, **kwargs):
         return []
 

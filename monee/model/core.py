@@ -4,6 +4,10 @@ from abc import ABC, abstractmethod
 import networkx as nx
 import pandas
 
+EL_KEY = "electricity"
+GAS_KEY = "gas"
+WATER_KEY = "water"
+
 component_list = []
 
 
@@ -244,8 +248,12 @@ class Branch(Component):
 
 
 class Network:
-    def __init__(self, model=None) -> None:
-        self.default_grid_model = model
+    def __init__(self, el_model=None, water_model=None, gas_model=None) -> None:
+        self._default_grid_models = {
+            EL_KEY: el_model,
+            WATER_KEY: water_model,
+            GAS_KEY: gas_model,
+        }
 
         self._network_internal = nx.MultiGraph()
         self._child_dict = {}
@@ -440,6 +448,13 @@ class Network:
         if self.__collect_components:
             self.__collected_components.append(obj)
 
+    def node_by_id_or_create(self, node_id, auto_node_creator, auto_grid_key):
+        if not self.has_node(node_id):
+            return self.node_by_id(
+                self.node(auto_node_creator(), default_model_key=auto_grid_key)
+            )
+        return self.node_by_id(node_id)
+
     def child(
         self,
         model,
@@ -447,6 +462,8 @@ class Network:
         constraints=None,
         overwrite_id=None,
         name=None,
+        auto_node_creator=None,
+        auto_grid_key=None,
     ):
         child_id = overwrite_id or (
             0 if len(self._child_dict) == 0 else max(self._child_dict.keys()) + 1
@@ -463,18 +480,31 @@ class Network:
         self._child_dict[child_id] = child
         if attach_to_node_id is not None:
             child.node_id = attach_to_node_id
-            attaching_node = self.node_by_id(attach_to_node_id)
+            attaching_node = self.node_by_id_or_create(
+                attach_to_node_id, auto_node_creator, auto_grid_key
+            )
             attaching_node.child_ids.append(child_id)
             child.grid = attaching_node.grid
         return child_id
 
-    def child_to(self, model, node_id, constraints=None, overwrite_id=None, name=None):
+    def child_to(
+        self,
+        model,
+        node_id,
+        constraints=None,
+        overwrite_id=None,
+        name=None,
+        auto_node_creator=None,
+        auto_grid_key=None,
+    ):
         return self.child(
             model,
             attach_to_node_id=node_id,
             constraints=constraints,
             overwrite_id=overwrite_id,
             name=name,
+            auto_node_creator=auto_node_creator,
+            auto_grid_key=auto_grid_key,
         )
 
     def first_node(self):
@@ -489,6 +519,7 @@ class Network:
         overwrite_id=None,
         name=None,
         position=None,
+        default_model_key=EL_KEY,
     ):
         node_id = overwrite_id or (
             0 if len(self._network_internal) == 0 else max(self._network_internal) + 1
@@ -498,7 +529,7 @@ class Network:
             model,
             child_ids,
             constraints,
-            grid or self.default_grid_model,
+            grid or self._default_grid_models[default_model_key],
             name=name,
             position=position,
             independent=not self.__collect_components,

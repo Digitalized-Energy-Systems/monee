@@ -17,6 +17,45 @@ def create_bus(
         overwrite_id=overwrite_id,
         name=name,
         position=position,
+        default_model_key=mm.EL_KEY,
+    )
+
+
+def create_water_junction(
+    network: mm.Network,
+    constraints=None,
+    grid=None,
+    overwrite_id=None,
+    name=None,
+    position=None,
+):
+    return create_junction(
+        network,
+        constraints,
+        grid,
+        overwrite_id,
+        name,
+        position,
+        default_model_key=mm.WATER_KEY,
+    )
+
+
+def create_gas_junction(
+    network: mm.Network,
+    constraints=None,
+    grid=None,
+    overwrite_id=None,
+    name=None,
+    position=None,
+):
+    return create_junction(
+        network,
+        constraints,
+        grid,
+        overwrite_id,
+        name,
+        position,
+        default_model_key=mm.GAS_KEY,
     )
 
 
@@ -27,6 +66,7 @@ def create_junction(
     overwrite_id=None,
     name=None,
     position=None,
+    default_model_key=None,
 ):
     return network.node(
         mm.Junction(),
@@ -35,6 +75,26 @@ def create_junction(
         overwrite_id=overwrite_id,
         name=name,
         position=position,
+        default_model_key=default_model_key,
+    )
+
+
+def create_el_branch(
+    network: mm.Network,
+    from_node_id,
+    to_node_id,
+    model,
+    constraints=None,
+    grid=None,
+    name=None,
+):
+    return network.branch(
+        model,
+        from_node_id=from_node_id,
+        to_node_id=to_node_id,
+        constraints=constraints,
+        grid=grid,
+        name=name,
     )
 
 
@@ -109,6 +169,131 @@ def create_water_pipe(
         to_node_id=to_node_id,
         constraints=constraints,
         grid=grid,
+        name=name,
+    )
+
+
+def create_el_child(
+    network: mm.Network,
+    model,
+    node_id,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    return network.child_to(
+        model,
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        auto_node_creator=lambda: mm.Bus(1),
+        auto_grid_key=mm.EL_KEY,
+        **kwargs,
+    )
+
+
+def create_water_child(
+    network: mm.Network,
+    model,
+    node_id,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    return network.child_to(
+        model,
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        auto_node_type=mm.Junction,
+        auto_grid_key=mm.WATER_KEY,
+        **kwargs,
+    )
+
+
+def create_gas_child(
+    network: mm.Network,
+    model,
+    node_id,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    return network.child_to(
+        model,
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        auto_node_type=mm.Junction,
+        auto_grid_key=mm.GAS_KEY,
+        **kwargs,
+    )
+
+
+def create_power_load(
+    network: mm.Network,
+    node_id,
+    p_mw,
+    q_mvar,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    return create_el_child(
+        network,
+        mm.PowerLoad(p_mw, q_mvar, **kwargs),
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+    )
+
+
+def create_power_generator(
+    network: mm.Network,
+    node_id,
+    p_mw,
+    q_mvar,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    return create_el_child(
+        network,
+        mm.PowerGenerator(p_mw, q_mvar, **kwargs),
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+    )
+
+
+def create_ext_power_grid(
+    network: mm.Network,
+    node_id,
+    p_mw=1,
+    q_mvar=1,
+    vm_pu=1,
+    va_degree=0,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    return create_el_child(
+        network,
+        mm.ExtPowerGrid(p_mw, q_mvar, vm_pu, va_degree, **kwargs),
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
         name=name,
     )
 
@@ -307,4 +492,12 @@ def create_p2h(
         power_node_id=power_node_id,
         heat_node_id=heat_node_id,
         heat_return_node_id=heat_return_node_id,
+    )
+
+
+def create_multi_energy_network():
+    return mm.Network(
+        mm.create_power_grid("power"),
+        mm.create_water_grid("water"),
+        mm.create_gas_grid("gas"),
     )

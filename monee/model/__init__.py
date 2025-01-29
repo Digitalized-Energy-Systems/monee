@@ -19,6 +19,9 @@ from .core import (
     transform_network,
     to_spanning_tree,
     calc_coordinates,
+    EL_KEY,
+    GAS_KEY,
+    WATER_KEY,
 )
 from .node import Bus, Junction
 from .branch import (
