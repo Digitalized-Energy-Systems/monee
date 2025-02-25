@@ -51,8 +51,6 @@ def native_dict_to_network(dict_struct) -> Network:
         values_grid_dict = v["values"]
         model = init_model(v["model_type"], values_grid_dict)
         grid_by_name[k] = model
-        if network.default_grid_model is None:
-            network.default_grid_model = model
 
     childs = dict_struct["childs"]
     nodes = dict_struct["nodes"]

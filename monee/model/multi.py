@@ -106,7 +106,7 @@ class GasToHeatControlNode(Junction):
             )
             == 0,
             self.heat_energy_mw
-            == self.efficiency * self.gas_consumption * 3600 / self.hhv,
+            == self.efficiency * self.gas_consumption * 3.6 * self.hhv,
         )
 
 
@@ -214,8 +214,8 @@ class CHPControlNode(Junction, Bus):
             sum(power_eqs[1]) == 0,
             [branch for branch in heat_from_branches if type(branch) is HeatExchanger][
                 0
-            ].q_w
-            == -self.efficiency_heat * self.gas_consumption * 3600 / self._hhv,
+            ].q_w / 1000000
+            == -self.efficiency_heat * self.gas_consumption * (1 / (3.6* self._hhv)),
             self.gen_p_mw
             == self.efficiency_power * self.gas_consumption * (3.6 * self._hhv),
         )
@@ -422,44 +422,52 @@ class PowerToHeat(CompoundModel):
 
 @model
 class GasToPower(MultiGridBranchModel):
-    def __init__(self, efficiency, p_mw_setpoint, q_mvar_setpoint=0) -> None:
+    def __init__(self, efficiency, p_mw_setpoint, q_mvar_setpoint=0, regulation=1) -> None:
         super().__init__()
 
         self.efficiency = efficiency
+        self.p_mw_setpoint = p_mw_setpoint
 
-        self.p_to_mw = p_mw_setpoint
+        self.p_to_mw = Var(p_mw_setpoint)
         self.q_to_mvar = q_mvar_setpoint
         self.from_mass_flow = Var(1)
+        self.regulation = regulation
 
     def loss_percent(self):
         return 1 - self.efficiency
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
-        return self.p_to_mw == self.efficiency * self.from_mass_flow * (
-            3.6 * grids[GasGrid].higher_heating_value
-        )
+        return [
+            self.p_to_mw == self.regulation * self.p_mw_setpoint,
+            self.p_to_mw == self.efficiency * self.from_mass_flow * (3.6 * grids[GasGrid].higher_heating_value)
+        ]
 
 
 @model
 class PowerToGas(MultiGridBranchModel):
     def __init__(
-        self, efficiency, mass_flow_setpoint, consume_q_mvar_setpoint=0
+        self, efficiency, mass_flow_setpoint, consume_q_mvar_setpoint=0, regulation=1
     ) -> None:
         super().__init__()
 
         self.efficiency = efficiency
+        self.mass_flow_setpoint = mass_flow_setpoint
 
         self.p_from_mw = Var(1)
         self.q_from_mvar = consume_q_mvar_setpoint
-        self.to_mass_flow = mass_flow_setpoint
+        self.to_mass_flow = Var(mass_flow_setpoint)
+        self.regulation = regulation
 
     def loss_percent(self):
         return 1 - self.efficiency
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
-        return (
+        return [(
             self.to_mass_flow
             == self.efficiency
             * self.p_from_mw
             * (1 / (grids[GasGrid].higher_heating_value * 3.6))
-        ), self.p_from_mw > 0
+        ), 
+            self.p_from_mw > 0, 
+            self.mass_flow_setpoint * self.regulation == self.to_mass_flow
+        ]

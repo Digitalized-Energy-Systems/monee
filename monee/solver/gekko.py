@@ -379,7 +379,7 @@ class GEKKOSolver:
             if ignore_node(node, network, ignored_nodes):
                 continue
             node_childs = network.childs_by_ids(node.child_ids)
-            grid = node.grid or network.default_grid_model
+            grid = node.grid
             for constraint in node.constraints:
                 m.Equation(
                     constraint(
@@ -431,7 +431,7 @@ class GEKKOSolver:
             if ignore_branch(branch, network, ignored_nodes):
                 continue
 
-            grid = branch.grid or network.default_grid_model
+            grid = branch.grid
             for constraint in branch.constraints:
                 m.Equation(
                     constraint(

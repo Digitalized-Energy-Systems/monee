@@ -417,6 +417,7 @@ def create_p2g(
     efficiency,
     mass_flow_setpoint,
     consume_q_mvar_setpoint=0,
+    regulation=1,
     constraints=None,
     grid=None,
     name=None,
@@ -426,6 +427,33 @@ def create_p2g(
             efficiency=efficiency,
             mass_flow_setpoint=mass_flow_setpoint,
             consume_q_mvar_setpoint=consume_q_mvar_setpoint,
+            regulation=regulation
+        ),
+        from_node_id=from_node_id,
+        to_node_id=to_node_id,
+        constraints=constraints,
+        grid=grid,
+        name=name,
+    )
+
+def create_g2p(
+    network: mm.Network,
+    from_node_id,
+    to_node_id,
+    efficiency,
+    p_mw_setpoint, 
+    q_mvar_setpoint=0,
+    regulation=1,
+    constraints=None,
+    grid=None,
+    name=None,
+):
+    return network.branch(
+        mm.GasToPower(
+            efficiency=efficiency,
+            p_mw_setpoint=p_mw_setpoint,
+            q_mvar_setpoint=q_mvar_setpoint,
+            regulation=regulation
         ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,

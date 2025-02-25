@@ -86,6 +86,9 @@ class GenericModel(ABC):
     def vars(self):
         return {k: v for (k, v) in self.__dict__.items() if k[0] != "_"}
 
+    @property
+    def values(self):
+        return {k: value(v) for (k, v) in self.__dict__.items() if k[0] != "_"}
 
 class NodeModel(GenericModel):
     @abstractmethod
@@ -118,6 +121,12 @@ class CompoundModel(GenericModel):
 
 
 class ChildModel(GenericModel):
+    
+    def __init__(self, regulation:int=1, **kwargs):
+        super().__init__(**kwargs)
+        
+        self.regulation = regulation
+
     def overwrite(self, node_model):
         # optional override
         pass
@@ -538,7 +547,7 @@ class Network:
             for child_id in child_ids:
                 child = self.child_by_id(child_id)
                 child.grid = grid
-                child.id = node_id
+                child.node_id = node_id
         self.__insert_to_blacklist_if_forced(node)
         self.__insert_to_container_if_collect_toggled(node)
 

@@ -21,12 +21,12 @@ class Bus(NodeModel):
         signed_active_power = (
             [model.vars["p_from_mw"] for model in from_branch_models]
             + [model.vars["p_to_mw"] for model in to_branch_models]
-            + [model.vars["p_mw"] for model in connected_node_models]
+            + [model.vars["p_mw"] * model.vars["regulation"] for model in connected_node_models]
         )
         signed_reactive_power = (
             [model.vars["q_from_mvar"] for model in from_branch_models]
             + [model.vars["q_to_mvar"] for model in to_branch_models]
-            + [model.vars["q_mvar"] for model in connected_node_models]
+            + [model.vars["q_mvar"] * model.vars["regulation"] for model in connected_node_models]
         )
         return signed_active_power, signed_reactive_power
 
@@ -93,7 +93,7 @@ class Junction(NodeModel):
                 if "mass_flow" in model.vars
             ]
             + [
-                model.vars["mass_flow"]
+                model.vars["mass_flow"] * model.vars["regulation"]
                 for model in connected_node_models
                 if "mass_flow" in model.vars
             ]
