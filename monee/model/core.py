@@ -100,15 +100,18 @@ class BranchModel(GenericModel):
     @abstractmethod
     def equations(self, grid, from_node_model, to_node_model, **kwargs):
         pass
-
     def loss_percent(self):
         return 0
+    def is_cp_part(self):
+        return False
 
 
 class MultiGridBranchModel(BranchModel):
     @abstractmethod
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
         pass
+    def is_cp_part(self):
+        return True
 
 
 class CompoundModel(GenericModel):

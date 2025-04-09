@@ -55,7 +55,7 @@ class PowerLoad(NoVarChildModel):
 class Source(NoVarChildModel):
     def __init__(self, mass_flow, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = mass_flow
+        self.mass_flow = -mass_flow
 
 
 @model
@@ -90,4 +90,4 @@ class ConsumeHydrGrid(NoVarChildModel):
 class Sink(NoVarChildModel):
     def __init__(self, mass_flow, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = -mass_flow
+        self.mass_flow = mass_flow

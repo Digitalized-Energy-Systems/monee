@@ -275,12 +275,6 @@ class WaterPipe(BranchModel):
                 pipe_length=self.length_m,
                 pipe_inside_diameter=self.diameter_m,
                 pipe_outside_diameter=self.diameter_m + self.insulation_thickness_m,
-                mass_flow_var=self.mass_flow,
-            ),
-            ohfmodel.heat_transfer_pipe(
-                heat_transfer_flow_loss_var=self.heat_loss,
-                t_1_var=from_node_model.vars["t_k"],
-                t_2_var=to_node_model.vars["t_k"],
             ),
             self.t_average_k
             == abs(from_node_model.vars["t_k"] + to_node_model.vars["t_k"]) / 2,

@@ -22,8 +22,7 @@ def heat_transfer_loss(
     ext_t,
     pipe_length,
     pipe_inside_diameter,
-    pipe_outside_diameter,
-    mass_flow_var,
+    pipe_outside_diameter
 ):
     return (
         heat_transfer_flow_loss_var
@@ -31,7 +30,6 @@ def heat_transfer_loss(
         * math.pi
         * k_insulation_w_per_k
         * pipe_length
-        * -mass_flow_var
         * (((t_var - ext_t) + (t_var2 - ext_t)) / 2)
         / math.log(pipe_outside_diameter / pipe_inside_diameter)
     )
