@@ -1,7 +1,7 @@
 from .core import NodeModel, Var, model
 from .phys.nl.hydraulics import junction_mass_flow_balance
 from .phys.nl.opf import power_balance_equation
-
+from .phys.nl.ohf import SPECIFIC_HEAT_CAP_WATER
 
 @model
 class Bus(NodeModel):
@@ -72,6 +72,7 @@ class Junction(NodeModel):
         self, from_branch_models, to_branch_models, connected_node_models
     ):
         return (
+            # mass flow balance
             [
                 model.vars["from_mass_flow"]
                 for model in from_branch_models
@@ -83,12 +84,12 @@ class Junction(NodeModel):
                 if "to_mass_flow" in model.vars
             ]
             + [
-                model.vars["mass_flow"]
+                -model.vars["mass_flow"]
                 for model in from_branch_models
                 if "mass_flow" in model.vars
             ]
             + [
-                -model.vars["mass_flow"]
+                model.vars["mass_flow"] 
                 for model in to_branch_models
                 if "mass_flow" in model.vars
             ]
@@ -98,6 +99,28 @@ class Junction(NodeModel):
                 if "mass_flow" in model.vars
             ]
         )
+    
+    def calc_signed_heat_flow(self, from_branch_models, to_branch_models, connected_node_models, if_impl):
+        temp_supported = False
+        if len(from_branch_models) > 0 and "t_from_k" in from_branch_models[0].vars or len(to_branch_models) > 0 and "t_from_k" in to_branch_models[0].vars:
+            temp_supported = True
+        if temp_supported:
+            return ( [
+                    -model.vars["mass_flow"] * (model.vars["t_from_k"] * SPECIFIC_HEAT_CAP_WATER) if "t_from_k" in model.vars else 0
+                    for model in from_branch_models
+                    if "mass_flow" in model.vars
+                ] + [
+                    model.vars["mass_flow"] * (model.vars["t_to_k"] * SPECIFIC_HEAT_CAP_WATER) if "t_to_k" in model.vars else 0
+                    for model in to_branch_models
+                    if "mass_flow" in model.vars
+                ] + [
+                    model.vars["mass_flow"] * model.vars["regulation"] * self.t_k * SPECIFIC_HEAT_CAP_WATER
+                    for model in connected_node_models
+                    if "mass_flow" in model.vars
+                ]
+            )
+        else:
+            return [0]
 
     def equations(
         self,
@@ -110,6 +133,10 @@ class Junction(NodeModel):
         mass_flow_signed_list = self.calc_signed_mass_flow(
             from_branch_models, to_branch_models, connected_node_models
         )
+        energy_flow_list = self.calc_signed_heat_flow(from_branch_models, to_branch_models, connected_node_models, kwargs["if_impl"])
         if mass_flow_signed_list:
-            return junction_mass_flow_balance(mass_flow_signed_list)
+            return (
+                junction_mass_flow_balance(mass_flow_signed_list),
+                junction_mass_flow_balance(energy_flow_list)
+            )
         return []

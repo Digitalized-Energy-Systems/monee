@@ -2,7 +2,7 @@ import math
 
 from monee.model.branch import PowerLine, Trafo
 from monee.model.child import ExtPowerGrid, PowerGenerator, PowerLoad
-from monee.model.core import Network, Var
+from monee.model import Network, Var
 from monee.model.grid import PowerGrid
 from monee.model.node import Bus
 from monee.problem.load_shedding import create_load_shedding_optimization_problem

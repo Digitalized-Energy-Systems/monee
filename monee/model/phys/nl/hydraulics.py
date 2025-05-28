@@ -10,7 +10,7 @@ def calc_pipe_area(diameter_m):
 # prandtl nikurdse formula
 # https://core.ac.uk/download/pdf/38640864.pdf
 def calc_nikurdse(internal_diameter_m, roughness):
-    return 1 / (2 * np.log10(internal_diameter_m / roughness) + 1.14) ** 2
+    return 1 / (2 * np.log10(3.71*internal_diameter_m / roughness)) ** 2
 
 
 def reynolds_equation(rey_var, flow_var, diameter_m, dynamic_visc, pipe_area):
@@ -33,7 +33,7 @@ def pipe_mass_flow(max_v, min_v, v):
 
 
 def friction_model(rey, nikurdse):
-    return (64 / rey) + nikurdse
+    return (64 / rey) + nikurdse / 100
 
 
 def flow_rate_equation(mean_flow_velocity, flow_rate, diameter):

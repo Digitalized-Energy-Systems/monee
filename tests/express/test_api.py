@@ -4,11 +4,7 @@ from monee import mm, mx, run_energy_flow
 
 
 def test_api_el():
-    net = mm.Network(
-        mm.create_power_grid("power"),
-        mm.create_water_grid("water"),
-        mm.create_gas_grid("gas"),
-    )
+    net = mm.Network()
 
     bus_0 = mx.create_bus(net)
     bus_1 = mx.create_bus(net)

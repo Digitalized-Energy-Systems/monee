@@ -46,16 +46,10 @@ def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
                 to_node_id=bus_index_to_end_junction_index[node.id],
                 diameter_m=0.020,
                 q_mw=(-1 if random.random() > 0.8 else 1) * -0.02 * random.random(),
-                in_line_operation=True,
             )
         mx.create_sink(
             target_net,
             bus_index_to_end_junction_index[node.id],
-            mass_flow=0.075 + random.random() * 0.01,
-        )
-        mx.create_sink(
-            target_net,
-            bus_index_to_junction_index[node.id],
             mass_flow=0.075 + random.random() * 0.01,
         )
 
@@ -66,11 +60,10 @@ def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=0.020,
+            diameter_m=0.120,
             length_m=get_length(target_net, branch, from_node_id, to_node_id),
             temperature_ext_k=296.15,
             roughness=0.001,
-            lambda_insulation_w_per_k=2.4 * 10**-5,
             grid=heat_grid,
         )
 
@@ -100,7 +93,7 @@ def create_gas_net_for_power(power_net, target_net, gas_deployment_rate, scaling
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=0.2575,
+            diameter_m=0.9575,
             length_m=get_length(target_net, branch, from_node_id, to_node_id),
             grid=gas_grid,
         )

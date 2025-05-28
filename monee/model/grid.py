@@ -8,12 +8,10 @@ from .core import model
 class Grid:
     name: str
 
-
 @model
 @dataclass
 class PowerGrid(Grid):
     sn_mva: float = 1
-
 
 @model
 @dataclass
@@ -31,7 +29,6 @@ GAS_GRID_ATTRS = {
         "higher_heating_value": 0.0116,
     }
 }
-
 
 @model
 @dataclass

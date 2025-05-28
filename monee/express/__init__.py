@@ -5,7 +5,7 @@ def create_bus(
     network: mm.Network,
     base_kv=1,
     constraints=None,
-    grid=None,
+    grid=mm.EL,
     overwrite_id=None,
     name=None,
     position=None,
@@ -17,56 +17,52 @@ def create_bus(
         overwrite_id=overwrite_id,
         name=name,
         position=position,
-        default_model_key=mm.EL_KEY,
     )
 
 
 def create_water_junction(
     network: mm.Network,
+    grid=mm.WATER,
     constraints=None,
-    grid=None,
     overwrite_id=None,
     name=None,
     position=None,
 ):
     return create_junction(
         network,
-        constraints,
         grid,
+        constraints,
         overwrite_id,
         name,
         position,
-        default_model_key=mm.WATER_KEY,
     )
 
 
 def create_gas_junction(
     network: mm.Network,
+    grid=mm.GAS,
     constraints=None,
-    grid=None,
     overwrite_id=None,
     name=None,
     position=None,
 ):
     return create_junction(
         network,
-        constraints,
         grid,
+        constraints,
         overwrite_id,
         name,
         position,
-        default_model_key=mm.GAS_KEY,
     )
 
 
 def create_junction(
     network: mm.Network,
+    grid,
     constraints=None,
-    grid=None,
     overwrite_id=None,
     name=None,
     position=None,
-    default_model_key=None,
 ):
     return network.node(
         mm.Junction(),
@@ -75,7 +71,6 @@ def create_junction(
         overwrite_id=overwrite_id,
         name=name,
         position=position,
-        default_model_key=default_model_key,
     )
 
 
@@ -127,7 +122,7 @@ def create_gas_pipe(
     diameter_m,
     length_m,
     temperature_ext_k=296.15,
-    roughness=0.001,
+    roughness=0.00001,
     constraints=None,
     grid=None,
     name=None,
@@ -150,8 +145,8 @@ def create_water_pipe(
     length_m,
     temperature_ext_k=296.15,
     roughness=0.001,
-    lambda_insulation_w_per_k=0.00001,
-    insulation_thickness_m=0.035,
+    lambda_insulation_w_per_k=0.025,
+    insulation_thickness_m=0.2,
     constraints=None,
     grid=None,
     name=None,
@@ -383,7 +378,6 @@ def create_heat_exchanger(
     q_mw,
     diameter_m=0.10,
     temperature_ext_k=293,
-    in_line_operation=False,
     constraints=None,
     grid=None,
     name=None,
@@ -393,14 +387,12 @@ def create_heat_exchanger(
             q_mw=-q_mw,
             diameter_m=diameter_m,
             temperature_ext_k=temperature_ext_k,
-            in_line_operation=in_line_operation,
         )
         if q_mw < 0
         else mm.HeatExchanger(
             q_mw=q_mw,
             diameter_m=diameter_m,
             temperature_ext_k=temperature_ext_k,
-            in_line_operation=in_line_operation,
         ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
@@ -473,7 +465,6 @@ def create_chp(
     efficiency_power,
     efficiency_heat,
     mass_flow_setpoint,
-    in_line_operation=False,
     constraints=None,
 ):
     return network.compound(
@@ -484,7 +475,6 @@ def create_chp(
             mass_flow_setpoint,
             q_mvar_setpoint=0,
             temperature_ext_k=293,
-            in_line_operation=in_line_operation,
         ),
         constraints=constraints,
         power_node_id=power_node_id,

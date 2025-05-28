@@ -15,6 +15,7 @@ def create_two_line_example_with_2_pipe_example_p2g(source_flow=0.1):
     # POWER
     el_node_0 = pn.node(
         mm.Bus(base_kv=1),
+        grid=mm.WATER,
         child_ids=[
             pn.child(mm.PowerGenerator(p_mw=1, q_mvar=0)),
         ],
@@ -247,7 +248,7 @@ def create_in_line_p2h():
 
     # multi
     pn.compound(
-        mm.PowerToHeat(0.1, 0.015, 300, 1, in_line_operation=True),
+        mm.PowerToHeat(1, 0.015, 300, 1, in_line_operation=True),
         power_node_id=el_node_2,
         heat_node_id=w_node_2,
         heat_return_node_id=w_node_1,
@@ -364,14 +365,14 @@ def test_small_p2g_network():
 
     assert len(result.dataframes) == 11
     assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.090487525893)
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], 0.8)
+    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.8)
 
 
 def test_in_line_p2h():
     multi_energy_network = create_in_line_p2h()
 
     result = ms.GEKKOSolver().solve(multi_energy_network)
-
+    print(result)
     assert len(result.dataframes) == 12
     assert math.isclose(result.dataframes["Junction"]["t_k"][0], 598.005423)
 

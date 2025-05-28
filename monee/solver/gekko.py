@@ -7,10 +7,17 @@ from gekko import GEKKO
 from gekko.gk_operators import GK_Operators
 from gekko.gk_variable import GKVariable
 
-from monee.model.branch import WaterPipe
-from monee.model.child import ExtHydrGrid, ExtPowerGrid
-from monee.model.core import Branch, Compound, Const, GenericModel, Network, Node, Var
-from monee.model.multi import (
+from monee.model import (
+    Branch, 
+    Compound, 
+    Const, 
+    GenericModel, 
+    Network, 
+    Node, 
+    Var, 
+    ExtHydrGrid, 
+    ExtPowerGrid, 
+    WaterPipe,
     CHP,
     GasToHeat,
     MultiGridBranchModel,
@@ -25,13 +32,13 @@ DEFAULT_SOLVER_OPTIONS = [
     "nlp_maximum_iterations 250",
     "minlp_as_nlp 1",
     "minlp_branch_method 3",
-    "minlp_gap_tol 1.0e-2",
-    "minlp_integer_tol 1.0e-2",
+    "minlp_gap_tol 1.0e-3",
+    "minlp_integer_tol 1.0e-3",
     "minlp_integer_max 2.0e9",
     "minlp_integer_leaves 1",
     "minlp_print_level 1",
     "objective_convergence_tolerance 1.0e-3",
-    "constraint_convergence_tolerance 1.0e-2",
+    "constraint_convergence_tolerance 1.0e-4",
 ]
 
 
@@ -275,7 +282,6 @@ class GEKKOSolver:
         network = input_network.copy()
 
         ignored_nodes = find_ignored_nodes(network)
-
         nodes = network.nodes
 
         # prepare for overwritting default node behaviors with
@@ -417,6 +423,12 @@ class GEKKOSolver:
                         for child in node_childs
                         if not ignore_child(child, ignored_nodes)
                     ],
+                    sin_impl=m.sin,
+                    cos_impl=m.cos,
+                    if_impl=m.if2,
+                    abs_impl=m.abs3,
+                    max_impl=m.max2,
+                    sign_impl=m.sign2,
                 )
             )
             m.Equations([eq for eq in equations if type(eq) is not bool or not eq])
@@ -451,6 +463,7 @@ class GEKKOSolver:
                         if_impl=m.if3,
                         abs_impl=m.abs3,
                         max_impl=m.max2,
+                        sign_impl=m.sign2,
                     )
                 )
             )
