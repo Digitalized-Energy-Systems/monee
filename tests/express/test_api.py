@@ -1,5 +1,3 @@
-import networkx as nx
-
 from monee import mm, mx, run_energy_flow
 
 
@@ -51,4 +49,3 @@ def test_api_el_super_ex():
     result = run_energy_flow(net)
 
     assert result is not None
-

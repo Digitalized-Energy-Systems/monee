@@ -36,6 +36,7 @@ def create_branching_two_pipe_heat_example():
     )
     return pn
 
+
 def create_t_heat_grid_test():
     pn = mm.Network(mm.create_water_grid("heat"))
 
@@ -73,6 +74,7 @@ def create_t_heat_grid_test():
     )
     return pn
 
+
 def create_circle_heat_grid_test():
     pn = mm.Network()
 
@@ -109,7 +111,6 @@ def create_circle_heat_grid_test():
         g_node_0,
     )
     return pn
-
 
 
 def create_rect_he_heat_example():
@@ -320,7 +321,7 @@ def create_line_heating_with_dead_end():
 
     # WATER
     g_node_0 = pn.node(
-        mm.Junction(), 
+        mm.Junction(),
         mm.WATER,
         child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
     )
@@ -411,13 +412,16 @@ def test_two_pipes_heat_network():
     assert len(result.dataframes) == 4
     assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999840.95027)
     assert math.isclose(result.dataframes["Junction"]["t_k"][2], 358.896478)
- 
+
+
 def test_t_heat_network():
     heat_net = create_t_heat_grid_test()
     result = ms.GEKKOSolver().solve(heat_net)
 
     print(result)
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2, rel_tol=1e-4)
+    assert math.isclose(
+        result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2, rel_tol=1e-4
+    )
     assert math.isclose(result.dataframes["Junction"]["t_k"][3], 341.86627662)
     assert len(result.dataframes) == 5
 
@@ -427,9 +431,11 @@ def test_circle_heat_network():
     result = ms.GEKKOSolver().solve(heat_net)
 
     print(result)
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -5, rel_tol=1e-4)
+    assert math.isclose(
+        result.dataframes["ExtHydrGrid"]["mass_flow"][0], -5, rel_tol=1e-4
+    )
     assert math.isclose(result.dataframes["Junction"]["t_k"][2], 358.93859693)
-    assert len(result.dataframes ) == 5
+    assert len(result.dataframes) == 5
 
 
 def test_ext_branching_pipes_heat_network():
@@ -458,6 +464,8 @@ def test_dead_end():
     heat_net = create_line_heating_with_dead_end()
     result = ms.GEKKOSolver().solve(heat_net)
 
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.1, rel_tol=1e-5)
+    assert math.isclose(
+        result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.1, rel_tol=1e-5
+    )
     assert math.isclose(result.dataframes["Junction"]["t_k"][0], 345.46592742)
     assert len(result.dataframes) == 4

@@ -1,21 +1,22 @@
 import functools
 
 from monee.model import (
-    HeatExchanger, 
-    HeatExchangerGenerator, 
-    HeatExchangerLoad, 
-    PowerGenerator, 
-    PowerLoad, 
-    Sink, 
-    Source, 
-    Network, 
-    GenericModel, 
-    Var, 
-    GasGrid, 
-    CHP, 
-    PowerToGas, 
-    PowerToHeat
+    CHP,
+    GasGrid,
+    GenericModel,
+    HeatExchanger,
+    HeatExchangerGenerator,
+    HeatExchangerLoad,
+    Network,
+    PowerGenerator,
+    PowerLoad,
+    PowerToGas,
+    PowerToHeat,
+    Sink,
+    Source,
+    Var,
 )
+
 
 class Objective:
     def __init__(self, selected_models_link) -> None:

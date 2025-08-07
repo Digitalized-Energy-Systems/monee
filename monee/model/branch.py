@@ -8,7 +8,6 @@ import monee.model.phys.nl.ogf as ogfmodel
 import monee.model.phys.nl.ohf as ohfmodel
 import monee.model.phys.nl.opf as opfmodel
 import monee.model.phys.nl.owf as owfmodel
-from monee.model.phys.constant import UNIV_GAS_CONST
 
 from .core import BranchModel, Var, model
 from .grid import GasGrid, PowerGrid, WaterGrid
@@ -44,8 +43,8 @@ class GenericPowerBranch(BranchModel):
         self.g_to = g_to
         self.b_to = b_to
         self.max_i_ka = max_i_ka
-        
-        self.on_off = on_off # 1 = on, 0 = off
+
+        self.on_off = on_off  # 1 = on, 0 = off
         self.p_from_mw = Var(1)
         self.q_from_mvar = Var(1)
         self.i_from_ka = Var(1)
@@ -80,7 +79,7 @@ class GenericPowerBranch(BranchModel):
                 cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
                 sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
                 g_from=self.g_fr,
-                on_off=self.on_off
+                on_off=self.on_off,
             ),
             opfmodel.int_flow_from_q(
                 q_from_var=self.q_from_mvar,
@@ -95,7 +94,7 @@ class GenericPowerBranch(BranchModel):
                 cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
                 sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
                 b_from=self.b_fr,
-                on_off=self.on_off
+                on_off=self.on_off,
             ),
             opfmodel.int_flow_to_p(
                 p_to_var=self.p_to_mw,
@@ -110,7 +109,7 @@ class GenericPowerBranch(BranchModel):
                 cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
                 sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
                 g_to=self.g_to,
-                on_off=self.on_off
+                on_off=self.on_off,
             ),
             opfmodel.int_flow_to_q(
                 q_to_var=self.q_to_mvar,
@@ -125,7 +124,7 @@ class GenericPowerBranch(BranchModel):
                 cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
                 sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
                 b_to=self.b_to,
-                on_off=self.on_off
+                on_off=self.on_off,
             ),
             self.i_from_ka
             == (self.p_from_mw**2 + self.q_from_mvar**2)
@@ -212,6 +211,7 @@ class Trafo(PowerBranch):
 def sign(v):
     return 1 if v >= 0 else -1
 
+
 @model
 class WaterPipe(BranchModel):
     def __init__(
@@ -287,22 +287,32 @@ class WaterPipe(BranchModel):
                 pipe_inside_radius=self.diameter_m / 2,
                 pipe_outside_radius=self.diameter_m / 2 + self.insulation_thickness_m,
             ),
-            ohfmodel.temp_flow(t_in_scaled=from_node_model.vars["t_pu"], 
-                               t_out_scaled=to_node_model.vars["t_pu"], 
-                               heat_loss=self.q_w / grid.t_ref, 
-                               mass_flow=self.mass_flow, 
-                               sign_impl=kwargs["sign_impl"]),
-            self.t_average_pu == (from_node_model.vars["t_pu"] + to_node_model.vars["t_pu"]) / 2,
+            ohfmodel.temp_flow(
+                t_in_scaled=from_node_model.vars["t_pu"],
+                t_out_scaled=to_node_model.vars["t_pu"],
+                heat_loss=self.q_w / grid.t_ref,
+                mass_flow=self.mass_flow,
+                sign_impl=kwargs["sign_impl"],
+            ),
+            self.t_average_pu
+            == (from_node_model.vars["t_pu"] + to_node_model.vars["t_pu"]) / 2,
             self.t_from_pu == from_node_model.vars["t_pu"],
             self.t_to_pu == to_node_model.vars["t_pu"],
-            self.t_average_k == (from_node_model.vars["t_k"] + to_node_model.vars["t_k"]) / 2
+            self.t_average_k
+            == (from_node_model.vars["t_k"] + to_node_model.vars["t_k"]) / 2,
         )
 
 
 @model
 class HeatExchanger(BranchModel):
     def __init__(
-        self, q_mw, diameter_m, roughness=0.0001, length_m=2.5, temperature_ext_k=293, regulation=1
+        self,
+        q_mw,
+        diameter_m,
+        roughness=0.0001,
+        length_m=2.5,
+        temperature_ext_k=293,
+        regulation=1,
     ) -> None:
         super().__init__()
         self.diameter_m = diameter_m
@@ -312,7 +322,7 @@ class HeatExchanger(BranchModel):
         self.limit = 0.1
         self.active = True
 
-        self.regulation = regulation        
+        self.regulation = regulation
         self.on_off = 1
         self.q_w_set = -q_mw * 10**6
         self.q_w = Var(1)
@@ -321,7 +331,7 @@ class HeatExchanger(BranchModel):
         self.reynolds = Var(1000)
         self.t_from_pu = Var(1)
         self.t_to_pu = Var(1)
-        self.t_average_pu = Var(1)     
+        self.t_average_pu = Var(1)
         self.t_average_k = Var(350)
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
@@ -333,7 +343,7 @@ class HeatExchanger(BranchModel):
                 self.mass_flow,
                 self.diameter_m,
                 grid.dynamic_visc,
-                self._pipe_area
+                self._pipe_area,
             ),
             owfmodel.darcy_weisbach_equation(
                 from_node_model.vars["pressure_pu"] * grid.pressure_ref,
@@ -353,24 +363,26 @@ class HeatExchanger(BranchModel):
                 diameter=self.diameter_m,
                 fluid_density=grid.fluid_density,
             ),
-            ohfmodel.temp_flow(t_in_scaled=from_node_model.vars["t_pu"],
-                               t_out_scaled=to_node_model.vars["t_pu"],
-                               heat_loss=self.q_w/grid.t_ref,
-                               mass_flow=self.mass_flow,
-                               sign_impl=kwargs["sign_impl"]),
+            ohfmodel.temp_flow(
+                t_in_scaled=from_node_model.vars["t_pu"],
+                t_out_scaled=to_node_model.vars["t_pu"],
+                heat_loss=self.q_w / grid.t_ref,
+                mass_flow=self.mass_flow,
+                sign_impl=kwargs["sign_impl"],
+            ),
             self.t_from_pu == from_node_model.vars["t_pu"],
             self.t_to_pu == to_node_model.vars["t_pu"],
             self.q_w == self.q_w_set * self.regulation,
-            self.t_average_pu == (from_node_model.vars["t_pu"] + to_node_model.vars["t_pu"]) / 2,
-            self.t_average_k == (from_node_model.vars["t_k"] + to_node_model.vars["t_k"]) / 2,
+            self.t_average_pu
+            == (from_node_model.vars["t_pu"] + to_node_model.vars["t_pu"]) / 2,
+            self.t_average_k
+            == (from_node_model.vars["t_k"] + to_node_model.vars["t_k"]) / 2,
         ]
 
 
 @model
 class HeatExchangerLoad(HeatExchanger):
-    def __init__(
-        self, q_mw, diameter_m, temperature_ext_k=293
-    ) -> None:
+    def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
         super().__init__(q_mw, diameter_m, temperature_ext_k)
 
         self.q_w = q_mw * 10**6
@@ -378,9 +390,7 @@ class HeatExchangerLoad(HeatExchanger):
 
 @model
 class HeatExchangerGenerator(HeatExchanger):
-    def __init__(
-        self, q_mw, diameter_m, temperature_ext_k=293
-    ) -> None:
+    def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
         super().__init__(q_mw, diameter_m, temperature_ext_k)
 
         self.q_w = -q_mw * 10**6
@@ -389,12 +399,7 @@ class HeatExchangerGenerator(HeatExchanger):
 @model
 class GasPipe(BranchModel):
     def __init__(
-        self,
-        diameter_m,
-        length_m,
-        temperature_ext_k=296.15,
-        roughness=0.0001,
-        on_off=1
+        self, diameter_m, length_m, temperature_ext_k=296.15, roughness=0.0001, on_off=1
     ) -> None:
         super().__init__()
 
@@ -432,15 +437,24 @@ class GasPipe(BranchModel):
                 t_k=grid.t_k,
                 compressibility=grid.compressibility,
                 on_off=self.on_off,
-                **kwargs
+                **kwargs,
             ),
             hydraulicsmodel.flow_rate_equation(
                 mean_flow_velocity=self.velocity,
                 flow_rate=self.mass_flow,
                 diameter=self.diameter_m,
-                fluid_density=self.gas_density
+                fluid_density=self.gas_density,
             ),
-            self.gas_density == (
-                ((from_node_model.vars["pressure_pa"] + to_node_model.vars["pressure_pa"]) / 2) * grid.molar_mass
-            ) / (grid.universal_gas_constant * grid.t_k)
+            self.gas_density
+            == (
+                (
+                    (
+                        from_node_model.vars["pressure_pa"]
+                        + to_node_model.vars["pressure_pa"]
+                    )
+                    / 2
+                )
+                * grid.molar_mass
+            )
+            / (grid.universal_gas_constant * grid.t_k),
         )

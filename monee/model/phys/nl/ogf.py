@@ -1,3 +1,5 @@
+import math
+
 from . import hydraulics
 
 
@@ -15,8 +17,8 @@ def junction_pressure(p, p_nom):
     return p == p_nom**2
 
 
-import math
-R_specific = 504.5      # J/(kg·K) for natural gas
+R_specific = 504.5  # J/(kg·K) for natural gas
+
 
 def calc_C_squared(diameter_m, friction, length_m, t_k, compressability):
     numerator = math.pi**2 * diameter_m**5
@@ -26,8 +28,26 @@ def calc_C_squared(diameter_m, friction, length_m, t_k, compressability):
     return C_squared
 
 
-def pipe_weymouth(p_i, p_j, f_a, rey, diameter_m, roughness, length_m, t_k, compressibility, on_off=1, **kwargs):
-    return ((p_i)**2 - (p_j)**2) * calc_C_squared(diameter_m, hydraulics.swamee_jain(rey, diameter_m, roughness, kwargs["log_impl"]), length_m, t_k, compressibility) * on_off  == (-abs(f_a) * f_a)
+def pipe_weymouth(
+    p_i,
+    p_j,
+    f_a,
+    rey,
+    diameter_m,
+    roughness,
+    length_m,
+    t_k,
+    compressibility,
+    on_off=1,
+    **kwargs,
+):
+    return ((p_i) ** 2 - (p_j) ** 2) * calc_C_squared(
+        diameter_m,
+        hydraulics.swamee_jain(rey, diameter_m, roughness, kwargs["log_impl"]),
+        length_m,
+        t_k,
+        compressibility,
+    ) * on_off == (-abs(f_a) * f_a)
 
 
 def normal_pressure(p, p_squared):

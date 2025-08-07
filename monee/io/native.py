@@ -2,7 +2,6 @@ import inspect
 import json
 
 from monee.model import Network
-
 from monee.model.core import Var, component_list
 
 

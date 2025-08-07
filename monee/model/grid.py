@@ -8,18 +8,25 @@ from .core import model
 class Grid:
     name: str
 
+
 @model
 @dataclass
 class PowerGrid(Grid):
     sn_mva: float = 1
 
+
 @model
 @dataclass
 class WaterGrid(Grid):
-    fluid_density: float = 998 # use better approximation for the accordings temperatures
-    dynamic_visc: float = 0.000596 # use better approximation for the according temperatures
-    t_ref: float = 356 # slight lower value than the typical 359 as (mostly)
+    fluid_density: float = (
+        998  # use better approximation for the accordings temperatures
+    )
+    dynamic_visc: float = (
+        0.000596  # use better approximation for the according temperatures
+    )
+    t_ref: float = 356  # slight lower value than the typical 359 as (mostly)
     pressure_ref: float = 1000000
+
 
 GAS_GRID_ATTRS = {
     "lgas": {
@@ -27,13 +34,14 @@ GAS_GRID_ATTRS = {
         "molar_mass": 0.0165,
         "gas_temperature": 300,
         "dynamic_visc": 1.2190162697374919e-05,
-        "higher_heating_value": 15.3, # kWh/kg,
+        "higher_heating_value": 15.3,  # kWh/kg,
         "t_ref": 356,
         "universal_gas_constant": 8.314,
         "t_k": 300,
-        "pressure_ref": 1000000
+        "pressure_ref": 1000000,
     }
 }
+
 
 @model
 @dataclass
@@ -41,13 +49,12 @@ class GasGrid(Grid):
     compressibility: float
     molar_mass: float
     gas_temperature: float
-    dynamic_visc: float 
+    dynamic_visc: float
     higher_heating_value: float
-    t_ref: float 
-    universal_gas_constant: float 
+    t_ref: float
+    universal_gas_constant: float
     t_k: float
     pressure_ref: float
-
 
 
 @model

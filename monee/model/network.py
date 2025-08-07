@@ -1,12 +1,33 @@
-
-from .core import EL_KEY, WATER_KEY, GAS_KEY, Node, Component, Compound, Child, Branch, GenericModel, CompoundModel, Var, Const
-from .grid import create_power_grid, create_water_grid, create_gas_grid
-import pandas
-import networkx as nx
 import copy
 
+import networkx as nx
+import pandas
+
+from .core import (
+    EL_KEY,
+    GAS_KEY,
+    WATER_KEY,
+    Branch,
+    Child,
+    Component,
+    Compound,
+    CompoundModel,
+    Const,
+    GenericModel,
+    Node,
+    Var,
+)
+from .grid import create_gas_grid, create_power_grid, create_water_grid
+
+
 class Network:
-    def __init__(self, active_grid=None, el_model=create_power_grid("power"), water_model=create_water_grid("heat"), gas_model=create_gas_grid("gas")) -> None:
+    def __init__(
+        self,
+        active_grid=None,
+        el_model=create_power_grid("power"),
+        water_model=create_water_grid("heat"),
+        gas_model=create_gas_grid("gas"),
+    ) -> None:
         self._default_grid_models = {
             EL_KEY: el_model,
             WATER_KEY: water_model,
@@ -161,7 +182,7 @@ class Network:
 
     def childs_by_ids(self, child_ids) -> list[Child]:
         return [self.child_by_id(child_id) for child_id in child_ids]
-    
+
     def branches_by_ids(self, branch_ids) -> list[Branch]:
         return [self.branch_by_id(branch_id) for branch_id in branch_ids]
 
@@ -181,24 +202,34 @@ class Network:
         return self._network_internal.has_edge(node_id_one, node_id_two)
 
     def compounds_connected_to(self, node_id) -> list[Component]:
-        return [compound for compound in self.compounds if node_id in compound.connected_to]
+        return [
+            compound for compound in self.compounds if node_id in compound.connected_to
+        ]
 
     def compound_of(self, subcomponent_component_id) -> list[Component]:
-        compounds = [compound for compound in self.compounds if subcomponent_component_id in [sc.id for sc in compound.subcomponents]]
+        compounds = [
+            compound
+            for compound in self.compounds
+            if subcomponent_component_id in [sc.id for sc in compound.subcomponents]
+        ]
         if len(compounds) == 0:
             return None
         return compounds[0]
 
     def components_connected_to(self, node_id) -> list[Component]:
         node = self.node_by_id(node_id)
-        return self.childs_by_ids(node.child_ids) \
-                    + self.compounds_connected_to(node_id) \
-                    + self.branches_by_ids(node.to_branch_ids) \
-                    + self.branches_by_ids(node.from_branch_ids)
-        
+        return (
+            self.childs_by_ids(node.child_ids)
+            + self.compounds_connected_to(node_id)
+            + self.branches_by_ids(node.to_branch_ids)
+            + self.branches_by_ids(node.from_branch_ids)
+        )
+
     def branches_connected_to(self, node_id) -> list[Branch]:
         node = self.node_by_id(node_id)
-        return self.branches_by_ids(node.to_branch_ids) + self.branches_by_ids(node.from_branch_ids)
+        return self.branches_by_ids(node.to_branch_ids) + self.branches_by_ids(
+            node.from_branch_ids
+        )
 
     @property
     def nodes(self) -> list[Node]:
@@ -300,12 +331,14 @@ class Network:
         return min(self._network_internal)
 
     def _or_default(self, grid_or_name):
-        if type(grid_or_name) == str:
+        if grid_or_name is str:
             return self._default_grid_models[grid_or_name]
         if grid_or_name is None:
             if self.__current_grid is None:
-                raise ValueError("No active grid and no grid was provided. Please provide a grid by using the argument grid= or use activate_grid(grid) to activate a grid for the whole Network object.")
-            if type(self.__current_grid) == str:
+                raise ValueError(
+                    "No active grid and no grid was provided. Please provide a grid by using the argument grid= or use activate_grid(grid) to activate a grid for the whole Network object."
+                )
+            if self.__current_grid is str:
                 return self._default_grid_models[self.__current_grid]
             return self.__current_grid
         return grid_or_name
@@ -320,7 +353,9 @@ class Network:
         name=None,
         position=None,
     ):
-        node_id = 0 if len(self._network_internal) == 0 else max(self._network_internal) + 1
+        node_id = (
+            0 if len(self._network_internal) == 0 else max(self._network_internal) + 1
+        )
         if overwrite_id is not None:
             node_id = overwrite_id
 
@@ -346,17 +381,24 @@ class Network:
         return node_id
 
     def branch(
-        self, model, 
-        from_node_id, 
-        to_node_id, 
-        constraints=None, 
-        grid=None, 
-        name=None, 
+        self,
+        model,
+        from_node_id,
+        to_node_id,
+        constraints=None,
+        grid=None,
+        name=None,
         auto_node_creator=None,
         auto_grid_key=None,
     ):
-        from_node = self.node_by_id_or_create(from_node_id, auto_node_creator=auto_node_creator, auto_grid_key=auto_grid_key)
-        to_node = self.node_by_id_or_create(to_node_id, auto_node_creator=auto_node_creator, auto_grid_key=auto_grid_key)
+        from_node = self.node_by_id_or_create(
+            from_node_id,
+            auto_node_creator=auto_node_creator,
+            auto_grid_key=auto_grid_key,
+        )
+        to_node = self.node_by_id_or_create(
+            to_node_id, auto_node_creator=auto_node_creator, auto_grid_key=auto_grid_key
+        )
         branch = Branch(
             model,
             from_node_id,

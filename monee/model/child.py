@@ -57,6 +57,7 @@ class Source(NoVarChildModel):
         super().__init__(**kwargs)
         self.mass_flow = -mass_flow
 
+
 @model
 class ExtHydrGrid(NoVarChildModel):
     def __init__(self, mass_flow=1, pressure_pa=1000000, t_k=359, **kwargs) -> None:

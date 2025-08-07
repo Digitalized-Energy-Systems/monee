@@ -1,8 +1,9 @@
 import pytest
 
 import monee.model as md
-from monee.simulation.timeseries import run
 from monee import run_energy_flow
+from monee.simulation.timeseries import run
+
 
 @pytest.mark.pptest
 def test_timeseries_with_simbench():

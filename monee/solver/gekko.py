@@ -8,20 +8,20 @@ from gekko.gk_operators import GK_Operators
 from gekko.gk_variable import GKVariable
 
 from monee.model import (
-    Branch, 
-    Compound, 
-    Const, 
-    GenericModel, 
-    Network, 
-    Node, 
-    Var, 
-    ExtHydrGrid, 
-    ExtPowerGrid, 
-    WaterPipe,
     CHP,
+    Branch,
+    Compound,
+    Const,
+    ExtHydrGrid,
+    ExtPowerGrid,
     GasToHeat,
+    GenericModel,
     MultiGridBranchModel,
+    Network,
+    Node,
     PowerToHeat,
+    Var,
+    WaterPipe,
 )
 from monee.problem.core import OptimizationProblem
 
@@ -169,7 +169,9 @@ class GEKKOSolver:
                 setattr(
                     target,
                     key,
-                    gekko.Var(value.value, lb=value.min, ub=value.max, integer=value.integer),
+                    gekko.Var(
+                        value.value, lb=value.min, ub=value.max, integer=value.integer
+                    ),
                 )
             if type(value) is Const:
                 setattr(
@@ -464,7 +466,7 @@ class GEKKOSolver:
                         abs_impl=m.abs3,
                         max_impl=m.max2,
                         sign_impl=m.sign2,
-                        log_impl=m.log10
+                        log_impl=m.log10,
                     )
                 )
             )

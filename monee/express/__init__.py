@@ -104,7 +104,7 @@ def create_line(
     constraints=None,
     grid=None,
     name=None,
-    on_off=1
+    on_off=1,
 ):
     return network.branch(
         mm.PowerLine(length_m, r_ohm_per_m, x_ohm_per_m, parallel, on_off=on_off),
@@ -114,7 +114,7 @@ def create_line(
         grid=grid,
         name=name,
         auto_node_creator=lambda: mm.Bus(1),
-        auto_grid_key=mm.EL_KEY
+        auto_grid_key=mm.EL_KEY,
     )
 
 
@@ -139,7 +139,7 @@ def create_gas_pipe(
         grid=grid,
         name=name,
         auto_node_creator=lambda: mm.Junction(),
-        auto_grid_key=mm.GAS_KEY
+        auto_grid_key=mm.GAS_KEY,
     )
 
 
@@ -166,7 +166,7 @@ def create_water_pipe(
             roughness=roughness,
             lambda_insulation_w_per_k=lambda_insulation_w_per_k,
             insulation_thickness_m=insulation_thickness_m,
-            on_off=on_off
+            on_off=on_off,
         ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
@@ -174,7 +174,7 @@ def create_water_pipe(
         grid=grid,
         name=name,
         auto_node_creator=lambda: mm.Junction(),
-        auto_grid_key=mm.WATER_KEY
+        auto_grid_key=mm.WATER_KEY,
     )
 
 
@@ -429,7 +429,7 @@ def create_p2g(
             efficiency=efficiency,
             mass_flow_setpoint=mass_flow_setpoint,
             consume_q_mvar_setpoint=consume_q_mvar_setpoint,
-            regulation=regulation
+            regulation=regulation,
         ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
@@ -438,12 +438,13 @@ def create_p2g(
         name=name,
     )
 
+
 def create_g2p(
     network: mm.Network,
     from_node_id,
     to_node_id,
     efficiency,
-    p_mw_setpoint, 
+    p_mw_setpoint,
     q_mvar_setpoint=0,
     regulation=1,
     constraints=None,
@@ -455,7 +456,7 @@ def create_g2p(
             efficiency=efficiency,
             p_mw_setpoint=p_mw_setpoint,
             q_mvar_setpoint=q_mvar_setpoint,
-            regulation=regulation
+            regulation=regulation,
         ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,

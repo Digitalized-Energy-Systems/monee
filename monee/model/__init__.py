@@ -19,12 +19,12 @@ from .core import (
     EL_KEY,
     GAS_KEY,
     WATER_KEY,
-    EL, 
+    EL,
     GAS,
-    WATER
+    WATER,
 )
 from .network import (
-    Network, 
+    Network,
     transform_network,
     to_spanning_tree,
     calc_coordinates,
@@ -50,7 +50,14 @@ from .child import (
     Source,
     ConsumeHydrGrid,
 )
-from .multi import CHP, GasToPower, PowerToGas, PowerToHeat, GenericTransferBranch, GasToHeat
+from .multi import (
+    CHP,
+    GasToPower,
+    PowerToGas,
+    PowerToHeat,
+    GenericTransferBranch,
+    GasToHeat,
+)
 from .grid import (
     create_gas_grid,
     create_water_grid,

@@ -22,16 +22,12 @@ def create_two_pipes_no_branching():
     )
 
     pn.branch(
-        mm.GasPipe(
-            diameter_m=0.75, length_m=100, temperature_ext_k=300
-        ),
+        mm.GasPipe(diameter_m=0.75, length_m=100, temperature_ext_k=300),
         g_node_0,
         g_node_1,
     )
     pn.branch(
-        mm.GasPipe(
-            diameter_m=0.75, length_m=2000, temperature_ext_k=300
-        ),
+        mm.GasPipe(diameter_m=0.75, length_m=2000, temperature_ext_k=300),
         g_node_1,
         g_node_2,
     )
@@ -57,20 +53,17 @@ def create_two_pipes_gas_example():
     )
 
     pn.branch(
-        mm.GasPipe(
-            diameter_m=1, length_m=2000
-        ),
+        mm.GasPipe(diameter_m=1, length_m=2000),
         g_node_0,
         g_node_1,
     )
     pn.branch(
-        mm.GasPipe(
-            diameter_m=0.3, length_m=200
-        ),
+        mm.GasPipe(diameter_m=0.3, length_m=200),
         g_node_0,
         g_node_2,
     )
     return pn
+
 
 def create_branching_gas_net():
     pn = mm.Network()
@@ -79,19 +72,17 @@ def create_branching_gas_net():
     gas_grid = mm.create_gas_grid("gas", type="lgas")
     g_node_0 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Source(mass_flow=0.1))], grid=gas_grid,
+        child_ids=[pn.child(mm.Source(mass_flow=0.1))],
+        grid=gas_grid,
     )
     g_node_1 = pn.node(
-        mm.Junction(),
-        child_ids=[pn.child(mm.ExtHydrGrid())], grid=gas_grid
+        mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())], grid=gas_grid
     )
     g_node_2 = pn.node(
-        mm.Junction(), 
-        child_ids=[pn.child(mm.Sink(mass_flow=.1))], grid=gas_grid
+        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=0.1))], grid=gas_grid
     )
     g_node_3 = pn.node(
-        mm.Junction(), 
-        child_ids=[pn.child(mm.Sink(mass_flow=.1))], grid=gas_grid
+        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=0.1))], grid=gas_grid
     )
 
     pn.branch(

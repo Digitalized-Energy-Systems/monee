@@ -21,7 +21,12 @@ from monee.model.node import Bus, Junction
 from monee.problem.core import Constraints, Objectives, OptimizationProblem
 
 CONTROLLABLE_ATTRIBUTES = ["p_mw", "mass_flow", "q_w"]
-CONTROLLABLE_ATTRIBUTES_CP = ["mass_flow", "heat_energy_mw", "to_mass_flow", "mass_flow_capacity"]
+CONTROLLABLE_ATTRIBUTES_CP = [
+    "mass_flow",
+    "heat_energy_mw",
+    "to_mass_flow",
+    "mass_flow_capacity",
+]
 
 
 def _or_zero(var):

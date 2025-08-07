@@ -10,10 +10,12 @@ GAS = GAS_KEY
 
 component_list = []
 
+
 # class decorator
 def model(cls):
     component_list.append(cls)
     return cls
+
 
 def upper(var_or_const):
     if isinstance(var_or_const, Var):
@@ -70,6 +72,7 @@ class Var:
             return self.min >= other
         return False
 
+
 class Const:
     def __init__(self, value) -> None:
         self.value = value
@@ -103,8 +106,10 @@ class BranchModel(GenericModel):
     @abstractmethod
     def equations(self, grid, from_node_model, to_node_model, **kwargs):
         pass
+
     def loss_percent(self):
         return 0
+
     def is_cp(self):
         return False
 
@@ -113,6 +118,7 @@ class MultiGridBranchModel(BranchModel):
     @abstractmethod
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
         pass
+
     def is_cp(self):
         return True
 
@@ -134,13 +140,12 @@ class CompoundModel(GenericModel):
 class MultGridCompoundModel(CompoundModel):
     def is_cp(self):
         return True
-    
+
 
 class ChildModel(GenericModel):
-    
-    def __init__(self, regulation:int=1, **kwargs):
+    def __init__(self, regulation: int = 1, **kwargs):
         super().__init__(**kwargs)
-        
+
         self.regulation = regulation
 
     def overwrite(self, node_model):
@@ -179,6 +184,7 @@ class Component(ABC):
     @property
     def nid(self):
         return f"{self.model.__class__.__name__}-{self.id}".lower()
+
 
 class Child(Component):
     def __init__(
@@ -284,4 +290,3 @@ class Branch(Component):
             return f"branch-{self.id[0]}-{self.id[1]}"
         else:
             return f"branch-{self.id[1]}-{self.id[0]}"
-
