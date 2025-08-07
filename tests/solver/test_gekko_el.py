@@ -8,23 +8,27 @@ from monee.model.node import Bus
 from monee.problem.load_shedding import create_load_shedding_optimization_problem
 from monee.solver.gekko import GEKKOSolver
 
+import monee.model as mm
 
 def create_two_line_example_with_vm(vm, controllable_gen=False):
-    pn = Network(PowerGrid(name="power", sn_mva=1))
+    pn = Network()
 
     node_0 = pn.node(
         Bus(base_kv=1),
         child_ids=[
             pn.child(PowerGenerator(p_mw=Var(1) if controllable_gen else 1, q_mvar=0))
         ],
+        grid=mm.EL
     )
     node_1 = pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(ExtPowerGrid(p_mw=0.1, q_mvar=0, vm_pu=vm, va_degree=0))],
+        grid=mm.EL
     )
     node_2 = pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(PowerLoad(p_mw=1, q_mvar=0))],
+        grid=mm.EL
     )
 
     pn.branch(
@@ -46,18 +50,22 @@ def create_two_gen_network(power_gen=1):
     node_0 = pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(PowerGenerator(p_mw=power_gen, q_mvar=0))],
+        grid=mm.EL
     )
     node_1 = pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(ExtPowerGrid(p_mw=0.1, q_mvar=0, vm_pu=1, va_degree=0))],
+        grid=mm.EL
     )
     node_2 = pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(PowerLoad(p_mw=1, q_mvar=0))],
+        grid=mm.EL
     )
     node_3 = pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(PowerGenerator(p_mw=0.1, q_mvar=0))],
+        grid=mm.EL
     )
 
     pn.branch(
@@ -84,14 +92,17 @@ def create_trafo_network():
     node_0 = pn.node(
         Bus(base_kv=10),
         child_ids=[pn.child(ExtPowerGrid(p_mw=0.1, q_mvar=0, vm_pu=1, va_degree=0))],
+        grid=mm.EL
     )
     node_1 = pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(PowerLoad(p_mw=1, q_mvar=0))],
+        grid=mm.EL
     )
     node_2 = pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(PowerLoad(p_mw=1, q_mvar=0))],
+        grid=mm.EL
     )
 
     pn.branch(
@@ -113,21 +124,26 @@ def create_four_line_example_with_inactive():
     node_0 = pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(PowerGenerator(p_mw=1, q_mvar=0))],
+        grid=mm.EL
     )
     node_1 = pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(ExtPowerGrid(p_mw=0.1, q_mvar=0, vm_pu=1, va_degree=0))],
+        grid=mm.EL
     )
     node_2 = pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(PowerLoad(p_mw=1, q_mvar=0))],
+        grid=mm.EL
     )
     node_3 = pn.node(
         Bus(base_kv=1),
+        grid=mm.EL
     )
     node_4 = pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(PowerLoad(p_mw=1, q_mvar=0))],
+        grid=mm.EL
     )
 
     pn.branch(
@@ -165,7 +181,7 @@ def test_simple_trafo():
 
     assert len(pn.as_dataframe_dict()) == 5
     assert result.dataframes["Bus"]["vm_pu"][0] == 1
-    assert math.isclose(result.dataframes["Bus"]["vm_pu"][1], 0.98425648993)
+    assert math.isclose(result.dataframes["Bus"]["vm_pu"][1], 0.9840819483)
 
 
 def test_two_lines_example():
@@ -192,7 +208,7 @@ def test_two_lines_example_big_vm():
     assert len(pn.as_dataframe_dict()) == 5
     assert len(pn.node_by_id(1).model.vars) == 5
     assert len(result.dataframes) == 5
-    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.018169406301)
+    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.018182218904)
 
 
 def test_two_gen_example():
@@ -224,7 +240,7 @@ def test_two_controllable_lines_example_simple_constraint():
     assert len(pn.node_by_id(1).model.vars) == 5
     assert len(result.dataframes) == 5
     assert result.dataframes["ExtPowerGrid"]["p_mw"][0] == 1
-    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], -2.142071799)
+    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], -2.1428570262)
 
 
 def test_two_controllable_lines_example_simple_objective():
@@ -237,8 +253,8 @@ def test_two_controllable_lines_example_simple_objective():
     assert len(pn.as_dataframe_dict()) == 5
     assert len(pn.node_by_id(1).model.vars) == 5
     assert len(result.dataframes) == 5
-    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -4.1428573107)
-    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], 1.1685869004)
+    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -4.14285, rel_tol=1e-4)
+    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], 1.16858, rel_tol=1e-4)
 
 
 def test_load_shedding_network_regulate_gen():

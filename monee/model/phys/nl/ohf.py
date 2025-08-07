@@ -34,10 +34,12 @@ def heat_transfer_loss(
     )
 
 
+# we scale the temperature here to avoid the small diff problem (if relative differences between variable are too small
+# solver tend to have to difficulties to find this small difference)
 def temp_flow(
-    t_in, t_out, heat_loss, mass_flow, sign_impl
+    t_in_scaled, t_out_scaled, heat_loss, mass_flow, sign_impl
 ):
-    return heat_loss == -mass_flow * SPECIFIC_HEAT_CAP_WATER * (t_in - t_out) 
+    return heat_loss == -mass_flow * SPECIFIC_HEAT_CAP_WATER * (t_in_scaled - t_out_scaled)
 
 
 # Dittus-Bölter correlation

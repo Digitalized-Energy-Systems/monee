@@ -30,14 +30,13 @@ DEFAULT_SOLVER_OPTIONS = [
     "minlp_max_iter_with_int_sol 500",
     "minlp_as_nlp 0",
     "nlp_maximum_iterations 250",
-    "minlp_as_nlp 1",
     "minlp_branch_method 3",
-    "minlp_gap_tol 1.0e-3",
-    "minlp_integer_tol 1.0e-3",
+    "minlp_gap_tol 1.0e-4",
+    "minlp_integer_tol 1.0e-4",
     "minlp_integer_max 2.0e9",
     "minlp_integer_leaves 1",
     "minlp_print_level 1",
-    "objective_convergence_tolerance 1.0e-3",
+    "objective_convergence_tolerance 1.0e-4",
     "constraint_convergence_tolerance 1.0e-4",
 ]
 
@@ -170,7 +169,7 @@ class GEKKOSolver:
                 setattr(
                     target,
                     key,
-                    gekko.Var(value.value, lb=value.min, ub=value.max),
+                    gekko.Var(value.value, lb=value.min, ub=value.max, integer=value.integer),
                 )
             if type(value) is Const:
                 setattr(
@@ -447,6 +446,7 @@ class GEKKOSolver:
             for constraint in branch.constraints:
                 m.Equation(
                     constraint(
+                        branch.model,
                         grid,
                         network.node_by_id(branch.from_node_id).model,
                         network.node_by_id(branch.to_node_id).model,
@@ -464,6 +464,7 @@ class GEKKOSolver:
                         abs_impl=m.abs3,
                         max_impl=m.max2,
                         sign_impl=m.sign2,
+                        log_impl=m.log10
                     )
                 )
             )

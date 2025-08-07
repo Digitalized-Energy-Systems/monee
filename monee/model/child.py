@@ -29,7 +29,7 @@ class PowerGenerator(NoVarChildModel):
 
 @model
 class ExtPowerGrid(NoVarChildModel):
-    def __init__(self, p_mw, q_mvar, vm_pu, va_degree, **kwargs) -> None:
+    def __init__(self, p_mw, q_mvar, vm_pu=1, va_degree=0, **kwargs) -> None:
         super().__init__(**kwargs)
 
         self.p_mw = Var(p_mw)
@@ -53,14 +53,13 @@ class PowerLoad(NoVarChildModel):
 
 @model
 class Source(NoVarChildModel):
-    def __init__(self, mass_flow, **kwargs) -> None:
+    def __init__(self, mass_flow, t_k=359, **kwargs) -> None:
         super().__init__(**kwargs)
         self.mass_flow = -mass_flow
 
-
 @model
 class ExtHydrGrid(NoVarChildModel):
-    def __init__(self, mass_flow=1, pressure_pa=1000000, t_k=300, **kwargs) -> None:
+    def __init__(self, mass_flow=1, pressure_pa=1000000, t_k=359, **kwargs) -> None:
         super().__init__(**kwargs)
         self.mass_flow = Var(mass_flow)
 

@@ -38,10 +38,11 @@ def value(var_or_const):
 
 
 class Var:
-    def __init__(self, value, max=None, min=None) -> None:
+    def __init__(self, value, max=None, min=None, integer=False) -> None:
         self.value = value
         self.max = max
         self.min = min
+        self.integer = integer
 
     def __neg__(self):
         return Var(value=-self.value, max=self.max, min=self.min)
@@ -68,7 +69,6 @@ class Var:
         if isinstance(other, float | int) and self.min is not None:
             return self.min >= other
         return False
-
 
 class Const:
     def __init__(self, value) -> None:

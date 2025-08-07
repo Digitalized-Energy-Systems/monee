@@ -6,7 +6,7 @@ import networkx as nx
 import copy
 
 class Network:
-    def __init__(self, el_model=create_power_grid("power"), water_model=create_water_grid("heat"), gas_model=create_gas_grid("gas")) -> None:
+    def __init__(self, active_grid=None, el_model=create_power_grid("power"), water_model=create_water_grid("heat"), gas_model=create_gas_grid("gas")) -> None:
         self._default_grid_models = {
             EL_KEY: el_model,
             WATER_KEY: water_model,
@@ -22,6 +22,10 @@ class Network:
         self.__collected_components = []
         self.__force_blacklist = False
         self.__collect_components = False
+        self.__current_grid = active_grid
+
+    def activate_grid(self, grid):
+        self.__current_grid = grid
 
     @property
     def graph(self):
@@ -236,7 +240,7 @@ class Network:
     def node_by_id_or_create(self, node_id, auto_node_creator, auto_grid_key):
         if not self.has_node(node_id):
             return self.node_by_id(
-                self.node(auto_node_creator(), default_model_key=auto_grid_key)
+                self.node(auto_node_creator(), grid=auto_grid_key, overwrite_id=node_id)
             )
         return self.node_by_id(node_id)
 
@@ -298,21 +302,28 @@ class Network:
     def _or_default(self, grid_or_name):
         if type(grid_or_name) == str:
             return self._default_grid_models[grid_or_name]
+        if grid_or_name is None:
+            if self.__current_grid is None:
+                raise ValueError("No active grid and no grid was provided. Please provide a grid by using the argument grid= or use activate_grid(grid) to activate a grid for the whole Network object.")
+            if type(self.__current_grid) == str:
+                return self._default_grid_models[self.__current_grid]
+            return self.__current_grid
         return grid_or_name
 
     def node(
         self,
         model,
-        grid,
+        grid=None,
         child_ids=None,
         constraints=None,
         overwrite_id=None,
         name=None,
         position=None,
     ):
-        node_id = overwrite_id or (
-            0 if len(self._network_internal) == 0 else max(self._network_internal) + 1
-        )
+        node_id = 0 if len(self._network_internal) == 0 else max(self._network_internal) + 1
+        if overwrite_id is not None:
+            node_id = overwrite_id
+
         node = Node(
             node_id,
             model,
@@ -335,10 +346,17 @@ class Network:
         return node_id
 
     def branch(
-        self, model, from_node_id, to_node_id, constraints=None, grid=None, name=None
+        self, model, 
+        from_node_id, 
+        to_node_id, 
+        constraints=None, 
+        grid=None, 
+        name=None, 
+        auto_node_creator=None,
+        auto_grid_key=None,
     ):
-        from_node = self.node_by_id(from_node_id)
-        to_node = self.node_by_id(to_node_id)
+        from_node = self.node_by_id_or_create(from_node_id, auto_node_creator=auto_node_creator, auto_grid_key=auto_grid_key)
+        to_node = self.node_by_id_or_create(to_node_id, auto_node_creator=auto_node_creator, auto_grid_key=auto_grid_key)
         branch = Branch(
             model,
             from_node_id,

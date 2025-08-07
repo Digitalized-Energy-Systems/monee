@@ -2,7 +2,7 @@ import pytest
 
 import monee.model as md
 from monee.simulation.timeseries import run
-
+from monee import run_energy_flow
 
 @pytest.mark.pptest
 def test_timeseries_with_simbench():
@@ -11,6 +11,8 @@ def test_timeseries_with_simbench():
     # GIVEN
     steps = 3
     net, td = obtain_simbench_net_with_td("1-LV-rural3--1-no_sw")
+    print(net.as_dataframe_dict_str())
+    run_energy_flow(net)
 
     # WHEN
     result = run(net, td, steps)

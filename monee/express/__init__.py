@@ -104,14 +104,17 @@ def create_line(
     constraints=None,
     grid=None,
     name=None,
+    on_off=1
 ):
     return network.branch(
-        mm.PowerLine(length_m, r_ohm_per_m, x_ohm_per_m, parallel),
+        mm.PowerLine(length_m, r_ohm_per_m, x_ohm_per_m, parallel, on_off=on_off),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
         constraints=constraints,
         grid=grid,
         name=name,
+        auto_node_creator=lambda: mm.Bus(1),
+        auto_grid_key=mm.EL_KEY
     )
 
 
@@ -123,17 +126,20 @@ def create_gas_pipe(
     length_m,
     temperature_ext_k=296.15,
     roughness=0.00001,
+    on_off=1,
     constraints=None,
     grid=None,
     name=None,
 ):
     return network.branch(
-        mm.GasPipe(diameter_m, length_m, temperature_ext_k, roughness),
+        mm.GasPipe(diameter_m, length_m, temperature_ext_k, roughness, on_off=on_off),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
         constraints=constraints,
         grid=grid,
         name=name,
+        auto_node_creator=lambda: mm.Junction(),
+        auto_grid_key=mm.GAS_KEY
     )
 
 
@@ -147,6 +153,7 @@ def create_water_pipe(
     roughness=0.001,
     lambda_insulation_w_per_k=0.025,
     insulation_thickness_m=0.2,
+    on_off=1,
     constraints=None,
     grid=None,
     name=None,
@@ -159,12 +166,15 @@ def create_water_pipe(
             roughness=roughness,
             lambda_insulation_w_per_k=lambda_insulation_w_per_k,
             insulation_thickness_m=insulation_thickness_m,
+            on_off=on_off
         ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
         constraints=constraints,
         grid=grid,
         name=name,
+        auto_node_creator=lambda: mm.Junction(),
+        auto_grid_key=mm.WATER_KEY
     )
 
 
@@ -298,7 +308,7 @@ def create_ext_hydr_grid(
     node_id,
     mass_flow=1,
     pressure_pa=1000000,
-    t_k=300,
+    t_k=359,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -514,8 +524,4 @@ def create_p2h(
 
 
 def create_multi_energy_network():
-    return mm.Network(
-        mm.create_power_grid("power"),
-        mm.create_water_grid("water"),
-        mm.create_gas_grid("gas"),
-    )
+    return mm.Network()

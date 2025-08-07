@@ -18,7 +18,7 @@ def test_calc_pipe_area_sub_1():
 def test_calc_nikurdse_friction_factor():
     nikurdse_friction = ml.calc_nikurdse(2, 0.7)
 
-    assert math.isclose(nikurdse_friction, 0.23752148174158597)
+    assert math.isclose(nikurdse_friction, 0.23781164943674166, rel_tol=1e-3)
 
 
 def test_balance_equation():

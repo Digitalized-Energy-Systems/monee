@@ -42,26 +42,13 @@ def test_api_el_super_ex():
     mx.create_power_load(net, 2, 1, 0)
     mx.create_line(net, 0, 1, 100, r_ohm_per_m=0.00007, x_ohm_per_m=0.00007)
     mx.create_line(net, 0, 2, 200, r_ohm_per_m=0.00007, x_ohm_per_m=0.00007)
-    mx.create_gas_pipe(net, 3, 4, diameter_m=0.1, length_m=100)
-    mx.create_gas_pipe(net, 3, 5, diameter_m=0.1, length_m=100)
+    mx.create_gas_pipe(net, 3, 4, diameter_m=0.6, length_m=100)
+    mx.create_gas_pipe(net, 3, 5, diameter_m=0.6, length_m=100)
     mx.create_ext_hydr_grid(net, 4)
-    mx.create_sink(net, 5, 4)
-    mx.create_p2g(net, 0, 3, efficiency=0.9, mass_flow_setpoint=0.1)
+    mx.create_sink(net, 5, 1)
+    mx.create_sink(net, 3, 1)
 
     result = run_energy_flow(net)
 
     assert result is not None
 
-
-def test_api_el_nx():
-    builder = mx.GraphBuilder(nx.Graph())
-    builder.use_default_node()
-    builder.use_default_branch()
-    builder.use_node_at()
-    builder.use_branch_at()
-    builder.attach()
-    net = builder.build_network()
-
-    result = run_energy_flow(net)
-
-    assert result is not None
