@@ -331,14 +331,14 @@ class Network:
         return min(self._network_internal)
 
     def _or_default(self, grid_or_name):
-        if grid_or_name is str:
+        if isinstance(grid_or_name, str):
             return self._default_grid_models[grid_or_name]
         if grid_or_name is None:
             if self.__current_grid is None:
                 raise ValueError(
                     "No active grid and no grid was provided. Please provide a grid by using the argument grid= or use activate_grid(grid) to activate a grid for the whole Network object."
                 )
-            if self.__current_grid is str:
+            if isinstance(self.__current_grid, str):
                 return self._default_grid_models[self.__current_grid]
             return self.__current_grid
         return grid_or_name
