@@ -123,7 +123,7 @@ class GasToHeatControlNode(Junction):
             )
             == 0,
             self.heat_energy_mw
-            == self.efficiency * self.gas_consumption * 3.6 * self.hhv,
+            == self.efficiency * self.gas_consumption * 3.6 * self.hhv,  # NOSONAR
         )
 
 
