@@ -1,10 +1,21 @@
 import functools
 
-from monee.model.branch import HeatExchanger, HeatExchangerGenerator, HeatExchangerLoad
-from monee.model.child import PowerGenerator, PowerLoad, Sink, Source
-from monee.model.core import GenericModel, Network, Var
-from monee.model.grid import GasGrid
-from monee.model.multi import CHP, PowerToGas, PowerToHeat
+from monee.model import (
+    CHP,
+    GasGrid,
+    GenericModel,
+    HeatExchanger,
+    HeatExchangerGenerator,
+    HeatExchangerLoad,
+    Network,
+    PowerGenerator,
+    PowerLoad,
+    PowerToGas,
+    PowerToHeat,
+    Sink,
+    Source,
+    Var,
+)
 
 
 class Objective:

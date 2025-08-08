@@ -10,7 +10,7 @@ def calc_pipe_area(diameter_m):
 # prandtl nikurdse formula
 # https://core.ac.uk/download/pdf/38640864.pdf
 def calc_nikurdse(internal_diameter_m, roughness):
-    return 1 / (2 * np.log10(internal_diameter_m / roughness) + 1.14) ** 2
+    return 1 / (2 * np.log10(3.71 * internal_diameter_m / roughness)) ** 2
 
 
 def reynolds_equation(rey_var, flow_var, diameter_m, dynamic_visc, pipe_area):
@@ -33,8 +33,19 @@ def pipe_mass_flow(max_v, min_v, v):
 
 
 def friction_model(rey, nikurdse):
-    return (64 / rey) + nikurdse
+    return 64 / rey
 
 
-def flow_rate_equation(mean_flow_velocity, flow_rate, diameter):
-    return flow_rate == mean_flow_velocity * diameter**2 * math.pi / 4
+def flow_rate_equation(mean_flow_velocity, flow_rate, diameter, fluid_density):
+    return mean_flow_velocity == flow_rate / (
+        fluid_density * (diameter**2 * math.pi / 4)
+    )
+
+
+# friction factor for turbulent flow
+def swamee_jain(reynolds_var, diameter_m, roughness, log_func):
+    term1 = (roughness / diameter_m) / 3.7
+    term2 = 5.74 / (reynolds_var**0.9)
+    denominator = log_func(term1 + term2) ** 2
+    f = 0.25 / denominator
+    return f

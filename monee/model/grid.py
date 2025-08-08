@@ -18,17 +18,27 @@ class PowerGrid(Grid):
 @model
 @dataclass
 class WaterGrid(Grid):
-    fluid_density: float = 1
-    dynamic_visc: float = 0.000596
+    fluid_density: float = (
+        998  # use better approximation for the accordings temperatures
+    )
+    dynamic_visc: float = (
+        0.000596  # use better approximation for the according temperatures
+    )
+    t_ref: float = 356  # slight lower value than the typical 359 as (mostly)
+    pressure_ref: float = 1000000
 
 
 GAS_GRID_ATTRS = {
     "lgas": {
         "compressibility": 1,
-        "molar_mass": 18.1138902,
+        "molar_mass": 0.0165,
         "gas_temperature": 300,
         "dynamic_visc": 1.2190162697374919e-05,
-        "higher_heating_value": 0.0116,
+        "higher_heating_value": 15.3,  # kWh/kg,
+        "t_ref": 356,
+        "universal_gas_constant": 8.314,
+        "t_k": 300,
+        "pressure_ref": 1000000,
     }
 }
 
@@ -41,6 +51,10 @@ class GasGrid(Grid):
     gas_temperature: float
     dynamic_visc: float
     higher_heating_value: float
+    t_ref: float
+    universal_gas_constant: float
+    t_k: float
+    pressure_ref: float
 
 
 @model
@@ -52,7 +66,7 @@ class NoGrid(Grid):
 NO_GRID = NoGrid("None")
 
 
-def create_gas_grid(name, type):
+def create_gas_grid(name, type="lgas"):
     return GasGrid(name, **GAS_GRID_ATTRS[type])
 
 

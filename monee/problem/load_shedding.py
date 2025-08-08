@@ -21,7 +21,12 @@ from monee.model.node import Bus, Junction
 from monee.problem.core import Constraints, Objectives, OptimizationProblem
 
 CONTROLLABLE_ATTRIBUTES = ["p_mw", "mass_flow", "q_w"]
-CONTROLLABLE_ATTRIBUTES_CP = ["mass_flow", "heat_energy_mw", "to_mass_flow"]
+CONTROLLABLE_ATTRIBUTES_CP = [
+    "mass_flow",
+    "heat_energy_mw",
+    "to_mass_flow",
+    "mass_flow_capacity",
+]
 
 
 def _or_zero(var):
@@ -41,7 +46,7 @@ def retrieve_power_uniform(model):
     elif isinstance(model, PowerLoad | PowerGenerator):
         return _or_zero(model.p_mw), model.p_mw.max
     elif isinstance(model, Sink | Source):
-        return -_or_zero(model.mass_flow) * 3.6 * HHV, -model.mass_flow.min * 3.6 * HHV
+        return model.mass_flow.min * 3.6 * HHV, model.mass_flow.max * 3.6 * HHV
     elif isinstance(model, CHP):
         return 0, 0
     elif isinstance(model, PowerToHeat):

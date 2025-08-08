@@ -78,6 +78,7 @@ def fill_branch_dict(branch_mat, branch_dict_list):
         # 1 if branch_row[8] == 0 else branch_row[8]
         branch_dict["values"]["shift"] = branch_row[9]
         branch_dict["values"]["max_i_ka"] = 0.319
+        branch_dict["values"]["on_off"] = 1
         branch_dict["model_type"] = "GenericPowerBranch"
         branch_dict_list.append(branch_dict)
 

@@ -1,5 +1,4 @@
 from .core import (
-    Network,
     Node,
     Child,
     Compound,
@@ -16,6 +15,16 @@ from .core import (
     NodeModel,
     CompoundModel,
     MultiGridBranchModel,
+    GenericModel,
+    EL_KEY,
+    GAS_KEY,
+    WATER_KEY,
+    EL,
+    GAS,
+    WATER,
+)
+from .network import (
+    Network,
     transform_network,
     to_spanning_tree,
     calc_coordinates,
@@ -41,7 +50,14 @@ from .child import (
     Source,
     ConsumeHydrGrid,
 )
-from .multi import CHP, GasToPower, PowerToGas, PowerToHeat, GenericTransferBranch
+from .multi import (
+    CHP,
+    GasToPower,
+    PowerToGas,
+    PowerToHeat,
+    GenericTransferBranch,
+    GasToHeat,
+)
 from .grid import (
     create_gas_grid,
     create_water_grid,

@@ -2,6 +2,18 @@ from .core import ChildModel, Const, Var, model
 
 
 class NoVarChildModel(ChildModel):
+    def set(self, n, value):
+        user_attributes = [
+            attr
+            for attr in dir(self)
+            if not attr.startswith("__") and not callable(getattr(self, attr))
+        ]
+        if n < 0 or n >= len(user_attributes):
+            raise IndexError(f"No user-defined attribute at index {n}")
+
+        attr_name = user_attributes[n]
+        setattr(self, attr_name, value)
+
     def equations(self, grid, node, **kwargs):
         return []
 
@@ -17,7 +29,7 @@ class PowerGenerator(NoVarChildModel):
 
 @model
 class ExtPowerGrid(NoVarChildModel):
-    def __init__(self, p_mw, q_mvar, vm_pu, va_degree, **kwargs) -> None:
+    def __init__(self, p_mw, q_mvar, vm_pu=1, va_degree=0, **kwargs) -> None:
         super().__init__(**kwargs)
 
         self.p_mw = Var(p_mw)
@@ -41,14 +53,14 @@ class PowerLoad(NoVarChildModel):
 
 @model
 class Source(NoVarChildModel):
-    def __init__(self, mass_flow, **kwargs) -> None:
+    def __init__(self, mass_flow, t_k=359, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = mass_flow
+        self.mass_flow = -mass_flow
 
 
 @model
 class ExtHydrGrid(NoVarChildModel):
-    def __init__(self, mass_flow=1, pressure_pa=1000000, t_k=300, **kwargs) -> None:
+    def __init__(self, mass_flow=1, pressure_pa=1000000, t_k=359, **kwargs) -> None:
         super().__init__(**kwargs)
         self.mass_flow = Var(mass_flow)
 
@@ -78,4 +90,4 @@ class ConsumeHydrGrid(NoVarChildModel):
 class Sink(NoVarChildModel):
     def __init__(self, mass_flow, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = -mass_flow
+        self.mass_flow = mass_flow

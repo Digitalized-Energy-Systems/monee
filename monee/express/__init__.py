@@ -5,7 +5,7 @@ def create_bus(
     network: mm.Network,
     base_kv=1,
     constraints=None,
-    grid=None,
+    grid=mm.EL,
     overwrite_id=None,
     name=None,
     position=None,
@@ -20,10 +20,46 @@ def create_bus(
     )
 
 
+def create_water_junction(
+    network: mm.Network,
+    grid=mm.WATER,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    position=None,
+):
+    return create_junction(
+        network,
+        grid,
+        constraints,
+        overwrite_id,
+        name,
+        position,
+    )
+
+
+def create_gas_junction(
+    network: mm.Network,
+    grid=mm.GAS,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    position=None,
+):
+    return create_junction(
+        network,
+        grid,
+        constraints,
+        overwrite_id,
+        name,
+        position,
+    )
+
+
 def create_junction(
     network: mm.Network,
+    grid,
     constraints=None,
-    grid=None,
     overwrite_id=None,
     name=None,
     position=None,
@@ -38,6 +74,25 @@ def create_junction(
     )
 
 
+def create_el_branch(
+    network: mm.Network,
+    from_node_id,
+    to_node_id,
+    model,
+    constraints=None,
+    grid=None,
+    name=None,
+):
+    return network.branch(
+        model,
+        from_node_id=from_node_id,
+        to_node_id=to_node_id,
+        constraints=constraints,
+        grid=grid,
+        name=name,
+    )
+
+
 def create_line(
     network: mm.Network,
     from_node_id,
@@ -49,14 +104,17 @@ def create_line(
     constraints=None,
     grid=None,
     name=None,
+    on_off=1,
 ):
     return network.branch(
-        mm.PowerLine(length_m, r_ohm_per_m, x_ohm_per_m, parallel),
+        mm.PowerLine(length_m, r_ohm_per_m, x_ohm_per_m, parallel, on_off=on_off),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
         constraints=constraints,
         grid=grid,
         name=name,
+        auto_node_creator=lambda: mm.Bus(1),
+        auto_grid_key=mm.EL_KEY,
     )
 
 
@@ -67,18 +125,21 @@ def create_gas_pipe(
     diameter_m,
     length_m,
     temperature_ext_k=296.15,
-    roughness=0.001,
+    roughness=0.00001,
+    on_off=1,
     constraints=None,
     grid=None,
     name=None,
 ):
     return network.branch(
-        mm.GasPipe(diameter_m, length_m, temperature_ext_k, roughness),
+        mm.GasPipe(diameter_m, length_m, temperature_ext_k, roughness, on_off=on_off),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
         constraints=constraints,
         grid=grid,
         name=name,
+        auto_node_creator=lambda: mm.Junction(),
+        auto_grid_key=mm.GAS_KEY,
     )
 
 
@@ -90,8 +151,9 @@ def create_water_pipe(
     length_m,
     temperature_ext_k=296.15,
     roughness=0.001,
-    lambda_insulation_w_per_k=0.00001,
-    insulation_thickness_m=0.035,
+    lambda_insulation_w_per_k=0.025,
+    insulation_thickness_m=0.2,
+    on_off=1,
     constraints=None,
     grid=None,
     name=None,
@@ -104,11 +166,139 @@ def create_water_pipe(
             roughness=roughness,
             lambda_insulation_w_per_k=lambda_insulation_w_per_k,
             insulation_thickness_m=insulation_thickness_m,
+            on_off=on_off,
         ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
         constraints=constraints,
         grid=grid,
+        name=name,
+        auto_node_creator=lambda: mm.Junction(),
+        auto_grid_key=mm.WATER_KEY,
+    )
+
+
+def create_el_child(
+    network: mm.Network,
+    model,
+    node_id,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    return network.child_to(
+        model,
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        auto_node_creator=lambda: mm.Bus(1),
+        auto_grid_key=mm.EL_KEY,
+        **kwargs,
+    )
+
+
+def create_water_child(
+    network: mm.Network,
+    model,
+    node_id,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    return network.child_to(
+        model,
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        auto_node_type=mm.Junction,
+        auto_grid_key=mm.WATER_KEY,
+        **kwargs,
+    )
+
+
+def create_gas_child(
+    network: mm.Network,
+    model,
+    node_id,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    return network.child_to(
+        model,
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        auto_node_type=mm.Junction,
+        auto_grid_key=mm.GAS_KEY,
+        **kwargs,
+    )
+
+
+def create_power_load(
+    network: mm.Network,
+    node_id,
+    p_mw,
+    q_mvar,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    return create_el_child(
+        network,
+        mm.PowerLoad(p_mw, q_mvar, **kwargs),
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+    )
+
+
+def create_power_generator(
+    network: mm.Network,
+    node_id,
+    p_mw,
+    q_mvar,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    return create_el_child(
+        network,
+        mm.PowerGenerator(p_mw, q_mvar, **kwargs),
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+    )
+
+
+def create_ext_power_grid(
+    network: mm.Network,
+    node_id,
+    p_mw=1,
+    q_mvar=1,
+    vm_pu=1,
+    va_degree=0,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    return create_el_child(
+        network,
+        mm.ExtPowerGrid(p_mw, q_mvar, vm_pu, va_degree, **kwargs),
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
         name=name,
     )
 
@@ -118,7 +308,7 @@ def create_ext_hydr_grid(
     node_id,
     mass_flow=1,
     pressure_pa=1000000,
-    t_k=300,
+    t_k=359,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -198,7 +388,6 @@ def create_heat_exchanger(
     q_mw,
     diameter_m=0.10,
     temperature_ext_k=293,
-    in_line_operation=False,
     constraints=None,
     grid=None,
     name=None,
@@ -208,14 +397,12 @@ def create_heat_exchanger(
             q_mw=-q_mw,
             diameter_m=diameter_m,
             temperature_ext_k=temperature_ext_k,
-            in_line_operation=in_line_operation,
         )
         if q_mw < 0
         else mm.HeatExchanger(
             q_mw=q_mw,
             diameter_m=diameter_m,
             temperature_ext_k=temperature_ext_k,
-            in_line_operation=in_line_operation,
         ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
@@ -232,6 +419,7 @@ def create_p2g(
     efficiency,
     mass_flow_setpoint,
     consume_q_mvar_setpoint=0,
+    regulation=1,
     constraints=None,
     grid=None,
     name=None,
@@ -241,6 +429,34 @@ def create_p2g(
             efficiency=efficiency,
             mass_flow_setpoint=mass_flow_setpoint,
             consume_q_mvar_setpoint=consume_q_mvar_setpoint,
+            regulation=regulation,
+        ),
+        from_node_id=from_node_id,
+        to_node_id=to_node_id,
+        constraints=constraints,
+        grid=grid,
+        name=name,
+    )
+
+
+def create_g2p(
+    network: mm.Network,
+    from_node_id,
+    to_node_id,
+    efficiency,
+    p_mw_setpoint,
+    q_mvar_setpoint=0,
+    regulation=1,
+    constraints=None,
+    grid=None,
+    name=None,
+):
+    return network.branch(
+        mm.GasToPower(
+            efficiency=efficiency,
+            p_mw_setpoint=p_mw_setpoint,
+            q_mvar_setpoint=q_mvar_setpoint,
+            regulation=regulation,
         ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
@@ -260,7 +476,6 @@ def create_chp(
     efficiency_power,
     efficiency_heat,
     mass_flow_setpoint,
-    in_line_operation=False,
     constraints=None,
 ):
     return network.compound(
@@ -271,7 +486,6 @@ def create_chp(
             mass_flow_setpoint,
             q_mvar_setpoint=0,
             temperature_ext_k=293,
-            in_line_operation=in_line_operation,
         ),
         constraints=constraints,
         power_node_id=power_node_id,
@@ -308,3 +522,7 @@ def create_p2h(
         heat_node_id=heat_node_id,
         heat_return_node_id=heat_return_node_id,
     )
+
+
+def create_multi_energy_network():
+    return mm.Network()
