@@ -203,7 +203,9 @@ class Network:
 
     def compounds_connected_to(self, node_id) -> list[Component]:
         return [
-            compound for compound in self.compounds if node_id in compound.connected_to
+            compound
+            for compound in self.compounds
+            if node_id in compound.connected_to.values()
         ]
 
     def compound_of(self, subcomponent_component_id) -> list[Component]:

@@ -510,6 +510,30 @@ def test_simple_g2h():
     assert math.isclose(result.dataframes["Junction"]["t_k"][3], 373.5426926)
 
 
+def test_network_convenience_methods():
+    multi_energy_network = create_multi_chp()
+
+    multi_energy_network.activate_by_id(mm.Node, 0)
+    multi_energy_network.activate_by_id(mm.Branch, (1, 0, 0))
+    multi_energy_network.activate_by_id(mm.Compound, 0)
+    multi_energy_network.activate_by_id(mm.Child, 0)
+    m = multi_energy_network.all_models_with_grid()
+
+    assert len(m) == 30
+
+    assert multi_energy_network.has_child(0)
+    multi_energy_network.remove_child(0)
+    assert len(multi_energy_network.childs) == 7
+    assert len(multi_energy_network.childs_by_type(mm.Sink)) == 1
+    assert len(multi_energy_network.compounds_by_type(mm.CHP)) == 1
+    assert len(multi_energy_network.branches_by_ids([(1, 0, 0)])) == 1
+    assert multi_energy_network.get_branch_between(1, 0) is not None
+    assert multi_energy_network.has_branch_between(1, 0)
+    assert len(multi_energy_network.components_connected_to(5)) == 2
+    assert len(multi_energy_network.branches_connected_to(5)) == 1
+    assert len(multi_energy_network.compounds_connected_to(2)) == 1
+
+
 """ def test_simbench_ls_optimization():
     random.seed(42)
 
