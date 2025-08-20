@@ -177,7 +177,6 @@ def create_chp_in_combined_generated_network(
                     diameter_m=0.035,
                     efficiency_power=efficiency / 2,
                     efficiency_heat=efficiency / 2,
-                    in_line_operation=True,
                 )
 
 

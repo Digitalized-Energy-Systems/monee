@@ -17,12 +17,15 @@ def init_model(model_type, preprocessed_dict):
     if model_type in model_type_dict:
         model_cls = model_type_dict[model_type]
         model = model_cls(
-            **{
-                argname: 0
-                for argname, _ in list(
-                    inspect.signature(model_cls.__init__).parameters.items()
-                )[1:]
-            }
+            **dict.fromkeys(
+                [
+                    argname
+                    for argname, _ in list(
+                        inspect.signature(model_cls.__init__).parameters.items()
+                    )[1:]
+                ],
+                0,
+            )
         )
         for key, value in preprocessed_dict.items():
             setattr(model, key, value)

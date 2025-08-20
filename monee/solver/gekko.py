@@ -122,13 +122,7 @@ def remove_cps(network: Network):
         network.remove_compound(comp.id)
 
         # as CHPs are integrated in the typical topology by replacing the actual in line he
-        if type(comp.model) is CHP:
-            heat_return_node = network.node_by_id(
-                comp.connected_to["heat_return_node_id"]
-            )
-            heat_node = network.node_by_id(comp.connected_to["heat_node_id"])
-            network.branch(WaterPipe(0, 0), heat_return_node.id, heat_node.id)
-        if type(comp.model) is PowerToHeat:
+        if type(comp.model) in COMPOUND_TYPES_TO_REMOVE:
             heat_return_node = network.node_by_id(
                 comp.connected_to["heat_return_node_id"]
             )
