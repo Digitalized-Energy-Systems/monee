@@ -139,7 +139,7 @@ class CompoundModel(GenericModel):
 
 class MultGridCompoundModel(CompoundModel):
     def is_cp(self):
-        return True
+        return False  # in monee compounds are collections, only components which actually connect to different grids are cps for monee
 
 
 class ChildModel(GenericModel):
