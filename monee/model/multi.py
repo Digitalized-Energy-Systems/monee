@@ -64,7 +64,6 @@ class GenericTransferBranch(MultiGridBranchModel):
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
         eqs = []
-        print(grids)
         if type(grids) is WaterGrid or type(grids) is dict and WaterGrid in grids:
             self.mass_flow = self._mass_flow
             self.heat_mass_flow = self._mass_flow
@@ -196,7 +195,6 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
-        print(grid)
         return (
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
