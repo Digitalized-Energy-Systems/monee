@@ -505,7 +505,6 @@ def create_p2h(
     efficiency,
     temperature_ext_k=293,
     q_mvar_setpoint=0,
-    in_line_operation=False,
     constraints=None,
 ):
     return network.compound(
@@ -515,10 +514,34 @@ def create_p2h(
             temperature_ext_k=temperature_ext_k,
             efficiency=efficiency,
             q_mvar_setpoint=q_mvar_setpoint,
-            in_line_operation=in_line_operation,
         ),
         constraints=constraints,
         power_node_id=power_node_id,
+        heat_node_id=heat_node_id,
+        heat_return_node_id=heat_return_node_id,
+    )
+
+
+def create_g2h(
+    network: mm.Network,
+    gas_node_id,
+    heat_node_id,
+    heat_return_node_id,
+    heat_energy_w,
+    diameter_m,
+    efficiency,
+    temperature_ext_k=293,
+    constraints=None,
+):
+    return network.compound(
+        mm.GasToHeat(
+            heat_energy_w=heat_energy_w,
+            diameter_m=diameter_m,
+            temperature_ext_k=temperature_ext_k,
+            efficiency=efficiency,
+        ),
+        constraints=constraints,
+        gas_node_id=gas_node_id,
         heat_node_id=heat_node_id,
         heat_return_node_id=heat_return_node_id,
     )
