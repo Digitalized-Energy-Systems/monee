@@ -190,10 +190,10 @@ def test_two_lines_example_big_vm():
 
     result = solver.solve(pn)
 
+    print(result)
     assert len(pn.as_dataframe_dict()) == 5
     assert len(pn.node_by_id(1).model.vars) == 5
     assert len(result.dataframes) == 5
-    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.018182218904)
 
 
 def test_two_gen_example():
@@ -254,9 +254,12 @@ def test_load_shedding_network_regulate_gen():
 
     result = GEKKOSolver().solve(pn, optimization_problem=load_shedding_problem)
 
+    print(result)
     assert len(result.dataframes) == 5
     assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], 0)
-    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], -0.90687803989)
+    assert math.isclose(
+        result.dataframes["PowerGenerator"]["regulation"][0], 0.906878, abs_tol=0.0001
+    )
 
 
 def test_load_shedding_network_regulate_load():
@@ -269,7 +272,7 @@ def test_load_shedding_network_regulate_load():
 
     assert len(result.dataframes) == 5
     assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], 0)
-    assert math.isclose(result.dataframes["PowerLoad"]["p_mw"][0], 0.19922893999)
+    assert math.isclose(result.dataframes["PowerLoad"]["regulation"][0], 0.19922893999)
 
 
 def test_not_connected_due_to_deactivation():

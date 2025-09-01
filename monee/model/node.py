@@ -12,8 +12,8 @@ class Bus(NodeModel):
 
         self.vm_pu = Var(1)
         self.va_degree = Var(0)
-        self.p_mw = Var(1)
-        self.q_mvar = Var(1)
+        self.p_mw = Intermediate()
+        self.q_mvar = Intermediate()
 
     def calc_signed_power_values(
         self, from_branch_models, to_branch_models, connected_node_models
@@ -49,13 +49,25 @@ class Bus(NodeModel):
         return signed_active_power, signed_reactive_power
 
     def p_mw_equation(self, child_models):
-        return self.p_mw == sum(
-            [model.vars["p_mw"] * model.vars["regulation"] for model in child_models]
+        return IntermediateEq(
+            "p_mw",
+            sum(
+                [
+                    model.vars["p_mw"] * model.vars["regulation"]
+                    for model in child_models
+                ]
+            ),
         )
 
     def q_mvar_equation(self, child_models):
-        return self.q_mvar == sum(
-            [model.vars["q_mvar"] * model.vars["regulation"] for model in child_models]
+        return IntermediateEq(
+            "q_mvar",
+            sum(
+                [
+                    model.vars["q_mvar"] * model.vars["regulation"]
+                    for model in child_models
+                ]
+            ),
         )
 
     def equations(
