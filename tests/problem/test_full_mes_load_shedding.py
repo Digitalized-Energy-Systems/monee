@@ -2,14 +2,13 @@ import random
 
 import monee.express as mx
 import monee.model as mm
+import monee.network.mes as mes
 import monee.problem as mp
 from monee import run_energy_flow, run_energy_flow_optimization
 from monee.model import Bus, ExtPowerGrid, PowerGenerator, PowerLine, PowerLoad, Source
 
 
 def create_four_line_example():
-    import monee.network.mes as mes
-
     random.seed(9002)
     pn = mm.Network()
 
