@@ -1,7 +1,3 @@
-import monee.model.phys.nl.hydraulics as hydraulicsmodel
-import monee.model.phys.nl.ohf as ohfmodel
-import monee.model.phys.nl.owf as owfmodel
-
 from .branch import HeatExchanger
 from .child import PowerGenerator, PowerLoad, Sink
 from .core import (
@@ -215,50 +211,7 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
 
 
 class SubHE(HeatExchanger):
-    def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
-        self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
-
-        return [
-            hydraulicsmodel.reynolds_equation(
-                self.reynolds,
-                self.mass_flow,
-                self.diameter_m,
-                grid.dynamic_visc,
-                self._pipe_area,
-                kwargs["abs_impl"],
-            ),
-            owfmodel.darcy_weisbach_equation(
-                from_node_model.vars["pressure_pu"] * grid.pressure_ref,
-                to_node_model.vars["pressure_pu"] * grid.pressure_ref,
-                self.reynolds,
-                self.velocity,
-                self.length_m,
-                self.diameter_m,
-                grid.fluid_density,
-                self.pipe_roughness,
-                on_off=self.on_off,
-                use_darcy_friction=True,
-                **kwargs,
-            ),
-            hydraulicsmodel.flow_rate_equation(
-                mean_flow_velocity=self.velocity,
-                flow_rate=self.mass_flow,
-                diameter=self.diameter_m,
-                fluid_density=grid.fluid_density,
-            ),
-            ohfmodel.temp_flow(
-                t_in_scaled=from_node_model.vars["t_pu"],
-                t_out_scaled=to_node_model.vars["t_pu"],
-                heat_loss=self.q_w / grid.t_ref,
-                mass_flow=self.mass_flow,
-                sign_impl=kwargs["sign_impl"],
-            ),
-            self.t_from_pu == from_node_model.vars["t_pu"],
-            self.t_to_pu == to_node_model.vars["t_pu"],
-            self.q_w == self.q_w_set * self.regulation,
-            self.t_average_pu
-            == (from_node_model.vars["t_pu"] + to_node_model.vars["t_pu"]) / 2,
-        ]
+    pass
 
 
 @model
