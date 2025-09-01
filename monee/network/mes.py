@@ -4,7 +4,6 @@ from geopy import distance
 
 import monee.express as mx
 import monee.model as mm
-from monee.io.from_simbench import obtain_simbench_net
 
 REF_PA = 1000000
 REF_TEMP = 352
@@ -233,21 +232,3 @@ def generate_mes_based_on_power_net(
         new_mes_net, net_power, bus_to_gas_junc, p2g_density
     )
     return new_mes_net
-
-
-def generate_mes_based_on_simbench_id(
-    simbench_id: str,
-    heat_deployment_rate,
-    gas_deployment_rate,
-    chp_density=0.1,
-    p2g_density=0.02,
-    p2h_density=0.1,
-):
-    return generate_mes_based_on_power_net(
-        obtain_simbench_net(simbench_id),
-        heat_deployment_rate,
-        gas_deployment_rate,
-        chp_density=chp_density,
-        p2g_density=p2g_density,
-        p2h_density=p2h_density,
-    )
