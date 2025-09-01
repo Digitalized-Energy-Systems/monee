@@ -72,10 +72,24 @@ class Var:
             return self.min >= other
         return False
 
+    def __str__(self):
+        return f"{self.value} ({self.min}, {self.max}), is int: {self.integer}"
+
 
 class Const:
     def __init__(self, value) -> None:
         self.value = value
+
+
+class Intermediate:
+    def __init__(self, value=0):
+        self.value = value
+
+
+class IntermediateEq:
+    def __init__(self, attr, eq):
+        self.attr = attr
+        self.eq = eq
 
 
 class GenericModel(ABC):
@@ -113,6 +127,9 @@ class BranchModel(GenericModel):
     def is_cp(self):
         return False
 
+    def init(self, grid):
+        pass
+
 
 class MultiGridBranchModel(BranchModel):
     @abstractmethod
@@ -121,6 +138,9 @@ class MultiGridBranchModel(BranchModel):
 
     def is_cp(self):
         return True
+
+    def init(self, grids):
+        pass
 
 
 class MultiGridNodeModel(NodeModel):

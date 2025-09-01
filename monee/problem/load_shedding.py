@@ -5,6 +5,7 @@ from monee.model.branch import (
     HeatExchanger,
     HeatExchangerGenerator,
     HeatExchangerLoad,
+    PowerLine,
 )
 from monee.model.child import (
     ExtHydrGrid,
@@ -18,74 +19,118 @@ from monee.model.core import Var
 from monee.model.grid import GasGrid, WaterGrid
 from monee.model.multi import CHP, PowerToGas, PowerToHeat
 from monee.model.node import Bus, Junction
-from monee.problem.core import Constraints, Objectives, OptimizationProblem
+from monee.problem.core import (
+    AttributeParameter,
+    Constraints,
+    Objectives,
+    OptimizationProblem,
+)
 
-CONTROLLABLE_ATTRIBUTES = ["p_mw", "mass_flow", "q_w"]
+CONTROLLABLE_ATTRIBUTES = [
+    (
+        "regulation",
+        AttributeParameter(
+            min=lambda attr, val: 0, max=lambda attr, val: 1, val=lambda attr, val: 0
+        ),
+    )
+]
 CONTROLLABLE_ATTRIBUTES_CP = [
-    "mass_flow",
-    "heat_energy_mw",
-    "to_mass_flow",
-    "mass_flow_capacity",
+    (
+        "regulation",
+        AttributeParameter(
+            min=lambda attr, val: 0, max=lambda attr, val: 1, val=lambda attr, val: 0
+        ),
+    )
 ]
 
 
 def _or_zero(var):
     if type(var) is Var and math.isnan(var.value):
         return 0
-    if hasattr(var.value, "value") and math.isnan(var.value.value):
+    if (
+        hasattr(var, "value")
+        and hasattr(var.value, "value")
+        and math.isnan(var.value.value)
+    ):
         return 0
     return var
 
 
-HHV = 0.0116
+HHV = 15.3
 
 
 def retrieve_power_uniform(model):
     if isinstance(model, HeatExchangerLoad | HeatExchangerGenerator | HeatExchanger):
-        return _or_zero(model.q_w) / 1e6, model.q_w.max / 1e6
+        return _or_zero(model.q_w) / 1e6 * model.regulation, model.q_w / 1e6
     elif isinstance(model, PowerLoad | PowerGenerator):
-        return _or_zero(model.p_mw), model.p_mw.max
+        return _or_zero(model.p_mw) * model.regulation, model.p_mw
     elif isinstance(model, Sink | Source):
-        return model.mass_flow.min * 3.6 * HHV, model.mass_flow.max * 3.6 * HHV
+        return _or_zero(
+            model.mass_flow
+        ) * 3.6 * HHV * model.regulation, model.mass_flow * 3.6 * HHV
     elif isinstance(model, CHP):
         return 0, 0
     elif isinstance(model, PowerToHeat):
         return 0, 0
     elif isinstance(model, PowerToGas):
         return 0, 0
+    elif isinstance(model, PowerLine):
+        return 0, 0
 
     raise ValueError(f"The model {type(model)} is not a known load.")
 
 
 def calculate_objective(model_to_data):
-    return sum(
-        [
-            (retrieve_power_uniform(model)[1] - retrieve_power_uniform(model)[0]) * data
-            for model, data in model_to_data.items()
-        ]
-    )
+    power_coeff = [
+        (
+            model,
+            (retrieve_power_uniform(model)[1] - retrieve_power_uniform(model)[0])
+            * data,
+        )
+        for model, data in model_to_data.items()
+    ]
+    # print(power_coeff)
+    return sum([t[1] for t in power_coeff])
 
 
 def create_load_shedding_optimization_problem(
     load_weight=100,
     bounds_el=(0.9, 1.1),
-    bounds_heat=(340, 390),
-    bounds_gas=(900000, 1100000),
+    bounds_heat=(0.9, 1.1),
+    bounds_gas=(0.9, 1.1),
     bounds_lp=(0, 1.5),
     ext_grid_el_bounds=(-0.25, 0.25),
     ext_grid_gas_bounds=(-1.5, 1.5),
+    debug=False,
 ):
-    problem = OptimizationProblem()
+    problem = OptimizationProblem(debug=debug)
 
     problem.controllable_demands(CONTROLLABLE_ATTRIBUTES)
     problem.controllable_generators(CONTROLLABLE_ATTRIBUTES)
     problem.controllable_cps(CONTROLLABLE_ATTRIBUTES_CP)
 
+    # controllable not integrated in objective function
+    problem.controllable(
+        component_condition=lambda component: "backup" in component.model.vars
+        and component.model.backup,
+        attributes=[
+            (
+                "on_off",
+                AttributeParameter(
+                    min=lambda attr, val: 0,
+                    max=lambda attr, val: 1,
+                    val=lambda attr, val: 0,
+                    integer=True,
+                ),
+            )
+        ],
+    )
+
     problem.bounds(bounds_el, lambda m, _: type(m) is Bus, ["vm_pu"])
     problem.bounds(
-        bounds_heat, lambda m, g: type(m) is Junction and type(g) is WaterGrid, ["t_k"]
+        bounds_heat, lambda m, g: type(m) is Junction and type(g) is WaterGrid, ["t_pu"]
     )
-    problem.bounds(bounds_gas, lambda m, _: type(m) is Junction, ["pressure_pa"])
+    problem.bounds(bounds_gas, lambda m, _: type(m) is Junction, ["pressure_pu"])
 
     objectives = Objectives()
     objectives.with_models(problem.controllables_link).data(
@@ -115,8 +160,8 @@ def create_load_shedding_optimization_problem(
         lambda model: model.loading_from_percent <= bounds_lp[1]
     ).equation(lambda model: model.loading_to_percent <= bounds_lp[1])
 
-    problem.objectives = objectives
     problem.constraints = constraints
+    problem.objectives = objectives
 
     return problem
 

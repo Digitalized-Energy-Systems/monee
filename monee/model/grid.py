@@ -35,9 +35,9 @@ GAS_GRID_ATTRS = {
         "gas_temperature": 300,
         "dynamic_visc": 1.2190162697374919e-05,
         "higher_heating_value": 15.3,  # kWh/kg,
-        "t_ref": 356,
         "universal_gas_constant": 8.314,
         "t_k": 300,
+        "t_ref": 356,
         "pressure_ref": 1000000,
     }
 }
@@ -51,9 +51,9 @@ class GasGrid(Grid):
     gas_temperature: float
     dynamic_visc: float
     higher_heating_value: float
-    t_ref: float
     universal_gas_constant: float
     t_k: float
+    t_ref: float
     pressure_ref: float
 
 

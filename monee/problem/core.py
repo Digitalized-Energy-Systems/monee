@@ -1,4 +1,7 @@
 import functools
+import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 
 from monee.model import (
     CHP,
@@ -16,6 +19,8 @@ from monee.model import (
     Source,
     Var,
 )
+
+logger = logging.getLogger(__name__)
 
 
 class Objective:
@@ -163,31 +168,56 @@ class Constraints:
         return len(self._constraints) == 0
 
 
+@dataclass
+class AttributeParameter:
+    min: Callable[[str, float], float]
+    max: Callable[[str, float], float]
+    val: Callable[[str, float], float]
+    integer: bool = False
+
+
 class OptimizationProblem:
-    def __init__(self) -> None:
+    def __init__(self, debug=False) -> None:
         self._controllable_appliables: list = []
         self._controllable_to_attr: dict[GenericModel, str] = {}
         self._bounds_for_controllables: list = []
         self._objectives: Objectives = None
         self._constraints: Constraints = None
+        self._debug = debug
 
     def _apply(self, network: Network):
         for appliable in self._controllable_appliables:
             appliable(network)
         for model, attributes in self._controllable_to_attr.items():
-            for attribute in attributes:
+            for attribute_param in attributes:
+                attribute = attribute_param
+                param = None
+                if type(attribute_param) is tuple:
+                    attribute = attribute_param[0]
+                    param: AttributeParameter = attribute_param[1]
                 if hasattr(model, attribute):
                     val = getattr(model, attribute)
                     if type(val) is not Var:
-                        setattr(
-                            model,
-                            attribute,
-                            Var(
+                        if param is None:
+                            variable = Var(
                                 val,
                                 max=0 if val <= 0 else val,
                                 min=0 if val > 0 else val,
-                            ),
+                            )
+                        else:
+                            variable = Var(
+                                param.val(attribute, val),
+                                param.max(attribute, val),
+                                param.min(attribute, val),
+                            )
+                        setattr(
+                            model,
+                            attribute,
+                            variable,
                         )
+                        if self._debug:
+                            logger.info("From the model %s", model)
+                            logger.info("The attribute %s has been replaced", attribute)
 
         for min, max, component_condition, attributes in self._bounds_for_controllables:
             component_list = network.all_components()
@@ -196,22 +226,32 @@ class OptimizationProblem:
                     component_condition(component.model, component.grid)
                     and component.independent
                 ):
+                    if self._debug:
+                        logger.info("From the model %s", component.model)
+                        logger.info("The attributes %s are bounded", attributes)
+
                     for attribute in attributes:
                         var = getattr(component.model, attribute)
                         var.max = max
                         var.min = min
 
-    def add_to_controllable(self, model, attributes=None):
+    def add_to_controllable(
+        self, model, attributes: list[str | tuple[str, AttributeParameter]]
+    ):
         if model not in self._controllable_to_attr:
             self._controllable_to_attr[model] = []
-        self._controllable_to_attr[model] += attributes or list(model.vars.keys())
+        self._controllable_to_attr[model] += attributes
 
     def bounds(self, minmax, component_condition=lambda _: True, attributes=None):
         self._bounds_for_controllables.append(
             (minmax[0], minmax[1], component_condition, attributes)
         )
 
-    def controllable(self, component_condition=lambda _: True, attributes=None):
+    def controllable(
+        self,
+        attributes: list[str | tuple[str, AttributeParameter]],
+        component_condition=lambda _: True,
+    ):
         def apply_controllable(network: Network):
             component_list = network.all_components()
             for component in component_list:
@@ -228,7 +268,9 @@ class OptimizationProblem:
         )
         return self
 
-    def controllable_demands(self, attributes):
+    def controllable_demands(
+        self, attributes: list[str | tuple[str, AttributeParameter]]
+    ):
         self.controllable(
             component_condition=lambda component: (
                 isinstance(component.model, HeatExchangerLoad | PowerLoad)

@@ -1,4 +1,4 @@
-from .core import NodeModel, Var, model
+from .core import Intermediate, IntermediateEq, NodeModel, Var, model
 from .phys.nl.hydraulics import junction_mass_flow_balance
 from .phys.nl.opf import power_balance_equation
 
@@ -48,28 +48,14 @@ class Bus(NodeModel):
         )
         return signed_active_power, signed_reactive_power
 
-    def p_mw_equation(self, from_branch_models, to_branch_models):
+    def p_mw_equation(self, child_models):
         return self.p_mw == sum(
-            [
-                model.vars["p_from_mw"] * model.vars["on_off"]
-                for model in from_branch_models
-            ]
-            + [
-                model.vars["p_to_mw"] * model.vars["on_off"]
-                for model in to_branch_models
-            ]
+            [model.vars["p_mw"] * model.vars["regulation"] for model in child_models]
         )
 
-    def q_mvar_equation(self, from_branch_models, to_branch_models):
+    def q_mvar_equation(self, child_models):
         return self.q_mvar == sum(
-            [
-                model.vars["q_from_mvar"] * model.vars["on_off"]
-                for model in from_branch_models
-            ]
-            + [
-                model.vars["q_to_mvar"] * model.vars["on_off"]
-                for model in to_branch_models
-            ]
+            [model.vars["q_mvar"] * model.vars["regulation"] for model in child_models]
         )
 
     def equations(
@@ -85,8 +71,8 @@ class Bus(NodeModel):
         )
 
         return (
-            self.p_mw_equation(from_branch_models, to_branch_models),
-            self.q_mvar_equation(from_branch_models, to_branch_models),
+            self.p_mw_equation(connected_node_models),
+            self.q_mvar_equation(connected_node_models),
             power_balance_equation(signed_ap),
             power_balance_equation(signed_rp),
         )
@@ -95,9 +81,9 @@ class Bus(NodeModel):
 @model
 class Junction(NodeModel):
     def __init__(self) -> None:
-        self.t_k = Var(350)
+        self.t_k = Intermediate()
         self.t_pu = Var(1)
-        self.pressure_pa = Var(1000000)
+        self.pressure_pa = Intermediate()
         self.pressure_pu = Var(1)
 
     def calc_signed_mass_flow(
@@ -189,7 +175,9 @@ class Junction(NodeModel):
             return (
                 junction_mass_flow_balance(mass_flow_signed_list),
                 junction_mass_flow_balance(energy_flow_list),
-                self.t_pu == self.t_k / grid.t_ref,
-                self.pressure_pu * grid.pressure_ref == self.pressure_pa,
+                IntermediateEq("t_k", self.t_pu * grid.t_ref),
+                IntermediateEq("pressure_pa", self.pressure_pu * grid.pressure_ref),
+                # self.t_k == self.t_pu * grid.t_ref,
+                # self.pressure_pu * grid.pressure_ref == self.pressure_pa,
             )
         return []

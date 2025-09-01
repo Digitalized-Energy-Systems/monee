@@ -6,7 +6,7 @@ import monee.express as mx
 import monee.model as mm
 from monee.io.from_simbench import obtain_simbench_net
 
-REF_PA = 500000
+REF_PA = 1000000
 REF_TEMP = 352
 DEFAULT_LENGTH = 0.1
 
@@ -25,7 +25,10 @@ def get_length(net: mm.Network, branch, node1_id, node2_id):
 
 
 def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
-    heat_grid = mm.create_water_grid("heat")
+    heat_grid = mm.create_water_grid("water")
+    heat_grid.t_ref = REF_TEMP
+    heat_grid.pressure_ref = REF_PA
+    target_net.set_default_grid("water", heat_grid)
 
     power_net_as_st = mm.to_spanning_tree(power_net)
     bus_index_to_junction_index = {}
@@ -44,8 +47,8 @@ def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
                 target_net,
                 from_node_id=bus_index_to_junction_index[node.id],
                 to_node_id=bus_index_to_end_junction_index[node.id],
-                diameter_m=0.020,
-                q_mw=(-1 if random.random() > 0.8 else 1) * -0.02 * random.random(),
+                diameter_m=0.20,
+                q_mw=(-1 if random.random() > 0.8 else 1) * -0.001 * random.random(),
             )
         mx.create_sink(
             target_net,
@@ -77,8 +80,13 @@ def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
     return bus_index_to_junction_index, bus_index_to_end_junction_index
 
 
-def create_gas_net_for_power(power_net, target_net, gas_deployment_rate, scaling=1):
-    gas_grid = mm.create_gas_grid("gas", "lgas")
+def create_gas_net_for_power(
+    power_net, target_net: mm.Network, gas_deployment_rate, scaling=1
+):
+    gas_grid = mm.create_gas_grid("gas", type="lgas")
+    gas_grid.pressure_ref = REF_PA
+    gas_grid.t_ref = REF_TEMP
+    target_net.set_default_grid("gas", gas_grid)
 
     power_net_as_st = mm.to_spanning_tree(power_net)
     bus_index_to_junction_index = {}
@@ -93,7 +101,7 @@ def create_gas_net_for_power(power_net, target_net, gas_deployment_rate, scaling
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=0.9575,
+            diameter_m=0.3,
             length_m=get_length(target_net, branch, from_node_id, to_node_id),
             grid=gas_grid,
         )

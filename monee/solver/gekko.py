@@ -4,7 +4,7 @@ from dataclasses import dataclass
 import networkx as nx
 import pandas
 from gekko import GEKKO
-from gekko.gk_operators import GK_Operators
+from gekko.gk_operators import GK_Intermediate, GK_Operators
 from gekko.gk_variable import GKVariable
 
 from monee.model import (
@@ -16,6 +16,8 @@ from monee.model import (
     ExtPowerGrid,
     GasToHeat,
     GenericModel,
+    Intermediate,
+    IntermediateEq,
     MultiGridBranchModel,
     Network,
     Node,
@@ -45,6 +47,7 @@ DEFAULT_SOLVER_OPTIONS = [
 class SolverResult:
     network: Network
     dataframes: dict[str, pandas.DataFrame]
+    objective: float
 
     def __str__(self) -> str:
         result_str = str(self.network)
@@ -62,6 +65,24 @@ def _as_iter(possible_iter):
     if possible_iter is None:
         raise Exception("None as result for 'equations' is not allowed!")
     return possible_iter if hasattr(possible_iter, "__iter__") else [possible_iter]
+
+
+def _filter_intermediate_eqs(eqs):
+    return [eq for eq in eqs if type(eq) is not IntermediateEq]
+
+
+def _process_intermediate_eqs(m, model, equations):
+    for intermediate_eq in [eq for eq in equations if type(eq) is IntermediateEq]:
+        attr_intermediate_var = getattr(model, intermediate_eq.attr)
+        if type(attr_intermediate_var) is not Intermediate:
+            m.Equation(attr_intermediate_var == intermediate_eq.eq)
+        else:
+            i = m.Intermediate(intermediate_eq.eq)
+            setattr(
+                model,
+                intermediate_eq.attr,
+                i,
+            )
 
 
 def ignore_branch(branch, network: Network, ignored_nodes):
@@ -243,6 +264,12 @@ class GEKKOSolver:
                     key,
                     Const(value.VALUE.value),
                 )
+            if type(value) is GK_Intermediate:
+                setattr(
+                    target,
+                    key,
+                    Intermediate(value=value.VALUE.value[0]),
+                )
 
     @staticmethod
     def withdraw_gekko_vars(nodes, branches, compounds, network):
@@ -300,8 +327,9 @@ class GEKKOSolver:
             m, nodes, branches, compounds, network, ignored_nodes
         )
 
-        self.process_equations_branches(m, network, branches, ignored_nodes)
+        self.init_branches(branches)
         self.process_equations_nodes_childs(m, network, nodes, ignored_nodes)
+        self.process_equations_branches(m, network, branches, ignored_nodes)
         self.process_equations_compounds(m, network, compounds, ignored_nodes)
 
         if optimization_problem is not None:
@@ -330,8 +358,9 @@ class GEKKOSolver:
             raise
 
         GEKKOSolver.withdraw_gekko_vars(nodes, branches, compounds, network)
-
-        solver_result = SolverResult(network, network.as_result_dataframe_dict())
+        solver_result = SolverResult(
+            network, network.as_result_dataframe_dict(), m.options.OBJFCNVAL
+        )
         return solver_result
 
     def process_internal_oxf_components(self, m, network):
@@ -373,7 +402,8 @@ class GEKKOSolver:
                 m.Equation(constraint(compound.model))
             equations = compound.model.equations(network)
             if equations is not None:
-                m.Equations(_as_iter(equations))
+                _process_intermediate_eqs(m, compound, equations)
+                m.Equations(_filter_intermediate_eqs(_as_iter(equations)))
 
     def process_equations_nodes_childs(self, m, network: Network, nodes, ignored_nodes):
         for node in nodes:
@@ -426,12 +456,20 @@ class GEKKOSolver:
                     sign_impl=m.sign2,
                 )
             )
-            m.Equations([eq for eq in equations if type(eq) is not bool or not eq])
+            node_eqs = [eq for eq in equations if type(eq) is not bool or not eq]
+            _process_intermediate_eqs(m, node.model, node_eqs)
+            m.Equations(_filter_intermediate_eqs(node_eqs))
 
             for child in node_childs:
                 if ignore_child(child, ignored_nodes):
                     continue
-                m.Equations(_as_iter(child.model.equations(grid, node)))
+                child_eqs = _as_iter(child.model.equations(grid, node))
+                _process_intermediate_eqs(m, child.model, child_eqs)
+                m.Equations(_filter_intermediate_eqs(child_eqs))
+
+    def init_branches(self, branches):
+        for branch in branches:
+            branch.model.init(branch.grid)
 
     def process_equations_branches(self, m, network, branches, ignored_nodes):
         for branch in branches:
@@ -448,19 +486,19 @@ class GEKKOSolver:
                         network.node_by_id(branch.to_node_id).model,
                     )
                 )
-            m.Equations(
-                _as_iter(
-                    branch.model.equations(
-                        grid,
-                        network.node_by_id(branch.from_node_id).model,
-                        network.node_by_id(branch.to_node_id).model,
-                        sin_impl=m.sin,
-                        cos_impl=m.cos,
-                        if_impl=m.if3,
-                        abs_impl=m.abs3,
-                        max_impl=m.max2,
-                        sign_impl=m.sign2,
-                        log_impl=m.log10,
-                    )
+            branch_eqs = _as_iter(
+                branch.model.equations(
+                    grid,
+                    network.node_by_id(branch.from_node_id).model,
+                    network.node_by_id(branch.to_node_id).model,
+                    sin_impl=m.sin,
+                    cos_impl=m.cos,
+                    if_impl=m.if3,
+                    abs_impl=m.abs3,
+                    max_impl=m.max2,
+                    sign_impl=m.sign3,
+                    log_impl=m.log10,
                 )
             )
+            _process_intermediate_eqs(m, branch.model, branch_eqs)
+            m.Equations(_filter_intermediate_eqs(branch_eqs))

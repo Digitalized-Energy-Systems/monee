@@ -13,7 +13,7 @@ def calc_nikurdse(internal_diameter_m, roughness):
     return 1 / (2 * np.log10(3.71 * internal_diameter_m / roughness)) ** 2
 
 
-def reynolds_equation(rey_var, flow_var, diameter_m, dynamic_visc, pipe_area):
+def reynolds_equation(rey_var, flow_var, diameter_m, dynamic_visc, pipe_area, abs_impl):
     return rey_var == abs(flow_var) * diameter_m / (dynamic_visc * pipe_area)
 
 
