@@ -14,6 +14,7 @@ from .core import (
     CompoundModel,
     Const,
     GenericModel,
+    Intermediate,
     Node,
     Var,
 )
@@ -25,7 +26,7 @@ class Network:
         self,
         active_grid=None,
         el_model=create_power_grid("power"),
-        water_model=create_water_grid("heat"),
+        water_model=create_water_grid("water"),
         gas_model=create_gas_grid("gas"),
     ) -> None:
         self._default_grid_models = {
@@ -44,6 +45,9 @@ class Network:
         self.__force_blacklist = False
         self.__collect_components = False
         self.__current_grid = active_grid
+
+    def set_default_grid(self, key, grid):
+        self._default_grid_models[key] = grid
 
     def activate_grid(self, grid):
         self.__current_grid = grid
@@ -502,7 +506,7 @@ class Network:
         result_dict = {}
         for k, v in model_dict.items():
             result_value = v
-            if isinstance(v, Var | Const):
+            if isinstance(v, Var | Const | Intermediate):
                 result_value = v.value
             result_dict[k] = result_value
         return result_dict

@@ -56,31 +56,32 @@ class GenericTransferBranch(MultiGridBranchModel):
     def is_cp(self):
         return False
 
-    def _fill_el(self):
-        self.p_to_mw = self._p_mw
-        self.p_from_mw = self._p_mw
-        self.q_to_mvar = self._q_mvar
-        self.q_from_mvar = self._q_mvar
-
-    def equations(self, grids, from_node_model, to_node_model, **kwargs):
-        eqs = []
+    def init(self, grids):
         if type(grids) is WaterGrid or type(grids) is dict and WaterGrid in grids:
             self.mass_flow = self._mass_flow
             self.heat_mass_flow = self._mass_flow
             self.t_from_pu = self._t_from_pu
             self.t_to_pu = self._t_to_pu
+        if type(grids) is GasGrid or type(grids) is dict and GasGrid in grids:
+            self.mass_flow = self._mass_flow
+            self.gas_mass_flow = self._mass_flow
+        if type(grids) is PowerGrid or type(grids) is dict and PowerGrid in grids:
+            self.p_to_mw = self._p_mw
+            self.p_from_mw = self._p_mw
+            self.q_to_mvar = self._q_mvar
+            self.q_from_mvar = self._q_mvar
+
+    def equations(self, grids, from_node_model, to_node_model, **kwargs):
+        eqs = []
+        if type(grids) is WaterGrid or type(grids) is dict and WaterGrid in grids:
             eqs += [self.t_from_pu == self.t_to_pu]
             eqs += [self.t_from_pu == from_node_model.t_pu]
             eqs += [to_node_model.t_pu == self.t_to_pu]
             eqs += [to_node_model.t_pu == from_node_model.t_pu]
             eqs += [from_node_model.pressure_pu == to_node_model.pressure_pu]
-        if type(grids) is GasGrid or type(grids) is dict and GasGrid in grids:
-            self.mass_flow = self._mass_flow
-            self.gas_mass_flow = self._mass_flow
-            eqs += [from_node_model.pressure_pu == to_node_model.pressure_pu]
             eqs += [from_node_model.pressure_pa == to_node_model.pressure_pa]
-        if type(grids) is PowerGrid or type(grids) is dict and PowerGrid in grids:
-            self._fill_el()
+        if type(grids) is GasGrid or type(grids) is dict and GasGrid in grids:
+            pass
 
         return eqs
 
@@ -218,8 +219,8 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
     def __init__(
         self,
         mass_flow_capacity,
-        efficiency_heat,
         efficiency_power,
+        efficiency_heat,
         hhv,
         q_mvar=0,
         regulation=1,
@@ -234,9 +235,9 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         self._hhv = hhv
         self.regulation = regulation
 
-        self._gen_p_mw = Var(1)
-        self.heat_gen_w = Var(1)
-        self.el_gen_mw = Var(1)
+        self._gen_p_mw = Var(-1)
+        self.heat_gen_w = Var(-1000)
+        self.el_gen_mw = Var(-1)
 
         # eventually overridden
         self.t_k = Var(350)
@@ -297,7 +298,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
                 0
             ].q_w,
             self.el_gen_mw == self._gen_p_mw,
-            self.t_pu == self.t_k / grid[1].t_ref,
+            self.t_k == self.t_pu * grid[1].t_ref,
             self.pressure_pu == self.pressure_pa / grid[1].pressure_ref,
         )
 
@@ -331,12 +332,6 @@ class CHP(MultGridCompoundModel):
             else MutableFloat(q_mvar_setpoint)
         )
 
-    def set_active(self, activation_flag):
-        if activation_flag:
-            self._control_node.gas_consumption = self.mass_flow
-        else:
-            self._control_node.gas_consumption = 0
-
     def create(
         self,
         network: Network,
@@ -369,7 +364,7 @@ class CHP(MultGridCompoundModel):
         )
         network.branch(
             SubHE(
-                Var(0.1),
+                Var(-1000),
                 self.diameter_m,
             ),
             node_id_control,

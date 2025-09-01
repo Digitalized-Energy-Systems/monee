@@ -5,6 +5,8 @@ from .core import (
     Branch,
     Var,
     Const,
+    Intermediate,
+    IntermediateEq,
     Component,
     model,
     upper,

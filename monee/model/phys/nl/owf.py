@@ -17,6 +17,7 @@ def darcy_weisbach_equation(
     fluid_density,
     roughness,
     on_off=1,
+    use_darcy_friction=False,
     **kwargs,
 ):
     """
@@ -29,8 +30,12 @@ def darcy_weisbach_equation(
     """
     # reformulated to optimize numerical stability
     # note swamee-jain decreases stability due to the log
-    return -velocity_var * abs(velocity_var) * hydraulics.swamee_jain(
+    friction = hydraulics.swamee_jain(
         reynolds_var, diameter_m, roughness, kwargs["log_impl"]
-    ) == on_off * (
+    )
+    if use_darcy_friction:
+        friction = darcy_friction(reynolds_var)
+
+    return -velocity_var * abs(velocity_var) * friction == on_off * (
         2 * (p_start_var - p_end_var) / ((pipe_length / diameter_m) * fluid_density)
     )

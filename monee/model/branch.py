@@ -18,7 +18,18 @@ SQRT_3 = np.sqrt(3)
 @model
 class GenericPowerBranch(BranchModel):
     def __init__(
-        self, tap, shift, br_r, br_x, g_fr, b_fr, g_to, b_to, max_i_ka=0.319, on_off=1
+        self,
+        tap,
+        shift,
+        br_r,
+        br_x,
+        g_fr,
+        b_fr,
+        g_to,
+        b_to,
+        max_i_ka=0.319,
+        backup=False,
+        on_off=1,
     ) -> None:
         """_summary_
 
@@ -44,6 +55,9 @@ class GenericPowerBranch(BranchModel):
         self.b_to = b_to
         self.max_i_ka = max_i_ka
 
+        self.backup = (
+            backup  # mark branch as reserve line (used in optimization problems)
+        )
         self.on_off = on_off  # 1 = on, 0 = off
         self.p_from_mw = Var(1)
         self.q_from_mvar = Var(1)
@@ -141,8 +155,8 @@ class GenericPowerBranch(BranchModel):
 
 @model
 class PowerBranch(GenericPowerBranch, ABC):
-    def __init__(self, tap, shift, on_off=1) -> None:
-        super().__init__(tap, shift, 0, 0, 0, 0, 0, 0, on_off=on_off)
+    def __init__(self, tap, shift, backup=False, on_off=1) -> None:
+        super().__init__(tap, shift, 0, 0, 0, 0, 0, 0, backup=backup, on_off=on_off)
 
         self.tap = tap
         self.shift = shift
@@ -164,8 +178,10 @@ class PowerBranch(GenericPowerBranch, ABC):
 
 @model
 class PowerLine(PowerBranch):
-    def __init__(self, length_m, r_ohm_per_m, x_ohm_per_m, parallel, on_off=1) -> None:
-        super().__init__(1, 0, on_off=on_off)
+    def __init__(
+        self, length_m, r_ohm_per_m, x_ohm_per_m, parallel, backup=False, on_off=1
+    ) -> None:
+        super().__init__(1, 0, backup=backup, on_off=on_off)
 
         self.length_m = length_m
         self.r_ohm_per_m = r_ohm_per_m
@@ -238,7 +254,6 @@ class WaterPipe(BranchModel):
         self.q_w = Var(1)
         self.reynolds = Var(1000)
         self.t_average_pu = Var(1)
-        self.t_average_k = Var(350)
         self.t_from_pu = Var(1)
         self.t_to_pu = Var(1)
 
@@ -259,6 +274,7 @@ class WaterPipe(BranchModel):
                 self.diameter_m,
                 grid.dynamic_visc,
                 self._pipe_area,
+                kwargs["abs_impl"],
             ),
             owfmodel.darcy_weisbach_equation(
                 from_node_model.vars["pressure_pu"] * grid.pressure_ref,
@@ -298,8 +314,6 @@ class WaterPipe(BranchModel):
             == (from_node_model.vars["t_pu"] + to_node_model.vars["t_pu"]) / 2,
             self.t_from_pu == from_node_model.vars["t_pu"],
             self.t_to_pu == to_node_model.vars["t_pu"],
-            self.t_average_k
-            == (from_node_model.vars["t_k"] + to_node_model.vars["t_k"]) / 2,
         )
 
 
@@ -325,14 +339,13 @@ class HeatExchanger(BranchModel):
         self.regulation = regulation
         self.on_off = 1
         self.q_w_set = -q_mw * 10**6
-        self.q_w = Var(1)
+        self.q_w = Var(-1000)
         self.mass_flow = Var(-0.1)
-        self.velocity = Var(-1)
+        self.velocity = Var(-0.01)
         self.reynolds = Var(1000)
         self.t_from_pu = Var(1)
         self.t_to_pu = Var(1)
         self.t_average_pu = Var(1)
-        self.t_average_k = Var(350)
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
@@ -344,6 +357,7 @@ class HeatExchanger(BranchModel):
                 self.diameter_m,
                 grid.dynamic_visc,
                 self._pipe_area,
+                kwargs["abs_impl"],
             ),
             owfmodel.darcy_weisbach_equation(
                 from_node_model.vars["pressure_pu"] * grid.pressure_ref,
@@ -355,6 +369,7 @@ class HeatExchanger(BranchModel):
                 grid.fluid_density,
                 self.pipe_roughness,
                 on_off=self.on_off,
+                use_darcy_friction=True,
                 **kwargs,
             ),
             hydraulicsmodel.flow_rate_equation(
@@ -375,8 +390,6 @@ class HeatExchanger(BranchModel):
             self.q_w == self.q_w_set * self.regulation,
             self.t_average_pu
             == (from_node_model.vars["t_pu"] + to_node_model.vars["t_pu"]) / 2,
-            self.t_average_k
-            == (from_node_model.vars["t_k"] + to_node_model.vars["t_k"]) / 2,
         ]
 
 
@@ -425,6 +438,7 @@ class GasPipe(BranchModel):
                 self.diameter_m,
                 grid.dynamic_visc,
                 self._pipe_area,
+                kwargs["abs_impl"],
             ),
             ogfmodel.pipe_weymouth(
                 from_node_model.vars["pressure_pu"] * grid.pressure_ref,
@@ -448,9 +462,10 @@ class GasPipe(BranchModel):
             self.gas_density
             == (
                 (
-                    (
-                        from_node_model.vars["pressure_pa"]
-                        + to_node_model.vars["pressure_pa"]
+                    grid.pressure_ref
+                    * (
+                        from_node_model.vars["pressure_pu"]
+                        + to_node_model.vars["pressure_pu"]
                     )
                     / 2
                 )
