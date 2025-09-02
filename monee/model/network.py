@@ -396,6 +396,7 @@ class Network:
         name=None,
         auto_node_creator=None,
         auto_grid_key=None,
+        **kwargs,
     ):
         from_node = self.node_by_id_or_create(
             from_node_id,
@@ -421,6 +422,7 @@ class Network:
             ),
             name=name,
             independent=not self.__collect_components,
+            **kwargs,
         )
         self.__insert_to_blacklist_if_forced(branch)
         self.__insert_to_container_if_collect_toggled(branch)

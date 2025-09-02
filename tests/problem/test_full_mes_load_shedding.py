@@ -57,6 +57,7 @@ def create_four_line_example():
         PowerLine(length_m=100, r_ohm_per_m=0.00007, x_ohm_per_m=0.00007, parallel=1),
         node_1,
         node_2,
+        active=False,
     )
     pn.branch(
         PowerLine(length_m=100, r_ohm_per_m=0.00007, x_ohm_per_m=0.00007, parallel=1),
@@ -165,6 +166,7 @@ def create_four_line_example():
             x_ohm_per_m=0.00007,
             parallel=1,
             backup=True,
+            on_off=0,
         ),
         node_4,
         node_0,
@@ -176,6 +178,7 @@ def create_four_line_example():
             x_ohm_per_m=0.00007,
             parallel=1,
             backup=True,
+            on_off=0,
         ),
         node_6,
         node_2,
@@ -193,7 +196,7 @@ def test_load_shedding_four_lines():
     net_multi = create_four_line_example()
 
     print(run_energy_flow(net_multi))
-
+    assert False
     bounds_el = (
         BOUND_EL[1] * (1 - BOUND_EL[2]),
         BOUND_EL[1] * (1 + BOUND_EL[2]),
