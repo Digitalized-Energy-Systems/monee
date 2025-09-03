@@ -209,6 +209,7 @@ class OptimizationProblem:
                                 param.val(attribute, val),
                                 param.max(attribute, val),
                                 param.min(attribute, val),
+                                param.integer
                             )
                         setattr(
                             model,

@@ -48,7 +48,7 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
             if is_load(component)
         ]
 
-    def calc(self, network):
+    def calc(self, network, inv=False):
         relevant_components = self.get_relevant_components(network)
         power_load_curtailed = 0
         heat_load_curtailed = 0
@@ -81,5 +81,7 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                 heat_load_curtailed += (
                     md.upper(model.q_w) - md.value(model.q_w)
                 ) / 10**6
-
-        return (power_load_curtailed, heat_load_curtailed, gas_load_curtailed)
+        if inv:
+            return (-power_load_curtailed, -heat_load_curtailed, -gas_load_curtailed)
+        else:
+            return (power_load_curtailed, heat_load_curtailed, gas_load_curtailed)

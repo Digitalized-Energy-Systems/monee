@@ -196,7 +196,7 @@ def test_load_shedding_four_lines():
     net_multi = create_four_line_example()
 
     print(run_energy_flow(net_multi))
-    assert False
+
     bounds_el = (
         BOUND_EL[1] * (1 - BOUND_EL[2]),
         BOUND_EL[1] * (1 + BOUND_EL[2]),
@@ -221,6 +221,7 @@ def test_load_shedding_four_lines():
     result = run_energy_flow_optimization(
         net_multi, optimization_problem=optimization_problem
     )
+    print(result)
 
     assert mp.calc_general_resilience_performance(result.network) == (0, 0, 0)
     assert result is not None

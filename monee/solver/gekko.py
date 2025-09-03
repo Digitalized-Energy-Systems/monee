@@ -22,6 +22,8 @@ from monee.model import (
     Network,
     Node,
     PowerToHeat,
+    PowerToGas,
+    GasToPower,
     Var,
     WaterPipe,
 )
@@ -124,13 +126,13 @@ def generate_real_topology(nx_net):
     net_copy = nx_net.copy()
     for edge in nx_net.edges.data():
         branch = edge[2]["internal_branch"]
-        if not branch.active:
+        if not branch.active or (type(branch.model.on_off) is not Var and branch.model.on_off == 0):
             net_copy.remove_edge(edge[0], edge[1], 0)
 
     return net_copy
 
 
-COMPOUND_TYPES_TO_REMOVE = [PowerToHeat, GasToHeat, CHP]
+COMPOUND_TYPES_TO_REMOVE = [PowerToHeat, GasToHeat, CHP] # only compound cps
 
 
 def remove_cps(network: Network):
@@ -303,6 +305,12 @@ class GEKKOSolver:
 
         network = input_network.copy()
 
+        # need to happen before finding ignored nodes as it affects whether branches are considered as statically off
+        if optimization_problem is not None:
+            optimization_problem._apply(network)
+        else:
+            m.Obj(0)
+
         ignored_nodes = find_ignored_nodes(network)
         nodes = network.nodes
 
@@ -317,11 +325,6 @@ class GEKKOSolver:
 
         branches = network.branches
         compounds = network.compounds
-
-        if optimization_problem is not None:
-            optimization_problem._apply(network)
-        else:
-            m.Obj(0)
 
         GEKKOSolver.inject_gekko_vars(
             m, nodes, branches, compounds, network, ignored_nodes

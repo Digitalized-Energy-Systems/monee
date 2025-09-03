@@ -13,14 +13,14 @@ from monee.simulation import (
 )
 
 
-def run_energy_flow(net: mm.Network, solver=None):
-    return run_energy_flow_optimization(net, None, solver=solver)
+def run_energy_flow(net: mm.Network, solver=None, **kwargs):
+    return run_energy_flow_optimization(net, None, solver=solver, **kwargs)
 
 
 def run_energy_flow_optimization(
-    net: mm.Network, optimization_problem: mp.OptimizationProblem, solver=None
+    net: mm.Network, optimization_problem: mp.OptimizationProblem, solver=None, **kwargs
 ):
-    return solve(net, optimization_problem, solver)
+    return solve(net, optimization_problem, solver, **kwargs)
 
 
 def solve_load_shedding_problem(
@@ -31,6 +31,7 @@ def solve_load_shedding_problem(
     bounds_ext_el: tuple,
     bounds_ext_gas: tuple,
     debug=False,
+    **kwargs
 ):
     optimization_problem = mp.create_load_shedding_optimization_problem(
         bounds_el=bounds_vm,
@@ -42,5 +43,5 @@ def solve_load_shedding_problem(
     )
 
     return run_energy_flow_optimization(
-        network, optimization_problem=optimization_problem
+        network, optimization_problem=optimization_problem, **kwargs
     )
