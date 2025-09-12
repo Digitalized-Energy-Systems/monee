@@ -477,8 +477,12 @@ class Network:
         self._objectives.append(objective_function)
 
     @staticmethod
-    def _model_dict_to_input(model_dict):
-        input_dict = {}
+    def _model_dict_to_input(container):
+        model_dict = container.model.__dict__
+        input_dict = {"active": container.active, 
+                      "id": container.id, 
+                      "independent": container.independent, 
+                      "ignored": container.ignored}
         for k, v in model_dict.items():
             input_value = v
             if isinstance(v, (Var)):
@@ -496,7 +500,7 @@ class Network:
             if model_type_name not in input_dict_list_dict:
                 input_dict_list_dict[model_type_name] = []
             input_dict_list_dict[model_type_name].append(
-                Network._model_dict_to_input(container.model.__dict__)
+                Network._model_dict_to_input(container)
             )
         dataframe_dict = {}
         for result_type, dict_list in input_dict_list_dict.items():
@@ -504,8 +508,12 @@ class Network:
         return dataframe_dict
 
     @staticmethod
-    def _model_dict_to_results(model_dict):
-        result_dict = {}
+    def _model_dict_to_results(container):
+        model_dict = container.model.vars
+        result_dict = {"active": container.active, 
+                      "id": container.id, 
+                      "independent": container.independent, 
+                      "ignored": container.ignored}
         for k, v in model_dict.items():
             result_value = v
             if isinstance(v, Var | Const | Intermediate):
@@ -521,7 +529,7 @@ class Network:
             if model_type_name not in result_dict_list_dict:
                 result_dict_list_dict[model_type_name] = []
             result_dict_list_dict[model_type_name].append(
-                Network._model_dict_to_results(container.model.vars)
+                Network._model_dict_to_results(container)
             )
         dataframe_dict = {}
         for result_type, dict_list in result_dict_list_dict.items():

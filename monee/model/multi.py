@@ -266,9 +266,9 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
             power_from_branches, [], [PowerGenerator(self._gen_p_mw, self.gen_q_mvar)]
         )
         gas_eqs = self.calc_signed_mass_flow(
-            [], gas_to_branches, [Sink(self.mass_flow_capacity)]
+            [], gas_to_branches, [Sink(self.mass_flow_capacity * self.regulation)]
         )
-        heat_eqs = self.calc_signed_mass_flow(  #
+        heat_eqs = self.calc_signed_mass_flow(
             heat_from_branches,
             heat_to_branches,
             [],  #
@@ -313,12 +313,14 @@ class CHP(MultGridCompoundModel):
         mass_flow_setpoint: float,
         q_mvar_setpoint: float = 0,
         temperature_ext_k: float = 293,
+        regulation=1,
     ) -> None:
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
+        self.regulation = regulation
         self.efficiency_power = efficiency_power
         self.efficiency_heat = efficiency_heat
-
+        
         self.mass_flow_setpoint = mass_flow_setpoint
 
         self.mass_flow = (
@@ -346,6 +348,7 @@ class CHP(MultGridCompoundModel):
             self.efficiency_power,
             self.efficiency_heat,
             gas_node.grid.higher_heating_value,
+            regulation=self.regulation
         )
         node_id_control = network.node(
             self._control_node,

@@ -289,7 +289,7 @@ class GEKKOSolver:
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
-        solver=1,
+        solver=3,
         draw_debug=False,
     ):
         # ensure compatibility of gekko models with own models
@@ -311,7 +311,12 @@ class GEKKOSolver:
         else:
             m.Obj(0)
 
-        ignored_nodes = find_ignored_nodes(network)
+        # do not search for ignored nodes due to the topology if an optimization problem has been provided -> responsibility of the
+        # user to provide a problem which solves all existing components
+        ignored_nodes = set()
+        if optimization_problem is None:
+            ignored_nodes = find_ignored_nodes(network)
+
         nodes = network.nodes
 
         # prepare for overwritting default node behaviors with

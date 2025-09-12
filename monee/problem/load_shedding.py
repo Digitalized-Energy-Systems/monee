@@ -17,7 +17,7 @@ from monee.model.child import (
 )
 from monee.model.core import Var
 from monee.model.grid import GasGrid, WaterGrid
-from monee.model.multi import CHP, PowerToGas, PowerToHeat
+from monee.model.multi import CHPControlNode, PowerToGas, PowerToHeat
 from monee.model.node import Bus, Junction
 from monee.problem.core import (
     AttributeParameter,
@@ -30,7 +30,7 @@ CONTROLLABLE_ATTRIBUTES = [
     (
         "regulation",
         AttributeParameter(
-            min=lambda attr, val: 0, max=lambda attr, val: 1, val=lambda attr, val: 0
+            min=lambda attr, val: 0, max=lambda attr, val: 1, val=lambda attr, val: 1
         ),
     )
 ]
@@ -38,7 +38,7 @@ CONTROLLABLE_ATTRIBUTES_CP = [
     (
         "regulation",
         AttributeParameter(
-            min=lambda attr, val: 0, max=lambda attr, val: 1, val=lambda attr, val: 0
+            min=lambda attr, val: 0, max=lambda attr, val: 1, val=lambda attr, val: 1
         ),
     )
 ]
@@ -61,20 +61,22 @@ HHV = 15.3
 
 def retrieve_power_uniform(model):
     if isinstance(model, HeatExchangerLoad | HeatExchangerGenerator | HeatExchanger):
-        return _or_zero(model.q_w) / 1e6 * model.regulation, model.q_w / 1e6
+        return model.q_w_set/1e6 * model.regulation, model.q_w_set/1e6
     elif isinstance(model, PowerLoad | PowerGenerator):
         return _or_zero(model.p_mw) * model.regulation, model.p_mw
     elif isinstance(model, Sink | Source):
         return _or_zero(
             model.mass_flow
         ) * 3.6 * HHV * model.regulation, model.mass_flow * 3.6 * HHV
-    elif isinstance(model, CHP):
+    elif isinstance(model, CHPControlNode):
         return 0, 0
     elif isinstance(model, PowerToHeat):
         return 0, 0
     elif isinstance(model, PowerToGas):
         return 0, 0
     elif isinstance(model, PowerLine):
+        if model.backup:
+            return 0, model.on_off * 0.1 # static penalty for using backup lines
         return 0, 0
 
     raise ValueError(f"The model {type(model)} is not a known load.")
@@ -94,7 +96,7 @@ def calculate_objective(model_to_data):
 
 
 def create_load_shedding_optimization_problem(
-    load_weight=100,
+    load_weight=10,
     bounds_el=(0.9, 1.1),
     bounds_heat=(0.9, 1.1),
     bounds_gas=(0.9, 1.1),
@@ -119,7 +121,7 @@ def create_load_shedding_optimization_problem(
                 AttributeParameter(
                     min=lambda attr, val: 0,
                     max=lambda attr, val: 1,
-                    val=lambda attr, val: 0,
+                    val=lambda attr, val: 1,
                     integer=True,
                 ),
             )
@@ -139,7 +141,7 @@ def create_load_shedding_optimization_problem(
             if isinstance(model, HeatExchangerLoad | Sink | PowerLoad)
             else (
                 load_weight - 1
-                if isinstance(model, CHP | PowerToGas | PowerToHeat)
+                if isinstance(model, CHPControlNode | PowerToGas | PowerToHeat)
                 else 1
             )
         )

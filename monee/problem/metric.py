@@ -70,16 +70,16 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                 continue
 
             if isinstance(model, md.PowerLoad):
-                power_load_curtailed += md.upper(model.p_mw) - md.value(model.p_mw)
+                power_load_curtailed += md.upper(model.p_mw) - md.value(model.p_mw) * md.value(model.regulation)
             if isinstance(model, md.Sink):
                 gas_load_curtailed += (
-                    (md.upper(model.mass_flow) - md.value(model.mass_flow))
+                    (md.upper(model.mass_flow) - md.value(model.mass_flow) * md.value(model.regulation))
                     * 3.6
                     * component.grid.higher_heating_value
                 )
             if isinstance(model, (md.HeatExchangerLoad)):
                 heat_load_curtailed += (
-                    md.upper(model.q_w) - md.value(model.q_w)
+                    md.upper(model.q_w) - md.value(model.q_w) * md.value(model.regulation)
                 ) / 10**6
         if inv:
             return (-power_load_curtailed, -heat_load_curtailed, -gas_load_curtailed)

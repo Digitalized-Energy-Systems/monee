@@ -14,7 +14,6 @@ from .grid import GasGrid, PowerGrid, WaterGrid
 
 SQRT_3 = np.sqrt(3)
 
-
 @model
 class GenericPowerBranch(BranchModel):
     def __init__(
@@ -27,7 +26,7 @@ class GenericPowerBranch(BranchModel):
         b_fr,
         g_to,
         b_to,
-        max_i_ka=0.319,
+        max_i_ka=3.19,
         backup=False,
         on_off=1,
     ) -> None:
@@ -398,16 +397,11 @@ class HeatExchangerLoad(HeatExchanger):
     def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
         super().__init__(q_mw, diameter_m, temperature_ext_k)
 
-        self.q_w = q_mw * 10**6
-
 
 @model
 class HeatExchangerGenerator(HeatExchanger):
     def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
         super().__init__(q_mw, diameter_m, temperature_ext_k)
-
-        self.q_w = -q_mw * 10**6
-
 
 @model
 class GasPipe(BranchModel):

@@ -241,6 +241,7 @@ def create_multi_chp():
             0.6,
             0.4,
             0.00005,
+            regulation=0.5
         ),
         gas_node_id=g_node_2,
         heat_node_id=w_node_1,
@@ -491,17 +492,17 @@ def test_simple_chp():
 
     result = ms.GEKKOSolver().solve(multi_energy_network)
     print(result)
+
     assert len(result.dataframes) == 14
     assert math.isclose(
         result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.0059846779661, abs_tol=0.001
     )
     assert math.isclose(
         result.dataframes["ExtHydrGrid"]["mass_flow"][1],
-        -5.0097600702e-05,
-        abs_tol=0.001,
+        -2.5e-05,
     )
     assert math.isclose(
-        result.dataframes["Junction"]["t_k"][1], 355.8977904, abs_tol=0.001
+        result.dataframes["Junction"]["t_k"][1], 354.58134681, abs_tol=0.001
     )
 
 

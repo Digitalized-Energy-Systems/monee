@@ -47,7 +47,7 @@ def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
                 from_node_id=bus_index_to_junction_index[node.id],
                 to_node_id=bus_index_to_end_junction_index[node.id],
                 diameter_m=0.20,
-                q_mw=(-1 if random.random() > 0.8 else 1) * -0.001 * random.random(),
+                q_mw=(-1 if random.random() > 0.8 else 1) * -0.003 * random.random(),
             )
         mx.create_sink(
             target_net,
@@ -100,7 +100,7 @@ def create_gas_net_for_power(
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=0.3,
+            diameter_m=0.3*scaling,
             length_m=get_length(target_net, branch, from_node_id, to_node_id),
             grid=gas_grid,
         )
@@ -111,7 +111,7 @@ def create_gas_net_for_power(
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
-                mass_flow=1 * random.random() * scaling,
+                mass_flow=round(1 * random.random() * scaling, 2),
             )
 
     mx.create_source(
