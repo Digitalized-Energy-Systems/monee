@@ -171,7 +171,6 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
 
         # unified variables
         self.el_mw = self.load_p_mw
-        self.gas_kgps = self.mass_flow_capacity
         self.heat_w = self.heat_energy_mw
 
         self.t_k = Var(350)

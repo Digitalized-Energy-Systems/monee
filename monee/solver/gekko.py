@@ -289,7 +289,7 @@ class GEKKOSolver:
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
-        solver=3,
+        solver=1,
         draw_debug=False,
     ):
         # ensure compatibility of gekko models with own models
