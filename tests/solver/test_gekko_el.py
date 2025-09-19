@@ -11,7 +11,7 @@ from monee.solver.gekko import GEKKOSolver
 
 
 def create_two_line_example_with_vm(vm, controllable_gen=False):
-    pn = Network()
+    pn = Network(PowerGrid(name="power", sn_mva=1))
 
     node_0 = pn.node(
         Bus(base_kv=1),

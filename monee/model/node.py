@@ -14,7 +14,7 @@ class Bus(NodeModel):
 
         self.vm_pu = Var(1)
         self.va_radians = Var(0)
-        self.va_degree = Var(0)
+        self.va_degree = Intermediate()
         self.p_mw = Intermediate()
         self.q_mvar = Intermediate()
 
@@ -90,7 +90,7 @@ class Bus(NodeModel):
             self.q_mvar_equation(connected_node_models),
             power_balance_equation(signed_ap),
             power_balance_equation(signed_rp),
-            self.va_degree == 180/math.pi * self.va_radians
+            IntermediateEq("va_degree", 180/math.pi * self.va_radians)
         )
 
 
