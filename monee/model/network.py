@@ -53,6 +53,10 @@ class Network:
         self.__current_grid = grid
 
     @property
+    def grids(self):
+        return list(set([node.grid for node in self.nodes]))
+
+    @property
     def graph(self):
         return self._network_internal
 
@@ -487,6 +491,8 @@ class Network:
             input_value = v
             if isinstance(v, (Var)):
                 input_value = "$VAR"
+            if isinstance(v, (Intermediate)):
+                input_value = "$INT"
             if isinstance(v, (Const)):
                 input_value = v.value
             input_dict[k] = input_value

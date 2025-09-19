@@ -1,4 +1,5 @@
 import scipy.io
+import math
 
 from monee.model.branch import *  # noqa needed for generic creation of models
 from monee.model.child import *  # noqa needed for generic creation of models
@@ -27,7 +28,6 @@ def read_matpower_data(mat_data):
     bus_mat = mpc["bus"][0][0]
     branch_mat = mpc["branch"][0][0]
     gen_mat = mpc["gen"][0][0]
-
     grid_dict_list = {
         "power": {
             "model_type": "PowerGrid",
@@ -76,7 +76,7 @@ def fill_branch_dict(branch_mat, branch_dict_list):
         branch_dict["values"]["tap"] = 1 if branch_row[8] == 0 else branch_row[8]
         # 1 / (    1 - branch_row[8] )
         # 1 if branch_row[8] == 0 else branch_row[8]
-        branch_dict["values"]["shift"] = branch_row[9]
+        branch_dict["values"]["shift"] = math.radians(branch_row[9])
         branch_dict["values"]["max_i_ka"] = 0.319
         branch_dict["values"]["on_off"] = 1
         branch_dict["model_type"] = "GenericPowerBranch"
@@ -111,8 +111,6 @@ def fill_node_dict(bus_mat, node_dict_list, child_dict_list):
     for i in range(len(bus_mat)):
         node_dict = {}
         bus_row = bus_mat[i]
-        if bus_row[12] != 0:
-            continue
         node_dict["id"] = int(bus_row[0])
         node_dict["grid_id"] = "power"
         node_dict["values"] = {}

@@ -75,16 +75,16 @@ class GenericPowerBranch(BranchModel):
         return abs((self.p_from_mw.value - self.p_to_mw.value) / self.p_from_mw.value)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
-        y = np.linalg.pinv([[self.br_r + self.br_x * 1j]])[0][0]
-        g, b = np.real(y), np.imag(y)
+        d = self.br_r ** 2 + self.br_x ** 2
+        g, b = self.br_r / d, -self.br_x / d
 
         return (
             opfmodel.int_flow_from_p(
-                p_from_var=self.p_from_mw,
+                p_from_var=self.p_from_mw / grid.sn_mva,
                 vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
                 vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
-                va_from_var=from_node_model.vars["va_degree"],
-                va_to_var=to_node_model.vars["va_degree"],
+                va_from_var=from_node_model.vars["va_radians"],
+                va_to_var=to_node_model.vars["va_radians"],
                 g_branch=g,
                 b_branch=b,
                 tap=self.tap,
@@ -95,11 +95,11 @@ class GenericPowerBranch(BranchModel):
                 on_off=self.on_off,
             ),
             opfmodel.int_flow_from_q(
-                q_from_var=self.q_from_mvar,
+                q_from_var=self.q_from_mvar / grid.sn_mva,
                 vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
                 vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
-                va_from_var=from_node_model.vars["va_degree"],
-                va_to_var=to_node_model.vars["va_degree"],
+                va_from_var=from_node_model.vars["va_radians"],
+                va_to_var=to_node_model.vars["va_radians"],
                 g_branch=g,
                 b_branch=b,
                 tap=self.tap,
@@ -110,11 +110,11 @@ class GenericPowerBranch(BranchModel):
                 on_off=self.on_off,
             ),
             opfmodel.int_flow_to_p(
-                p_to_var=self.p_to_mw,
+                p_to_var=self.p_to_mw / grid.sn_mva,
                 vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
                 vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
-                va_from_var=from_node_model.vars["va_degree"],
-                va_to_var=to_node_model.vars["va_degree"],
+                va_from_var=from_node_model.vars["va_radians"],
+                va_to_var=to_node_model.vars["va_radians"],
                 g_branch=g,
                 b_branch=b,
                 tap=self.tap,
@@ -125,11 +125,11 @@ class GenericPowerBranch(BranchModel):
                 on_off=self.on_off,
             ),
             opfmodel.int_flow_to_q(
-                q_to_var=self.q_to_mvar,
+                q_to_var=self.q_to_mvar / grid.sn_mva,
                 vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
                 vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
-                va_from_var=from_node_model.vars["va_degree"],
-                va_to_var=to_node_model.vars["va_degree"],
+                va_from_var=from_node_model.vars["va_radians"],
+                va_to_var=to_node_model.vars["va_radians"],
                 g_branch=g,
                 b_branch=b,
                 tap=self.tap,

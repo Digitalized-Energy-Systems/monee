@@ -7,7 +7,7 @@ import monee.model as mm
 
 REF_PA = 1000000
 REF_TEMP = 352
-DEFAULT_LENGTH = 0.1
+DEFAULT_LENGTH = 100
 
 
 def get_length(net: mm.Network, branch, node1_id, node2_id):
@@ -18,7 +18,7 @@ def get_length(net: mm.Network, branch, node1_id, node2_id):
     node2 = net.node_by_id(node2_id)
 
     if node1.position is None or node2.position is None:
-        raise Exception("The branch length can't be read from the given network!")
+        return DEFAULT_LENGTH
 
     return distance.distance(node1.position, node2.position).m
 

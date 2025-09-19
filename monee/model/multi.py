@@ -102,8 +102,11 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
         self.efficiency_heat = efficiency_heat
         self._hhv = hhv
         self.regulation = regulation
-
         self.gas_mass_flow = Var(1)
+
+        # unified variables
+        self.gas_kgps = self.gas_mass_flow
+        self.heat_w = self.heat_gen_w
 
         # eventually overridden
         self.t_k = Var(350)
@@ -165,6 +168,11 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         self.load_q_mvar = load_q_mvar
         self.heat_energy_mw = heat_energy_mw
         self.efficiency = efficiency
+
+        # unified variables
+        self.el_mw = self.load_p_mw
+        self.gas_kgps = self.mass_flow_capacity
+        self.heat_w = self.heat_energy_mw
 
         self.t_k = Var(350)
         self.t_pu = Var(1)
@@ -238,6 +246,11 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         self._gen_p_mw = Var(-1)
         self.heat_gen_w = Var(-1000)
         self.el_gen_mw = Var(-1)
+
+        # unified variables
+        self.el_mw = self._gen_p_mw
+        self.gas_kgps = self.mass_flow_capacity
+        self.heat_w = self.heat_gen_w
 
         # eventually overridden
         self.t_k = Var(350)
@@ -505,6 +518,10 @@ class GasToPower(MultiGridBranchModel):
         self.p_mw_capacity = -p_mw_setpoint
         self.mass_flow_capacity = Var(1)
 
+        # unified variables
+        self.el_mw = self.p_mw_capacity
+        self.gas_kgps = self.mass_flow_capacity
+
         self.on_off = 1
         self.p_to_mw = Var(-p_mw_setpoint)
         self.q_to_mvar = -q_mvar_setpoint
@@ -538,6 +555,10 @@ class PowerToGas(MultiGridBranchModel):
         self.efficiency = efficiency
         self.mass_flow_capacity = -mass_flow_setpoint
         self.p_mw_capacity = Var(1)
+
+        # unified variables
+        self.el_mw = self.p_mw_capacity
+        self.gas_kgps = self.mass_flow_capacity
 
         self.on_off = 1
         self.p_from_mw = Var(1)

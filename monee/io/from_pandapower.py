@@ -35,10 +35,13 @@ def from_pandapower_net(net):
     for node in monee_net.nodes:
         # per convention the index of the node minus 1 is equal to the id of the bus in pandapower
         pp_id = node.id - 1
-        node.name = net.bus["name"].iloc[pp_id]
-        node.position = (
-            net.bus_geodata["x"].iloc[pp_id],
-            net.bus_geodata["y"].iloc[pp_id],
-        )
+        if len(net.bus) > pp_id:
+            node.name = net.bus["name"].iloc[pp_id]
+            if hasattr(net, "bus_geodata"):
+                node.position = (
+                    net.bus_geodata["x"].iloc[pp_id],
+                    net.bus_geodata["y"].iloc[pp_id],
+                )
+        
 
     return monee_net

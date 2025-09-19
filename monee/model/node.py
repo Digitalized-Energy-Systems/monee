@@ -1,3 +1,5 @@
+import math
+
 from .core import Intermediate, IntermediateEq, NodeModel, Var, model
 from .phys.nl.hydraulics import junction_mass_flow_balance
 from .phys.nl.opf import power_balance_equation
@@ -11,6 +13,7 @@ class Bus(NodeModel):
         self.base_kv = base_kv
 
         self.vm_pu = Var(1)
+        self.va_radians = Var(0)
         self.va_degree = Var(0)
         self.p_mw = Intermediate()
         self.q_mvar = Intermediate()
@@ -87,6 +90,7 @@ class Bus(NodeModel):
             self.q_mvar_equation(connected_node_models),
             power_balance_equation(signed_ap),
             power_balance_equation(signed_rp),
+            self.va_degree == 180/math.pi * self.va_radians
         )
 
 
