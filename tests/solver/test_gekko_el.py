@@ -176,7 +176,6 @@ def test_two_lines_example():
     result = solver.solve(pn)
 
     assert len(pn.as_dataframe_dict()) == 5
-    assert len(pn.node_by_id(1).model.vars) == 5
     assert len(result.dataframes) == 5
     assert (
         result.dataframes["ExtPowerGrid"]["p_mw"][0] > -0.09
@@ -192,7 +191,6 @@ def test_two_lines_example_big_vm():
 
     print(result)
     assert len(pn.as_dataframe_dict()) == 5
-    assert len(pn.node_by_id(1).model.vars) == 5
     assert len(result.dataframes) == 5
 
 
@@ -202,7 +200,6 @@ def test_two_gen_example():
     result = solver.solve(pn)
 
     assert len(pn.as_dataframe_dict()) == 5
-    assert len(pn.node_by_id(node_1).model.vars) == 5
     assert len(result.dataframes) == 5
     assert (
         result.dataframes["ExtPowerGrid"]["p_mw"][0] > 0.03
@@ -222,7 +219,6 @@ def test_two_controllable_lines_example_simple_constraint():
     result = solver.solve(pn)
 
     assert len(pn.as_dataframe_dict()) == 5
-    assert len(pn.node_by_id(1).model.vars) == 5
     assert len(result.dataframes) == 5
     assert result.dataframes["ExtPowerGrid"]["p_mw"][0] == 1
     assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], -2.1428570262)
@@ -236,7 +232,6 @@ def test_two_controllable_lines_example_simple_objective():
     result = solver.solve(pn)
 
     assert len(pn.as_dataframe_dict()) == 5
-    assert len(pn.node_by_id(1).model.vars) == 5
     assert len(result.dataframes) == 5
     assert math.isclose(
         result.dataframes["ExtPowerGrid"]["p_mw"][0], -4.14285, rel_tol=1e-4

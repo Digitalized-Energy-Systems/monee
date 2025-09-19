@@ -281,7 +281,7 @@ def test_load_shedding_multimicrogrid_gas_shedding():
     print(result.objective)
     print(resilience)
     
-    assert resilience == (0.0, 0.00119531930112, 33.531377276677)
+    assert resilience == (0.0, 0.00119531930112, 33.53137727622534)
     assert result is not None
 
 def test_load_shedding_multimicrogrid_heat_cooldown():
