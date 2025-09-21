@@ -398,9 +398,9 @@ def create_heat_exchanger(
             diameter_m=diameter_m,
             temperature_ext_k=temperature_ext_k,
         )
-        if q_mw < 0
-        else mm.HeatExchanger(
-            q_mw=q_mw,
+        if q_mw > 0
+        else mm.HeatExchangerGenerator(
+            q_mw=-q_mw,
             diameter_m=diameter_m,
             temperature_ext_k=temperature_ext_k,
         ),
@@ -476,6 +476,7 @@ def create_chp(
     efficiency_power,
     efficiency_heat,
     mass_flow_setpoint,
+    regulation=1,
     constraints=None,
 ):
     return network.compound(
@@ -486,6 +487,7 @@ def create_chp(
             mass_flow_setpoint,
             q_mvar_setpoint=0,
             temperature_ext_k=293,
+            regulation=regulation,
         ),
         constraints=constraints,
         power_node_id=power_node_id,

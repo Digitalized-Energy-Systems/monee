@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from monee.model import (
-    CHP,
+    CHPControlNode,
     GasGrid,
     GenericModel,
     HeatExchanger,
@@ -14,7 +14,7 @@ from monee.model import (
     PowerGenerator,
     PowerLoad,
     PowerToGas,
-    PowerToHeat,
+    PowerToHeatControlNode,
     Sink,
     Source,
     Var,
@@ -209,6 +209,7 @@ class OptimizationProblem:
                                 param.val(attribute, val),
                                 param.max(attribute, val),
                                 param.min(attribute, val),
+                                param.integer,
                             )
                         setattr(
                             model,
@@ -216,8 +217,10 @@ class OptimizationProblem:
                             variable,
                         )
                         if self._debug:
-                            logger.info("From the model %s", model)
-                            logger.info("The attribute %s has been replaced", attribute)
+                            logger.warning("From the model %s", model)
+                            logger.warning(
+                                "The attribute %s has been replaced", attribute
+                            )
 
         for min, max, component_condition, attributes in self._bounds_for_controllables:
             component_list = network.all_components()
@@ -255,7 +258,7 @@ class OptimizationProblem:
         def apply_controllable(network: Network):
             component_list = network.all_components()
             for component in component_list:
-                if component.independent and component_condition(component):
+                if component_condition(component):
                     self.add_to_controllable(component.model, attributes)
 
         self._controllable_appliables.append(apply_controllable)
@@ -301,7 +304,7 @@ class OptimizationProblem:
     def controllable_cps(self, attributes):
         self.controllable(
             component_condition=lambda component: isinstance(
-                component.model, CHP | PowerToHeat | PowerToGas
+                component.model, CHPControlNode | PowerToHeatControlNode | PowerToGas
             )
             and component.active
             and not component.ignored,

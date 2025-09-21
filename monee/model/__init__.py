@@ -59,6 +59,9 @@ from .multi import (
     PowerToHeat,
     GenericTransferBranch,
     GasToHeat,
+    CHPControlNode,
+    GasToHeatControlNode,
+    PowerToHeatControlNode,
 )
 from .grid import (
     create_gas_grid,

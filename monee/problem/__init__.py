@@ -10,5 +10,5 @@ from .load_shedding import (
 from .metric import GeneralResiliencePerformanceMetric
 
 
-def calc_general_resilience_performance(network: md.Network):
-    return GeneralResiliencePerformanceMetric().calc(network)
+def calc_general_resilience_performance(network: md.Network, **kwargs):
+    return GeneralResiliencePerformanceMetric().calc(network, **kwargs)

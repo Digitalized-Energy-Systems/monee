@@ -124,13 +124,15 @@ def generate_real_topology(nx_net):
     net_copy = nx_net.copy()
     for edge in nx_net.edges.data():
         branch = edge[2]["internal_branch"]
-        if not branch.active:
+        if not branch.active or (
+            type(branch.model.on_off) is not Var and branch.model.on_off == 0
+        ):
             net_copy.remove_edge(edge[0], edge[1], 0)
 
     return net_copy
 
 
-COMPOUND_TYPES_TO_REMOVE = [PowerToHeat, GasToHeat, CHP]
+COMPOUND_TYPES_TO_REMOVE = [PowerToHeat, GasToHeat, CHP]  # only compound cps
 
 
 def remove_cps(network: Network):
@@ -177,6 +179,9 @@ def find_ignored_nodes(network: Network):
 
 
 class GEKKOSolver:
+    def __init__(self, solver=1):
+        self.solver: int = solver
+
     @staticmethod
     def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel):
         for key, value in target.__dict__.items():
@@ -287,7 +292,6 @@ class GEKKOSolver:
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
-        solver=1,
         draw_debug=False,
     ):
         # ensure compatibility of gekko models with own models
@@ -296,14 +300,25 @@ class GEKKOSolver:
         GKVariable.min = property(lambda self: self.LOWER)
 
         m = GEKKO(remote=False)
-        m.options.SOLVER = solver
+        m.options.SOLVER = self.solver
         m.options.WEB = 0
         m.options.IMODE = 3
         m.solver_options = DEFAULT_SOLVER_OPTIONS
 
         network = input_network.copy()
 
-        ignored_nodes = find_ignored_nodes(network)
+        # need to happen before finding ignored nodes as it affects whether branches are considered as statically off
+        if optimization_problem is not None:
+            optimization_problem._apply(network)
+        else:
+            m.Obj(0)
+
+        # do not search for ignored nodes due to the topology if an optimization problem has been provided -> responsibility of the
+        # user to provide a problem which solves all existing components
+        ignored_nodes = set()
+        if optimization_problem is None:
+            ignored_nodes = find_ignored_nodes(network)
+
         nodes = network.nodes
 
         # prepare for overwritting default node behaviors with
@@ -317,11 +332,6 @@ class GEKKOSolver:
 
         branches = network.branches
         compounds = network.compounds
-
-        if optimization_problem is not None:
-            optimization_problem._apply(network)
-        else:
-            m.Obj(0)
 
         GEKKOSolver.inject_gekko_vars(
             m, nodes, branches, compounds, network, ignored_nodes

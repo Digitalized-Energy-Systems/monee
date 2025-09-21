@@ -4,19 +4,19 @@ from .core import model
 
 
 @model
-@dataclass
+@dataclass(unsafe_hash=True)
 class Grid:
     name: str
 
 
 @model
-@dataclass
+@dataclass(unsafe_hash=True)
 class PowerGrid(Grid):
     sn_mva: float = 1
 
 
 @model
-@dataclass
+@dataclass(unsafe_hash=True)
 class WaterGrid(Grid):
     fluid_density: float = (
         998  # use better approximation for the accordings temperatures
@@ -44,7 +44,7 @@ GAS_GRID_ATTRS = {
 
 
 @model
-@dataclass
+@dataclass(unsafe_hash=True)
 class GasGrid(Grid):
     compressibility: float
     molar_mass: float
@@ -58,7 +58,7 @@ class GasGrid(Grid):
 
 
 @model
-@dataclass
+@dataclass(unsafe_hash=True)
 class NoGrid(Grid):
     pass
 

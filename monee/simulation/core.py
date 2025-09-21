@@ -3,8 +3,13 @@ from monee.model import Network
 from monee.problem import OptimizationProblem
 
 
-def solve(net: Network, optimization_problem: OptimizationProblem, solver=None):
+def solve(
+    net: Network, optimization_problem: OptimizationProblem, solver=None, **kwargs
+):
     actual_solver = solver
     if actual_solver is None:
-        actual_solver = ms.GEKKOSolver()
-    return actual_solver.solve(net, optimization_problem=optimization_problem)
+        # IPOPT better properties for energy-flow
+        solver_impl_id = 1 if optimization_problem is None else 3
+        actual_solver = ms.GEKKOSolver(solver=solver_impl_id)
+
+    return actual_solver.solve(net, optimization_problem=optimization_problem, **kwargs)

@@ -27,9 +27,10 @@ class GenericPowerBranch(BranchModel):
         b_fr,
         g_to,
         b_to,
-        max_i_ka=0.319,
+        max_i_ka=3.19,
         backup=False,
         on_off=1,
+        **kwargs,
     ) -> None:
         """_summary_
 
@@ -84,8 +85,8 @@ class GenericPowerBranch(BranchModel):
                 p_from_var=self.p_from_mw,
                 vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
                 vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
-                va_from_var=from_node_model.vars["va_degree"],
-                va_to_var=to_node_model.vars["va_degree"],
+                va_from_var=from_node_model.vars["va_radians"],
+                va_to_var=to_node_model.vars["va_radians"],
                 g_branch=g,
                 b_branch=b,
                 tap=self.tap,
@@ -99,8 +100,8 @@ class GenericPowerBranch(BranchModel):
                 q_from_var=self.q_from_mvar,
                 vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
                 vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
-                va_from_var=from_node_model.vars["va_degree"],
-                va_to_var=to_node_model.vars["va_degree"],
+                va_from_var=from_node_model.vars["va_radians"],
+                va_to_var=to_node_model.vars["va_radians"],
                 g_branch=g,
                 b_branch=b,
                 tap=self.tap,
@@ -114,8 +115,8 @@ class GenericPowerBranch(BranchModel):
                 p_to_var=self.p_to_mw,
                 vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
                 vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
-                va_from_var=from_node_model.vars["va_degree"],
-                va_to_var=to_node_model.vars["va_degree"],
+                va_from_var=from_node_model.vars["va_radians"],
+                va_to_var=to_node_model.vars["va_radians"],
                 g_branch=g,
                 b_branch=b,
                 tap=self.tap,
@@ -129,8 +130,8 @@ class GenericPowerBranch(BranchModel):
                 q_to_var=self.q_to_mvar,
                 vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
                 vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
-                va_from_var=from_node_model.vars["va_degree"],
-                va_to_var=to_node_model.vars["va_degree"],
+                va_from_var=from_node_model.vars["va_radians"],
+                va_to_var=to_node_model.vars["va_radians"],
                 g_branch=g,
                 b_branch=b,
                 tap=self.tap,
@@ -155,8 +156,10 @@ class GenericPowerBranch(BranchModel):
 
 @model
 class PowerBranch(GenericPowerBranch, ABC):
-    def __init__(self, tap, shift, backup=False, on_off=1) -> None:
-        super().__init__(tap, shift, 0, 0, 0, 0, 0, 0, backup=backup, on_off=on_off)
+    def __init__(self, tap, shift, backup=False, on_off=1, **kwargs) -> None:
+        super().__init__(
+            tap, shift, 0, 0, 0, 0, 0, 0, backup=backup, on_off=on_off, **kwargs
+        )
 
         self.tap = tap
         self.shift = shift
@@ -179,9 +182,16 @@ class PowerBranch(GenericPowerBranch, ABC):
 @model
 class PowerLine(PowerBranch):
     def __init__(
-        self, length_m, r_ohm_per_m, x_ohm_per_m, parallel, backup=False, on_off=1
+        self,
+        length_m,
+        r_ohm_per_m,
+        x_ohm_per_m,
+        parallel,
+        backup=False,
+        on_off=1,
+        **kwargs,
     ) -> None:
-        super().__init__(1, 0, backup=backup, on_off=on_off)
+        super().__init__(1, 0, backup=backup, on_off=on_off, **kwargs)
 
         self.length_m = length_m
         self.r_ohm_per_m = r_ohm_per_m
@@ -398,15 +408,11 @@ class HeatExchangerLoad(HeatExchanger):
     def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
         super().__init__(q_mw, diameter_m, temperature_ext_k)
 
-        self.q_w = q_mw * 10**6
-
 
 @model
 class HeatExchangerGenerator(HeatExchanger):
     def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
         super().__init__(q_mw, diameter_m, temperature_ext_k)
-
-        self.q_w = -q_mw * 10**6
 
 
 @model

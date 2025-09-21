@@ -7,7 +7,7 @@ import monee.model as mm
 
 REF_PA = 1000000
 REF_TEMP = 352
-DEFAULT_LENGTH = 0.1
+DEFAULT_LENGTH = 100
 
 
 def get_length(net: mm.Network, branch, node1_id, node2_id):
@@ -18,12 +18,18 @@ def get_length(net: mm.Network, branch, node1_id, node2_id):
     node2 = net.node_by_id(node2_id)
 
     if node1.position is None or node2.position is None:
-        raise Exception("The branch length can't be read from the given network!")
+        return DEFAULT_LENGTH
 
     return distance.distance(node1.position, node2.position).m
 
 
-def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
+def create_heat_net_for_power(
+    power_net,
+    target_net,
+    heat_deployment_rate,
+    mass_flow_rate=0.075,
+    default_diameter_m=0.12,
+):
     heat_grid = mm.create_water_grid("water")
     heat_grid.t_ref = REF_TEMP
     heat_grid.pressure_ref = REF_PA
@@ -47,12 +53,12 @@ def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
                 from_node_id=bus_index_to_junction_index[node.id],
                 to_node_id=bus_index_to_end_junction_index[node.id],
                 diameter_m=0.20,
-                q_mw=(-1 if random.random() > 0.8 else 1) * -0.001 * random.random(),
+                q_mw=(-1 if random.random() > 0.8 else 1) * -0.003 * random.random(),
             )
         mx.create_sink(
             target_net,
             bus_index_to_end_junction_index[node.id],
-            mass_flow=0.075 + random.random() * 0.01,
+            mass_flow=mass_flow_rate + random.random() * mass_flow_rate / 10,
         )
 
     for branch in power_net_as_st.branches:
@@ -62,7 +68,7 @@ def create_heat_net_for_power(power_net, target_net, heat_deployment_rate):
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=0.120,
+            diameter_m=default_diameter_m,
             length_m=get_length(target_net, branch, from_node_id, to_node_id),
             temperature_ext_k=296.15,
             roughness=0.001,
@@ -100,7 +106,7 @@ def create_gas_net_for_power(
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=0.3,
+            diameter_m=0.3 * scaling,
             length_m=get_length(target_net, branch, from_node_id, to_node_id),
             grid=gas_grid,
         )
@@ -111,7 +117,7 @@ def create_gas_net_for_power(
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
-                mass_flow=1 * random.random() * scaling,
+                mass_flow=round(1 * random.random() * scaling, 2),
             )
 
     mx.create_source(
