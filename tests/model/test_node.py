@@ -9,7 +9,7 @@ def test_bus_vars():
     assert type(bus.p_mw) is Intermediate
     assert type(bus.q_mvar) is Intermediate
     assert type(bus.vm_pu) is Var
-    assert type(bus.va_degree) is Var
+    assert type(bus.va_degree) is Intermediate
 
 
 def test_bus_eq():

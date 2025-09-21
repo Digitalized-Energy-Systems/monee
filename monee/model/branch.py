@@ -30,6 +30,7 @@ class GenericPowerBranch(BranchModel):
         max_i_ka=3.19,
         backup=False,
         on_off=1,
+        **kwargs,
     ) -> None:
         """_summary_
 

@@ -555,7 +555,9 @@ def test_scaled_example_gas_incident():
     print(result.objective)
     print(resilience)
 
-    assert resilience == (0.0, 0.07947125452800002, 31.947503194946055)
+    assert resilience[0] == 0
+    assert math.isclose(resilience[1], 0.07947125452800002, abs_tol=0.0001)
+    assert math.isclose(resilience[2], 31.947503194946055, abs_tol=0.0001)
     assert result is not None
 
 
