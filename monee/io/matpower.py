@@ -1,5 +1,6 @@
-import scipy.io
 import math
+
+import scipy.io
 
 from monee.model.branch import *  # noqa needed for generic creation of models
 from monee.model.child import *  # noqa needed for generic creation of models

@@ -332,7 +332,7 @@ class CHP(MultGridCompoundModel):
         self.regulation = regulation
         self.efficiency_power = efficiency_power
         self.efficiency_heat = efficiency_heat
-        
+
         self.mass_flow_setpoint = mass_flow_setpoint
 
         self.mass_flow = (
@@ -360,7 +360,7 @@ class CHP(MultGridCompoundModel):
             self.efficiency_power,
             self.efficiency_heat,
             gas_node.grid.higher_heating_value,
-            regulation=self.regulation
+            regulation=self.regulation,
         )
         node_id_control = network.node(
             self._control_node,

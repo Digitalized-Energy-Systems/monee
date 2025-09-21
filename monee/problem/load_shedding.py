@@ -61,7 +61,7 @@ HHV = 15.3
 
 def retrieve_power_uniform(model):
     if isinstance(model, HeatExchangerLoad | HeatExchangerGenerator | HeatExchanger):
-        return model.q_w_set/1e6 * model.regulation, model.q_w_set/1e6
+        return model.q_w_set / 1e6 * model.regulation, model.q_w_set / 1e6
     elif isinstance(model, PowerLoad | PowerGenerator):
         return _or_zero(model.p_mw) * model.regulation, model.p_mw
     elif isinstance(model, Sink | Source):
@@ -76,7 +76,7 @@ def retrieve_power_uniform(model):
         return 0, 0
     elif isinstance(model, PowerLine):
         if model.backup:
-            return 0, model.on_off * 0.1 # static penalty for using backup lines
+            return 0, model.on_off * 0.1  # static penalty for using backup lines
         return 0, 0
 
     raise ValueError(f"The model {type(model)} is not a known load.")

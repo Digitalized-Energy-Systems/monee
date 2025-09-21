@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from monee.model import (
+    CHPControlNode,
     GasGrid,
     GenericModel,
     HeatExchanger,
@@ -13,8 +14,6 @@ from monee.model import (
     PowerGenerator,
     PowerLoad,
     PowerToGas,
-    PowerToHeat,
-    CHPControlNode,
     PowerToHeatControlNode,
     Sink,
     Source,
@@ -210,7 +209,7 @@ class OptimizationProblem:
                                 param.val(attribute, val),
                                 param.max(attribute, val),
                                 param.min(attribute, val),
-                                param.integer
+                                param.integer,
                             )
                         setattr(
                             model,
@@ -218,8 +217,10 @@ class OptimizationProblem:
                             variable,
                         )
                         if self._debug:
-                            logger.warn("From the model %s", model)
-                            logger.warn("The attribute %s has been replaced", attribute)
+                            logger.warning("From the model %s", model)
+                            logger.warning(
+                                "The attribute %s has been replaced", attribute
+                            )
 
         for min, max, component_condition, attributes in self._bounds_for_controllables:
             component_list = network.all_components()

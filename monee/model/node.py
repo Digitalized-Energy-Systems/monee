@@ -90,7 +90,7 @@ class Bus(NodeModel):
             self.q_mvar_equation(connected_node_models),
             power_balance_equation(signed_ap),
             power_balance_equation(signed_rp),
-            IntermediateEq("va_degree", 180/math.pi * self.va_radians)
+            IntermediateEq("va_degree", 180 / math.pi * self.va_radians),
         )
 
 

@@ -236,13 +236,7 @@ def create_multi_chp():
 
     # multi
     pn.compound(
-        mm.CHP(
-            0.5,
-            0.6,
-            0.4,
-            0.00005,
-            regulation=0.5
-        ),
+        mm.CHP(0.5, 0.6, 0.4, 0.00005, regulation=0.5),
         gas_node_id=g_node_2,
         heat_node_id=w_node_1,
         heat_return_node_id=w_node_2,

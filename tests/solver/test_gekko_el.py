@@ -253,7 +253,9 @@ def test_load_shedding_network_regulate_gen():
     assert len(result.dataframes) == 5
     assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], 0)
     assert math.isclose(
-        result.dataframes["PowerGenerator"]["regulation"][0], 0.96668963486, abs_tol=0.0001
+        result.dataframes["PowerGenerator"]["regulation"][0],
+        0.96668963486,
+        abs_tol=0.0001,
     )
 
 

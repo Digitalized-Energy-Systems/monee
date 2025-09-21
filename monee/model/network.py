@@ -483,10 +483,12 @@ class Network:
     @staticmethod
     def _model_dict_to_input(container):
         model_dict = container.model.__dict__
-        input_dict = {"active": container.active, 
-                      "id": container.id, 
-                      "independent": container.independent, 
-                      "ignored": container.ignored}
+        input_dict = {
+            "active": container.active,
+            "id": container.id,
+            "independent": container.independent,
+            "ignored": container.ignored,
+        }
         for k, v in model_dict.items():
             input_value = v
             if isinstance(v, (Var)):
@@ -516,10 +518,12 @@ class Network:
     @staticmethod
     def _model_dict_to_results(container):
         model_dict = container.model.vars
-        result_dict = {"active": container.active, 
-                      "id": container.id, 
-                      "independent": container.independent, 
-                      "ignored": container.ignored}
+        result_dict = {
+            "active": container.active,
+            "id": container.id,
+            "independent": container.independent,
+            "ignored": container.ignored,
+        }
         for k, v in model_dict.items():
             result_value = v
             if isinstance(v, Var | Const | Intermediate):

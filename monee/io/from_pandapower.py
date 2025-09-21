@@ -42,6 +42,5 @@ def from_pandapower_net(net):
                     net.bus_geodata["x"].iloc[pp_id],
                     net.bus_geodata["y"].iloc[pp_id],
                 )
-        
 
     return monee_net

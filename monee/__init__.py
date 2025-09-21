@@ -31,7 +31,7 @@ def solve_load_shedding_problem(
     bounds_ext_el: tuple,
     bounds_ext_gas: tuple,
     debug=False,
-    **kwargs
+    **kwargs,
 ):
     optimization_problem = mp.create_load_shedding_optimization_problem(
         bounds_el=bounds_vm,
