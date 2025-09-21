@@ -14,6 +14,7 @@ from .grid import GasGrid, PowerGrid, WaterGrid
 
 SQRT_3 = np.sqrt(3)
 
+
 @model
 class GenericPowerBranch(BranchModel):
     def __init__(
@@ -125,7 +126,7 @@ class GenericPowerBranch(BranchModel):
                 on_off=self.on_off,
             ),
             opfmodel.int_flow_to_q(
-                q_to_var=self.q_to_mvar ,
+                q_to_var=self.q_to_mvar,
                 vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
                 vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
                 va_from_var=from_node_model.vars["va_radians"],
@@ -154,8 +155,10 @@ class GenericPowerBranch(BranchModel):
 
 @model
 class PowerBranch(GenericPowerBranch, ABC):
-    def __init__(self, tap, shift, backup=False, on_off=1) -> None:
-        super().__init__(tap, shift, 0, 0, 0, 0, 0, 0, backup=backup, on_off=on_off)
+    def __init__(self, tap, shift, backup=False, on_off=1, **kwargs) -> None:
+        super().__init__(
+            tap, shift, 0, 0, 0, 0, 0, 0, backup=backup, on_off=on_off, **kwargs
+        )
 
         self.tap = tap
         self.shift = shift
@@ -178,9 +181,16 @@ class PowerBranch(GenericPowerBranch, ABC):
 @model
 class PowerLine(PowerBranch):
     def __init__(
-        self, length_m, r_ohm_per_m, x_ohm_per_m, parallel, backup=False, on_off=1
+        self,
+        length_m,
+        r_ohm_per_m,
+        x_ohm_per_m,
+        parallel,
+        backup=False,
+        on_off=1,
+        **kwargs,
     ) -> None:
-        super().__init__(1, 0, backup=backup, on_off=on_off)
+        super().__init__(1, 0, backup=backup, on_off=on_off, **kwargs)
 
         self.length_m = length_m
         self.r_ohm_per_m = r_ohm_per_m
@@ -402,6 +412,7 @@ class HeatExchangerLoad(HeatExchanger):
 class HeatExchangerGenerator(HeatExchanger):
     def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
         super().__init__(q_mw, diameter_m, temperature_ext_k)
+
 
 @model
 class GasPipe(BranchModel):

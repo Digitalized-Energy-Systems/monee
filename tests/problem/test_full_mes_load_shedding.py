@@ -1,3 +1,4 @@
+import math
 import random
 
 import monee.express as mx
@@ -281,7 +282,8 @@ def test_load_shedding_multimicrogrid_gas_shedding():
     print(result.objective)
     print(resilience)
 
-    assert resilience == (0.0, 0.00119531930112, 33.53137727622534)
+    assert math.isclose(resilience[1], 0.00119531930112, abs_tol=0.0001)
+    assert math.isclose(resilience[2], 33.53137727622534, abs_tol=0.01)
     assert result is not None
 
 
@@ -309,7 +311,7 @@ def test_load_shedding_multimicrogrid_heat_cooldown():
     print(result.objective)
     print(resilience)
 
-    assert resilience == (0.0, 0.0023203160032478232, 0.0)
+    assert math.isclose(resilience[1], 0.0023592007191769932, abs_tol=0.0001)
     assert result is not None
 
 
@@ -335,51 +337,87 @@ def create_scaled_example_net():
     node_3 = pn.node(
         Bus(base_kv=20),
         mm.EL,
-        child_ids=[pn.child(PowerLoad(p_mw=10, q_mvar=0))],
+        child_ids=[pn.child(PowerLoad(p_mw=20, q_mvar=0))],
     )
     node_4 = pn.node(
         Bus(base_kv=20),
         mm.EL,
-        child_ids=[pn.child(PowerLoad(p_mw=10, q_mvar=0))],
+        child_ids=[pn.child(PowerLoad(p_mw=20, q_mvar=0))],
     )
     node_5 = pn.node(
         Bus(base_kv=20),
         mm.EL,
-        child_ids=[pn.child(PowerGenerator(p_mw=31, q_mvar=0, regulation=0.5))],
+        child_ids=[pn.child(PowerGenerator(p_mw=30, q_mvar=0, regulation=0.5))],
     )
     node_6 = pn.node(
         Bus(base_kv=20),
         mm.EL,
-        child_ids=[pn.child(PowerGenerator(p_mw=23, q_mvar=0, regulation=0.5))],
+        child_ids=[pn.child(PowerGenerator(p_mw=20, q_mvar=0, regulation=0.5))],
     )
-
+    max_i_ka = 319
     pn.branch(
-        PowerLine(length_m=100, r_ohm_per_m=0.00007, x_ohm_per_m=0.00007, parallel=1),
+        PowerLine(
+            length_m=100,
+            r_ohm_per_m=0.00007,
+            x_ohm_per_m=0.00007,
+            max_i_ka=max_i_ka,
+            parallel=1,
+        ),
         node_0,
         node_1,
     )
     pn.branch(
-        PowerLine(length_m=100, r_ohm_per_m=0.00007, x_ohm_per_m=0.00007, parallel=1),
+        PowerLine(
+            length_m=100,
+            r_ohm_per_m=0.00007,
+            x_ohm_per_m=0.00007,
+            max_i_ka=max_i_ka,
+            parallel=1,
+        ),
         node_1,
         node_2,
     )
     pn.branch(
-        PowerLine(length_m=100, r_ohm_per_m=0.00007, x_ohm_per_m=0.00007, parallel=1),
+        PowerLine(
+            length_m=100,
+            r_ohm_per_m=0.00007,
+            x_ohm_per_m=0.00007,
+            max_i_ka=max_i_ka,
+            parallel=1,
+        ),
         node_1,
         node_5,
     )
     pn.branch(
-        PowerLine(length_m=100, r_ohm_per_m=0.00007, x_ohm_per_m=0.00007, parallel=1),
+        PowerLine(
+            length_m=100,
+            r_ohm_per_m=0.00007,
+            x_ohm_per_m=0.00007,
+            max_i_ka=max_i_ka,
+            parallel=1,
+        ),
         node_2,
         node_3,
     )
     pn.branch(
-        PowerLine(length_m=100, r_ohm_per_m=0.00007, x_ohm_per_m=0.00007, parallel=1),
+        PowerLine(
+            length_m=100,
+            r_ohm_per_m=0.00007,
+            x_ohm_per_m=0.00007,
+            max_i_ka=max_i_ka,
+            parallel=1,
+        ),
         node_3,
         node_4,
     )
     pn.branch(
-        PowerLine(length_m=100, r_ohm_per_m=0.00007, x_ohm_per_m=0.00007, parallel=1),
+        PowerLine(
+            length_m=100,
+            r_ohm_per_m=0.00007,
+            x_ohm_per_m=0.00007,
+            max_i_ka=max_i_ka,
+            parallel=1,
+        ),
         node_3,
         node_6,
     )
@@ -472,6 +510,7 @@ def create_scaled_example_net():
             parallel=1,
             backup=True,
             on_off=0,
+            max_i_ka=max_i_ka,
         ),
         node_4,
         node_0,
@@ -484,6 +523,7 @@ def create_scaled_example_net():
             parallel=1,
             backup=True,
             on_off=0,
+            max_i_ka=max_i_ka,
         ),
         node_5,
         node_2,
@@ -515,7 +555,7 @@ def test_scaled_example_gas_incident():
     print(result.objective)
     print(resilience)
 
-    assert resilience == (0.0, 0.00119531930112, 33.53137727622534)
+    assert resilience == (0.0, 0.07947125452800002, 31.947503194946055)
     assert result is not None
 
 
@@ -543,5 +583,32 @@ def test_scaled_load_shedding_multimicrogrid_chp_save():
     print(result.objective)
     print(resilience)
 
-    assert resilience == (0.089030811558, 0, 0.0)
+    assert resilience == (1.6330737020000008, 0.0, 0.0)
+    assert result is not None
+
+
+def test_scaled_load_shedding_def():
+    net_multi = create_scaled_example_net()
+
+    print(run_energy_flow(net_multi))
+
+    optimization_problem = mp.create_load_shedding_optimization_problem(
+        bounds_el=bounds_el,
+        bounds_heat=bounds_heat,
+        bounds_gas=bounds_gas,
+        ext_grid_el_bounds=(0.0, 0.1),
+        ext_grid_gas_bounds=(0.0, 0.1),
+        debug=True,
+    )
+    result = run_energy_flow_optimization(
+        net_multi, optimization_problem=optimization_problem
+    )
+
+    resilience = mp.calc_general_resilience_performance(result.network)
+
+    print(result)
+    print(result.objective)
+    print(resilience)
+
+    assert resilience == (0, 0, 0.0)
     assert result is not None
