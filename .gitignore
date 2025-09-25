@@ -100,3 +100,7 @@ env_peext/
 ./data/
 *.pickle
 MASWorld
+
+_build/
+.pytest_cache/
+.ruff_cache/

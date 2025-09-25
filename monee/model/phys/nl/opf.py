@@ -1,16 +1,20 @@
 import math
 
 
-# per junction
 def power_balance_equation(signed_flows):
+    """
+    No docstring provided.
+    """
     return sum(signed_flows) == 0
 
 
 def calc_branch_t(tap, shift):
-    return tap * math.cos(shift), tap * math.sin(shift)
+    """
+    No docstring provided.
+    """
+    return (tap * math.cos(shift), tap * math.sin(shift))
 
 
-# per branch
 def int_flow_from_p(
     p_from_var,
     vm_from_var,
@@ -26,8 +30,10 @@ def int_flow_from_p(
     g_from=0,
     on_off=1,
 ):
+    """
+    No docstring provided.
+    """
     tr, ti = calc_branch_t(tap, shift)
-
     return p_from_var == on_off * (
         (g_branch + g_from) / tap**2 * vm_from_var**2
         + (-g_branch * tr + b_branch * ti)
@@ -54,8 +60,10 @@ def int_flow_from_q(
     b_from=0,
     on_off=1,
 ):
+    """
+    No docstring provided.
+    """
     tr, ti = calc_branch_t(tap, shift)
-
     return q_from_var == on_off * (
         -(b_branch + b_from) / tap**2 * vm_from_var**2
         - (-b_branch * tr - g_branch * ti)
@@ -82,8 +90,10 @@ def int_flow_to_p(
     g_to=0,
     on_off=1,
 ):
+    """
+    No docstring provided.
+    """
     tr, ti = calc_branch_t(tap, shift)
-
     return p_to_var == on_off * (
         (g_branch + g_to) * vm_to_var**2
         + (-g_branch * tr - b_branch * ti)
@@ -110,8 +120,10 @@ def int_flow_to_q(
     b_to=0,
     on_off=1,
 ):
+    """
+    No docstring provided.
+    """
     tr, ti = calc_branch_t(tap, shift)
-
     return q_to_var == on_off * (
         -(b_branch + b_to) * vm_to_var**2
         - (-b_branch * tr + g_branch * ti)

@@ -11,6 +11,9 @@ def generate_mes_based_on_simbench_id(
     p2g_density=0.02,
     p2h_density=0.1,
 ):
+    """
+    No docstring provided.
+    """
     return generate_mes_based_on_power_net(
         obtain_simbench_net(simbench_id),
         heat_deployment_rate,

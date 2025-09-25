@@ -1,4 +1,9 @@
--e .
-pika
-pyzmq
-furo>=2024.8.6
+
+sphinx>=7
+furo
+myst-parser>=3
+sphinx-autodoc-typehints
+sphinx-copybutton
+sphinx-design
+numpy
+pandas

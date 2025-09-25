@@ -4,44 +4,74 @@ import monee.model as md
 
 
 class PerformanceMetric(ABC):
+    """
+    No docstring provided.
+    """
+
     @abstractmethod
     def calc(self, network: md.Network):
-        pass
+        """
+        No docstring provided.
+        """
 
 
 class ResilienceMetric(ABC):
+    """
+    No docstring provided.
+    """
+
     @abstractmethod
     def gather(self, network: md.Network, step, **kwargs):
-        pass
+        """
+        No docstring provided.
+        """
 
     @abstractmethod
     def calc(self):
-        pass
+        """
+        No docstring provided.
+        """
 
 
 class rlist(list):
+    """
+    No docstring provided.
+    """
+
     def __init__(self, default):
         self._default = default
 
     def __setitem__(self, key, value):
+        """
+        No docstring provided.
+        """
         if key >= len(self):
             self += [self._default] * (key - len(self) + 1)
         super().__setitem__(key, value)
 
 
 def is_load(component):
+    """
+    No docstring provided.
+    """
     model = component.model
     grid = component.grid
     return (
         isinstance(model, md.PowerLoad)
-        or isinstance(model, md.Sink)
-        and isinstance(grid, md.GasGrid)
+        or (isinstance(model, md.Sink) and isinstance(grid, md.GasGrid))
         or isinstance(model, md.HeatExchangerLoad)
     )
 
 
 class GeneralResiliencePerformanceMetric(PerformanceMetric):
+    """
+    No docstring provided.
+    """
+
     def get_relevant_components(self, network: md.Network):
+        """
+        No docstring provided.
+        """
         return [
             component
             for component in network.childs + network.branches
@@ -49,11 +79,13 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
         ]
 
     def calc(self, network, inv=False):
+        """
+        No docstring provided.
+        """
         relevant_components = self.get_relevant_components(network)
         power_load_curtailed = 0
         heat_load_curtailed = 0
         gas_load_curtailed = 0
-
         for component in relevant_components:
             model = component.model
             if component.ignored or not component.active:
@@ -61,14 +93,13 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                     power_load_curtailed += md.upper(model.p_mw)
                 if isinstance(model, md.Sink):
                     gas_load_curtailed += (
-                        (md.upper(model.mass_flow))
+                        md.upper(model.mass_flow)
                         * 3.6
                         * component.grid.higher_heating_value
                     )
-                if isinstance(model, (md.HeatExchangerLoad)):
+                if isinstance(model, md.HeatExchangerLoad):
                     heat_load_curtailed += md.upper(model.q_w) / 10**6
                 continue
-
             if isinstance(model, md.PowerLoad):
                 power_load_curtailed += md.upper(model.p_mw) - md.value(
                     model.p_mw
@@ -82,7 +113,7 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                     * 3.6
                     * component.grid.higher_heating_value
                 )
-            if isinstance(model, (md.HeatExchangerLoad)):
+            if isinstance(model, md.HeatExchangerLoad):
                 heat_load_curtailed += (
                     md.upper(model.q_w)
                     - md.value(model.q_w) * md.value(model.regulation)

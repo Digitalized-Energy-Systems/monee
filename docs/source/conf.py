@@ -1,44 +1,53 @@
-# Configuration file for the Sphinx documentation builder.
-#
-# This file only contains a selection of the most common options. For a full
-# list see the documentation:
-# https://www.sphinx-doc.org/en/master/usage/configuration.html
-
 # -- Project information -----------------------------------------------------
-
 project = "monee"
-copyright = "2024, Rico Schrage"
-author = "Rico Schrage"
-
-# The full version, including alpha/beta/rc tags
-version = release = "0.1.0"
-
+author = "monee contributors"
+copyright = "2025, monee contributors"
+release = "latest"
 
 # -- General configuration ---------------------------------------------------
-
-# Add any Sphinx extension module names here, as strings. They can be
-# extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
-# ones.
 extensions = [
+    "myst_parser",
     "sphinx.ext.autodoc",
-    "sphinx.ext.doctest",
+    "sphinx.ext.napoleon",
+    "sphinx.ext.autosummary",
     "sphinx.ext.intersphinx",
-    "sphinx.ext.graphviz",
-    "sphinx.ext.imgmath",
     "sphinx.ext.viewcode",
+    "sphinx.ext.doctest",
+    "sphinx.ext.todo",
+    "sphinx.ext.duration",
+    "sphinx_copybutton",
+    "sphinx_autodoc_typehints",
 ]
 
-
-# Add any paths that contain templates here, relative to this directory.
 templates_path = ["_templates"]
-
-# List of patterns, relative to source directory, that match files and
-# directories to ignore when looking for source files.
-# This pattern also affects html_static_path and html_extra_path.
 exclude_patterns = []
 
+autosummary_generate = True
+autoclass_content = "both"
+napoleon_google_docstring = True
+napoleon_numpy_docstring = True
+napoleon_include_init_with_doc = False
+napoleon_use_param = True
+napoleon_attr_annotations = True
 
-# -- Options for HTML output -------------------------------------------------
+typehints_fully_qualified = True
+typehints_use_rtype = False
+typehints_use_signature = True
+
+myst_enable_extensions = [
+    "colon_fence",
+    "deflist",
+    "substitution",
+    "attrs_block",
+    "attrs_inline",
+]
+
+# Intersphinx mappings
+intersphinx_mapping = {
+    "python": ("https://docs.python.org/3", None),
+    "numpy": ("https://numpy.org/doc/stable/", None),
+    "pandas": ("https://pandas.pydata.org/pandas-docs/stable/", None),
+}
 
 # The theme to use for HTML and HTML Help pages.  See the documentation for
 # a list of builtin themes.

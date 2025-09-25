@@ -32,7 +32,9 @@ dependencies = [
     "networkx>=3.0",
     "numpy>=1.26.4",
     "pandas>=1.5.3",
-    "geopy>=2.4.1"
+    "geopy>=2.4.1",
+    "plotly>=6.3.0",
+    "pygraphviz"
 ]
 
 [project.optional-dependencies]

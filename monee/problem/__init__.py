@@ -1,5 +1,4 @@
 import monee.model as md
-
 from .core import OptimizationProblem
 from .core import Constraints
 from .core import Objectives
@@ -11,4 +10,7 @@ from .metric import GeneralResiliencePerformanceMetric
 
 
 def calc_general_resilience_performance(network: md.Network, **kwargs):
+    """
+    No docstring provided.
+    """
     return GeneralResiliencePerformanceMetric().calc(network, **kwargs)
