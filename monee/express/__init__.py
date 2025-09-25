@@ -635,38 +635,38 @@ def create_ext_hydr_grid(
     **kwargs,
 ):
     """
-    Adds an external hydrogen grid to a specified node in the network with configurable flow, pressure, and operational parameters.
+    Adds an external hydraulic grid to a specified node in the network with configurable flow, pressure, and operational parameters.
 
-    This function is used to model the integration of external hydrogen sources into an energy network, supporting scenarios such as sector coupling, hydrogen fueling, or storage. Use it during network setup or expansion to represent points where hydrogen is supplied from outside the system. The function creates an external hydrogen grid object with user-defined mass flow, pressure, and temperature, applies any operational constraints, and connects it to the designated node in the network. Additional customization is available via keyword arguments for advanced modeling needs.
+    This function is used to model the integration of external hydraulic sources into an energy network, supporting scenarios such as sector coupling, hydraulic fueling, or storage. Use it during network setup or expansion to represent points where hydraulic is supplied from outside the system. The function creates an external hydraulic grid object with user-defined mass flow, pressure, and temperature, applies any operational constraints, and connects it to the designated node in the network. Additional customization is available via keyword arguments for advanced modeling needs.
 
     Args:
-        network (mm.Network): The network to which the external hydrogen grid will be added. Must be a valid `mm.Network` instance.
-        node_id: Identifier of the node where the external hydrogen grid will be connected.
-        mass_flow (float, optional): Mass flow rate of hydrogen in kilograms per second. Defaults to 1.
-        pressure_pa (float, optional): Hydrogen pressure in pascals. Defaults to 1,000,000.
-        t_k (float, optional): Hydrogen temperature in Kelvin. Defaults to 359.
-        constraints (dict or object, optional): Operational constraints for the hydrogen grid, such as flow or pressure limits.
+        network (mm.Network): The network to which the external hydraulic grid will be added. Must be a valid `mm.Network` instance.
+        node_id: Identifier of the node where the external hydraulic grid will be connected.
+        mass_flow (float, optional): Mass flow rate of hydraulic in kilograms per second. Defaults to 1.
+        pressure_pa (float, optional): hydraulic pressure in pascals. Defaults to 1,000,000.
+        t_k (float, optional): hydraulic temperature in Kelvin. Defaults to 359.
+        constraints (dict or object, optional): Operational constraints for the hydraulic grid, such as flow or pressure limits.
         overwrite_id (Any, optional): Custom identifier to override the default grid ID.
-        name (str, optional): Human-readable name for the external hydrogen grid.
+        name (str, optional): Human-readable name for the external hydraulic grid.
         **kwargs: Additional keyword arguments for further customization (e.g., advanced modeling or solver options).
 
     Returns:
-        mm.ExtHydrGrid: The created external hydrogen grid object, integrated into the network and connected to the specified node.
+        mm.ExtHydrGrid: The created external hydraulic grid object, integrated into the network and connected to the specified node.
 
     Raises:
         ValueError: If the network is invalid, node_id is missing or incorrect, or if parameter values are out of valid ranges or incompatible.
 
     Examples:
-        Add an external hydrogen grid with custom mass flow and pressure:
+        Add an external hydraulic grid with custom mass flow and pressure:
             ext_hydr_grid = create_ext_hydr_grid(
                 my_network,
                 node_id=5,
                 mass_flow=2,
                 pressure_pa=1500000,
-                name='External Hydrogen Grid A'
+                name='External hydraulic Grid A'
             )
 
-        Add an external hydrogen grid with operational constraints and a custom ID:
+        Add an external hydraulic grid with operational constraints and a custom ID:
             ext_hydr_grid = create_ext_hydr_grid(
                 my_network,
                 node_id='EXT_H2_NODE',
@@ -717,38 +717,38 @@ def create_consume_hydr_grid(
     **kwargs,
 ):
     """
-    Adds a hydrogen consumption grid to a specified node in the network with configurable flow, pressure, and operational parameters.
+    Adds a hydraulic consumption grid to a specified node in the network with configurable flow, pressure, and operational parameters.
 
-    This function is intended for modeling hydrogen demand points within an energy network, such as those required for fuel cell integration, hydrogen storage, or sector coupling applications. Use it during network setup or expansion to represent locations where hydrogen is consumed. The function creates a hydrogen consumption grid object with user-defined mass flow, pressure, and temperature, applies any operational constraints, and integrates it into the network at the designated node. Additional customization is supported via keyword arguments for advanced modeling needs.
+    This function is intended for modeling hydraulic demand points within an energy network, such as those required for fuel cell integration, hydraulic storage, or sector coupling applications. Use it during network setup or expansion to represent locations where hydraulic is consumed. The function creates a hydraulic consumption grid object with user-defined mass flow, pressure, and temperature, applies any operational constraints, and integrates it into the network at the designated node. Additional customization is supported via keyword arguments for advanced modeling needs.
 
     Args:
-        network (mm.Network): The network to which the hydrogen consumption grid will be added. Must be a valid `mm.Network` instance.
-        node_id: Identifier of the node where the hydrogen grid will be connected.
-        mass_flow (float, optional): Mass flow rate of hydrogen in kilograms per second. Defaults to 1.
-        pressure_pa (float, optional): Hydrogen pressure in pascals. Defaults to 1,000,000.
-        t_k (float, optional): Hydrogen temperature in Kelvin. Defaults to 293.
-        constraints (dict or object, optional): Operational constraints for the hydrogen grid, such as flow or pressure limits.
+        network (mm.Network): The network to which the hydraulic consumption grid will be added. Must be a valid `mm.Network` instance.
+        node_id: Identifier of the node where the hydraulic grid will be connected.
+        mass_flow (float, optional): Mass flow rate of hydraulic in kilograms per second. Defaults to 1.
+        pressure_pa (float, optional): hydraulic pressure in pascals. Defaults to 1,000,000.
+        t_k (float, optional): hydraulic temperature in Kelvin. Defaults to 293.
+        constraints (dict or object, optional): Operational constraints for the hydraulic grid, such as flow or pressure limits.
         overwrite_id (Any, optional): Custom identifier to override the default grid ID.
-        name (str, optional): Human-readable name for the hydrogen consumption grid.
+        name (str, optional): Human-readable name for the hydraulic consumption grid.
         **kwargs: Additional keyword arguments for further customization (e.g., advanced modeling or solver options).
 
     Returns:
-        mm.ConsumeHydrGrid: The created hydrogen consumption grid object, integrated into the network and connected to the specified node.
+        mm.ConsumeHydrGrid: The created hydraulic consumption grid object, integrated into the network and connected to the specified node.
 
     Raises:
         ValueError: If the network is invalid, node_id is missing or incorrect, or if parameter values are out of valid ranges or incompatible.
 
     Examples:
-        Add a hydrogen consumption grid with custom mass flow and pressure:
+        Add a hydraulic consumption grid with custom mass flow and pressure:
             hydr_grid = create_consume_hydr_grid(
                 my_network,
                 node_id=5,
                 mass_flow=2,
                 pressure_pa=1500000,
-                name='Hydrogen Grid A'
+                name='hydraulic Grid A'
             )
 
-        Add a hydrogen grid with operational constraints and a custom ID:
+        Add a hydraulic grid with operational constraints and a custom ID:
             hydr_grid = create_consume_hydr_grid(
                 my_network,
                 node_id='H2_NODE',
