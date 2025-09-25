@@ -24,19 +24,32 @@ logger = logging.getLogger(__name__)
 
 
 class Objective:
+    """
+    No docstring provided.
+    """
+
     def __init__(self, selected_models_link) -> None:
         self._selected_models_link = selected_models_link
         self._data_attacher = None
         self._calculator = lambda _: 0
 
     def data(self, data_attacher):
+        """
+        No docstring provided.
+        """
         self._data_attacher = data_attacher
         return self
 
     def calculate(self, calculator):
+        """
+        No docstring provided.
+        """
         self._calculator = calculator
 
     def _eval(self, network):
+        """
+        No docstring provided.
+        """
         model_objectives = []
         if self._data_attacher is not None:
             model_to_data = {}
@@ -51,26 +64,39 @@ class Objective:
 
 
 class Objectives:
+    """
+    No docstring provided.
+    """
+
     def __init__(self) -> None:
         self._objectives = []
 
     def select(self, model_selection_function) -> Objective:
+        """
+        No docstring provided.
+        """
         objective = Objective(
             lambda network: [
                 model
                 for model in network.all_models()
                 if model_selection_function(model)
-            ],
+            ]
         )
         self._objectives.append(objective)
         return objective
 
     def with_models(self, models_link) -> Objective:
+        """
+        No docstring provided.
+        """
         objective = Objective(models_link)
         self._objectives.append(objective)
         return objective
 
     def all(self, network):
+        """
+        No docstring provided.
+        """
         if self._objectives:
             return functools.reduce(
                 lambda a, b: a + b,
@@ -80,6 +106,10 @@ class Objectives:
 
 
 class Constraint:
+    """
+    No docstring provided.
+    """
+
     def __init__(self, selected_models_link) -> None:
         self._selected_models_link = selected_models_link
         self._data_attacher = None
@@ -88,18 +118,30 @@ class Constraint:
         self._comp_equations = []
 
     def data(self, data_attacher):
+        """
+        No docstring provided.
+        """
         self._data_attacher = data_attacher
         return self
 
     def equation(self, equation_lambda):
+        """
+        No docstring provided.
+        """
         self._equations.append(equation_lambda)
         return self
 
     def comp_equation(self, equation_lambda):
+        """
+        No docstring provided.
+        """
         self._comp_equations.append(equation_lambda)
         return self
 
     def _eval(self, network):
+        """
+        No docstring provided.
+        """
         model_equations = []
         selected_models = self._selected_models_link(network)
         for equation in self._equations:
@@ -112,7 +154,6 @@ class Constraint:
             else:
                 for model in selected_models:
                     model_equations.append(equation(model))
-
         for comp_equation in self._comp_equations:
             if len(self._model_to_data) > 0:
                 model_to_data = {}
@@ -121,41 +162,59 @@ class Constraint:
                 model_equations.append(comp_equation(model_to_data))
             else:
                 model_equations.append(comp_equation(selected_models))
-
         return model_equations
 
 
 class Constraints:
+    """
+    No docstring provided.
+    """
+
     def __init__(self) -> None:
         self._constraints = []
 
     def select(self, component_selection_function) -> Constraint:
+        """
+        No docstring provided.
+        """
         constraint = Constraint(
             lambda network: [
                 component.model
                 for component in network.all_components()
                 if component_selection_function(component)
                 and component.active
-                and not component.ignored
-            ],
+                and (not component.ignored)
+            ]
         )
         self._constraints.append(constraint)
         return constraint
 
     def select_types(self, model_cls_tuple) -> Constraint:
+        """
+        No docstring provided.
+        """
         return self.select(
             lambda component: isinstance(component.model, model_cls_tuple)
         )
 
     def select_grids(self, grid_cls_tuple) -> Constraint:
+        """
+        No docstring provided.
+        """
         return self.select(lambda component: isinstance(component.grid, grid_cls_tuple))
 
     def with_models(self, models) -> Constraint:
+        """
+        No docstring provided.
+        """
         constraint = Constraint(models)
         self._constraints.append(constraint)
         return constraint
 
     def all(self, network):
+        """
+        No docstring provided.
+        """
         if self._constraints:
             return functools.reduce(
                 lambda a, b: a + b,
@@ -165,11 +224,18 @@ class Constraints:
 
     @property
     def empty(self):
+        """
+        No docstring provided.
+        """
         return len(self._constraints) == 0
 
 
 @dataclass
 class AttributeParameter:
+    """
+    No docstring provided.
+    """
+
     min: Callable[[str, float], float]
     max: Callable[[str, float], float]
     val: Callable[[str, float], float]
@@ -177,6 +243,10 @@ class AttributeParameter:
 
 
 class OptimizationProblem:
+    """
+    No docstring provided.
+    """
+
     def __init__(self, debug=False) -> None:
         self._controllable_appliables: list = []
         self._controllable_to_attr: dict[GenericModel, str] = {}
@@ -186,6 +256,9 @@ class OptimizationProblem:
         self._debug = debug
 
     def _apply(self, network: Network):
+        """
+        No docstring provided.
+        """
         for appliable in self._controllable_appliables:
             appliable(network)
         for model, attributes in self._controllable_to_attr.items():
@@ -211,17 +284,12 @@ class OptimizationProblem:
                                 param.min(attribute, val),
                                 param.integer,
                             )
-                        setattr(
-                            model,
-                            attribute,
-                            variable,
-                        )
+                        setattr(model, attribute, variable)
                         if self._debug:
                             logger.warning("From the model %s", model)
                             logger.warning(
                                 "The attribute %s has been replaced", attribute
                             )
-
         for min, max, component_condition, attributes in self._bounds_for_controllables:
             component_list = network.all_components()
             for component in component_list:
@@ -232,7 +300,6 @@ class OptimizationProblem:
                     if self._debug:
                         logger.info("From the model %s", component.model)
                         logger.info("The attributes %s are bounded", attributes)
-
                     for attribute in attributes:
                         var = getattr(component.model, attribute)
                         var.max = max
@@ -241,11 +308,17 @@ class OptimizationProblem:
     def add_to_controllable(
         self, model, attributes: list[str | tuple[str, AttributeParameter]]
     ):
+        """
+        No docstring provided.
+        """
         if model not in self._controllable_to_attr:
             self._controllable_to_attr[model] = []
         self._controllable_to_attr[model] += attributes
 
     def bounds(self, minmax, component_condition=lambda _: True, attributes=None):
+        """
+        No docstring provided.
+        """
         self._bounds_for_controllables.append(
             (minmax[0], minmax[1], component_condition, attributes)
         )
@@ -255,6 +328,10 @@ class OptimizationProblem:
         attributes: list[str | tuple[str, AttributeParameter]],
         component_condition=lambda _: True,
     ):
+        """
+        No docstring provided.
+        """
+
         def apply_controllable(network: Network):
             component_list = network.all_components()
             for component in component_list:
@@ -265,15 +342,18 @@ class OptimizationProblem:
         return self
 
     def controllable_all(self, attributes):
-        self.controllable(
-            component_condition=lambda _: True,
-            attributes=attributes,
-        )
+        """
+        No docstring provided.
+        """
+        self.controllable(component_condition=lambda _: True, attributes=attributes)
         return self
 
     def controllable_demands(
         self, attributes: list[str | tuple[str, AttributeParameter]]
     ):
+        """
+        No docstring provided.
+        """
         self.controllable(
             component_condition=lambda component: (
                 isinstance(component.model, HeatExchangerLoad | PowerLoad)
@@ -281,43 +361,55 @@ class OptimizationProblem:
                 or (
                     type(component.model) is HeatExchanger
                     and type(component.model.q_w) is not Var
-                    and component.model.q_w > 0
+                    and (component.model.q_w > 0)
                 )
             )
             and component.active
-            and not component.ignored,
+            and (not component.ignored),
             attributes=attributes,
         )
         return self
 
     def controllable_generators(self, attributes):
+        """
+        No docstring provided.
+        """
         self.controllable(
             component_condition=lambda component: isinstance(
                 component.model, HeatExchangerGenerator | PowerGenerator | Source
             )
             and component.active
-            and not component.ignored,
+            and (not component.ignored),
             attributes=attributes,
         )
         return self
 
     def controllable_cps(self, attributes):
+        """
+        No docstring provided.
+        """
         self.controllable(
             component_condition=lambda component: isinstance(
                 component.model, CHPControlNode | PowerToHeatControlNode | PowerToGas
             )
             and component.active
-            and not component.ignored,
+            and (not component.ignored),
             attributes=attributes,
         )
         return self
 
     @property
     def objectives(self):
+        """
+        No docstring provided.
+        """
         return self._objectives
 
     @property
     def constraints(self):
+        """
+        No docstring provided.
+        """
         return self._constraints
 
     @constraints.setter
@@ -330,4 +422,7 @@ class OptimizationProblem:
 
     @property
     def controllables_link(self):
+        """
+        No docstring provided.
+        """
         return lambda _: self._controllable_to_attr.keys()

@@ -9,6 +9,9 @@ from monee.simulation.core import solve
 
 
 def _merge_inner_dicts_to(target_dict, extend_dict):
+    """
+    No docstring provided.
+    """
     for key, inner_dict in target_dict.items():
         for key_two, inner_dict_two in extend_dict.items():
             if key == key_two:
@@ -18,47 +21,79 @@ def _merge_inner_dicts_to(target_dict, extend_dict):
 
 
 class TimeseriesData:
+    """
+    No docstring provided.
+    """
+
     _child_id_to_series: dict[Any, dict[str, list]] = {}
     _child_name_to_series: dict[str, dict[str, list]] = {}
-
     _compound_id_to_series: dict[Any, dict[str, list]] = {}
-
     _branch_id_to_series: dict[Any, dict[str, list]] = {}
 
     def _add_to(self, target_dict, key_one, key_two, value):
+        """
+        No docstring provided.
+        """
         if key_one not in target_dict:
             target_dict[key_one] = {}
         target_dict[key_one][key_two] = value
 
     def add_compound_series(self, compound_id: int, attribute: str, series: list):
+        """
+        No docstring provided.
+        """
         self._add_to(self._compound_id_to_series, compound_id, attribute, series)
 
     def add_branch_series(self, branch_id: int, attribute: str, series: list):
+        """
+        No docstring provided.
+        """
         self._add_to(self._branch_id_to_series, branch_id, attribute, series)
 
     def add_child_series(self, child_id: int, attribute: str, series: list):
+        """
+        No docstring provided.
+        """
         self._add_to(self._child_id_to_series, child_id, attribute, series)
 
     def add_child_series_by_name(self, child_name: str, attribute: str, series: list):
+        """
+        No docstring provided.
+        """
         self._add_to(self._child_name_to_series, child_name, attribute, series)
 
     @property
     def child_id_data(self):
+        """
+        No docstring provided.
+        """
         return self._child_id_to_series
 
     @property
     def child_name_data(self):
+        """
+        No docstring provided.
+        """
         return self._child_name_to_series
 
     @property
     def branch_id_data(self):
+        """
+        No docstring provided.
+        """
         return self._branch_id_to_series
 
     @property
     def compound_id_data(self):
+        """
+        No docstring provided.
+        """
         return self._compound_id_to_series
 
     def extend(self, td):
+        """
+        No docstring provided.
+        """
         self._child_id_to_series = {**td.child_id_data, **self._child_id_to_series}
         self._child_name_to_series = {
             **td.child_name_data,
@@ -69,13 +104,15 @@ class TimeseriesData:
             **td.compound_id_data,
             **self._compound_id_to_series,
         }
-
         _merge_inner_dicts_to(self._child_id_to_series, td.child_id_data)
         _merge_inner_dicts_to(self._child_name_to_series, td.child_name_data)
         _merge_inner_dicts_to(self._branch_id_to_series, td.branch_id_data)
         _merge_inner_dicts_to(self._compound_id_to_series, td.compound_id_data)
 
     def __add__(self, other):
+        """
+        No docstring provided.
+        """
         new_td = TimeseriesData()
         new_td.extend(self)
         new_td.extend(other)
@@ -83,31 +120,47 @@ class TimeseriesData:
 
 
 class TimeseriesResult:
+    """
+    No docstring provided.
+    """
+
     def __init__(self, raw) -> None:
         self._raw_results: list = raw
         self._type_attr_to_result_df: dict[tuple[Any, str], pandas.DataFrame] = {}
 
     def _create_result_for(self, type, attribute: str):
+        """
+        No docstring provided.
+        """
         rows = []
         for raw_result in self._raw_results:
             raw_df = raw_result.dataframes[type.__name__]
             raw_attribute_series_t = raw_df[attribute].transpose()
             rows.append(raw_attribute_series_t.to_dict())
         df = pandas.DataFrame(rows)
-        self._type_attr_to_result_df[(type, attribute)] = df
+        self._type_attr_to_result_df[type, attribute] = df
         return df
 
     def get_result_for(self, type, attribute: str) -> pandas.DataFrame:
+        """
+        No docstring provided.
+        """
         if (type, attribute) in self._type_attr_to_result_df:
-            return self._type_attr_to_result_df[(type, attribute)]
+            return self._type_attr_to_result_df[type, attribute]
         return self._create_result_for(type, attribute)
 
     @property
     def raw(self):
+        """
+        No docstring provided.
+        """
         return self._raw_results
 
 
 def apply_to_by_id(component, data, timestep):
+    """
+    No docstring provided.
+    """
     if component.id in data:
         attr_series_dict = data[component.id]
         for attr, series in attr_series_dict.items():
@@ -115,8 +168,10 @@ def apply_to_by_id(component, data, timestep):
 
 
 def apply_to_child(child, timeseries_data, timestep):
+    """
+    No docstring provided.
+    """
     apply_to_by_id(child, timeseries_data.child_id_data, timestep)
-
     if child.name in timeseries_data.child_name_data:
         attr_series_dict = timeseries_data.data[child.name]
         for attr, series in attr_series_dict.items():
@@ -124,19 +179,33 @@ def apply_to_child(child, timeseries_data, timestep):
 
 
 def apply_to_branch(branch, timeseries_data, timestep):
+    """
+    No docstring provided.
+    """
     apply_to_by_id(branch, timeseries_data.branch_id_data, timestep)
 
 
 def apply_to_compound(compound, timeseries_data, timestep):
+    """
+    No docstring provided.
+    """
     apply_to_by_id(compound, timeseries_data.branch_id_data, timestep)
 
 
 class StepHook(ABC):
+    """
+    No docstring provided.
+    """
+
     def pre_run(self, net, base_net, step):
-        pass
+        """
+        No docstring provided.
+        """
 
     def post_run(self, net, base_net, step):
-        pass
+        """
+        No docstring provided.
+        """
 
 
 def run(
@@ -148,35 +217,32 @@ def run(
     optimization_problem=None,
     solve_flag=True,
 ):
+    """
+    No docstring provided.
+    """
     result_list = []
     if step_hooks is None:
         step_hooks = []
-
     for step in range(steps):
         for step_hook in step_hooks:
             if isinstance(step_hook, StepHook):
                 step_hook.pre_run(net, step)
-
         net_copy = net.copy()
-
         for child in net_copy.childs:
             apply_to_child(child, timeseries_data, step)
         for branch in net_copy.branches:
             apply_to_branch(branch, timeseries_data, step)
         for compound in net_copy.compounds:
             apply_to_compound(compound, timeseries_data, step)
-
         if solve_flag:
             result_list.append(
                 solve(
                     net_copy, optimization_problem=optimization_problem, solver=solver
                 )
             )
-
         for step_hook in step_hooks:
             if isinstance(step_hook, StepHook):
                 step_hook.post_run(net_copy, net, step)
             else:
                 step_hook(net_copy, net, step)
-
     return TimeseriesResult(result_list)

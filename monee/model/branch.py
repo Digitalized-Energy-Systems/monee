@@ -17,6 +17,10 @@ SQRT_3 = np.sqrt(3)
 
 @model
 class GenericPowerBranch(BranchModel):
+    """
+    No docstring provided.
+    """
+
     def __init__(
         self,
         tap,
@@ -45,7 +49,6 @@ class GenericPowerBranch(BranchModel):
             b_to (_type_): to susceptance
         """
         super().__init__()
-
         self.tap = tap
         self.shift = shift
         self.br_r = br_r
@@ -55,11 +58,8 @@ class GenericPowerBranch(BranchModel):
         self.g_to = g_to
         self.b_to = b_to
         self.max_i_ka = max_i_ka
-
-        self.backup = (
-            backup  # mark branch as reserve line (used in optimization problems)
-        )
-        self.on_off = on_off  # 1 = on, 0 = off
+        self.backup = backup
+        self.on_off = on_off
         self.p_from_mw = Var(1)
         self.q_from_mvar = Var(1)
         self.i_from_ka = Var(1)
@@ -71,20 +71,28 @@ class GenericPowerBranch(BranchModel):
 
     @property
     def loading_percent(self):
+        """
+        No docstring provided.
+        """
         return max(self.loading_to_percent.value, self.loading_from_percent.value)
 
     def loss_percent(self):
+        """
+        No docstring provided.
+        """
         return abs((self.p_from_mw.value - self.p_to_mw.value) / self.p_from_mw.value)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
+        """
+        No docstring provided.
+        """
         y = np.linalg.pinv([[self.br_r + self.br_x * 1j]])[0][0]
-        g, b = np.real(y), np.imag(y)
-
+        g, b = (np.real(y), np.imag(y))
         return (
             opfmodel.int_flow_from_p(
                 p_from_var=self.p_from_mw,
-                vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
-                vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
+                vm_from_var=from_node_model.vars["vm_pu"],
+                vm_to_var=to_node_model.vars["vm_pu"],
                 va_from_var=from_node_model.vars["va_radians"],
                 va_to_var=to_node_model.vars["va_radians"],
                 g_branch=g,
@@ -98,8 +106,8 @@ class GenericPowerBranch(BranchModel):
             ),
             opfmodel.int_flow_from_q(
                 q_from_var=self.q_from_mvar,
-                vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
-                vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
+                vm_from_var=from_node_model.vars["vm_pu"],
+                vm_to_var=to_node_model.vars["vm_pu"],
                 va_from_var=from_node_model.vars["va_radians"],
                 va_to_var=to_node_model.vars["va_radians"],
                 g_branch=g,
@@ -113,8 +121,8 @@ class GenericPowerBranch(BranchModel):
             ),
             opfmodel.int_flow_to_p(
                 p_to_var=self.p_to_mw,
-                vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
-                vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
+                vm_from_var=from_node_model.vars["vm_pu"],
+                vm_to_var=to_node_model.vars["vm_pu"],
                 va_from_var=from_node_model.vars["va_radians"],
                 va_to_var=to_node_model.vars["va_radians"],
                 g_branch=g,
@@ -128,8 +136,8 @@ class GenericPowerBranch(BranchModel):
             ),
             opfmodel.int_flow_to_q(
                 q_to_var=self.q_to_mvar,
-                vm_from_var=from_node_model.vars["vm_pu"],  # * from_node_model.base_kv,
-                vm_to_var=to_node_model.vars["vm_pu"],  # * to_node_model.base_kv,
+                vm_from_var=from_node_model.vars["vm_pu"],
+                vm_to_var=to_node_model.vars["vm_pu"],
                 va_from_var=from_node_model.vars["va_radians"],
                 va_to_var=to_node_model.vars["va_radians"],
                 g_branch=g,
@@ -156,14 +164,16 @@ class GenericPowerBranch(BranchModel):
 
 @model
 class PowerBranch(GenericPowerBranch, ABC):
+    """
+    No docstring provided.
+    """
+
     def __init__(self, tap, shift, backup=False, on_off=1, **kwargs) -> None:
         super().__init__(
             tap, shift, 0, 0, 0, 0, 0, 0, backup=backup, on_off=on_off, **kwargs
         )
-
         self.tap = tap
         self.shift = shift
-
         self.p_from_mw = Var(1)
         self.q_from_mvar = Var(1)
         self.p_to_mw = Var(1)
@@ -171,16 +181,24 @@ class PowerBranch(GenericPowerBranch, ABC):
 
     @abstractmethod
     def calc_r_x(self, grid, from_node_model, to_node_model):
-        pass
+        """
+        No docstring provided.
+        """
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
+        """
+        No docstring provided.
+        """
         self.br_r, self.br_x = self.calc_r_x(grid, from_node_model, to_node_model)
-
         return super().equations(grid, from_node_model, to_node_model, **kwargs)
 
 
 @model
 class PowerLine(PowerBranch):
+    """
+    No docstring provided.
+    """
+
     def __init__(
         self,
         length_m,
@@ -192,60 +210,73 @@ class PowerLine(PowerBranch):
         **kwargs,
     ) -> None:
         super().__init__(1, 0, backup=backup, on_off=on_off, **kwargs)
-
         self.length_m = length_m
         self.r_ohm_per_m = r_ohm_per_m
         self.x_ohm_per_m = x_ohm_per_m
         self.parallel = parallel
 
     def calc_r_x(self, grid: PowerGrid, from_node_model, to_node_model):
-        base_r = from_node_model.base_kv**2 / (grid.sn_mva)
+        """
+        No docstring provided.
+        """
+        base_r = from_node_model.base_kv**2 / grid.sn_mva
         br_r = self.r_ohm_per_m * self.length_m / base_r / self.parallel
         br_x = self.x_ohm_per_m * self.length_m / base_r / self.parallel
-        return br_r, br_x
+        return (br_r, br_x)
 
 
 @model
 class Trafo(PowerBranch):
+    """
+    No docstring provided.
+    """
+
     def __init__(
-        self,
-        vk_percent=12.2,
-        vkr_percent=0.25,
-        sn_trafo_mva=160,
-        shift=0,
+        self, vk_percent=12.2, vkr_percent=0.25, sn_trafo_mva=160, shift=0
     ) -> None:
         super().__init__(1, shift)
-
         self.vk_percent = vk_percent
         self.vkr_percent = vkr_percent
         self.sn_trafo_mva = sn_trafo_mva
         self.vn_trafo_lv = 1
 
     def calc_r_x(self, grid: PowerGrid, lv_model, hv_model):
+        """
+        No docstring provided.
+        """
         tap_lv = np.square(lv_model.base_kv / hv_model.base_kv) * grid.sn_mva
         z_sc = self.vk_percent / 100.0 / self.sn_trafo_mva * tap_lv
         r_sc = self.vkr_percent / 100.0 / self.sn_trafo_mva * tap_lv
         x_sc = np.sign(z_sc) * np.sqrt((z_sc**2 - r_sc**2).astype(float))
-        return r_sc, x_sc
+        return (r_sc, x_sc)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
-        self.tap = 1  # from_node_model.base_kv / to_node_model.base_kv
-
+        """
+        No docstring provided.
+        """
+        self.tap = 1
         return super().equations(grid, from_node_model, to_node_model, **kwargs)
 
 
 def sign(v):
+    """
+    No docstring provided.
+    """
     return 1 if v >= 0 else -1
 
 
 @model
 class WaterPipe(BranchModel):
+    """
+    No docstring provided.
+    """
+
     def __init__(
         self,
         diameter_m,
         length_m,
         temperature_ext_k=283.15,
-        roughness=0.000045,
+        roughness=4.5e-05,
         lambda_insulation_w_per_k=0.025,
         insulation_thickness_m=0.12,
         on_off=1,
@@ -257,7 +288,6 @@ class WaterPipe(BranchModel):
         self.pipe_roughness = roughness
         self.lambda_insulation_w_per_k = lambda_insulation_w_per_k
         self.insulation_thickness_m = insulation_thickness_m
-
         self.on_off = on_off
         self.mass_flow = Var(0.1)
         self.velocity = Var(1)
@@ -268,6 +298,9 @@ class WaterPipe(BranchModel):
         self.t_to_pu = Var(1)
 
     def loss_percent(self):
+        """
+        No docstring provided.
+        """
         return abs(self.q_w.value) / (
             abs(self.mass_flow.value)
             * ohfmodel.SPECIFIC_HEAT_CAP_WATER
@@ -275,8 +308,10 @@ class WaterPipe(BranchModel):
         )
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
+        """
+        No docstring provided.
+        """
         self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
-
         return (
             hydraulicsmodel.reynolds_equation(
                 self.reynolds,
@@ -329,6 +364,10 @@ class WaterPipe(BranchModel):
 
 @model
 class HeatExchanger(BranchModel):
+    """
+    No docstring provided.
+    """
+
     def __init__(
         self,
         q_mw,
@@ -345,7 +384,6 @@ class HeatExchanger(BranchModel):
         self.length_m = length_m
         self.limit = 0.1
         self.active = True
-
         self.regulation = regulation
         self.on_off = 1
         self.q_w_set = -q_mw * 10**6
@@ -358,8 +396,10 @@ class HeatExchanger(BranchModel):
         self.t_average_pu = Var(1)
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
+        """
+        No docstring provided.
+        """
         self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
-
         return [
             hydraulicsmodel.reynolds_equation(
                 self.reynolds,
@@ -405,28 +445,38 @@ class HeatExchanger(BranchModel):
 
 @model
 class HeatExchangerLoad(HeatExchanger):
+    """
+    No docstring provided.
+    """
+
     def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
         super().__init__(q_mw, diameter_m, temperature_ext_k)
 
 
 @model
 class HeatExchangerGenerator(HeatExchanger):
+    """
+    No docstring provided.
+    """
+
     def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
         super().__init__(q_mw, diameter_m, temperature_ext_k)
 
 
 @model
 class GasPipe(BranchModel):
+    """
+    No docstring provided.
+    """
+
     def __init__(
         self, diameter_m, length_m, temperature_ext_k=296.15, roughness=0.0001, on_off=1
     ) -> None:
         super().__init__()
-
         self.diameter_m = diameter_m
         self.length_m = length_m
         self.temperature_ext_k = temperature_ext_k
         self.pipe_roughness = roughness
-
         self.on_off = on_off
         self.mass_flow = Var(0.1)
         self.velocity = Var(1)
@@ -435,8 +485,10 @@ class GasPipe(BranchModel):
         self.q_w = 0
 
     def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):
+        """
+        No docstring provided.
+        """
         self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
-
         return (
             hydraulicsmodel.reynolds_equation(
                 self.reynolds,
@@ -466,16 +518,9 @@ class GasPipe(BranchModel):
                 fluid_density=self.gas_density,
             ),
             self.gas_density
-            == (
-                (
-                    grid.pressure_ref
-                    * (
-                        from_node_model.vars["pressure_pu"]
-                        + to_node_model.vars["pressure_pu"]
-                    )
-                    / 2
-                )
-                * grid.molar_mass
-            )
+            == grid.pressure_ref
+            * (from_node_model.vars["pressure_pu"] + to_node_model.vars["pressure_pu"])
+            / 2
+            * grid.molar_mass
             / (grid.universal_gas_constant * grid.t_k),
         )

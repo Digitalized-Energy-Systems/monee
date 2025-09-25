@@ -4,24 +4,37 @@ import numpy as np
 
 
 def calc_pipe_area(diameter_m):
+    """
+    No docstring provided.
+    """
     return math.pi * diameter_m**2 / 4
 
 
-# prandtl nikurdse formula
-# https://core.ac.uk/download/pdf/38640864.pdf
 def calc_nikurdse(internal_diameter_m, roughness):
+    """
+    No docstring provided.
+    """
     return 1 / (2 * np.log10(3.71 * internal_diameter_m / roughness)) ** 2
 
 
 def reynolds_equation(rey_var, flow_var, diameter_m, dynamic_visc, pipe_area, abs_impl):
+    """
+    No docstring provided.
+    """
     return rey_var == abs(flow_var) * diameter_m / (dynamic_visc * pipe_area)
 
 
 def junction_mass_flow_balance(flows):
+    """
+    No docstring provided.
+    """
     return sum(flows) == 0
 
 
 def pipe_pressure(pd_min_pa, pd_max_pa, from_pressure_pa, to_pressure_pa):
+    """
+    No docstring provided.
+    """
     return (
         pd_min_pa <= abs(from_pressure_pa - to_pressure_pa)
         and abs(from_pressure_pa - to_pressure_pa) <= pd_max_pa
@@ -29,23 +42,34 @@ def pipe_pressure(pd_min_pa, pd_max_pa, from_pressure_pa, to_pressure_pa):
 
 
 def pipe_mass_flow(max_v, min_v, v):
+    """
+    No docstring provided.
+    """
     return min_v <= v <= max_v
 
 
 def friction_model(rey, nikurdse):
+    """
+    No docstring provided.
+    """
     return 64 / rey
 
 
 def flow_rate_equation(mean_flow_velocity, flow_rate, diameter, fluid_density):
+    """
+    No docstring provided.
+    """
     return mean_flow_velocity == flow_rate / (
         fluid_density * (diameter**2 * math.pi / 4)
     )
 
 
-# friction factor for turbulent flow
 def swamee_jain(reynolds_var, diameter_m, roughness, log_func):
-    term1 = (roughness / diameter_m) / 3.7
-    term2 = 5.74 / (reynolds_var**0.9)
+    """
+    No docstring provided.
+    """
+    term1 = roughness / diameter_m / 3.7
+    term2 = 5.74 / reynolds_var**0.9
     denominator = log_func(term1 + term2) ** 2
     f = 0.25 / denominator
     return f
