@@ -63,5 +63,6 @@ html_theme_options = {
     "sidebar_hide_name": True,
     "source_branch": "main",
     "source_directory": "docs/source/",
+    "source_repository": "https://github.com/Digitalized-Energy-Systems/monee/",
     "top_of_page_buttons": ["view", "edit"],
 }
