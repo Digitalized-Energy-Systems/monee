@@ -32,7 +32,7 @@ jobs:
         pip install virtualenv
         virtualenv venv
         source venv/bin/activate
-        apt install graphviz
+        sudo apt install graphviz
         pip3 install -U sphinx
         pip3 install -r docs/requirements.txt
         pip3 install -e .[test]
@@ -71,7 +71,7 @@ jobs:
         pip install virtualenv
         virtualenv venv
         source venv/bin/activate
-        apt install graphviz
+        sudo apt install graphviz
         pip3 install -U sphinx
         pip3 install -r docs/requirements.txt
         pip3 install -e .[test]
@@ -110,7 +110,7 @@ jobs:
         pip install virtualenv
         virtualenv venv
         source venv/bin/activate
-        apt install graphviz
+        sudo apt install graphviz
         pip3 install -U sphinx
         pip3 install -r docs/requirements.txt
         pip3 install -e .[testpp]
