@@ -80,5 +80,4 @@ def test_api_example_index():
     result = run_energy_flow(net)
 
     print(result)
-    assert False
     assert result is not None

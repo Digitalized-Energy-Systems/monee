@@ -33,10 +33,10 @@ DEFAULT_SOLVER_OPTIONS = [
     "minlp_as_nlp 0",
     "nlp_maximum_iterations 250",
     "minlp_branch_method 3",
-    "minlp_gap_tol 1.0e-4",
+    "minlp_gap_tol 1.0e-3",
     "minlp_integer_tol 1.0e-4",
-    "minlp_integer_max 2.0e9",
-    "minlp_integer_leaves 1",
+    "minlp_integer_max 2.0e5",
+    "minlp_integer_leaves 50",
     "minlp_print_level 1",
     "objective_convergence_tolerance 1.0e-4",
     "constraint_convergence_tolerance 1.0e-4",
@@ -358,7 +358,7 @@ class GEKKOSolver:
         else:
             self.process_internal_oxf_components(m, network)
         try:
-            m.options.COLDSTART = 0
+            m.options.COLDSTART = 1
             m.solve(disp=False)
         except Exception:
             logging.error("Solver not converged.")
