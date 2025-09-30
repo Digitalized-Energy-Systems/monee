@@ -1,4 +1,4 @@
-
+-e .
 sphinx>=7
 furo
 myst-parser>=3
