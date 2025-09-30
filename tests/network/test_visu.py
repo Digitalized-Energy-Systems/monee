@@ -6,7 +6,6 @@ import pytest
 import monee.model as mm
 import monee.network.mes as mes
 from monee import run_energy_flow
-from monee.io.from_pandapower import from_pandapower_net
 from monee.network import create_monee_benchmark_net
 from monee.visualization import plot_network
 
@@ -22,6 +21,8 @@ def test_visu_with_monee_bench_net():
 
 def create_cigre_multi():
     import pandapower.networks as pn
+
+    from monee.io.from_pandapower import from_pandapower_net
 
     random.seed(9002)
     pnet = pn.create_cigre_network_mv(with_der="pv_wind")
