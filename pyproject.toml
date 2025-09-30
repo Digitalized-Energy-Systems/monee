@@ -34,7 +34,6 @@ dependencies = [
     "pandas>=1.5.3",
     "geopy>=2.4.1",
     "plotly>=6.3.0",
-    "pygraphviz"
 ]
 
 [project.optional-dependencies]
@@ -56,7 +55,8 @@ testpp = [
     "numpy==1.26.4",
     "pytest-cov",
     "pre-commit",
-    "pandas==1.5.3"
+    "pandas==1.5.3",
+    "pygraphviz"
 ]
 
 [project.urls]

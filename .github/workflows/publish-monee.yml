@@ -19,7 +19,7 @@ jobs:
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate
-          apt install graphviz
+          sudo apt install graphviz
           pip3 install -e .[testpp]
           pip3 install pytest coverage
       - name: Test+Coverage
