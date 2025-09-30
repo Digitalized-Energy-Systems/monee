@@ -61,6 +61,8 @@ html_theme = "furo"
 html_static_path = ["_static"]
 
 html_theme_options = {
+    "light_logo": "monee-logo.drawio.svg",
+    "dark_logo": "monee-logo.drawio.svg",
     "sidebar_hide_name": True,
     "source_branch": "main",
     "source_directory": "docs/source/",
