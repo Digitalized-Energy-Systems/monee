@@ -17,7 +17,7 @@ monee network
 
 
 monee generate net from simbench
------------------------
+-----------------------------------
 
 .. automodule:: monee.network.bench.mes_simbench
    :members:

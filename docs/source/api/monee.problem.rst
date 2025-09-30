@@ -1,8 +1,8 @@
 monee optimization problem
-===================
+==========================
 
 monee optimization probem
------------------------
+-------------------------
 
 .. automodule:: monee.problem
    :members:

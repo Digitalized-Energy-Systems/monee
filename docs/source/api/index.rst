@@ -1,5 +1,6 @@
+
 =============
-API reference
+API-reference
 =============
 
 The API reference provides detailed descriptions of the monee's classes and
