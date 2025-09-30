@@ -36,7 +36,7 @@ jobs:
         brew link --overwrite graphviz
         pip3 install -U sphinx
         pip3 install -r docs/requirements.txt
-        pip3 install pip install --config-settings="--global-option=build_ext" \
+        pip3 install --config-settings="--global-option=build_ext" \
             --config-settings="--global-option=-I$(brew --prefix graphviz)/include/" \
             --config-settings="--global-option=-L$(brew --prefix graphviz)/lib/" \
             -e .[test]
