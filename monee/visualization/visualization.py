@@ -61,6 +61,23 @@ def plot_network(
     use_monee_positions=False,
     write_to="net.pdf",
 ):
+    """Plot a monee network using plotly.
+
+    Args:
+        network (mm.Network): _description_
+        color_df (_type_, optional): _description_. Defaults to None.
+        color_name (_type_, optional): _description_. Defaults to None.
+        color_legend_text (_type_, optional): _description_. Defaults to None.
+        title (_type_, optional): _description_. Defaults to None.
+        plot_node_characteristics (bool, optional): _description_. Defaults to True.
+        template (str, optional): _description_. Defaults to "plotly_white+publish".
+        without_nodes (bool, optional): _description_. Defaults to False.
+        use_monee_positions (bool, optional): _description_. Defaults to False.
+        write_to (str, optional): _description_. Defaults to "net.pdf".
+
+    Returns:
+        _type_: the plotly figure
+    """
     graph: nx.Graph = network._network_internal
     pos = {}
     if not use_monee_positions:

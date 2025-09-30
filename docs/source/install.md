@@ -6,6 +6,12 @@
 - Python >= 3.9
 - Recommended: create a fresh virtual environment.
 
+## From pypi
+
+```bash
+pip install monee
+```
+
 ## From source
 
 ```bash
@@ -16,6 +22,4 @@ pip install -e .[all]
 
 ## Optional extras
 
-- `gekkopy` / GEKKO for nonlinear optimization.
-- `pandas`, `numpy` for data IO.
-- For docs: see `requirements-docs.txt`.
+- `plotly` for visualization.

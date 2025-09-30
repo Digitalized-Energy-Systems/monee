@@ -398,3 +398,31 @@ def test_scaled_load_shedding_def():
 
     assert resilience == (0, 0, 0.0)
     assert result is not None
+
+
+def test_scaled_load_shedding_def_2_3():
+    net_multi = mes.create_monee_benchmark_net()
+    net_multi.branch_by_id((1, 2, 0)).active = False
+
+    print(run_energy_flow(net_multi))
+
+    optimization_problem = mp.create_load_shedding_optimization_problem(
+        bounds_el=bounds_el,
+        bounds_heat=bounds_heat,
+        bounds_gas=bounds_gas,
+        ext_grid_el_bounds=(0.0, 1),
+        ext_grid_gas_bounds=(0.0, 1),
+        debug=True,
+    )
+    result = run_energy_flow_optimization(
+        net_multi, optimization_problem=optimization_problem
+    )
+
+    resilience = mp.calc_general_resilience_performance(result.network)
+
+    print(result)
+    print(result.objective)
+    print(resilience)
+
+    assert resilience == (0, 0, 0.0)
+    assert result is not None

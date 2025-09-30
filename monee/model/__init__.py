@@ -70,4 +70,5 @@ from .grid import (
     GasGrid,
     WaterGrid,
     PowerGrid,
+    Grid,
 )

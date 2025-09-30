@@ -1,4 +1,4 @@
 
 # Solvers
 
-Out-of-the-box nonlinear solver integration via `monee.solver` (e.g., GEKKO).
+Out-of-the-box monee integrates solvers via `monee.solver`. Currently only GEKKO and its underlying supported solvers are supported.
