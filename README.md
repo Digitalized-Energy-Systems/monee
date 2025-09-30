@@ -1,6 +1,10 @@
-# monee
-[PyPi](https://pypi.org/project/monee/) | [Docs](https://monee.readthedocs.io)
+<p align="center">
 
+![logo](docs/source/_static/monee-logo.drawio.svg)
+
+</p>
+
+[PyPi](https://pypi.org/project/monee/) | [Docs](https://monee.readthedocs.io)
 
 ![lifecycle](https://img.shields.io/badge/lifecycle-maturing-blue.svg)
 [![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/Digitalized-Energy-Systems/monee/blob/development/LICENSE)
