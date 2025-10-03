@@ -443,7 +443,9 @@ def test_load_shedding_p2g_network():
         source_flow=1
     )
     load_shedding_problem = mp.create_load_shedding_optimization_problem(
-        ext_grid_el_bounds=(0, 0), ext_grid_gas_bounds=(-0.0, 0.0)
+        ext_grid_el_bounds=(0, 0),
+        ext_grid_gas_bounds=(-0.0, 0.0),
+        use_ext_grid_bounds=True,
     )
 
     result = ms.GEKKOSolver().solve(

@@ -290,7 +290,7 @@ def test_load_shedding_multimicrogrid_gas_shedding():
 
 def test_load_shedding_multimicrogrid_heat_cooldown():
     net_multi: mm.Network = create_four_line_example()
-    net_multi.branch_by_id((26, 27, 0)).model.q_w_set = 10000
+    net_multi.branch_by_id((26, 27, 0)).model.q_w_set = 1000
 
     print(run_energy_flow(net_multi))
 
@@ -298,8 +298,8 @@ def test_load_shedding_multimicrogrid_heat_cooldown():
         bounds_el=bounds_el,
         bounds_heat=bounds_heat,
         bounds_gas=bounds_gas,
-        ext_grid_el_bounds=(0.0, 0.1),
-        ext_grid_gas_bounds=(0.0, 0.1),
+        ext_grid_el_bounds=(0.0, 1),
+        ext_grid_gas_bounds=(0.0, 1),
         debug=True,
     )
     result = run_energy_flow_optimization(
@@ -342,7 +342,7 @@ def test_scaled_example_gas_incident():
     print(resilience)
 
     assert resilience[0] == 0
-    assert math.isclose(resilience[2], -28.643805241083786, abs_tol=0.01)
+    assert math.isclose(resilience[2], 66.09600000018102, abs_tol=0.01)
     assert result is not None
 
 

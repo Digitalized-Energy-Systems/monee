@@ -244,7 +244,7 @@ def test_two_controllable_lines_example_simple_objective():
 def test_load_shedding_network_regulate_gen():
     pn, _ = create_two_gen_network()
     load_shedding_problem = create_load_shedding_optimization_problem(
-        ext_grid_el_bounds=(0, 0)
+        ext_grid_el_bounds=(0, 0), use_ext_grid_bounds=True
     )
 
     result = GEKKOSolver().solve(pn, optimization_problem=load_shedding_problem)
@@ -262,7 +262,7 @@ def test_load_shedding_network_regulate_gen():
 def test_load_shedding_network_regulate_load():
     pn, _ = create_two_gen_network(power_gen=0.1)
     load_shedding_problem = create_load_shedding_optimization_problem(
-        ext_grid_el_bounds=(0, 0)
+        ext_grid_el_bounds=(0, 0), use_ext_grid_bounds=True
     )
 
     result = GEKKOSolver().solve(pn, optimization_problem=load_shedding_problem)
