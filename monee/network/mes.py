@@ -35,6 +35,7 @@ def create_heat_net_for_power(
     default_diameter_m=0.12,
     length_scale=1,
     default_length=DEFAULT_LENGTH,
+    power_scale=1,
 ):
     """
     No docstring provided.
@@ -50,6 +51,11 @@ def create_heat_net_for_power(
 
     for node in power_net_as_st.nodes:
         junc_id = mx.create_junction(target_net, position=node.position, grid=heat_grid)
+        mx.create_sink(
+            target_net,
+            junc_id,
+            mass_flow=mass_flow_rate + random.random() * mass_flow_rate / 10,
+        )
         bus_index_to_junction_index[node.id] = junc_id
         bus_index_to_end_junction_index[node.id] = junc_id
         deployment_c_value = random.random()
@@ -62,13 +68,16 @@ def create_heat_net_for_power(
                 from_node_id=bus_index_to_junction_index[node.id],
                 to_node_id=bus_index_to_end_junction_index[node.id],
                 diameter_m=0.2,
-                q_mw=(-1 if random.random() > 0.8 else 1) * -0.003 * random.random(),
+                q_mw=(-1 if random.random() > 0.8 else 1)
+                * -0.003
+                * random.random()
+                * power_scale,
             )
-        mx.create_sink(
-            target_net,
-            bus_index_to_end_junction_index[node.id],
-            mass_flow=mass_flow_rate + random.random() * mass_flow_rate / 10,
-        )
+            mx.create_sink(
+                target_net,
+                bus_index_to_end_junction_index[node.id],
+                mass_flow=mass_flow_rate + random.random() * mass_flow_rate / 10,
+            )
     for branch in power_net_as_st.branches:
         from_node_id = bus_index_to_end_junction_index[branch.from_node_id]
         to_node_id = bus_index_to_junction_index[branch.to_node_id]
@@ -104,6 +113,8 @@ def create_gas_net_for_power(
     target_net: mm.Network,
     gas_deployment_rate,
     scaling=1,
+    source_scaling=1,
+    default_diameter_m=0.3,
     length_scale=1,
     default_length=100,
 ):
@@ -128,7 +139,7 @@ def create_gas_net_for_power(
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=0.3 * scaling,
+            diameter_m=default_diameter_m * scaling,
             length_m=get_length(
                 target_net,
                 branch,
@@ -141,16 +152,16 @@ def create_gas_net_for_power(
         )
     for node in power_net_as_st.nodes:
         deployment_c_value = random.random()
-        if deployment_c_value < gas_deployment_rate:
+        if deployment_c_value <= gas_deployment_rate:
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
-                mass_flow=round(1 * random.random() * scaling, 2),
+                mass_flow=round(0.1 + 0.5 * random.random() * scaling, 2),
             )
     mx.create_source(
         target_net,
         node_id=bus_index_to_junction_index[power_net_as_st.first_node()],
-        mass_flow=10 * scaling,
+        mass_flow=10 * scaling * source_scaling,
     )
     mx.create_ext_hydr_grid(
         target_net,
@@ -491,5 +502,76 @@ def create_monee_benchmark_net():
         ),
         node_5,
         node_2,
+    )
+    return new_mes
+
+
+def create_mv_multi_cigre():
+    import pandapower.networks as pn
+
+    from monee.io.from_pandapower import from_pandapower_net
+
+    random.seed(9004)
+    pnet = pn.create_cigre_network_mv(with_der="pv_wind")
+
+    monee_net = from_pandapower_net(pnet)
+    new_mes = monee_net.copy()
+    create_gas_net_for_power(
+        monee_net,
+        new_mes,
+        1,
+        source_scaling=1,
+        default_diameter_m=0.64,
+        length_scale=0.001,
+        default_length=100000,
+    )
+    create_heat_net_for_power(
+        monee_net,
+        new_mes,
+        0.5,
+        mass_flow_rate=25,
+        default_diameter_m=0.68,
+        power_scale=100,
+        length_scale=0.001,
+        default_length=100000,
+    )
+
+    mx.create_power_generator(new_mes, 5, 2, 1)
+    mx.create_power_generator(new_mes, 6, 3, 1)
+
+    mx.create_p2g(
+        new_mes,
+        from_node_id=4,
+        to_node_id=21,
+        efficiency=0.7,
+        mass_flow_setpoint=0.5,
+        regulation=0.1,
+    )
+    mx.create_chp(
+        new_mes,
+        power_node_id=2,
+        heat_node_id=43,
+        heat_return_node_id=44,
+        gas_node_id=25,
+        mass_flow_setpoint=0.5,
+        diameter_m=0.3,
+        efficiency_power=0.58,
+        efficiency_heat=0.4,
+        regulation=1,
+        remove_existing_branch=True,
+    )
+
+    new_mes.branch(
+        mm.PowerLine(
+            length_m=100,
+            r_ohm_per_m=0.00007,
+            x_ohm_per_m=0.00007,
+            parallel=1,
+            backup=True,
+            on_off=0,
+            max_i_ka=319,
+        ),
+        5,
+        2,
     )
     return new_mes

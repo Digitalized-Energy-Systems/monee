@@ -934,6 +934,7 @@ def create_chp(
     mass_flow_setpoint,
     regulation=1,
     constraints=None,
+    remove_existing_branch=False,
 ):
     """
     Adds a Combined Heat and Power (CHP) unit to the network with specified connectivity, efficiency, and operational parameters.
@@ -952,6 +953,7 @@ def create_chp(
         mass_flow_setpoint (float): Setpoint for the mass flow rate through the CHP unit.
         regulation (float, optional): Regulation factor for load responsiveness. Defaults to 1.
         constraints (dict or object, optional): Operational constraints (e.g., output limits, regulatory requirements).
+        remove_existing_branch (bool, optional): Whether to remove the existing branch between the heat nodes
 
     Returns:
         mm.CHP: The created CHP unit object, integrated into the network and connected to the specified nodes.
@@ -988,6 +990,8 @@ def create_chp(
                 constraints={'max_output': 5.0}
             )
     """
+    if remove_existing_branch:
+        network.remove_branch_between(heat_node_id, heat_return_node_id)
     return network.compound(
         mm.CHP(
             diameter_m,

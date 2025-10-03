@@ -5,6 +5,8 @@ from dataclasses import dataclass
 
 from monee.model import (
     CHPControlNode,
+    ExtHydrGrid,
+    ExtPowerGrid,
     GasGrid,
     GenericModel,
     HeatExchanger,
@@ -381,6 +383,24 @@ class OptimizationProblem:
             and component.active
             and (not component.ignored),
             attributes=attributes,
+        )
+        return self
+
+    def controllable_ext(self):
+        """
+        No docstring provided.
+        """
+        self.controllable(
+            component_condition=lambda component: (
+                isinstance(component.model, ExtPowerGrid)
+                or (
+                    type(component.model) is ExtHydrGrid
+                    and type(component.grid) is GasGrid
+                )
+            )
+            and component.active
+            and (not component.ignored),
+            attributes=[],
         )
         return self
 

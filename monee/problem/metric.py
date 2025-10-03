@@ -60,6 +60,9 @@ def is_load(component):
         isinstance(model, md.PowerLoad)
         or (isinstance(model, md.Sink) and isinstance(grid, md.GasGrid))
         or isinstance(model, md.HeatExchangerLoad)
+        or isinstance(model, md.ExtPowerGrid)
+        or isinstance(model, md.ExtHydrGrid)
+        and isinstance(grid, md.GasGrid)
     )
 
 
@@ -78,7 +81,7 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
             if is_load(component)
         ]
 
-    def calc(self, network, inv=False):
+    def calc(self, network, inv=False, include_ext_grid=True):
         """
         No docstring provided.
         """
@@ -100,6 +103,18 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                 if isinstance(model, md.HeatExchangerLoad):
                     heat_load_curtailed += md.upper(model.q_w) / 10**6
                 continue
+            if isinstance(model, md.ExtHydrGrid) and include_ext_grid:
+                if md.value(model.mass_flow) < 0:
+                    # only if ext grid needs to feed in (load would need to be shedded)
+                    gas_load_curtailed += (
+                        -md.value(model.mass_flow)
+                        * 3.6
+                        * component.grid.higher_heating_value
+                    )
+            if isinstance(model, md.ExtPowerGrid) and include_ext_grid:
+                if md.value(model.p_mw) < 0:
+                    # only if ext grid needs to feed in (load would need to be shedded)
+                    power_load_curtailed += -md.value(model.p_mw)
             if isinstance(model, md.PowerLoad):
                 power_load_curtailed += md.upper(model.p_mw) - md.value(
                     model.p_mw

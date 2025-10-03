@@ -66,10 +66,15 @@ def retrieve_power_uniform(model):
     """
     No docstring provided.
     """
+
     if isinstance(model, HeatExchangerLoad | HeatExchangerGenerator | HeatExchanger):
         return (model.q_w_set / 1000000.0 * model.regulation, model.q_w_set / 1000000.0)
     elif isinstance(model, PowerLoad | PowerGenerator):
         return (_or_zero(model.p_mw) * model.regulation, model.p_mw)
+    elif isinstance(model, ExtPowerGrid):
+        return model.p_mw, 0
+    elif isinstance(model, ExtHydrGrid):
+        return model.mass_flow * 3.6 * HHV, 0
     elif isinstance(model, Sink | Source):
         return (
             _or_zero(model.mass_flow) * 3.6 * HHV * model.regulation,
@@ -100,6 +105,7 @@ def calculate_objective(model_to_data):
         )
         for model, data in model_to_data.items()
     ]
+    print(power_coeff)
     return sum([t[1] for t in power_coeff])
 
 
@@ -111,6 +117,8 @@ def create_load_shedding_optimization_problem(
     bounds_lp=(0, 1.5),
     ext_grid_el_bounds=(-0.25, 0.25),
     ext_grid_gas_bounds=(-1.5, 1.5),
+    use_ext_grid_bounds=False,
+    use_ext_grid_objective=True,
     debug=False,
 ):
     """
@@ -120,6 +128,8 @@ def create_load_shedding_optimization_problem(
     problem.controllable_demands(CONTROLLABLE_ATTRIBUTES)
     problem.controllable_generators(CONTROLLABLE_ATTRIBUTES)
     problem.controllable_cps(CONTROLLABLE_ATTRIBUTES_CP)
+    if use_ext_grid_objective:
+        problem.controllable_ext()
     problem.controllable(
         component_condition=lambda component: "backup" in component.model.vars
         and component.model.backup,
@@ -140,23 +150,34 @@ def create_load_shedding_optimization_problem(
         bounds_heat, lambda m, g: type(m) is Junction and type(g) is WaterGrid, ["t_pu"]
     )
     problem.bounds(bounds_gas, lambda m, _: type(m) is Junction, ["pressure_pu"])
+
     objectives = Objectives()
-    objectives.with_models(problem.controllables_link).data(
-        lambda model: load_weight
-        if isinstance(model, HeatExchangerLoad | Sink | PowerLoad)
-        else load_weight - 1
-        if isinstance(model, CHPControlNode | PowerToGas | PowerToHeat)
-        else 1
-    ).calculate(calculate_objective)
-    constraints = Constraints()
-    constraints.select_types(ExtPowerGrid).equation(
-        lambda model: model.p_mw >= ext_grid_el_bounds[0]
-    ).equation(lambda model: model.p_mw <= ext_grid_el_bounds[1])
-    constraints.select(
-        lambda comp: type(comp.grid) is GasGrid and type(comp.model) is ExtHydrGrid
-    ).equation(lambda model: model.mass_flow >= ext_grid_gas_bounds[0]).equation(
-        lambda model: model.mass_flow <= ext_grid_gas_bounds[1]
+
+    def calc_weight(model):
+        weight = 1
+        if isinstance(model, HeatExchangerLoad | Sink | PowerLoad):
+            weight = load_weight
+        elif isinstance(model, CHPControlNode | PowerToGas | PowerToHeat):
+            weight = load_weight - 1
+        elif isinstance(model, ExtPowerGrid | ExtHydrGrid):
+            weight = 5
+        return weight
+
+    objectives.with_models(problem.controllables_link).data(calc_weight).calculate(
+        calculate_objective
     )
+
+    constraints = Constraints()
+    if use_ext_grid_bounds:
+        constraints.select_types(ExtPowerGrid).equation(
+            lambda model: model.p_mw >= ext_grid_el_bounds[0]
+        ).equation(lambda model: model.p_mw <= ext_grid_el_bounds[1])
+        constraints.select(
+            lambda comp: type(comp.grid) is GasGrid and type(comp.model) is ExtHydrGrid
+        ).equation(lambda model: model.mass_flow >= ext_grid_gas_bounds[0]).equation(
+            lambda model: model.mass_flow <= ext_grid_gas_bounds[1]
+        )
+
     constraints.select_types(GenericPowerBranch).equation(
         lambda model: model.loading_from_percent <= bounds_lp[1]
     ).equation(lambda model: model.loading_to_percent <= bounds_lp[1])
