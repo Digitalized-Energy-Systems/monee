@@ -117,8 +117,12 @@ def create_load_shedding_optimization_problem(
     bounds_lp=(0, 1.5),
     ext_grid_el_bounds=(-0.25, 0.25),
     ext_grid_gas_bounds=(-1.5, 1.5),
-    use_ext_grid_bounds=False,
+    use_ext_grid_bounds=True,
     use_ext_grid_objective=True,
+    check_lp=True,
+    check_vm=True,
+    check_pressure=True,
+    check_t=True,
     debug=False,
 ):
     """
@@ -145,11 +149,16 @@ def create_load_shedding_optimization_problem(
             )
         ],
     )
-    problem.bounds(bounds_el, lambda m, _: type(m) is Bus, ["vm_pu"])
-    problem.bounds(
-        bounds_heat, lambda m, g: type(m) is Junction and type(g) is WaterGrid, ["t_pu"]
-    )
-    problem.bounds(bounds_gas, lambda m, _: type(m) is Junction, ["pressure_pu"])
+    if check_vm:
+        problem.bounds(bounds_el, lambda m, _: type(m) is Bus, ["vm_pu"])
+    if check_t:
+        problem.bounds(
+            bounds_heat,
+            lambda m, g: type(m) is Junction and type(g) is WaterGrid,
+            ["t_pu"],
+        )
+    if check_pressure:
+        problem.bounds(bounds_gas, lambda m, _: type(m) is Junction, ["pressure_pu"])
 
     objectives = Objectives()
 
@@ -178,43 +187,10 @@ def create_load_shedding_optimization_problem(
             lambda model: model.mass_flow <= ext_grid_gas_bounds[1]
         )
 
-    constraints.select_types(GenericPowerBranch).equation(
-        lambda model: model.loading_from_percent <= bounds_lp[1]
-    ).equation(lambda model: model.loading_to_percent <= bounds_lp[1])
+    if check_lp:
+        constraints.select_types(GenericPowerBranch).equation(
+            lambda model: model.loading_from_percent <= bounds_lp[1]
+        ).equation(lambda model: model.loading_to_percent <= bounds_lp[1])
     problem.constraints = constraints
     problem.objectives = objectives
-    return problem
-
-
-def create_ls_init_optimization_problem(
-    bounds_el=(0.9, 1.1),
-    bounds_heat=(340, 390),
-    bounds_gas=(900000, 1100000),
-    bounds_lp=(0, 1.5),
-    ext_grid_el_bounds=(-0.25, 0.25),
-    ext_grid_gas_bounds=(-1.5, 1.5),
-):
-    """
-    No docstring provided.
-    """
-    problem = OptimizationProblem()
-    problem.controllable_generators(CONTROLLABLE_ATTRIBUTES)
-    problem.bounds(bounds_el, lambda m, _: type(m) is Bus, ["vm_pu"])
-    problem.bounds(
-        bounds_heat, lambda m, g: type(m) is Junction and type(g) is WaterGrid, ["t_k"]
-    )
-    problem.bounds(bounds_gas, lambda m, _: type(m) is Junction, ["pressure_pa"])
-    constraints = Constraints()
-    constraints.select_types(ExtPowerGrid).equation(
-        lambda model: model.p_mw >= ext_grid_el_bounds[0]
-    ).equation(lambda model: model.p_mw <= ext_grid_el_bounds[1])
-    constraints.select(
-        lambda comp: type(comp.grid) is GasGrid and type(comp.model) is ExtHydrGrid
-    ).equation(lambda model: model.mass_flow >= ext_grid_gas_bounds[0]).equation(
-        lambda model: model.mass_flow <= ext_grid_gas_bounds[1]
-    )
-    constraints.select_types(GenericPowerBranch).equation(
-        lambda model: model.loading_from_percent <= bounds_lp[1]
-    ).equation(lambda model: model.loading_to_percent <= bounds_lp[1])
-    problem.constraints = constraints
     return problem

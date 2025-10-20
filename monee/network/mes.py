@@ -564,8 +564,8 @@ def create_mv_multi_cigre():
     new_mes.branch(
         mm.PowerLine(
             length_m=100,
-            r_ohm_per_m=0.00007,
-            x_ohm_per_m=0.00007,
+            r_ohm_per_m=0.007,
+            x_ohm_per_m=0.007,
             parallel=1,
             backup=True,
             on_off=0,

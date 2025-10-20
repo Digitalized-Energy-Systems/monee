@@ -78,6 +78,12 @@ def solve_load_shedding_problem(
     bounds_pressure: tuple,
     bounds_ext_el: tuple,
     bounds_ext_gas: tuple,
+    use_ext_grid_bounds=False,
+    use_ext_grid_objective=True,
+    check_lp=True,
+    check_vm=True,
+    check_pressure=True,
+    check_t=True,
     debug=False,
     **kwargs,
 ):
@@ -123,6 +129,12 @@ def solve_load_shedding_problem(
         bounds_gas=bounds_pressure,
         ext_grid_el_bounds=bounds_ext_el,
         ext_grid_gas_bounds=bounds_ext_gas,
+        use_ext_grid_bounds=use_ext_grid_bounds,
+        use_ext_grid_objective=use_ext_grid_objective,
+        check_lp=check_lp,
+        check_vm=check_vm,
+        check_pressure=check_pressure,
+        check_t=check_t,
         debug=debug,
     )
     return run_energy_flow_optimization(
