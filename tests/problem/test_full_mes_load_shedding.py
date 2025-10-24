@@ -1,6 +1,8 @@
 import math
 import random
 
+import pytest
+
 import monee.express as mx
 import monee.model as mm
 import monee.network.mes as mes
@@ -436,6 +438,7 @@ def test_scaled_load_shedding_def_multi_line():
     assert result is not None
 
 
+@pytest.mark.pptest
 def test_scaled_load_shedding_def_cigre():
     net_multi = mes.create_mv_multi_cigre()
     # net_multi.childs_by_type(Source)[0].model.mass_flow = -4
