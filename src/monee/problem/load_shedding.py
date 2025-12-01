@@ -105,7 +105,6 @@ def calculate_objective(model_to_data):
         )
         for model, data in model_to_data.items()
     ]
-    print(power_coeff)
     return sum([t[1] for t in power_coeff])
 
 

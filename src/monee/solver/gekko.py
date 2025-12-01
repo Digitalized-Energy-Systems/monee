@@ -318,6 +318,7 @@ class GEKKOSolver:
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
         draw_debug=False,
+        exclude_unconnected_nodes=False,
     ):
         """
         No docstring provided.
@@ -335,7 +336,7 @@ class GEKKOSolver:
         else:
             m.Obj(0)
         ignored_nodes = set()
-        if optimization_problem is None:
+        if optimization_problem is None or exclude_unconnected_nodes:
             ignored_nodes = find_ignored_nodes(network)
         nodes = network.nodes
         for node in nodes:

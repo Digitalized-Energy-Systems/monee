@@ -278,11 +278,34 @@ class Network:
         """
         return [compound for compound in self.compounds if type(compound.model) is cls]
 
+    def nodes_by_type(self, cls):
+        """
+        No docstring provided.
+        """
+        return [node for node in self.nodes if type(node.model) is cls]
+
     def childs_by_ids(self, child_ids) -> list[Child]:
         """
         No docstring provided.
         """
         return [self.child_by_id(child_id) for child_id in child_ids]
+
+    def has_any_child_of_type(self, branch, cls) -> bool:
+        """
+        No docstring provided.
+        """
+        childs = self.get_childs_by_type(branch, cls)
+        return len(childs) > 0
+
+    def get_childs_by_type(self, branch, cls) -> list[Child]:
+        """
+        No docstring provided.
+        """
+        return [
+            child
+            for child in self.childs_by_ids(branch.child_ids)
+            if isinstance(child.model, cls)
+        ]
 
     def branches_by_ids(self, branch_ids) -> list[Branch]:
         """
@@ -408,7 +431,7 @@ class Network:
         """
         No docstring provided.
         """
-        return [branch for branch in self.branches if type(branch.model) is cls]
+        return [branch for branch in self.branches if isinstance(branch.model, cls)]
 
     def __insert_to_blacklist_if_forced(self, obj):
         """
@@ -467,6 +490,7 @@ class Network:
             )
             attaching_node.child_ids.append(child_id)
             child.grid = attaching_node.grid
+            child.node_id = attaching_node.id
         return child_id
 
     def child_to(
@@ -687,9 +711,10 @@ class Network:
             model_type_name = type(container.model).__name__
             if model_type_name not in input_dict_list_dict:
                 input_dict_list_dict[model_type_name] = []
-            input_dict_list_dict[model_type_name].append(
-                Network._model_dict_to_input(container)
-            )
+            input_dict = Network._model_dict_to_input(container)
+            if isinstance(container, Child):
+                input_dict["node_id"] = container.node_id
+            input_dict_list_dict[model_type_name].append(input_dict)
         dataframe_dict = {}
         for result_type, dict_list in input_dict_list_dict.items():
             dataframe_dict[result_type] = pandas.DataFrame(dict_list)
@@ -724,9 +749,10 @@ class Network:
             model_type_name = type(container.model).__name__
             if model_type_name not in result_dict_list_dict:
                 result_dict_list_dict[model_type_name] = []
-            result_dict_list_dict[model_type_name].append(
-                Network._model_dict_to_results(container)
-            )
+            result_dict = Network._model_dict_to_results(container)
+            if isinstance(container, Child):
+                result_dict["node_id"] = container.node_id
+            result_dict_list_dict[model_type_name].append(result_dict)
         dataframe_dict = {}
         for result_type, dict_list in result_dict_list_dict.items():
             dataframe_dict[result_type] = pandas.DataFrame(dict_list)

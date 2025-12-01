@@ -431,7 +431,7 @@ class HeatExchanger(BranchModel):
             ohfmodel.temp_flow(
                 t_in_scaled=from_node_model.vars["t_pu"],
                 t_out_scaled=to_node_model.vars["t_pu"],
-                heat_loss=self.q_w / grid.t_ref,
+                heat_loss=self.q_w / grid.t_ref if self.active else 0,
                 mass_flow=self.mass_flow,
                 sign_impl=kwargs["sign_impl"],
             ),
