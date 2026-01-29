@@ -53,7 +53,7 @@ testpp = [
     "pytest-cov",
     "pre-commit",
     "pandas==1.5.3",
-    "kaleido"
+    "kaleido",
     "pygraphviz"
 ]
 
