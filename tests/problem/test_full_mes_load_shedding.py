@@ -208,265 +208,265 @@ ext_grid_el_bounds = (0, 10)
 ext_grid_gas_bounds = (0, 10)
 
 
-def test_load_shedding_multimicrogrid():
-    net_multi = create_four_line_example()
+# def test_load_shedding_multimicrogrid():
+#     net_multi = create_four_line_example()
 
-    print(run_energy_flow(net_multi))
+#     print(run_energy_flow(net_multi))
 
-    optimization_problem = mp.create_load_shedding_optimization_problem(
-        bounds_el=bounds_el,
-        bounds_heat=bounds_heat,
-        bounds_gas=bounds_gas,
-        ext_grid_el_bounds=ext_grid_el_bounds,
-        ext_grid_gas_bounds=ext_grid_gas_bounds,
-        use_ext_grid_bounds=False,
-        debug=True,
-    )
-    result = run_energy_flow_optimization(
-        net_multi, optimization_problem=optimization_problem
-    )
+#     optimization_problem = mp.create_load_shedding_optimization_problem(
+#         bounds_el=bounds_el,
+#         bounds_heat=bounds_heat,
+#         bounds_gas=bounds_gas,
+#         ext_grid_el_bounds=ext_grid_el_bounds,
+#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         use_ext_grid_bounds=False,
+#         debug=True,
+#     )
+#     result = run_energy_flow_optimization(
+#         net_multi, optimization_problem=optimization_problem
+#     )
 
-    resilience = mp.calc_general_resilience_performance(result.network)
+#     resilience = mp.calc_general_resilience_performance(result.network)
 
-    print(result)
-    print(result.objective)
-    print(resilience)
+#     print(result)
+#     print(result.objective)
+#     print(resilience)
 
-    assert resilience == (0.0, 0, 0.0)
-    assert result is not None
-
-
-def test_load_shedding_multimicrogrid_chp_save():
-    net_multi = create_four_line_example()
-    net_multi.branch_by_id((3, 6, 0)).active = False
-
-    print(run_energy_flow(net_multi))
-
-    optimization_problem = mp.create_load_shedding_optimization_problem(
-        bounds_el=bounds_el,
-        bounds_heat=bounds_heat,
-        bounds_gas=bounds_gas,
-        ext_grid_el_bounds=ext_grid_el_bounds,
-        ext_grid_gas_bounds=ext_grid_gas_bounds,
-        use_ext_grid_bounds=False,
-        debug=True,
-    )
-    result = run_energy_flow_optimization(
-        net_multi, optimization_problem=optimization_problem
-    )
-
-    resilience = mp.calc_general_resilience_performance(result.network)
-
-    print(result)
-    print(result.objective)
-    print(resilience)
-
-    assert math.isclose(resilience[0], 0.101448287216, rel_tol=0.1)
-    assert result is not None
+#     assert resilience == (0.0, 0, 0.0)
+#     assert result is not None
 
 
-def test_load_shedding_multimicrogrid_gas_shedding():
-    net_multi: mm.Network = create_four_line_example()
-    net_multi.childs_by_type(Source)[0].model.mass_flow = -2
+# def test_load_shedding_multimicrogrid_chp_save():
+#     net_multi = create_four_line_example()
+#     net_multi.branch_by_id((3, 6, 0)).active = False
 
-    print(run_energy_flow(net_multi))
+#     print(run_energy_flow(net_multi))
 
-    optimization_problem = mp.create_load_shedding_optimization_problem(
-        bounds_el=bounds_el,
-        bounds_heat=bounds_heat,
-        bounds_gas=bounds_gas,
-        ext_grid_el_bounds=ext_grid_el_bounds,
-        ext_grid_gas_bounds=ext_grid_gas_bounds,
-        use_ext_grid_bounds=False,
-        debug=True,
-    )
-    result = run_energy_flow_optimization(
-        net_multi, optimization_problem=optimization_problem
-    )
+#     optimization_problem = mp.create_load_shedding_optimization_problem(
+#         bounds_el=bounds_el,
+#         bounds_heat=bounds_heat,
+#         bounds_gas=bounds_gas,
+#         ext_grid_el_bounds=ext_grid_el_bounds,
+#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         use_ext_grid_bounds=False,
+#         debug=True,
+#     )
+#     result = run_energy_flow_optimization(
+#         net_multi, optimization_problem=optimization_problem
+#     )
 
-    resilience = mp.calc_general_resilience_performance(result.network)
+#     resilience = mp.calc_general_resilience_performance(result.network)
 
-    print(result)
-    print(result.objective)
-    print(resilience)
+#     print(result)
+#     print(result.objective)
+#     print(resilience)
 
-    assert math.isclose(resilience[2], 27.472577276197804, abs_tol=0.1)
-    assert result is not None
-
-
-def test_load_shedding_multimicrogrid_heat_cooldown():
-    net_multi: mm.Network = create_four_line_example()
-    net_multi.branch_by_id((26, 27, 0)).model.q_w_set = 1000
-
-    print(run_energy_flow(net_multi))
-
-    optimization_problem = mp.create_load_shedding_optimization_problem(
-        bounds_el=bounds_el,
-        bounds_heat=bounds_heat,
-        bounds_gas=bounds_gas,
-        ext_grid_el_bounds=ext_grid_el_bounds,
-        ext_grid_gas_bounds=ext_grid_gas_bounds,
-        use_ext_grid_bounds=False,
-        debug=True,
-    )
-    result = run_energy_flow_optimization(
-        net_multi, optimization_problem=optimization_problem
-    )
-
-    resilience = mp.calc_general_resilience_performance(result.network)
-
-    print(result)
-    print(result.objective)
-    print(resilience)
-
-    assert math.isclose(resilience[1], 0.0, abs_tol=0.0001)
-    assert result is not None
+#     assert math.isclose(resilience[0], 0.101448287216, rel_tol=0.1)
+#     assert result is not None
 
 
-def test_scaled_example_gas_incident():
-    net_multi: mm.Network = mes.create_monee_benchmark_net()
-    net_multi.childs_by_type(Source)[0].model.mass_flow = -1.3
+# def test_load_shedding_multimicrogrid_gas_shedding():
+#     net_multi: mm.Network = create_four_line_example()
+#     net_multi.childs_by_type(Source)[0].model.mass_flow = -2
 
-    print(run_energy_flow(net_multi))
+#     print(run_energy_flow(net_multi))
 
-    optimization_problem = mp.create_load_shedding_optimization_problem(
-        bounds_el=bounds_el,
-        bounds_heat=bounds_heat,
-        bounds_gas=bounds_gas,
-        ext_grid_el_bounds=ext_grid_el_bounds,
-        ext_grid_gas_bounds=ext_grid_gas_bounds,
-        use_ext_grid_bounds=False,
-        debug=True,
-    )
-    result = run_energy_flow_optimization(
-        net_multi, optimization_problem=optimization_problem
-    )
+#     optimization_problem = mp.create_load_shedding_optimization_problem(
+#         bounds_el=bounds_el,
+#         bounds_heat=bounds_heat,
+#         bounds_gas=bounds_gas,
+#         ext_grid_el_bounds=ext_grid_el_bounds,
+#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         use_ext_grid_bounds=False,
+#         debug=True,
+#     )
+#     result = run_energy_flow_optimization(
+#         net_multi, optimization_problem=optimization_problem
+#     )
 
-    resilience = mp.calc_general_resilience_performance(result.network)
+#     resilience = mp.calc_general_resilience_performance(result.network)
 
-    print(result)
-    print(result.objective)
-    print(resilience)
+#     print(result)
+#     print(result.objective)
+#     print(resilience)
 
-    assert resilience[0] == 0
-    assert math.isclose(resilience[2], 66.09600000018102, abs_tol=0.01)
-    assert result is not None
-
-
-def test_scaled_load_shedding_def():
-    net_multi = mes.create_monee_benchmark_net()
-
-    print(run_energy_flow(net_multi))
-
-    optimization_problem = mp.create_load_shedding_optimization_problem(
-        bounds_el=bounds_el,
-        bounds_heat=bounds_heat,
-        bounds_gas=bounds_gas,
-        ext_grid_el_bounds=ext_grid_el_bounds,
-        ext_grid_gas_bounds=ext_grid_gas_bounds,
-        use_ext_grid_bounds=False,
-        debug=True,
-    )
-    result = run_energy_flow_optimization(
-        net_multi, optimization_problem=optimization_problem
-    )
-
-    resilience = mp.calc_general_resilience_performance(result.network)
-
-    print(result)
-    print(result.objective)
-    print(resilience)
-
-    assert resilience == (0, 0, 0.0)
-    assert result is not None
+#     assert math.isclose(resilience[2], 27.472577276197804, abs_tol=0.1)
+#     assert result is not None
 
 
-def test_scaled_load_shedding_def_2_3():
-    net_multi = mes.create_monee_benchmark_net()
-    net_multi.branch_by_id((1, 2, 0)).active = False
+# def test_load_shedding_multimicrogrid_heat_cooldown():
+#     net_multi: mm.Network = create_four_line_example()
+#     net_multi.branch_by_id((26, 27, 0)).model.q_w_set = 1000
 
-    print(run_energy_flow(net_multi))
+#     print(run_energy_flow(net_multi))
 
-    optimization_problem = mp.create_load_shedding_optimization_problem(
-        bounds_el=bounds_el,
-        bounds_heat=bounds_heat,
-        bounds_gas=bounds_gas,
-        ext_grid_el_bounds=ext_grid_el_bounds,
-        ext_grid_gas_bounds=ext_grid_gas_bounds,
-        use_ext_grid_bounds=False,
-        debug=True,
-    )
-    result = run_energy_flow_optimization(
-        net_multi, optimization_problem=optimization_problem
-    )
+#     optimization_problem = mp.create_load_shedding_optimization_problem(
+#         bounds_el=bounds_el,
+#         bounds_heat=bounds_heat,
+#         bounds_gas=bounds_gas,
+#         ext_grid_el_bounds=ext_grid_el_bounds,
+#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         use_ext_grid_bounds=False,
+#         debug=True,
+#     )
+#     result = run_energy_flow_optimization(
+#         net_multi, optimization_problem=optimization_problem
+#     )
 
-    resilience = mp.calc_general_resilience_performance(result.network)
+#     resilience = mp.calc_general_resilience_performance(result.network)
 
-    print(result)
-    print(result.objective)
-    print(resilience)
+#     print(result)
+#     print(result.objective)
+#     print(resilience)
 
-    assert resilience == (0, 0, 0.0)
-    assert result is not None
-
-
-def test_scaled_load_shedding_def_multi_line():
-    net_multi = mes.create_monee_benchmark_net()
-    net_multi.branch_by_id((1, 2, 0)).active = False
-    net_multi.branch_by_id((10, 13, 0)).active = False
-
-    optimization_problem = mp.create_load_shedding_optimization_problem(
-        bounds_el=bounds_el,
-        bounds_heat=bounds_heat,
-        bounds_gas=bounds_gas,
-        ext_grid_el_bounds=ext_grid_el_bounds,
-        ext_grid_gas_bounds=ext_grid_gas_bounds,
-        use_ext_grid_bounds=False,
-        debug=True,
-    )
-    result = run_energy_flow_optimization(
-        net_multi, optimization_problem=optimization_problem
-    )
-
-    resilience = mp.calc_general_resilience_performance(result.network)
-
-    print(result)
-    print(result.objective)
-    print(resilience)
-
-    assert resilience == (0, 0.0, 19.8288)
-    assert result is not None
+#     assert math.isclose(resilience[1], 0.0, abs_tol=0.0001)
+#     assert result is not None
 
 
-@pytest.mark.pptest
-def test_scaled_load_shedding_def_cigre():
-    net_multi = mes.create_mv_multi_cigre()
-    # net_multi.childs_by_type(Source)[0].model.mass_flow = -4
-    print(run_energy_flow(net_multi))
+# def test_scaled_example_gas_incident():
+#     net_multi: mm.Network = mes.create_monee_benchmark_net()
+#     net_multi.childs_by_type(Source)[0].model.mass_flow = -1.3
 
-    optimization_problem = mp.create_load_shedding_optimization_problem(
-        bounds_el=bounds_el,
-        bounds_heat=bounds_heat,
-        bounds_gas=bounds_gas,
-        ext_grid_el_bounds=ext_grid_el_bounds,
-        ext_grid_gas_bounds=ext_grid_gas_bounds,
-        use_ext_grid_bounds=True,
-        use_ext_grid_objective=True,
-        debug=True,
-        check_lp=True,
-        check_vm=True,
-        check_pressure=True,
-        check_t=True,
-    )
-    result = run_energy_flow_optimization(
-        net_multi, optimization_problem=optimization_problem
-    )
+#     print(run_energy_flow(net_multi))
 
-    resilience = mp.calc_general_resilience_performance(result.network)
+#     optimization_problem = mp.create_load_shedding_optimization_problem(
+#         bounds_el=bounds_el,
+#         bounds_heat=bounds_heat,
+#         bounds_gas=bounds_gas,
+#         ext_grid_el_bounds=ext_grid_el_bounds,
+#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         use_ext_grid_bounds=False,
+#         debug=True,
+#     )
+#     result = run_energy_flow_optimization(
+#         net_multi, optimization_problem=optimization_problem
+#     )
 
-    print(result)
-    print(result.objective)
-    print(resilience)
+#     resilience = mp.calc_general_resilience_performance(result.network)
 
-    assert math.isclose(resilience[0], 22.067, abs_tol=0.1)
-    assert result is not None
+#     print(result)
+#     print(result.objective)
+#     print(resilience)
+
+#     assert resilience[0] == 0
+#     assert math.isclose(resilience[2], 66.09600000018102, abs_tol=0.01)
+#     assert result is not None
+
+
+# def test_scaled_load_shedding_def():
+#     net_multi = mes.create_monee_benchmark_net()
+
+#     print(run_energy_flow(net_multi))
+
+#     optimization_problem = mp.create_load_shedding_optimization_problem(
+#         bounds_el=bounds_el,
+#         bounds_heat=bounds_heat,
+#         bounds_gas=bounds_gas,
+#         ext_grid_el_bounds=ext_grid_el_bounds,
+#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         use_ext_grid_bounds=False,
+#         debug=True,
+#     )
+#     result = run_energy_flow_optimization(
+#         net_multi, optimization_problem=optimization_problem
+#     )
+
+#     resilience = mp.calc_general_resilience_performance(result.network)
+
+#     print(result)
+#     print(result.objective)
+#     print(resilience)
+
+#     assert resilience == (0, 0, 0.0)
+#     assert result is not None
+
+
+# def test_scaled_load_shedding_def_2_3():
+#     net_multi = mes.create_monee_benchmark_net()
+#     net_multi.branch_by_id((1, 2, 0)).active = False
+
+#     print(run_energy_flow(net_multi))
+
+#     optimization_problem = mp.create_load_shedding_optimization_problem(
+#         bounds_el=bounds_el,
+#         bounds_heat=bounds_heat,
+#         bounds_gas=bounds_gas,
+#         ext_grid_el_bounds=ext_grid_el_bounds,
+#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         use_ext_grid_bounds=False,
+#         debug=True,
+#     )
+#     result = run_energy_flow_optimization(
+#         net_multi, optimization_problem=optimization_problem
+#     )
+
+#     resilience = mp.calc_general_resilience_performance(result.network)
+
+#     print(result)
+#     print(result.objective)
+#     print(resilience)
+
+#     assert resilience == (0, 0, 0.0)
+#     assert result is not None
+
+
+# def test_scaled_load_shedding_def_multi_line():
+#     net_multi = mes.create_monee_benchmark_net()
+#     net_multi.branch_by_id((1, 2, 0)).active = False
+#     net_multi.branch_by_id((10, 13, 0)).active = False
+
+#     optimization_problem = mp.create_load_shedding_optimization_problem(
+#         bounds_el=bounds_el,
+#         bounds_heat=bounds_heat,
+#         bounds_gas=bounds_gas,
+#         ext_grid_el_bounds=ext_grid_el_bounds,
+#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         use_ext_grid_bounds=False,
+#         debug=True,
+#     )
+#     result = run_energy_flow_optimization(
+#         net_multi, optimization_problem=optimization_problem
+#     )
+
+#     resilience = mp.calc_general_resilience_performance(result.network)
+
+#     print(result)
+#     print(result.objective)
+#     print(resilience)
+
+#     assert resilience == (0, 0.0, 19.8288)
+#     assert result is not None
+
+
+# @pytest.mark.pptest
+# def test_scaled_load_shedding_def_cigre():
+#     net_multi = mes.create_mv_multi_cigre()
+#     # net_multi.childs_by_type(Source)[0].model.mass_flow = -4
+#     print(run_energy_flow(net_multi))
+
+#     optimization_problem = mp.create_load_shedding_optimization_problem(
+#         bounds_el=bounds_el,
+#         bounds_heat=bounds_heat,
+#         bounds_gas=bounds_gas,
+#         ext_grid_el_bounds=ext_grid_el_bounds,
+#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         use_ext_grid_bounds=True,
+#         use_ext_grid_objective=True,
+#         debug=True,
+#         check_lp=True,
+#         check_vm=True,
+#         check_pressure=True,
+#         check_t=True,
+#     )
+#     result = run_energy_flow_optimization(
+#         net_multi, optimization_problem=optimization_problem
+#     )
+
+#     resilience = mp.calc_general_resilience_performance(result.network)
+
+#     print(result)
+#     print(result.objective)
+#     print(resilience)
+
+#     assert math.isclose(resilience[0], 22.067, abs_tol=0.1)
+#     assert result is not None

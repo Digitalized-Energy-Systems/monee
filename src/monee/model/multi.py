@@ -11,8 +11,8 @@ from .core import (
 from .grid import GasGrid, PowerGrid, WaterGrid
 from .network import Network
 from .node import Bus, Junction
-from .phys.nl.hydraulics import junction_mass_flow_balance
-from .phys.nl.opf import power_balance_equation
+from .phys.core.hydraulics import junction_mass_flow_balance
+from .phys.nonlinear.ac import power_balance_equation
 
 
 class MutableFloat(float):
@@ -177,7 +177,7 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
-        return (
+        return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
             junction_mass_flow_balance(gas_eqs),
@@ -193,7 +193,7 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
             ].q_w,
             self.t_pu == self.t_k / grid[1].t_ref,
             self.pressure_pu == self.pressure_pa / grid[1].pressure_ref,
-        )
+        ]
 
 
 @model
@@ -241,7 +241,7 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
-        return (
+        return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
             [branch for branch in heat_to_branches if type(branch) is SubHE][0].q_w
@@ -252,7 +252,7 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
             self.heat_w == self.efficiency * self.el_mw,
             self.t_pu == self.t_k / grid[1].t_ref,
             self.pressure_pu == self.pressure_pa / grid[1].pressure_ref,
-        )
+        ]
 
 
 class SubHE(HeatExchanger):
@@ -403,7 +403,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
-        return (
+        return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
             junction_mass_flow_balance(gas_eqs),
@@ -426,7 +426,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
             ].q_w,
             self.t_k == self.t_pu * grid[1].t_ref,
             self.pressure_pu == self.pressure_pa / grid[1].pressure_ref,
-        )
+        ]
 
 
 @model

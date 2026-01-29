@@ -446,7 +446,7 @@ def create_water_child(
         constraints=constraints,
         overwrite_id=overwrite_id,
         name=name,
-        auto_node_type=mm.Junction,
+        auto_node_creator=mm.Junction,
         auto_grid_key=mm.WATER_KEY,
         **kwargs,
     )
@@ -505,7 +505,7 @@ def create_gas_child(
         constraints=constraints,
         overwrite_id=overwrite_id,
         name=name,
-        auto_node_type=mm.Junction,
+        auto_node_creator=mm.Junction,
         auto_grid_key=mm.GAS_KEY,
         **kwargs,
     )

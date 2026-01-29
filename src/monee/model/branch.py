@@ -3,16 +3,14 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
-import monee.model.phys.nl.hydraulics as hydraulicsmodel
-import monee.model.phys.nl.ogf as ogfmodel
-import monee.model.phys.nl.ohf as ohfmodel
-import monee.model.phys.nl.opf as opfmodel
-import monee.model.phys.nl.owf as owfmodel
-
+import monee.model.phys.core.hydraulics as hydraulicsmodel
+import monee.model.phys.nonlinear.gf as ogfmodel
+import monee.model.phys.nonlinear.hf as ohfmodel
+import monee.model.phys.nonlinear.ac as opfmodel
+import monee.model.phys.nonlinear.wf as owfmodel
+from monee.model.formulation.nonlinear.ac import ACElectricityBranchFormulation
 from .core import BranchModel, Var, model
 from .grid import GasGrid, PowerGrid, WaterGrid
-
-SQRT_3 = np.sqrt(3)
 
 
 @model
@@ -86,80 +84,10 @@ class GenericPowerBranch(BranchModel):
         """
         No docstring provided.
         """
-        y = np.linalg.pinv([[self.br_r + self.br_x * 1j]])[0][0]
-        g, b = (np.real(y), np.imag(y))
-        return (
-            opfmodel.int_flow_from_p(
-                p_from_var=self.p_from_mw,
-                vm_from_var=from_node_model.vars["vm_pu"],
-                vm_to_var=to_node_model.vars["vm_pu"],
-                va_from_var=from_node_model.vars["va_radians"],
-                va_to_var=to_node_model.vars["va_radians"],
-                g_branch=g,
-                b_branch=b,
-                tap=self.tap,
-                shift=self.shift,
-                cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
-                sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
-                g_from=self.g_fr,
-                on_off=self.on_off,
-            ),
-            opfmodel.int_flow_from_q(
-                q_from_var=self.q_from_mvar,
-                vm_from_var=from_node_model.vars["vm_pu"],
-                vm_to_var=to_node_model.vars["vm_pu"],
-                va_from_var=from_node_model.vars["va_radians"],
-                va_to_var=to_node_model.vars["va_radians"],
-                g_branch=g,
-                b_branch=b,
-                tap=self.tap,
-                shift=self.shift,
-                cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
-                sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
-                b_from=self.b_fr,
-                on_off=self.on_off,
-            ),
-            opfmodel.int_flow_to_p(
-                p_to_var=self.p_to_mw,
-                vm_from_var=from_node_model.vars["vm_pu"],
-                vm_to_var=to_node_model.vars["vm_pu"],
-                va_from_var=from_node_model.vars["va_radians"],
-                va_to_var=to_node_model.vars["va_radians"],
-                g_branch=g,
-                b_branch=b,
-                tap=self.tap,
-                shift=self.shift,
-                cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
-                sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
-                g_to=self.g_to,
-                on_off=self.on_off,
-            ),
-            opfmodel.int_flow_to_q(
-                q_to_var=self.q_to_mvar,
-                vm_from_var=from_node_model.vars["vm_pu"],
-                vm_to_var=to_node_model.vars["vm_pu"],
-                va_from_var=from_node_model.vars["va_radians"],
-                va_to_var=to_node_model.vars["va_radians"],
-                g_branch=g,
-                b_branch=b,
-                tap=self.tap,
-                shift=self.shift,
-                cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
-                sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
-                b_to=self.b_to,
-                on_off=self.on_off,
-            ),
-            self.i_from_ka
-            == (self.p_from_mw**2 + self.q_from_mvar**2)
-            / (from_node_model.vars["vm_pu"] * from_node_model.vars["base_kv"])
-            / SQRT_3,
-            self.i_to_ka
-            == (self.p_to_mw**2 + self.q_to_mvar**2)
-            / (to_node_model.vars["vm_pu"] * to_node_model.vars["base_kv"])
-            / SQRT_3,
+        return [
             self.loading_to_percent == self.i_to_ka / self.max_i_ka,
             self.loading_from_percent == self.i_from_ka / self.max_i_ka,
-        )
+        ]
 
 
 @model
@@ -312,7 +240,7 @@ class WaterPipe(BranchModel):
         No docstring provided.
         """
         self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
-        return (
+        return [
             hydraulicsmodel.reynolds_equation(
                 self.reynolds,
                 self.mass_flow,
@@ -359,7 +287,7 @@ class WaterPipe(BranchModel):
             == (from_node_model.vars["t_pu"] + to_node_model.vars["t_pu"]) / 2,
             self.t_from_pu == from_node_model.vars["t_pu"],
             self.t_to_pu == to_node_model.vars["t_pu"],
-        )
+        ]
 
 
 @model
@@ -489,7 +417,7 @@ class GasPipe(BranchModel):
         No docstring provided.
         """
         self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
-        return (
+        return [
             hydraulicsmodel.reynolds_equation(
                 self.reynolds,
                 self.mass_flow,
@@ -523,4 +451,4 @@ class GasPipe(BranchModel):
             / 2
             * grid.molar_mass
             / (grid.universal_gas_constant * grid.t_k),
-        )
+        ]

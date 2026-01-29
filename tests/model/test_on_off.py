@@ -15,7 +15,7 @@ def test_on_off_el():
 
     mx.create_line(net, bus_0, bus_1, 100, r_ohm_per_m=0.00007, x_ohm_per_m=0.00007)
 
-    def my_constraint(line, grid, fn, tn):
+    def my_constraint(line, grid, fn, tn, **kwargs):
         return line.on_off == 0
 
     mx.create_line(
@@ -50,7 +50,7 @@ def test_on_off_water():
 
     mx.create_water_pipe(net, j_0, j_1, diameter_m=0.1, length_m=100)
 
-    def my_constraint(line, grid, fn, tn):
+    def my_constraint(line, grid, fn, tn, **kwargs):
         return line.on_off == 0
 
     mx.create_water_pipe(
@@ -86,7 +86,7 @@ def test_on_off_gas():
 
     mx.create_gas_pipe(net, j_0, j_1, diameter_m=0.7, length_m=100)
 
-    def my_constraint(line, grid, fn, tn):
+    def my_constraint(line, grid, fn, tn, **kwargs):
         return line.on_off == 0
 
     mx.create_gas_pipe(

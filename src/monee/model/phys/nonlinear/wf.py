@@ -1,4 +1,4 @@
-from . import hydraulics
+from ..core import hydraulics
 
 
 def darcy_friction(reynolds_var):

@@ -278,6 +278,7 @@ class OptimizationProblem:
                                 val,
                                 max=0 if val <= 0 else val,
                                 min=0 if val > 0 else val,
+                                name=attribute
                             )
                         else:
                             variable = Var(
@@ -285,6 +286,7 @@ class OptimizationProblem:
                                 param.max(attribute, val),
                                 param.min(attribute, val),
                                 param.integer,
+                                name=attribute
                             )
                         setattr(model, attribute, variable)
                         if self._debug:

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "monee"
-version = "1.0.1"
+version = "1.1.0"
 authors = [
   { name="Rico Schrage", email="rico.schrage@uol.de" },
 ]
@@ -52,7 +52,6 @@ testpp = [
     "pytest-cov",
     "pre-commit",
     "pandas==1.5.3",
-    "pygraphviz",
     "kaleido"
 ]
 

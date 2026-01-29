@@ -1,9 +1,9 @@
 import math
 
 from .core import Intermediate, IntermediateEq, NodeModel, Var, model
-from .phys.nl.hydraulics import junction_mass_flow_balance
-from .phys.nl.opf import power_balance_equation
-
+from .phys.core.hydraulics import junction_mass_flow_balance
+from .phys.nonlinear.ac import power_balance_equation
+from .formulation.nonlinear.ac import ACElectricityNodeFormulation
 
 @model
 class Bus(NodeModel):
@@ -14,8 +14,9 @@ class Bus(NodeModel):
     def __init__(self, base_kv) -> None:
         super().__init__()
         self.base_kv = base_kv
-        self.vm_pu = Var(1)
-        self.va_radians = Var(0)
+        self.vm_pu = Var(1, name="vm_pu")
+        self.vm_pu_squared = Var(1, name="vm_pu_squared")
+        self.va_radians = Var(0, name="va_radians")
         self.va_degree = Intermediate()
         self.p_mw = Intermediate()
         self.q_mvar = Intermediate()
@@ -98,14 +99,13 @@ class Bus(NodeModel):
         signed_ap, signed_rp = self.calc_signed_power_values(
             from_branch_models, to_branch_models, connected_node_models
         )
-        return (
+        return [
             self.p_mw_equation(connected_node_models),
             self.q_mvar_equation(connected_node_models),
             power_balance_equation(signed_ap),
             power_balance_equation(signed_rp),
             IntermediateEq("va_degree", 180 / math.pi * self.va_radians),
-        )
-
+        ]
 
 @model
 class Junction(NodeModel):
@@ -212,7 +212,7 @@ class Junction(NodeModel):
             from_branch_models, to_branch_models, connected_node_models, grid
         )
         if mass_flow_signed_list:
-            return (
+            return [
                 junction_mass_flow_balance(mass_flow_signed_list),
                 junction_mass_flow_balance(energy_flow_list),
                 IntermediateEq("t_k", self.t_pu * grid.t_ref),
@@ -227,5 +227,5 @@ class Junction(NodeModel):
                         ]
                     ),
                 ),
-            )
+            ]
         return []

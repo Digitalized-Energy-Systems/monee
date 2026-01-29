@@ -1,6 +1,6 @@
 import math
 
-import monee.model.phys.nl.hydraulics as ml
+import monee.model.phys.core.hydraulics as ml
 
 
 def test_calc_pipe_area():
@@ -31,15 +31,6 @@ def test_reynolds_equation():
     reynolds_correct = ml.reynolds_equation(321, 321, 2, 0.1, 20, abs)
 
     assert reynolds_correct
-
-
-def test_pipe_pressure():
-    pressure_bound = ml.pipe_pressure(10, 20, 0, 25)
-    pressure_bound_2 = ml.pipe_pressure(10, 20, 10, 20)
-
-    assert not pressure_bound
-    assert pressure_bound_2
-
 
 def test_pipe_mass_flow_constraint():
     mass_flow_bound = ml.pipe_mass_flow(10, 1, 10)

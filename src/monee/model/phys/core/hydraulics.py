@@ -31,28 +31,11 @@ def junction_mass_flow_balance(flows):
     return sum(flows) == 0
 
 
-def pipe_pressure(pd_min_pa, pd_max_pa, from_pressure_pa, to_pressure_pa):
-    """
-    No docstring provided.
-    """
-    return (
-        pd_min_pa <= abs(from_pressure_pa - to_pressure_pa)
-        and abs(from_pressure_pa - to_pressure_pa) <= pd_max_pa
-    )
-
-
 def pipe_mass_flow(max_v, min_v, v):
     """
     No docstring provided.
     """
     return min_v <= v <= max_v
-
-
-def friction_model(rey, nikurdse):
-    """
-    No docstring provided.
-    """
-    return 64 / rey
 
 
 def flow_rate_equation(mean_flow_velocity, flow_rate, diameter, fluid_density):

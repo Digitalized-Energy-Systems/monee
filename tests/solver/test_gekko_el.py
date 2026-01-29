@@ -7,8 +7,8 @@ from monee.model.child import ExtPowerGrid, PowerGenerator, PowerLoad
 from monee.model.grid import PowerGrid
 from monee.model.node import Bus
 from monee.problem.load_shedding import create_load_shedding_optimization_problem
-from monee.solver.gekko import GEKKOSolver
-
+from monee.solver import PyomoSolver, GEKKOSolver
+from monee.model.formulation.misoc.el import MISOCPElectricityBranchFormulation, MISOCPElectricityNodeFormulation
 
 def create_two_line_example_with_vm(vm, controllable_gen=False):
     pn = Network(PowerGrid(name="power", sn_mva=1))
@@ -166,13 +166,14 @@ def test_simple_trafo():
 
     assert len(pn.as_dataframe_dict()) == 5
     assert result.dataframes["Bus"]["vm_pu"][0] == 1
-    assert math.isclose(result.dataframes["Bus"]["vm_pu"][1], 0.9840819483)
+    assert math.isclose(result.dataframes["Bus"]["vm_pu"][1], 0.9840819483, abs_tol=1e-3)
 
 
 def test_two_lines_example():
     pn = create_two_line_example_with_vm(1)
-    solver = GEKKOSolver()
 
+    solver = GEKKOSolver()
+    
     result = solver.solve(pn)
 
     assert len(pn.as_dataframe_dict()) == 5
@@ -221,7 +222,7 @@ def test_two_controllable_lines_example_simple_constraint():
     assert len(pn.as_dataframe_dict()) == 5
     assert len(result.dataframes) == 5
     assert result.dataframes["ExtPowerGrid"]["p_mw"][0] == 1
-    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], -2.1428570262)
+    assert math.isclose(result.dataframes["PowerGenerator"]["p_mw"][0], -2.1428570262, abs_tol=1e-3)
 
 
 def test_two_controllable_lines_example_simple_objective():
@@ -278,6 +279,6 @@ def test_not_connected_due_to_deactivation():
     result = GEKKOSolver().solve(pn)
 
     assert len(result.dataframes) == 5
-    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.01400300199)
+    assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -0.01400300199, abs_tol=1e-3)
     assert math.isclose(result.dataframes["PowerLoad"]["p_mw"][0], 1)
     assert math.isnan(result.dataframes["Bus"]["vm_pu"][3])

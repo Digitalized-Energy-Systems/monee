@@ -19,7 +19,7 @@ from .core import (
     Var,
 )
 from .grid import create_gas_grid, create_power_grid, create_water_grid
-
+from .formulation import NetworkFormulation, Formulation, AC_NETWORK_FORMULATION
 
 class Network:
     """
@@ -48,6 +48,22 @@ class Network:
         self.__force_blacklist = False
         self.__collect_components = False
         self.__current_grid = active_grid
+        self.__default_formulation: dict[type,Formulation] = {}
+        self.apply_formulation(AC_NETWORK_FORMULATION)
+
+    def apply_formulation(self, network_formulation: NetworkFormulation):
+
+        for (t,formulation) in list(network_formulation.branch_type_to_formulations.items()) \
+                                + list(network_formulation.child_type_to_formulations.items()) \
+                                + list(network_formulation.node_type_to_formulations.items()) \
+                                + list(network_formulation.compound_type_to_formulations.items()):
+            self.__default_formulation[t] = formulation
+            
+            for component in self.branches:
+                # formulation for type (or super type) exists
+                if isinstance(component.mode, t):
+                    component.formulation = formulation
+            
 
     def set_default_grid(self, key, grid):
         """
@@ -461,6 +477,7 @@ class Network:
         self,
         model,
         attach_to_node_id=None,
+        formulation=None,
         constraints=None,
         overwrite_id=None,
         name=None,
@@ -476,7 +493,8 @@ class Network:
         child = Child(
             child_id,
             model,
-            constraints,
+            formulation=self._or_default_formulation(model, formulation),
+            constraints=constraints,
             name=name,
             independent=not self.__collect_components,
         )
@@ -497,6 +515,7 @@ class Network:
         self,
         model,
         node_id,
+        formulation=None,
         constraints=None,
         overwrite_id=None,
         name=None,
@@ -508,6 +527,7 @@ class Network:
         """
         return self.child(
             model,
+            formulation=formulation,
             attach_to_node_id=node_id,
             constraints=constraints,
             overwrite_id=overwrite_id,
@@ -538,10 +558,17 @@ class Network:
             return self.__current_grid
         return grid_or_name
 
+    def _or_default_formulation(self, model, formulation):
+        for t,form in self.__default_formulation.items():
+            if isinstance(model, t):
+                return form
+        return formulation
+
     def node(
         self,
         model,
         grid=None,
+        formulation=None,
         child_ids=None,
         constraints=None,
         overwrite_id=None,
@@ -560,8 +587,9 @@ class Network:
             node_id,
             model,
             child_ids,
-            constraints,
-            self._or_default(grid),
+            formulation=self._or_default_formulation(model, formulation),
+            constraints=constraints,
+            grid=self._or_default(grid),
             name=name,
             position=position,
             independent=not self.__collect_components,
@@ -581,6 +609,7 @@ class Network:
         model,
         from_node_id,
         to_node_id,
+        formulation=None,
         constraints=None,
         grid=None,
         name=None,
@@ -603,8 +632,9 @@ class Network:
             model,
             from_node_id,
             to_node_id,
-            constraints,
-            grid
+            formulation=self._or_default_formulation(model, formulation),
+            constraints=constraints,
+            grid=grid
             or (
                 from_node.grid
                 if from_node.grid == to_node.grid
@@ -634,6 +664,7 @@ class Network:
     def compound(
         self,
         model: CompoundModel,
+        formulation=None,
         constraints=None,
         overwrite_id=None,
         **connected_node_ids,
@@ -657,6 +688,7 @@ class Network:
         self.__force_blacklist = False
         compound = Compound(
             compound_id=compound_id,
+            formulation=self._or_default_formulation(model, formulation),
             model=model,
             constraints=constraints,
             connected_to=connected_node_ids,

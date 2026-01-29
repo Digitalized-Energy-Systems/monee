@@ -1,6 +1,6 @@
 import math
 
-from . import hydraulics
+from ..core import hydraulics
 
 
 def calc_a(z, r, t, m):

@@ -83,23 +83,24 @@ class Var:
     No docstring provided.
     """
 
-    def __init__(self, value, max=None, min=None, integer=False) -> None:
+    def __init__(self, value, max=None, min=None, integer=False, name=None) -> None:
         self.value = value
         self.max = max
         self.min = min
         self.integer = integer
+        self.name = name
 
     def __neg__(self):
         """
         No docstring provided.
         """
-        return Var(value=-self.value, max=self.max, min=self.min)
+        return Var(value=-self.value, max=self.max, min=self.min, name=self.name)
 
     def __mul__(self, other):
         """
         No docstring provided.
         """
-        return Var(value=self.value * other, max=self.max, min=self.min)
+        return Var(value=self.value * other, max=self.max, min=self.min, name=self.name)
 
     def __lt__(self, other):
         """
@@ -240,6 +241,15 @@ class NodeModel(GenericModel):
                     # Define nodal balance equations
                     return [eq1, eq2]
         """
+    
+    def minimize(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
+        """
+        Minimization of an expression as minimization may necessary due to some formulation (when replacing 
+        constraints with slack variables)
+        
+        :param self: Description
+        """
+        return []
 
 
 class BranchModel(GenericModel):
@@ -281,6 +291,15 @@ class BranchModel(GenericModel):
         """
         No docstring provided.
         """
+    
+    def minimize(self, grid, from_node_model, to_node_model, **kwargs):
+        """
+        Minimization of an expression as minimization may necessary due to some formulation (when replacing 
+        constraints with slack variables)
+        
+        :param self: Description
+        """
+        return []
 
     def loss_percent(self):
         """
@@ -457,7 +476,17 @@ class CompoundModel(GenericModel):
         """
         No docstring provided.
         """
+        return []    
+    
+    def minimize(self, network, **kwargs):
+        """
+        Minimization of an expression as minimization may necessary due to some formulation (when replacing 
+        constraints with slack variables)
+        
+        :param self: Description
+        """
         return []
+
 
 
 class MultGridCompoundModel(CompoundModel):
@@ -491,6 +520,15 @@ class ChildModel(GenericModel):
         """
         No docstring provided.
         """
+    
+    def minimize(self, grid, node_model, **kwargs):
+        """
+        Minimization of an expression as minimization may necessary due to some formulation (when replacing 
+        constraints with slack variables)
+        
+        :param self: Description
+        """
+        return []
 
 
 class Component(ABC):
@@ -502,13 +540,15 @@ class Component(ABC):
         self,
         id,
         model,
-        constraints,
+        formulation=None,
+        constraints=None,
         grid=None,
         name=None,
         active=True,
         independent=True,
     ) -> None:
         self.model = model
+        self.formulation = formulation
         self.id = id
         self.constraints = [] if constraints is None else constraints
         self.name = name
@@ -530,6 +570,7 @@ class Component(ABC):
         No docstring provided.
         """
         return f"{self.model.__class__.__name__}-{self.id}".lower()
+    
 
 
 class Child(Component):
@@ -541,16 +582,33 @@ class Child(Component):
         self,
         child_id,
         model,
-        constraints,
+        formulation=None,
+        constraints=None,
         grid=None,
         name=None,
         active=True,
         independent=True,
     ) -> None:
-        super().__init__(child_id, model, constraints, grid, name, active, independent)
+        
+        super().__init__(child_id, model, formulation, constraints, grid, name, active, independent)
         self.node_id = None
         self.independent = independent
 
+    def equations(self, grid, node_model, **kwargs):
+        model_eqs = self.model.equations(grid, node_model, **kwargs)
+        form_eqs = []
+        if self.formulation is not None:
+            form_eqs = self.formulation.equations(self.model, grid, node_model, **kwargs)
+
+        return form_eqs + model_eqs + [c(self.model, grid, node_model, **kwargs) for c in self.constraints]
+    
+    def minimize(self, grid, node_model, **kwargs):
+        model_eqs = self.model.minimize(grid, node_model, **kwargs)
+        form_eqs = []
+        if self.formulation is not None:
+            form_eqs = self.formulation.minimize(self.model, grid, node_model, **kwargs)
+
+        return form_eqs + model_eqs
 
 class Compound(Component):
     """
@@ -561,16 +619,33 @@ class Compound(Component):
         self,
         compound_id,
         model: CompoundModel,
-        constraints,
         connected_to,
         subcomponents,
+        formulation=None,
+        constraints=None,
         grid=None,
         name=None,
         active=True,
     ) -> None:
-        super().__init__(compound_id, model, constraints, grid, name, active, True)
+        super().__init__(compound_id, model, formulation, constraints, grid, name, active, True)
         self.connected_to = connected_to
         self.subcomponents = subcomponents
+
+    def equations(self, network, **kwargs):
+        model_eqs = self.model.equations(network, **kwargs)
+        form_eqs = []
+        if self.formulation is not None:
+            form_eqs = self.formulation.equations(self.model, network, **kwargs)
+
+        return form_eqs + model_eqs + [c(self.model, network, **kwargs) for c in self.constraints]
+    
+    def minimize(self, network, **kwargs):
+        model_eqs = self.model.minimize(network, **kwargs)
+        form_eqs = []
+        if self.formulation is not None:
+            form_eqs = self.formulation.minimize(self.model, network, **kwargs)
+
+        return form_eqs + model_eqs
 
     def component_of_type(self, comp_type):
         """
@@ -625,6 +700,7 @@ class Node(Component):
         node_id,
         model,
         child_ids=None,
+        formulation=None,
         constraints=None,
         grid=None,
         name=None,
@@ -632,12 +708,28 @@ class Node(Component):
         active=True,
         independent=True,
     ) -> None:
-        super().__init__(node_id, model, constraints, grid, name, active, independent)
+        super().__init__(node_id, model, formulation, constraints, grid, name, active, independent)
         self.child_ids = [] if child_ids is None else child_ids
         self.constraints = [] if constraints is None else constraints
         self.from_branch_ids = []
         self.to_branch_ids = []
         self.position = position
+
+    def equations(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
+        model_eqs = self.model.equations(grid, in_branch_models, out_branch_models, childs, **kwargs)
+        form_eqs = []
+        if self.formulation is not None:
+            form_eqs = self.formulation.equations(self.model, grid, in_branch_models, out_branch_models, childs, **kwargs)
+
+        return form_eqs + model_eqs + [c(self.model, grid, in_branch_models, out_branch_models, childs, **kwargs) for c in self.constraints]
+    
+    def minimize(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
+        model_eqs = self.model.minimize(grid, in_branch_models, out_branch_models, childs, **kwargs)
+        form_eqs = []
+        if self.formulation is not None:
+            form_eqs = self.formulation.minimize(self.model, grid, in_branch_models, out_branch_models, childs, **kwargs)
+        
+        return form_eqs + model_eqs
 
     def add_from_branch_id(self, branch_id):
         """
@@ -723,15 +815,32 @@ class Branch(Component):
         model,
         from_node_id,
         to_node_id,
+        formulation=None,
         constraints=None,
         grid=None,
         name=None,
         active=True,
         independent=True,
     ) -> None:
-        super().__init__(None, model, constraints, grid, name, active, independent)
+        super().__init__(None, model, formulation, constraints, grid, name, active, independent)
         self.from_node_id = from_node_id
         self.to_node_id = to_node_id
+
+    def equations(self, grid, from_node_model, to_node_model, **kwargs):
+        model_eqs = self.model.equations(grid, from_node_model, to_node_model, **kwargs)
+        form_eqs = []
+        if self.formulation is not None:
+            form_eqs = self.formulation.equations(self.model, grid, from_node_model, to_node_model, **kwargs)
+        
+        return form_eqs + model_eqs + [c(self.model, grid, from_node_model, to_node_model, **kwargs) for c in self.constraints]
+
+    def minimize(self, grid, from_node_model, to_node_model, **kwargs):
+        model_eqs = self.model.minimize(grid, from_node_model, to_node_model, **kwargs)
+        form_eqs = []
+        if self.formulation is not None:
+            form_eqs = self.formulation.minimize(self.model, grid, from_node_model, to_node_model, **kwargs)
+        
+        return form_eqs + model_eqs
 
     @property
     def tid(self):

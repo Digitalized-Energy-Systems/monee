@@ -4,7 +4,7 @@ import uuid
 import pandapower.converter as pc
 
 from monee.model.child import ExtPowerGrid, PowerGenerator, PowerLoad
-
+import monee.model as mm
 from .matpower import read_matpower_case
 
 
@@ -17,23 +17,6 @@ def from_pandapower_net(net):
     pc.to_mpc(net, init="flat", filename=name_file)
     monee_net = read_matpower_case(name_file)
     os.remove(name_file)
-    monee_net.clear_childs()
-    for _, row in net.load.iterrows():
-        monee_net.child_to(
-            PowerLoad(row["p_mw"], row["q_mvar"]), row["bus"] + 1, name=row["name"]
-        )
-    for _, row in net.sgen.iterrows():
-        monee_net.child_to(
-            PowerGenerator(row["p_mw"], row["q_mvar"], name=row["name"]),
-            row["bus"] + 1,
-            name=row["name"],
-        )
-    for _, row in net.ext_grid.iterrows():
-        monee_net.child_to(
-            ExtPowerGrid(1, 1, vm_pu=row["vm_pu"], va_degree=row["va_degree"]),
-            row["bus"] + 1,
-            name=row["name"],
-        )
     for node in monee_net.nodes:
         pp_id = node.id - 1
         if len(net.bus) > pp_id:
