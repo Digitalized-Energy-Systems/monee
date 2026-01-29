@@ -30,6 +30,7 @@ dependencies = [
     "pandas>=1.5.3",
     "geopy>=2.4.1",
     "plotly>=6.3.0",
+    "pyomo"
 ]
 
 [project.optional-dependencies]
