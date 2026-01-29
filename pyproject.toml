@@ -54,6 +54,7 @@ testpp = [
     "pre-commit",
     "pandas==1.5.3",
     "kaleido"
+    "pygraphviz"
 ]
 
 [project.urls]
