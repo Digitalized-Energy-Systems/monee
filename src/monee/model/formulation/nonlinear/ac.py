@@ -1,16 +1,19 @@
 import math
 
 import numpy as np
+
 import monee.model.phys.nonlinear.ac as opfmodel
+
 from ..core import BranchFormulation, NodeFormulation
 
 SQRT_3 = np.sqrt(3)
 
+
 class ACElectricityNodeFormulation(NodeFormulation):
     pass
 
+
 class ACElectricityBranchFormulation(BranchFormulation):
-    
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         y = np.linalg.pinv([[branch.br_r + branch.br_x * 1j]])[0][0]
         g, b = (np.real(y), np.imag(y))

@@ -1,4 +1,3 @@
-import math
 from abc import ABC, abstractmethod
 
 import numpy as np
@@ -6,9 +5,8 @@ import numpy as np
 import monee.model.phys.core.hydraulics as hydraulicsmodel
 import monee.model.phys.nonlinear.gf as ogfmodel
 import monee.model.phys.nonlinear.hf as ohfmodel
-import monee.model.phys.nonlinear.ac as opfmodel
 import monee.model.phys.nonlinear.wf as owfmodel
-from monee.model.formulation.nonlinear.ac import ACElectricityBranchFormulation
+
 from .core import BranchModel, Var, model
 from .grid import GasGrid, PowerGrid, WaterGrid
 

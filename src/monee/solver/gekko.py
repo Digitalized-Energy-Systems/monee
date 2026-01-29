@@ -4,7 +4,6 @@ import networkx as nx
 from gekko import GEKKO
 from gekko.gk_operators import GK_Intermediate, GK_Operators
 from gekko.gk_variable import GKVariable
-from .core import *
 
 from monee.model import (
     Branch,
@@ -18,6 +17,20 @@ from monee.model import (
     Var,
 )
 from monee.problem.core import OptimizationProblem
+
+from .core import (
+    SolverInterface,
+    SolverResult,
+    as_iter,
+    filter_intermediate_eqs,
+    find_ignored_nodes,
+    generate_real_topology,
+    ignore_branch,
+    ignore_child,
+    ignore_compound,
+    ignore_node,
+    remove_cps,
+)
 
 DEFAULT_SOLVER_OPTIONS = [
     "minlp_maximum_iterations 1000",
@@ -47,6 +60,7 @@ def _process_intermediate_eqs(m, model, equations):
             i = m.Intermediate(intermediate_eq.eq)
             setattr(model, intermediate_eq.attr, i)
 
+
 class GEKKOSolver(SolverInterface):
     """
     No docstring provided.
@@ -71,7 +85,11 @@ class GEKKOSolver(SolverInterface):
                     target,
                     key,
                     gekko.Var(
-                        value.value, lb=value.min, ub=value.max, integer=value.integer, name=name
+                        value.value,
+                        lb=value.min,
+                        ub=value.max,
+                        integer=value.integer,
+                        name=name,
                     ),
                 )
                 i += 1
@@ -87,7 +105,11 @@ class GEKKOSolver(SolverInterface):
             if isinstance(value, Const):
                 setattr(target, key, Const(float("nan")))
             if isinstance(value, Var):
-                setattr(target, key, Var(float("nan"), max=value.max, min=value.min, name=value.name))
+                setattr(
+                    target,
+                    key,
+                    Var(float("nan"), max=value.max, min=value.min, name=value.name),
+                )
 
     @staticmethod
     def inject_gekko_vars(
@@ -127,7 +149,9 @@ class GEKKOSolver(SolverInterface):
                 compound.ignored = True
                 GEKKOSolver.inject_nans(compound.model)
                 continue
-            GEKKOSolver.inject_gekko_vars_attr(gekko_model, compound.model, compound.tid)
+            GEKKOSolver.inject_gekko_vars_attr(
+                gekko_model, compound.model, compound.tid
+            )
 
     @staticmethod
     def withdraw_gekko_vars_attr(target: GenericModel):
@@ -139,7 +163,12 @@ class GEKKOSolver(SolverInterface):
                 setattr(
                     target,
                     key,
-                    Var(value=value.VALUE.value[0], min=value.LOWER, max=value.UPPER, name=value.NAME.split("_")[-1]),
+                    Var(
+                        value=value.VALUE.value[0],
+                        min=value.LOWER,
+                        max=value.UPPER,
+                        name=value.NAME.split("_")[-1],
+                    ),
                 )
             if type(value) is GK_Operators:
                 setattr(target, key, Const(value.VALUE.value))
@@ -196,7 +225,7 @@ class GEKKOSolver(SolverInterface):
 
         branches = network.branches
         compounds = network.compounds
-        
+
         GEKKOSolver.inject_gekko_vars(
             m, nodes, branches, compounds, network, ignored_nodes
         )
@@ -294,23 +323,23 @@ class GEKKOSolver(SolverInterface):
             grid = node.grid
 
             from_branches = [
-                        network.branch_by_id(branch_id).model
-                        for branch_id in node.from_branch_ids
-                        if not ignore_branch(
-                            network.branch_by_id(branch_id), network, ignored_nodes
-                        )
+                network.branch_by_id(branch_id).model
+                for branch_id in node.from_branch_ids
+                if not ignore_branch(
+                    network.branch_by_id(branch_id), network, ignored_nodes
+                )
             ]
             to_branches = [
-                        network.branch_by_id(branch_id).model
-                        for branch_id in node.to_branch_ids
-                        if not ignore_branch(
-                            network.branch_by_id(branch_id), network, ignored_nodes
-                        )
+                network.branch_by_id(branch_id).model
+                for branch_id in node.to_branch_ids
+                if not ignore_branch(
+                    network.branch_by_id(branch_id), network, ignored_nodes
+                )
             ]
             connected_childs = [
-                        child.model
-                        for child in node_childs
-                        if not ignore_child(child, ignored_nodes)
+                child.model
+                for child in node_childs
+                if not ignore_child(child, ignored_nodes)
             ]
             equations = as_iter(
                 node.equations(
@@ -324,14 +353,12 @@ class GEKKOSolver(SolverInterface):
                     abs_impl=m.abs3,
                     max_impl=m.max2,
                     sign_impl=m.sign2,
-                    sqrt_impl=m.sqrt
+                    sqrt_impl=m.sqrt,
                 )
             )
-            for expr in node.minimize(grid, 
-                                              from_branches, 
-                                              to_branches,
-                                              connected_childs,
-                                              sqrt_impl=m.sqrt):
+            for expr in node.minimize(
+                grid, from_branches, to_branches, connected_childs, sqrt_impl=m.sqrt
+            ):
                 m.Obj(expr)
 
             node_eqs = [eq for eq in equations if type(eq) is not bool or not eq]
@@ -353,7 +380,9 @@ class GEKKOSolver(SolverInterface):
         for branch in branches:
             branch.model.init(branch.grid)
 
-    def process_equations_branches(self, m, network, branches, ignored_nodes, objs_exprs):
+    def process_equations_branches(
+        self, m, network, branches, ignored_nodes, objs_exprs
+    ):
         """
         No docstring provided.
         """
@@ -374,14 +403,16 @@ class GEKKOSolver(SolverInterface):
                     max_impl=m.max2,
                     sign_impl=m.sign3,
                     log_impl=m.log10,
-                    sqrt_impl=m.sqrt
+                    sqrt_impl=m.sqrt,
                 )
             )
 
-            for expr in branch.minimize(grid, 
-                                       network.node_by_id(branch.from_node_id).model, 
-                                       network.node_by_id(branch.to_node_id).model,
-                                       sqrt_impl=m.sqrt):
+            for expr in branch.minimize(
+                grid,
+                network.node_by_id(branch.from_node_id).model,
+                network.node_by_id(branch.to_node_id).model,
+                sqrt_impl=m.sqrt,
+            ):
                 objs_exprs.append(expr)
 
             _process_intermediate_eqs(m, branch.model, branch_eqs)

@@ -3,7 +3,7 @@ import math
 from .core import Intermediate, IntermediateEq, NodeModel, Var, model
 from .phys.core.hydraulics import junction_mass_flow_balance
 from .phys.nonlinear.ac import power_balance_equation
-from .formulation.nonlinear.ac import ACElectricityNodeFormulation
+
 
 @model
 class Bus(NodeModel):
@@ -106,6 +106,7 @@ class Bus(NodeModel):
             power_balance_equation(signed_rp),
             IntermediateEq("va_degree", 180 / math.pi * self.va_radians),
         ]
+
 
 @model
 class Junction(NodeModel):

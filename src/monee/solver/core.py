@@ -1,14 +1,7 @@
-
-from dataclasses import dataclass
-
-import pandas
-
-from monee.model import Network
-from monee.problem.core import OptimizationProblem
-
 from dataclasses import dataclass
 
 import networkx as nx
+import pandas
 
 from monee.model import (
     CHP,
@@ -23,6 +16,8 @@ from monee.model import (
     Var,
     WaterPipe,
 )
+from monee.problem.core import OptimizationProblem
+
 
 @dataclass
 class SolverResult:
@@ -48,8 +43,8 @@ class SolverResult:
             result_str += "\n"
         return result_str
 
-class SolverInterface:
 
+class SolverInterface:
     def solve(
         self,
         input_network: Network,
@@ -105,7 +100,9 @@ def generate_real_topology(nx_net):
     net_copy = nx_net.copy()
     for edge in nx_net.edges.data():
         branch = edge[2]["internal_branch"]
-        if not branch.active or (type(branch.model.on_off) is not Var and branch.model.on_off == 0):
+        if not branch.active or (
+            type(branch.model.on_off) is not Var and branch.model.on_off == 0
+        ):
             net_copy.remove_edge(edge[0], edge[1], 0)
     return net_copy
 
@@ -115,7 +112,8 @@ COMPOUND_TYPES_TO_REMOVE = [PowerToHeat, GasToHeat, CHP]
 
 def remove_cps(network: Network):
     relevant_compounds = [
-        compound for compound in network.compounds
+        compound
+        for compound in network.compounds
         if type(compound.model) in COMPOUND_TYPES_TO_REMOVE
     ]
     for comp in relevant_compounds:

@@ -32,6 +32,7 @@ def test_reynolds_equation():
 
     assert reynolds_correct
 
+
 def test_pipe_mass_flow_constraint():
     mass_flow_bound = ml.pipe_mass_flow(10, 1, 10)
     mass_flow_bound_2 = ml.pipe_mass_flow(10, 1, 0)

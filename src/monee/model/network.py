@@ -18,8 +18,9 @@ from .core import (
     Node,
     Var,
 )
+from .formulation import AC_NETWORK_FORMULATION, Formulation, NetworkFormulation
 from .grid import create_gas_grid, create_power_grid, create_water_grid
-from .formulation import NetworkFormulation, Formulation, AC_NETWORK_FORMULATION
+
 
 class Network:
     """
@@ -48,22 +49,22 @@ class Network:
         self.__force_blacklist = False
         self.__collect_components = False
         self.__current_grid = active_grid
-        self.__default_formulation: dict[type,Formulation] = {}
+        self.__default_formulation: dict[type, Formulation] = {}
         self.apply_formulation(AC_NETWORK_FORMULATION)
 
     def apply_formulation(self, network_formulation: NetworkFormulation):
-
-        for (t,formulation) in list(network_formulation.branch_type_to_formulations.items()) \
-                                + list(network_formulation.child_type_to_formulations.items()) \
-                                + list(network_formulation.node_type_to_formulations.items()) \
-                                + list(network_formulation.compound_type_to_formulations.items()):
+        for t, formulation in (
+            list(network_formulation.branch_type_to_formulations.items())
+            + list(network_formulation.child_type_to_formulations.items())
+            + list(network_formulation.node_type_to_formulations.items())
+            + list(network_formulation.compound_type_to_formulations.items())
+        ):
             self.__default_formulation[t] = formulation
-            
+
             for component in self.branches:
                 # formulation for type (or super type) exists
                 if isinstance(component.mode, t):
                     component.formulation = formulation
-            
 
     def set_default_grid(self, key, grid):
         """
@@ -559,7 +560,7 @@ class Network:
         return grid_or_name
 
     def _or_default_formulation(self, model, formulation):
-        for t,form in self.__default_formulation.items():
+        for t, form in self.__default_formulation.items():
             if isinstance(model, t):
                 return form
         return formulation

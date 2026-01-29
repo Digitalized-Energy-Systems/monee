@@ -1,7 +1,5 @@
 import pyomo.environ as pyo
 
-from .core import *
-
 from monee.model import (
     Const,
     GenericModel,
@@ -12,12 +10,23 @@ from monee.model import (
 )
 from monee.problem.core import OptimizationProblem
 
+from .core import (
+    SolverInterface,
+    SolverResult,
+    as_iter,
+    filter_intermediate_eqs,
+    find_ignored_nodes,
+    ignore_branch,
+    ignore_child,
+    ignore_compound,
+    ignore_node,
+)
+
 DEFAULT_SOLVER_OPTIONS = {}
 
 
 class PyomoSolver(SolverInterface):
-    """
-    """
+    """ """
 
     def __init__(self):
         pass
@@ -25,7 +34,9 @@ class PyomoSolver(SolverInterface):
     # --------- Injection / Withdrawal ---------
 
     @staticmethod
-    def inject_pyomo_vars_attr(pm: pyo.ConcreteModel, target: GenericModel, prefix: str):
+    def inject_pyomo_vars_attr(
+        pm: pyo.ConcreteModel, target: GenericModel, prefix: str
+    ):
         """
         Replace Var/Const fields on `target` with Pyomo Var / numeric constants.
         """
@@ -53,7 +64,7 @@ class PyomoSolver(SolverInterface):
         for key, value in target.__dict__.items():
             if isinstance(value, Const):
                 setattr(target, key, Const(float("nan")))
-            if isinstance(value, (Var, Const)):
+            if isinstance(value, Var | Const):
                 setattr(target, key, Var(float("nan"), max=value.max, min=value.min))
 
     @staticmethod
@@ -63,7 +74,9 @@ class PyomoSolver(SolverInterface):
                 branch.ignored = True
                 PyomoSolver.inject_nans(branch.model)
                 continue
-            PyomoSolver.inject_pyomo_vars_attr(pm, branch.model, prefix=f"branch_{branch.id}")
+            PyomoSolver.inject_pyomo_vars_attr(
+                pm, branch.model, prefix=f"branch_{branch.id}"
+            )
 
         for node in nodes:
             if ignore_node(node, network, ignored_nodes):
@@ -81,14 +94,18 @@ class PyomoSolver(SolverInterface):
                     child.ignored = True
                     PyomoSolver.inject_nans(child.model)
                     continue
-                PyomoSolver.inject_pyomo_vars_attr(pm, child.model, prefix=f"child_{child.id}")
+                PyomoSolver.inject_pyomo_vars_attr(
+                    pm, child.model, prefix=f"child_{child.id}"
+                )
 
         for compound in compounds:
             if ignore_compound(compound, ignored_nodes):
                 compound.ignored = True
                 PyomoSolver.inject_nans(compound.model)
                 continue
-            PyomoSolver.inject_pyomo_vars_attr(pm, compound.model, prefix=f"compound_{compound.id}")
+            PyomoSolver.inject_pyomo_vars_attr(
+                pm, compound.model, prefix=f"compound_{compound.id}"
+            )
 
     @staticmethod
     def withdraw_pyomo_vars_attr(target: GenericModel):
@@ -234,8 +251,12 @@ class PyomoSolver(SolverInterface):
         if obj is not None:
             pm.obj_exprs.append(obj)
 
-    def process_oxf_components(self, pm, network, optimization_problem: OptimizationProblem):
-        if optimization_problem.constraints is not None and (not optimization_problem.constraints.empty):
+    def process_oxf_components(
+        self, pm, network, optimization_problem: OptimizationProblem
+    ):
+        if optimization_problem.constraints is not None and (
+            not optimization_problem.constraints.empty
+        ):
             self._add_equations(pm, optimization_problem.constraints.all(network))
 
         obj = None
@@ -256,7 +277,9 @@ class PyomoSolver(SolverInterface):
                 self._process_intermediate_eqs(pm, compound, equations)
                 self._add_equations(pm, filter_intermediate_eqs(equations))
 
-    def process_equations_nodes_childs(self, pm, network: Network, nodes, ignored_nodes):
+    def process_equations_nodes_childs(
+        self, pm, network: Network, nodes, ignored_nodes
+    ):
         # Pyomo math operators
         sin_impl = pyo.sin
         cos_impl = pyo.cos
@@ -269,13 +292,19 @@ class PyomoSolver(SolverInterface):
         # You must implement these yourself (typically with binaries + big-M or Piecewise),
         # or change your model.equations() to avoid them for Pyomo runs.
         def if_impl(*args, **kwargs):
-            raise NotImplementedError("Replace GEKKO if2/if3 with a Pyomo Piecewise / big-M formulation.")
+            raise NotImplementedError(
+                "Replace GEKKO if2/if3 with a Pyomo Piecewise / big-M formulation."
+            )
 
         def max_impl(*args, **kwargs):
-            raise NotImplementedError("Replace GEKKO max2 with Pyomo max_ (or explicit constraints).")
+            raise NotImplementedError(
+                "Replace GEKKO max2 with Pyomo max_ (or explicit constraints)."
+            )
 
         def sign_impl(*args, **kwargs):
-            raise NotImplementedError("Replace GEKKO sign2/sign3 with a Pyomo formulation (often binary).")
+            raise NotImplementedError(
+                "Replace GEKKO sign2/sign3 with a Pyomo formulation (often binary)."
+            )
 
         for node in nodes:
             if ignore_node(node, network, ignored_nodes):
@@ -295,7 +324,8 @@ class PyomoSolver(SolverInterface):
                 if not ignore_branch(network.branch_by_id(bid), network, ignored_nodes)
             ]
             connected_childs = [
-                child.model for child in node_childs
+                child.model
+                for child in node_childs
                 if not ignore_child(child, ignored_nodes)
             ]
 
@@ -312,6 +342,7 @@ class PyomoSolver(SolverInterface):
                     max_impl=max_impl,
                     sign_impl=sign_impl,
                     sqrt_impl=sqrt_impl,
+                    log_impl=log_impl,
                 )
             )
 
@@ -345,13 +376,19 @@ class PyomoSolver(SolverInterface):
         log_impl = pyo.log
 
         def if_impl(*args, **kwargs):
-            raise NotImplementedError("Replace GEKKO if2/if3 with a Pyomo Piecewise / big-M formulation.")
+            raise NotImplementedError(
+                "Replace GEKKO if2/if3 with a Pyomo Piecewise / big-M formulation."
+            )
 
         def max_impl(*args, **kwargs):
-            raise NotImplementedError("Replace GEKKO max2 with Pyomo max_ (or explicit constraints).")
+            raise NotImplementedError(
+                "Replace GEKKO max2 with Pyomo max_ (or explicit constraints)."
+            )
 
         def sign_impl(*args, **kwargs):
-            raise NotImplementedError("Replace GEKKO sign2/sign3 with a Pyomo formulation (often binary).")
+            raise NotImplementedError(
+                "Replace GEKKO sign2/sign3 with a Pyomo formulation (often binary)."
+            )
 
         for branch in branches:
             if ignore_branch(branch, network, ignored_nodes):

@@ -18,6 +18,7 @@
 
 # --- Slack / reference handling (safe for multiple islands) ---
 
+
 def source_reference_angle(theta_s):
     """
     Fix each candidate grid-forming source bus angle.
@@ -57,10 +58,13 @@ def bus_must_have_source_if_energized(e_i, g_i):
     Often you will instead rely on the connectivity-flow constraints below.
     This constraint alone just says an energized bus could be a source.
     """
-    return e_i <= g_i + (1 - g_i)  # tautology placeholder; usually omit in favor of flow connectivity
+    return e_i <= g_i + (
+        1 - g_i
+    )  # tautology placeholder; usually omit in favor of flow connectivity
 
 
 # --- Connectivity (single-commodity flow from super-source 0) ---
+
 
 def connectivity_demand_balance(bus_inflow, bus_outflow, e_i):
     """
@@ -126,6 +130,7 @@ def super_outflow_definition(super_outflow, c_0s_vars):
 
 # --- Switchable DC flow equations (one constraint per function) ---
 
+
 def line_flow_angle_relation_upper(f_ij, theta_i, theta_j, b_ij, y_ij, big_m_pf):
     """
     Switchable DC flow (upper big-M):
@@ -167,6 +172,7 @@ def nodal_active_power_balance(p_gen_i, p_load_served_i, flow_out_sum, flow_in_s
 
 
 # --- Handy utilities (pure Python, not constraints) ---
+
 
 def big_m_pf_from_angle_bounds(b_ij, theta_max):
     """
