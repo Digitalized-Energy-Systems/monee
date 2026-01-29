@@ -6,7 +6,7 @@ from monee.model.formulation.core import BranchFormulation, NodeFormulation
 
 class MISOCPElectricityNodeFormulation(NodeFormulation):
     
-    def ensure_var(self, node):
+    def ensure_var(self, node): 
         node.vm_pu_squared = Var(1, min=0)
         node.vm_pu = Intermediate(1)
 
