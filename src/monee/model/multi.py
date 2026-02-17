@@ -1,6 +1,7 @@
 from .branch import HeatExchanger
 from .child import PowerGenerator, PowerLoad, Sink
 from .core import (
+    Intermediate,
     MultGridCompoundModel,
     MultiGridBranchModel,
     MultiGridNodeModel,
@@ -62,7 +63,8 @@ class GenericTransferBranch(MultiGridBranchModel):
 
     def __init__(self, loss=0, **kwargs) -> None:
         super().__init__(**kwargs)
-        self._mass_flow = Var(-1)
+        self._mass_flow_pos = Var(1, min=0, name="mass_flow_pos")
+        self._mass_flow_neg = Var(1, min=0, name="mass_flow_neg")
         self.on_off = 1
         self._p_mw = Var(1)
         self._q_mvar = Var(1)
@@ -87,13 +89,14 @@ class GenericTransferBranch(MultiGridBranchModel):
         No docstring provided.
         """
         if type(grids) is WaterGrid or (type(grids) is dict and WaterGrid in grids):
-            self.mass_flow = self._mass_flow
-            self.heat_mass_flow = self._mass_flow
+            self.mass_flow_pos = self._mass_flow_pos
+            self.mass_flow_neg = self._mass_flow_neg
             self.t_from_pu = self._t_from_pu
             self.t_to_pu = self._t_to_pu
         if type(grids) is GasGrid or (type(grids) is dict and GasGrid in grids):
-            self.mass_flow = self._mass_flow
-            self.gas_mass_flow = self._mass_flow
+            self.mass_flow_pos = self._mass_flow_pos
+            self.mass_flow_neg = self._mass_flow_neg
+            self.gas_mass_flow = self.mass_flow_pos
         if type(grids) is PowerGrid or (type(grids) is dict and PowerGrid in grids):
             self.p_to_mw = self._p_mw
             self.p_from_mw = self._p_mw
@@ -101,25 +104,6 @@ class GenericTransferBranch(MultiGridBranchModel):
             self.q_from_mvar = self._q_mvar
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
-        """
-        Defines the system of equations for a generic transfer branch, enforcing variable consistency across connected nodes and grids.
-
-        This method generates the physical and operational constraints for a transfer branch that may span multiple grid domains, such as water or gas networks. For water grids, it enforces temperature and pressure continuity between the branch and its connected nodes. The method is typically called during network simulation or optimization to ensure correct variable propagation and coupling between nodes.
-
-        Args:
-            grids: The grid object or a dictionary of grid objects relevant to the branch (e.g., WaterGrid, GasGrid).
-            from_node_model: The model instance representing the source node connected to the branch.
-            to_node_model: The model instance representing the destination node connected to the branch.
-            **kwargs: Additional keyword arguments for solver options or equation customization.
-
-        Returns:
-            list: A list of equations enforcing variable consistency (e.g., temperature and pressure) across the branch and its nodes. The list may be empty if no relevant grid is present.
-
-        Examples:
-            # Called automatically during network simulation:
-            eqs = transfer_branch.equations(grids, from_node, to_node)
-            # eqs will contain temperature and pressure continuity constraints for water grids.
-        """
         eqs = []
         if type(grids) is WaterGrid or (type(grids) is dict and WaterGrid in grids):
             eqs += [self.t_from_pu == self.t_to_pu]
@@ -127,7 +111,6 @@ class GenericTransferBranch(MultiGridBranchModel):
             eqs += [to_node_model.t_pu == self.t_to_pu]
             eqs += [to_node_model.t_pu == from_node_model.t_pu]
             eqs += [from_node_model.pressure_pu == to_node_model.pressure_pu]
-            eqs += [from_node_model.pressure_pa == to_node_model.pressure_pa]
         if type(grids) is GasGrid or (type(grids) is dict and GasGrid in grids):
             pass
         return eqs
@@ -162,12 +145,12 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
         heat_to_branches = [
             branch
             for branch in to_branch_models
-            if "heat_mass_flow" in branch.vars or type(branch) is SubHE
+            if "t_from_pu" in branch.vars or type(branch) is SubHE
         ]
         heat_from_branches = [
             branch
             for branch in from_branch_models
-            if "heat_mass_flow" in branch.vars or type(branch) is SubHE
+            if "t_from_pu" in branch.vars or type(branch) is SubHE
         ]
         gas_to_branches = [
             branch for branch in to_branch_models if "gas_mass_flow" in branch.vars
@@ -206,16 +189,17 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         self, load_p_mw, load_q_mvar, heat_energy_mw, efficiency, **kwargs
     ) -> None:
         super().__init__(**kwargs)
+
         self.load_q_mvar = load_q_mvar
         self.efficiency = efficiency
 
         self.el_mw = load_p_mw
         self.heat_w = heat_energy_mw
 
-        self.t_k = Var(350)
-        self.t_pu = Var(1)
-        self.pressure_pa = Var(1000000)
-        self.pressure_pu = Var(1)
+        self.t_k = Intermediate(1)
+        self.t_pu = Var(1, min=0, max=2, name="t_pu")
+        self.pressure_squared_pu = Var(1, min=0, max=3, name="p_squared_pu")
+        self.pressure_pu = Var(1, min=0, max=3, name="p_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
         """
@@ -224,12 +208,12 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         heat_to_branches = [
             branch
             for branch in to_branch_models
-            if "heat_mass_flow" in branch.vars or type(branch) is SubHE
+            if "t_from_pu" in branch.vars or type(branch) is SubHE
         ]
         heat_from_branches = [
             branch
             for branch in from_branch_models
-            if "heat_mass_flow" in branch.vars or type(branch) is SubHE
+            if "t_from_pu" in branch.vars or type(branch) is SubHE
         ]
         power_to_branches = [
             branch for branch in to_branch_models if "p_from_mw" in branch.vars
@@ -250,8 +234,7 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
             sum(power_eqs[0]) == 0,
             sum(power_eqs[1]) == 0,
             self.heat_w == self.efficiency * self.el_mw,
-            self.t_pu == self.t_k / grid[1].t_ref,
-            self.pressure_pu == self.pressure_pa / grid[1].pressure_ref,
+            # IntermediateEq("t_k", self.t_pu * grid[1].t_ref),
         ]
 
 
@@ -380,12 +363,12 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         heat_to_branches = [
             branch
             for branch in to_branch_models
-            if "heat_mass_flow" in branch.vars or type(branch) is SubHE
+            if "t_from_pu" in branch.vars or type(branch) is SubHE
         ]
         heat_from_branches = [
             branch
             for branch in from_branch_models
-            if "heat_mass_flow" in branch.vars or type(branch) is SubHE
+            if "t_from_pu" in branch.vars or type(branch) is SubHE
         ]
         gas_to_branches = [
             branch for branch in to_branch_models if "gas_mass_flow" in branch.vars

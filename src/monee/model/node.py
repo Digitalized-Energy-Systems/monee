@@ -1,5 +1,7 @@
 import math
 
+from monee.model.child import ExtHydrGrid, Sink
+
 from .core import Intermediate, IntermediateEq, NodeModel, Var, model
 from .phys.core.hydraulics import junction_mass_flow_balance
 from .phys.nonlinear.ac import power_balance_equation
@@ -14,8 +16,8 @@ class Bus(NodeModel):
     def __init__(self, base_kv) -> None:
         super().__init__()
         self.base_kv = base_kv
-        self.vm_pu = Var(1, name="vm_pu")
-        self.vm_pu_squared = Var(1, name="vm_pu_squared")
+        self.vm_pu = Var(1, min=0, name="vm_pu")
+        self.vm_pu_squared = Var(1, min=0, name="vm_pu_squared")
         self.va_radians = Var(0, name="va_radians")
         self.va_degree = Intermediate()
         self.p_mw = Intermediate()
@@ -116,10 +118,10 @@ class Junction(NodeModel):
 
     def __init__(self) -> None:
         self.t_k = Intermediate()
-        self.t_pu = Var(1)
-        self.pressure_pa = Intermediate()
-        self.pressure_pu = Var(1)
-        self.mass_flow = Intermediate()
+        self.t_pu = Var(1, min=0, max=2, name="t_pu")
+        self.pressure_squared_pu = Var(1, min=0, max=2, name="p_squared_pu")
+        self.pressure_pu = Var(1, min=0, max=2, name="p_pu")
+        self.mass_flow = Intermediate(1)
 
     def calc_signed_mass_flow(
         self, from_branch_models, to_branch_models, connected_node_models
@@ -139,14 +141,24 @@ class Junction(NodeModel):
                 if "to_mass_flow" in model.vars
             ]
             + [
-                -model.vars["mass_flow"] * model.vars["on_off"]
+                -model.vars["mass_flow_pos"] * model.vars["on_off"]
                 for model in from_branch_models
-                if "mass_flow" in model.vars
+                if "mass_flow_pos" in model.vars
             ]
             + [
-                model.vars["mass_flow"] * model.vars["on_off"]
+                model.vars["mass_flow_pos"] * model.vars["on_off"]
                 for model in to_branch_models
-                if "mass_flow" in model.vars
+                if "mass_flow_pos" in model.vars
+            ]
+            + [
+                model.vars["mass_flow_neg"] * model.vars["on_off"]
+                for model in from_branch_models
+                if "mass_flow_neg" in model.vars
+            ]
+            + [
+                -model.vars["mass_flow_neg"] * model.vars["on_off"]
+                for model in to_branch_models
+                if "mass_flow_neg" in model.vars
             ]
             + [
                 model.vars["mass_flow"] * model.vars["regulation"]
@@ -163,35 +175,45 @@ class Junction(NodeModel):
         """
         temp_supported = (
             len(from_branch_models) > 0
-            and "t_average_k" in from_branch_models[0].vars
-            or (len(to_branch_models) > 0 and "t_average_k" in to_branch_models[0].vars)
+            and "t_to_pu" in from_branch_models[0].vars
+            or (len(to_branch_models) > 0 and "t_to_pu" in to_branch_models[0].vars)
         )
         if temp_supported:
-            return (
-                [
-                    -model.vars["mass_flow"]
-                    * model.vars["on_off"]
-                    * model.vars["t_from_pu"]
-                    if "t_from_pu" in model.vars
-                    else 0
-                    for model in from_branch_models
-                    if "mass_flow" in model.vars
-                ]
-                + [
-                    model.vars["mass_flow"]
-                    * model.vars["on_off"]
-                    * model.vars["t_to_pu"]
-                    if "t_to_pu" in model.vars
-                    else 0
-                    for model in to_branch_models
-                    if "mass_flow" in model.vars
-                ]
-                + [
-                    model.vars["mass_flow"] * model.vars["regulation"] * self.t_pu
-                    for model in connected_node_models
-                    if "mass_flow" in model.vars
-                ]
-            )
+            Tn = self.t_pu
+
+            terms = []
+
+            # node is FROM-end of these branches (branch orientation: this node -> other node)
+            for bm in from_branch_models:
+                if "mass_flow_pos" not in bm.vars or "mass_flow_neg" not in bm.vars:
+                    continue
+                mpos = bm.vars["mass_flow_pos"] * bm.vars.get("on_off", 1)
+                mneg = bm.vars["mass_flow_neg"] * bm.vars.get("on_off", 1)
+
+                Tin = bm.vars["t_from_pu"]  # inflow at from-end (your definition)
+                terms.append(mneg * Tn - mpos * Tin)
+
+            # node is TO-end of these branches (branch orientation: other node -> this node)
+            for bm in to_branch_models:
+                if "mass_flow_pos" not in bm.vars or "mass_flow_neg" not in bm.vars:
+                    continue
+                mpos = bm.vars["mass_flow_pos"] * bm.vars.get("on_off", 1)
+                mneg = bm.vars["mass_flow_neg"] * bm.vars.get("on_off", 1)
+
+                Tin = bm.vars["t_to_pu"]  # inflow at to-end
+                terms.append(-mneg * Tin + mpos * Tn)
+
+            for nm in connected_node_models:
+                if "mass_flow" not in nm.vars:
+                    continue
+
+                m_ext = nm.vars["mass_flow"] * nm.vars.get("regulation", 1)
+                if type(nm) is Sink or type(nm) is ExtHydrGrid:
+                    terms.append(m_ext * Tn)
+                else:
+                    terms.append(m_ext)
+
+            return terms
         else:
             return [0]
 
@@ -217,7 +239,6 @@ class Junction(NodeModel):
                 junction_mass_flow_balance(mass_flow_signed_list),
                 junction_mass_flow_balance(energy_flow_list),
                 IntermediateEq("t_k", self.t_pu * grid.t_ref),
-                IntermediateEq("pressure_pa", self.pressure_pu * grid.pressure_ref),
                 IntermediateEq(
                     "mass_flow",
                     sum(

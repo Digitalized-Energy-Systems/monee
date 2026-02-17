@@ -2,12 +2,9 @@ from abc import ABC, abstractmethod
 
 import numpy as np
 
-import monee.model.phys.core.hydraulics as hydraulicsmodel
-import monee.model.phys.nonlinear.gf as ogfmodel
 import monee.model.phys.nonlinear.hf as ohfmodel
-import monee.model.phys.nonlinear.wf as owfmodel
 
-from .core import BranchModel, Var, model
+from .core import BranchModel, Intermediate, IntermediateEq, Var, model
 from .grid import GasGrid, PowerGrid, WaterGrid
 
 
@@ -206,22 +203,28 @@ class WaterPipe(BranchModel):
         lambda_insulation_w_per_k=0.025,
         insulation_thickness_m=0.12,
         on_off=1,
+        friction=None,
     ) -> None:
         super().__init__()
         self.diameter_m = diameter_m
         self.length_m = length_m
         self.temperature_ext_k = temperature_ext_k
-        self.pipe_roughness = roughness
+        self.roughness = roughness
         self.lambda_insulation_w_per_k = lambda_insulation_w_per_k
         self.insulation_thickness_m = insulation_thickness_m
         self.on_off = on_off
-        self.mass_flow = Var(0.1)
-        self.velocity = Var(1)
-        self.q_w = Var(1)
-        self.reynolds = Var(1000)
-        self.t_average_pu = Var(1)
-        self.t_from_pu = Var(1)
-        self.t_to_pu = Var(1)
+        self.mass_flow = Intermediate(0.1)
+        self.mass_flow_pos = Var(0.1, min=0, name="mass_flow_pos")
+        self.mass_flow_neg = Var(0.1, min=0, name="mass_flow_neg")
+        self.mass_flow_pos_squared = Var(0, min=0, name="mass_flow_pos_sq")
+        self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
+        self.direction = Var(1, integer=True, min=0, max=1, name="direction")
+        self.velocity = Var(1, name="velocity")
+        self.q_w = Var(1, name="q_w")
+        self.reynolds = Var(1000, min=0, name="reynolds")
+        self.t_from_pu = Var(1, min=0, max=3, name="t_from_pu")
+        self.t_to_pu = Var(1, min=0, max=3, name="t_to_pu")
+        self.friction = Var(1, min=0, name="friction") if friction is None else friction
 
     def loss_percent(self):
         """
@@ -234,58 +237,7 @@ class WaterPipe(BranchModel):
         )
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
-        """
-        No docstring provided.
-        """
-        self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
-        return [
-            hydraulicsmodel.reynolds_equation(
-                self.reynolds,
-                self.mass_flow,
-                self.diameter_m,
-                grid.dynamic_visc,
-                self._pipe_area,
-                kwargs["abs_impl"],
-            ),
-            owfmodel.darcy_weisbach_equation(
-                from_node_model.vars["pressure_pu"] * grid.pressure_ref,
-                to_node_model.vars["pressure_pu"] * grid.pressure_ref,
-                self.reynolds,
-                self.velocity,
-                self.length_m,
-                self.diameter_m,
-                grid.fluid_density,
-                self.pipe_roughness,
-                on_off=self.on_off,
-                **kwargs,
-            ),
-            hydraulicsmodel.flow_rate_equation(
-                mean_flow_velocity=self.velocity,
-                flow_rate=self.mass_flow,
-                diameter=self.diameter_m,
-                fluid_density=grid.fluid_density,
-            ),
-            ohfmodel.heat_transfer_loss(
-                heat_transfer_flow_loss_var=self.q_w,
-                t_var=self.t_average_pu * grid.t_ref,
-                k_insulation_w_per_k=self.lambda_insulation_w_per_k,
-                ext_t=self.temperature_ext_k,
-                pipe_length=self.length_m,
-                pipe_inside_radius=self.diameter_m / 2,
-                pipe_outside_radius=self.diameter_m / 2 + self.insulation_thickness_m,
-            ),
-            ohfmodel.temp_flow(
-                t_in_scaled=from_node_model.vars["t_pu"],
-                t_out_scaled=to_node_model.vars["t_pu"],
-                heat_loss=self.q_w / grid.t_ref,
-                mass_flow=self.mass_flow,
-                sign_impl=kwargs["sign_impl"],
-            ),
-            self.t_average_pu
-            == (from_node_model.vars["t_pu"] + to_node_model.vars["t_pu"]) / 2,
-            self.t_from_pu == from_node_model.vars["t_pu"],
-            self.t_to_pu == to_node_model.vars["t_pu"],
-        ]
+        return [IntermediateEq("mass_flow", self.mass_flow_pos - self.mass_flow_neg)]
 
 
 @model
@@ -302,70 +254,38 @@ class HeatExchanger(BranchModel):
         length_m=2.5,
         temperature_ext_k=293,
         regulation=1,
+        friction=None,
     ) -> None:
         super().__init__()
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
-        self.pipe_roughness = roughness
+        self.roughness = roughness
         self.length_m = length_m
         self.limit = 0.1
         self.active = True
         self.regulation = regulation
         self.on_off = 1
         self.q_w_set = -q_mw * 10**6
-        self.q_w = Var(-1000)
-        self.mass_flow = Var(-0.1)
-        self.velocity = Var(-0.01)
-        self.reynolds = Var(1000)
-        self.t_from_pu = Var(1)
-        self.t_to_pu = Var(1)
-        self.t_average_pu = Var(1)
+        self.q_w = Var(-1000, name="q_w")
+
+        self.mass_flow = Intermediate(0.1)
+        self.mass_flow_pos = Var(0, min=0, name="mass_flow_pos")
+        self.mass_flow_neg = Var(0, min=0, name="mass_flow_neg")
+        self.mass_flow_pos_squared = Var(0, min=0, name="mass_flow_pos_sq")
+        self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
+        self.direction = Var(0, integer=True, min=0, max=1, name="direction")
+        self.velocity = Var(1, name="velocity")
+        self.reynolds = Var(1000, min=0, name="reynolds")
+        self.t_from_pu = Var(1, min=0, max=3, name="t_from_pu")
+        self.t_to_pu = Var(1, min=0, max=3, name="t_to_pu")
+        self.friction = (
+            Var(0.01, min=0, name="friction") if friction is None else friction
+        )
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
-        """
-        No docstring provided.
-        """
-        self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
         return [
-            hydraulicsmodel.reynolds_equation(
-                self.reynolds,
-                self.mass_flow,
-                self.diameter_m,
-                grid.dynamic_visc,
-                self._pipe_area,
-                kwargs["abs_impl"],
-            ),
-            owfmodel.darcy_weisbach_equation(
-                from_node_model.vars["pressure_pu"] * grid.pressure_ref,
-                to_node_model.vars["pressure_pu"] * grid.pressure_ref,
-                self.reynolds,
-                self.velocity,
-                self.length_m,
-                self.diameter_m,
-                grid.fluid_density,
-                self.pipe_roughness,
-                on_off=self.on_off,
-                use_darcy_friction=True,
-                **kwargs,
-            ),
-            hydraulicsmodel.flow_rate_equation(
-                mean_flow_velocity=self.velocity,
-                flow_rate=self.mass_flow,
-                diameter=self.diameter_m,
-                fluid_density=grid.fluid_density,
-            ),
-            ohfmodel.temp_flow(
-                t_in_scaled=from_node_model.vars["t_pu"],
-                t_out_scaled=to_node_model.vars["t_pu"],
-                heat_loss=self.q_w / grid.t_ref if self.active else 0,
-                mass_flow=self.mass_flow,
-                sign_impl=kwargs["sign_impl"],
-            ),
-            self.t_from_pu == from_node_model.vars["t_pu"],
-            self.t_to_pu == to_node_model.vars["t_pu"],
+            IntermediateEq("mass_flow", self.mass_flow_pos - self.mass_flow_neg),
             self.q_w == self.q_w_set * self.regulation,
-            self.t_average_pu
-            == (from_node_model.vars["t_pu"] + to_node_model.vars["t_pu"]) / 2,
         ]
 
 
@@ -396,57 +316,34 @@ class GasPipe(BranchModel):
     """
 
     def __init__(
-        self, diameter_m, length_m, temperature_ext_k=296.15, roughness=0.0001, on_off=1
+        self,
+        diameter_m,
+        length_m,
+        temperature_ext_k=296.15,
+        roughness=0.0001,
+        on_off=1,
+        friction=None,
     ) -> None:
         super().__init__()
         self.diameter_m = diameter_m
         self.length_m = length_m
         self.temperature_ext_k = temperature_ext_k
-        self.pipe_roughness = roughness
+        self.roughness = roughness
         self.on_off = on_off
-        self.mass_flow = Var(0.1)
+        self.mass_flow = Intermediate(0.1)
+        self.mass_flow_pos = Var(0, min=0, name="mass_flow_pos")
+        self.mass_flow_neg = Var(0, min=0, name="mass_flow_neg")
+        self.mass_flow_pos_squared = Var(0, min=0, name="mass_flow_pos_sq")
+        self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
+        self.direction = Var(0, integer=True, min=0, max=1)
         self.velocity = Var(1)
         self.reynolds = Var(1000)
         self.gas_density = Var(1)
+        self.friction = Var(1) if friction is None else friction
         self.q_w = 0
 
     def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):
         """
         No docstring provided.
         """
-        self._pipe_area = hydraulicsmodel.calc_pipe_area(self.diameter_m)
-        return [
-            hydraulicsmodel.reynolds_equation(
-                self.reynolds,
-                self.mass_flow,
-                self.diameter_m,
-                grid.dynamic_visc,
-                self._pipe_area,
-                kwargs["abs_impl"],
-            ),
-            ogfmodel.pipe_weymouth(
-                from_node_model.vars["pressure_pu"] * grid.pressure_ref,
-                to_node_model.vars["pressure_pu"] * grid.pressure_ref,
-                f_a=self.mass_flow,
-                rey=self.reynolds,
-                diameter_m=self.diameter_m,
-                roughness=self.pipe_roughness,
-                length_m=self.length_m,
-                t_k=grid.t_k,
-                compressibility=grid.compressibility,
-                on_off=self.on_off,
-                **kwargs,
-            ),
-            hydraulicsmodel.flow_rate_equation(
-                mean_flow_velocity=self.velocity,
-                flow_rate=self.mass_flow,
-                diameter=self.diameter_m,
-                fluid_density=self.gas_density,
-            ),
-            self.gas_density
-            == grid.pressure_ref
-            * (from_node_model.vars["pressure_pu"] + to_node_model.vars["pressure_pu"])
-            / 2
-            * grid.molar_mass
-            / (grid.universal_gas_constant * grid.t_k),
-        ]
+        return [IntermediateEq("mass_flow", self.mass_flow_pos - self.mass_flow_neg)]

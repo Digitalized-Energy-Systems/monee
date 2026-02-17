@@ -627,8 +627,8 @@ def create_ext_hydr_grid(
     network: mm.Network,
     node_id,
     mass_flow=1,
-    pressure_pa=1000000,
-    t_k=359,
+    pressure_pu=1,
+    t_k=356,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -676,7 +676,7 @@ def create_ext_hydr_grid(
             )
     """
     return network.child_to(
-        mm.ExtHydrGrid(mass_flow=mass_flow, pressure_pa=pressure_pa, t_k=t_k, **kwargs),
+        mm.ExtHydrGrid(mass_flow=mass_flow, pressure_pu=pressure_pu, t_k=t_k, **kwargs),
         node_id=node_id,
         constraints=constraints,
         overwrite_id=overwrite_id,

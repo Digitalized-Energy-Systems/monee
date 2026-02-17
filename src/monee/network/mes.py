@@ -6,7 +6,7 @@ import monee.express as mx
 import monee.model as mm
 
 REF_PA = 1000000
-REF_TEMP = 352
+REF_TEMP = 356
 DEFAULT_LENGTH = 100
 
 
@@ -69,7 +69,7 @@ def create_heat_net_for_power(
                 to_node_id=bus_index_to_end_junction_index[node.id],
                 diameter_m=0.2,
                 q_mw=(-1 if random.random() > 0.8 else 1)
-                * -0.003
+                * -0.1
                 * random.random()
                 * power_scale,
             )
@@ -101,7 +101,6 @@ def create_heat_net_for_power(
     mx.create_ext_hydr_grid(
         target_net,
         node_id=bus_index_to_junction_index[power_net_as_st.first_node()],
-        pressure_pa=REF_PA,
         t_k=REF_TEMP,
         name="Grid Connection Heat",
     )
@@ -399,110 +398,109 @@ def create_monee_benchmark_net():
 
     new_mes = pn.copy()
 
-    # gas
-    bus_to_gas_junc = create_gas_net_for_power(pn, new_mes, 1, scaling=1)
-    new_mes.childs_by_type(mm.Source)[0].model.regulation = 1
+    # # # gas
+    create_gas_net_for_power(pn, new_mes, 1, scaling=1)
 
-    # heat
+    # # heat
     bus_index_to_junction_index, bus_index_to_end_junction_index = (
         create_heat_net_for_power(
-            pn, new_mes, 1, mass_flow_rate=30, default_diameter_m=0.4
+            pn, new_mes, 1, mass_flow_rate=3, default_diameter_m=0.16
         )
     )
-    new_water_junc = mx.create_water_junction(new_mes)
-    mx.create_sink(
-        new_mes,
-        new_water_junc,
-        mass_flow=30,
-    )
-    new_water_junc_2 = mx.create_water_junction(new_mes)
-    mx.create_sink(
-        new_mes,
-        new_water_junc_2,
-        mass_flow=60,
-    )
-    mx.create_heat_exchanger(
-        new_mes,
-        from_node_id=new_water_junc,
-        to_node_id=new_water_junc_2,
-        diameter_m=0.20,
-        q_mw=3,
-    )
-    new_water_junc_3 = mx.create_water_junction(new_mes)
-    mx.create_sink(
-        new_mes,
-        new_water_junc_3,
-        mass_flow=60,
-    )
-    mx.create_heat_exchanger(
-        new_mes,
-        from_node_id=new_water_junc_2,
-        to_node_id=new_water_junc_3,
-        diameter_m=0.20,
-        q_mw=3,
-    )
-    mx.create_p2g(
-        new_mes,
-        from_node_id=node_4,
-        to_node_id=bus_to_gas_junc[node_4],
-        efficiency=0.7,
-        mass_flow_setpoint=1,
-        regulation=0,
-    )
-    mx.create_chp(
-        new_mes,
-        power_node_id=node_1,
-        heat_node_id=bus_index_to_junction_index[node_0],
-        heat_return_node_id=new_water_junc,
-        gas_node_id=bus_to_gas_junc[node_3],
-        mass_flow_setpoint=0.5,
-        diameter_m=0.3,
-        efficiency_power=0.5,
-        efficiency_heat=0.5,
-        regulation=1,
-    )
-    mx.create_g2p(
-        new_mes,
-        from_node_id=bus_to_gas_junc[node_1],
-        to_node_id=node_1,
-        efficiency=0.9,
-        p_mw_setpoint=20,
-        regulation=0,
-    )
-    mx.create_g2p(
-        new_mes,
-        from_node_id=bus_to_gas_junc[node_6],
-        to_node_id=node_6,
-        efficiency=0.9,
-        p_mw_setpoint=15,
-        regulation=0,
-    )
-    new_mes.branch(
-        mm.PowerLine(
-            length_m=100,
-            r_ohm_per_m=0.00007,
-            x_ohm_per_m=0.00007,
-            parallel=1,
-            backup=True,
-            on_off=0,
-            max_i_ka=max_i_ka,
-        ),
-        node_4,
-        node_0,
-    )
-    new_mes.branch(
-        mm.PowerLine(
-            length_m=100,
-            r_ohm_per_m=0.00007,
-            x_ohm_per_m=0.00007,
-            parallel=1,
-            backup=True,
-            on_off=0,
-            max_i_ka=max_i_ka,
-        ),
-        node_5,
-        node_2,
-    )
+    # new_water_junc = mx.create_water_junction(new_mes)
+    # mx.create_sink(
+    #     new_mes,
+    #     new_water_junc,
+    #     mass_flow=3,
+    # )
+    # new_water_junc_2 = mx.create_water_junction(new_mes)
+    # mx.create_sink(
+    #     new_mes,
+    #     new_water_junc_2,
+    #     mass_flow=6,
+    # )
+    # mx.create_heat_exchanger(
+    #     new_mes,
+    #     from_node_id=new_water_junc,
+    #     to_node_id=new_water_junc_2,
+    #     diameter_m=0.20,
+    #     q_mw=3,
+    # )
+    # new_water_junc_3 = mx.create_water_junction(new_mes)
+    # mx.create_sink(
+    #     new_mes,
+    #     new_water_junc_3,
+    #     mass_flow=6,
+    # )
+    # mx.create_heat_exchanger(
+    #     new_mes,
+    #     from_node_id=new_water_junc_2,
+    #     to_node_id=new_water_junc_3,
+    #     diameter_m=0.20,
+    #     q_mw=0.3,
+    # )
+    # mx.create_p2g(
+    #     new_mes,
+    #     from_node_id=node_4,
+    #     to_node_id=bus_to_gas_junc[node_4],
+    #     efficiency=0.7,
+    #     mass_flow_setpoint=1,
+    #     regulation=0,
+    # )
+    # mx.create_chp(
+    #     new_mes,
+    #     power_node_id=node_1,
+    #     heat_node_id=bus_index_to_junction_index[node_0],
+    #     heat_return_node_id=new_water_junc,
+    #     gas_node_id=bus_to_gas_junc[node_3],
+    #     mass_flow_setpoint=0.5,
+    #     diameter_m=0.3,
+    #     efficiency_power=0.5,
+    #     efficiency_heat=0.5,
+    #     regulation=1,
+    # )
+    # mx.create_g2p(
+    #     new_mes,
+    #     from_node_id=bus_to_gas_junc[node_1],
+    #     to_node_id=node_1,
+    #     efficiency=0.9,
+    #     p_mw_setpoint=20,
+    #     regulation=0,
+    # )
+    # mx.create_g2p(
+    #     new_mes,
+    #     from_node_id=bus_to_gas_junc[node_6],
+    #     to_node_id=node_6,
+    #     efficiency=0.9,
+    #     p_mw_setpoint=15,
+    #     regulation=0,
+    # )
+    # new_mes.branch(
+    #     mm.PowerLine(
+    #         length_m=100,
+    #         r_ohm_per_m=0.00007,
+    #         x_ohm_per_m=0.00007,
+    #         parallel=1,
+    #         backup=True,
+    #         on_off=0,
+    #         max_i_ka=max_i_ka,
+    #     ),
+    #     node_4,
+    #     node_0,
+    # )
+    # new_mes.branch(
+    #     mm.PowerLine(
+    #         length_m=100,
+    #         r_ohm_per_m=0.00007,
+    #         x_ohm_per_m=0.00007,
+    #         parallel=1,
+    #         backup=True,
+    #         on_off=0,
+    #         max_i_ka=max_i_ka,
+    #     ),
+    #     node_5,
+    #     node_2,
+    # )
     return new_mes
 
 

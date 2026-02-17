@@ -70,6 +70,7 @@ class WaterGrid(Grid):
     dynamic_visc: float = 0.000596
     t_ref: float = 356
     pressure_ref: float = 1000000
+    f_max: float = 200
 
 
 GAS_GRID_ATTRS = {
@@ -83,6 +84,10 @@ GAS_GRID_ATTRS = {
         "t_k": 300,
         "t_ref": 356,
         "pressure_ref": 1000000,
+        "nominal_pressure_pu": 1,
+        "f_max": 20,
+        "p_squared_pu_max": 1.3,
+        "p_squared_pu_min": 0.7,
     }
 }
 
@@ -123,6 +128,10 @@ class GasGrid(Grid):
     t_k: float
     t_ref: float
     pressure_ref: float
+    nominal_pressure_pu: float
+    f_max: float
+    p_squared_pu_max: float
+    p_squared_pu_min: float
 
 
 @model

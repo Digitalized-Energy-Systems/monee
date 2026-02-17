@@ -47,12 +47,12 @@ class ExtPowerGrid(NoVarChildModel):
 
     def __init__(self, p_mw, q_mvar, vm_pu=1, va_degree=0, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.p_mw = Var(p_mw)
-        self.q_mvar = Var(q_mvar)
+        self.p_mw = Var(p_mw, name="ext_grid_p_mw")
+        self.q_mvar = Var(q_mvar, name="ext_grid_q_mvar")
         self.vm_pu = vm_pu
         self.va_degree = va_degree
 
-    def overwrite(self, node_model):
+    def overwrite(self, node_model, grid):
         """
         No docstring provided.
         """
@@ -89,17 +89,19 @@ class ExtHydrGrid(NoVarChildModel):
     No docstring provided.
     """
 
-    def __init__(self, mass_flow=1, pressure_pa=1000000, t_k=359, **kwargs) -> None:
+    def __init__(self, mass_flow=-1, pressure_pu=1, t_k=356, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = Var(mass_flow)
-        self.pressure_pa = pressure_pa
+        self.mass_flow = Var(mass_flow, name="ext_grid_mass_flow")
+        self.pressure_pu = pressure_pu
         self.t_k = t_k
 
-    def overwrite(self, node_model):
+    def overwrite(self, node_model, grid):
         """
         No docstring provided.
         """
-        node_model.pressure_pa = Const(self.pressure_pa)
+        node_model.pressure_pu = Const(self.pressure_pu)
+        node_model.pressure_squared_pu = Const(self.pressure_pu**2)
+        node_model.t_pu = Const(self.t_k / grid.t_ref)
         node_model.t_k = Const(self.t_k)
 
 
@@ -109,17 +111,18 @@ class ConsumeHydrGrid(NoVarChildModel):
     No docstring provided.
     """
 
-    def __init__(self, mass_flow=0.1, pressure_pa=1000000, t_k=293, **kwargs) -> None:
+    def __init__(self, mass_flow=0.1, pressure_pu=1, t_k=293, **kwargs) -> None:
         super().__init__(**kwargs)
         self.mass_flow = -mass_flow
-        self.pressure_pa = pressure_pa
+        self.pressure_pu = pressure_pu
         self.t_k = t_k
 
-    def overwrite(self, node_model):
+    def overwrite(self, node_model, grid):
         """
         No docstring provided.
         """
-        node_model.pressure_pa = Const(self.pressure_pa)
+        node_model.pressure_pu = Const(self.pressure_pu)
+        node_model.pressure_squared_pu = Const(self.pressure_pu**2)
 
 
 @model

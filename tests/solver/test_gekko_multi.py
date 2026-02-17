@@ -258,7 +258,7 @@ def create_in_line_p2h():
     w_node_2 = pn.node(mm.Junction())
     w_node_3 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.ExtHydrGrid(t_k=359))],
+        child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))],
     )
     pn.branch(
         mm.WaterPipe(diameter_m=0.15, length_m=100),

@@ -1,3 +1,5 @@
+import types
+
 import pyomo.environ as pyo
 
 from monee.model import (
@@ -23,6 +25,39 @@ from .core import (
 )
 
 DEFAULT_SOLVER_OPTIONS = {}
+
+
+class PyomoPWLImpl:
+    def __init__(self, pm: pyo.ConcreteModel, pw_repn: str = "SOS2"):
+        self.pm = pm
+        self.pw_repn = pw_repn
+        # counter to ensure unique component names
+        if not hasattr(pm, "_pwl_counter"):
+            pm._pwl_counter = 0
+
+    def piecewise_eq(self, y, x, xs, ys, name: str | None = None):
+        pm = self.pm
+        pm._pwl_counter += 1
+        k = pm._pwl_counter
+        if name is None:
+            name = f"pwl_{k}"
+
+        # Pyomo Piecewise needs concrete lists
+        xs = list(xs)
+        ys = list(ys)
+
+        # Optional: ensure x domain coverage doesn't warn (often Reynolds bounds aren't tight)
+        pw = pyo.Piecewise(
+            y,
+            x,
+            pw_pts=xs,
+            f_rule=ys,  # list form: y[i] at xs[i]
+            pw_constr_type="EQ",
+            pw_repn=self.pw_repn,  # "SOS2" (tight), or "BIGM"
+            warn_domain_coverage=False,
+        )
+        setattr(pm, name, pw)
+        return []
 
 
 class PyomoSolver(SolverInterface):
@@ -158,13 +193,17 @@ class PyomoSolver(SolverInterface):
         """
         for intermediate_eq in [eq for eq in equations if type(eq) is IntermediateEq]:
             attr_val = getattr(model_obj, intermediate_eq.attr)
+            eq = (
+                intermediate_eq.eq()
+                if isinstance(intermediate_eq.eq, types.FunctionType)
+                else intermediate_eq.eq
+            )
 
             # If the target attribute is not "Intermediate" wrapper, force equality:
-            if type(attr_val) is not Intermediate:
-                PyomoSolver._add_equation(pm, attr_val == intermediate_eq.eq)
-            else:
+            if type(attr_val) is Intermediate:
                 # Create a Pyomo Expression and attach it
-                e = pyo.Expression(expr=intermediate_eq.eq)
+                e = pyo.Expression(expr=eq)
+
                 # Put on pm for uniqueness + easy value extraction
                 name = f"expr__{id(model_obj)}__{intermediate_eq.attr}"
                 setattr(pm, name, e)
@@ -199,7 +238,7 @@ class PyomoSolver(SolverInterface):
                 continue
             for child in network.childs_by_ids(node.child_ids):
                 if child.active:
-                    child.model.overwrite(node.model)
+                    child.model.overwrite(node.model, node.grid)
 
         branches = network.branches
         compounds = network.compounds
@@ -229,7 +268,8 @@ class PyomoSolver(SolverInterface):
         for k, v in DEFAULT_SOLVER_OPTIONS.items():
             solver.options[k] = v
 
-        solver.solve(pm, tee=True)
+        print(pm.cons[153].expr)
+        solver.solve(pm, tee=True, symbolic_solver_labels=True)
 
         # pull values back into your objects
         self.withdraw_pyomo_vars(nodes, branches, compounds, network)
@@ -374,6 +414,7 @@ class PyomoSolver(SolverInterface):
         abs_impl = abs
         sqrt_impl = pyo.sqrt
         log_impl = pyo.log
+        pwl_impl = PyomoPWLImpl(pm, pw_repn="SOS2")  # <-- add this
 
         def if_impl(*args, **kwargs):
             raise NotImplementedError(
@@ -409,6 +450,7 @@ class PyomoSolver(SolverInterface):
                     sign_impl=sign_impl,
                     log_impl=log_impl,
                     sqrt_impl=sqrt_impl,
+                    pwl_impl=pwl_impl,
                 )
             )
 

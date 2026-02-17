@@ -1,7 +1,5 @@
 import math
 
-from ..core import hydraulics
-
 
 def calc_a(z, r, t, m):
     """
@@ -31,39 +29,38 @@ def junction_pressure(p, p_nom):
 R_specific = 504.5
 
 
-def calc_C_squared(diameter_m, friction, length_m, t_k, compressability):
+def calc_C_squared(diameter_m, reynolds, length_m, t_k, compressability):
     """
     No docstring provided.
     """
-    numerator = math.pi**2 * diameter_m**5
-    denominator = 128 * friction * length_m * R_specific * t_k * compressability
+    numerator = math.pi**2 * diameter_m**5 * reynolds
+    denominator = (
+        128 * length_m * R_specific * t_k * compressability * 64
+    )  # reynolds / 64, as friction part of denominator
     C_squared = numerator / denominator
     return C_squared
 
 
 def pipe_weymouth(
-    p_i,
-    p_j,
-    f_a,
-    rey,
+    p_squared_i,
+    p_squared_j,
+    f_a_pos_sq,
+    f_a_neg_sq,
     diameter_m,
-    roughness,
     length_m,
     t_k,
     compressibility,
     on_off=1,
+    reynolds=None,
     **kwargs,
 ):
-    """
-    No docstring provided.
-    """
-    return (p_i**2 - p_j**2) * calc_C_squared(
+    return (p_squared_i - p_squared_j) * calc_C_squared(
         diameter_m,
-        hydraulics.swamee_jain(rey, diameter_m, roughness, kwargs["log_impl"]),
+        reynolds,
         length_m,
         t_k,
         compressibility,
-    ) * on_off == -abs(f_a) * f_a
+    ) * on_off == -(f_a_pos_sq - f_a_neg_sq)
 
 
 def normal_pressure(p, p_squared):

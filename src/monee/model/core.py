@@ -509,7 +509,7 @@ class ChildModel(GenericModel):
         super().__init__(**kwargs)
         self.regulation = regulation
 
-    def overwrite(self, node_model):
+    def overwrite(self, node_model, grid):
         """
         No docstring provided.
         """
@@ -547,7 +547,6 @@ class Component(ABC):
         independent=True,
     ) -> None:
         self.model = model
-        self.formulation = formulation
         self.id = id
         self.constraints = [] if constraints is None else constraints
         self.name = name
@@ -555,6 +554,8 @@ class Component(ABC):
         self.grid = grid
         self.independent = independent
         self.ignored = False
+
+        self.formulation = formulation
 
     @property
     def tid(self):
@@ -569,6 +570,17 @@ class Component(ABC):
         No docstring provided.
         """
         return f"{self.model.__class__.__name__}-{self.id}".lower()
+
+    @property
+    def formulation(self):
+        return self._formulation
+
+    @formulation.setter
+    def formulation(self, formulation):
+        self._formulation = formulation
+
+        if self._formulation is not None:
+            self._formulation.ensure_var(self.model)
 
 
 class Child(Component):

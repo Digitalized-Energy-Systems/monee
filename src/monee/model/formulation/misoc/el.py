@@ -22,8 +22,6 @@ class MISOCPElectricityNodeFormulation(NodeFormulation):
         connected_node_models,
         **kwargs,
     ):
-        if node.vm_pu is Intermediate:
-            return [node.vm_pu**2 == node.vm_pu_squared]
         return [
             IntermediateEq("vm_pu", kwargs["sqrt_impl"](node.vm_pu_squared)),
         ]

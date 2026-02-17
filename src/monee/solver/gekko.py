@@ -48,16 +48,28 @@ DEFAULT_SOLVER_OPTIONS = [
 ]
 
 
+class GekkoPWLImpl:
+    def __init__(self, m):
+        self.m = m
+
+    def piecewise_eq(self, *, y, x, xs, ys, name=None):
+        xs = list(xs)
+        ys = list(ys)
+        return [y == self.m.pwl(x, xs, ys)]
+
+
 def _process_intermediate_eqs(m, model, equations):
     """
     No docstring provided.
     """
     for intermediate_eq in [eq for eq in equations if type(eq) is IntermediateEq]:
         attr_intermediate_var = getattr(model, intermediate_eq.attr)
-        if type(attr_intermediate_var) is not Intermediate:
-            m.Equation(attr_intermediate_var == intermediate_eq.eq)
-        else:
-            i = m.Intermediate(intermediate_eq.eq)
+        eq = (
+            intermediate_eq.eq() if callable(intermediate_eq.eq) else intermediate_eq.eq
+        )
+
+        if type(attr_intermediate_var) is Intermediate:
+            i = m.Intermediate(eq)
             setattr(model, intermediate_eq.attr, i)
 
 
@@ -221,7 +233,7 @@ class GEKKOSolver(SolverInterface):
                 continue
             for child in network.childs_by_ids(node.child_ids):
                 if child.active:
-                    child.model.overwrite(node.model)
+                    child.model.overwrite(node.model, node.grid)
 
         branches = network.branches
         compounds = network.compounds
@@ -404,6 +416,7 @@ class GEKKOSolver(SolverInterface):
                     sign_impl=m.sign3,
                     log_impl=m.log10,
                     sqrt_impl=m.sqrt,
+                    exp_impl=m.exp,
                 )
             )
 

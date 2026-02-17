@@ -17,11 +17,11 @@ def calc_nikurdse(internal_diameter_m, roughness):
     return 1 / (2 * np.log10(3.71 * internal_diameter_m / roughness)) ** 2
 
 
-def reynolds_equation(rey_var, flow_var, diameter_m, dynamic_visc, pipe_area, abs_impl):
+def reynolds_equation(rey_var, mass_flow, diameter_m, dynamic_visc, pipe_area):
     """
     No docstring provided.
     """
-    return rey_var == abs(flow_var) * diameter_m / (dynamic_visc * pipe_area)
+    return rey_var == mass_flow * diameter_m / (dynamic_visc * pipe_area)
 
 
 def junction_mass_flow_balance(flows):
@@ -52,7 +52,7 @@ def swamee_jain(reynolds_var, diameter_m, roughness, log_func):
     No docstring provided.
     """
     term1 = roughness / diameter_m / 3.7
-    term2 = 5.74 / reynolds_var**0.9
+    term2 = 5.74 / (reynolds_var + 1) ** 0.9  # avoid infeasaiblity at Re=0
     denominator = log_func(term1 + term2) ** 2
     f = 0.25 / denominator
     return f

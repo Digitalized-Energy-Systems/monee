@@ -50,7 +50,7 @@ class ChildFormulation(Formulation):
     def equations(self, child, grid, node, **kwargs):
         return []
 
-    def overwrite(self, child, node_model):
+    def overwrite(self, child, node_model, grid):
         pass
 
 
@@ -59,10 +59,10 @@ def _or_dict(d: dict):
 
 
 class NetworkFormulation:
-    branch_type_to_formulations: dict[type, BranchFormulation]
-    node_type_to_formulations: dict[type, NodeFormulation]
-    child_type_to_formulations: dict[type, ChildFormulation]
-    compound_type_to_formulations: dict[type, CompoundFormulation]
+    branch_type_to_formulations: dict[tuple[type, type], BranchFormulation]
+    node_type_to_formulations: dict[tuple[type, type], NodeFormulation]
+    child_type_to_formulations: dict[tuple[type, type], ChildFormulation]
+    compound_type_to_formulations: dict[tuple[type, type], CompoundFormulation]
 
     def __init__(
         self,

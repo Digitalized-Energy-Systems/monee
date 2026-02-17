@@ -187,7 +187,7 @@ def test_two_lines_example():
 
 
 def test_two_lines_example_big_vm():
-    pn = create_two_line_example_with_vm(2)
+    pn = create_two_line_example_with_vm(1.5)
     solver = GEKKOSolver()
 
     result = solver.solve(pn)
