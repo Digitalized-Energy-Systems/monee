@@ -96,12 +96,12 @@ heating grid via a **power-to-heat (P2H)** unit:
     j_return = mx.create_water_junction(net)  # return header
 
     mx.create_ext_hydr_grid(net, j_supply)
-    mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.12, length_m=100)
+    mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.3, length_m=100)
     mx.create_sink(net, j_return, mass_flow=1)
 
     # ── Couple the two grids ──────────────────────────────────────────────
     mx.create_p2h(net, bus_1, j_mid, j_return,
-                  heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9)
+                  heat_energy_mw=0.01, diameter_m=0.1, efficiency=0.9)
 
     result = run_energy_flow(net)
 

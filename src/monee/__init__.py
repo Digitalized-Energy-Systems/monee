@@ -10,6 +10,7 @@ from monee.simulation import (
     TimeseriesResult,
     StepHook,
 )
+from monee.solver import GEKKOSolver, PyomoSolver
 
 
 def run_energy_flow(net: mm.Network, solver=None, **kwargs):
