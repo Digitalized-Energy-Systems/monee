@@ -395,10 +395,10 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
             power_balance_equation(power_eqs[0]),
             power_balance_equation(power_eqs[1]),
             [branch for branch in heat_from_branches if type(branch) is SubHE][0].q_w
-            / 1000000
             == -self.efficiency_heat
             * self.gas_kgps
             * self.regulation
+            * 1000000
             * (3.6 * self._hhv),
             self.el_mw
             == -self.efficiency_power

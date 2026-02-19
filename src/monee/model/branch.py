@@ -225,7 +225,7 @@ class WaterPipe(BranchModel):
         self.t_from_pu = Var(1, min=0, max=3, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=3, name="t_to_pu")
         self.friction = (
-            Var(1, min=0, max=1, name="friction") if friction is None else friction
+            Var(0.01, min=0, max=1, name="friction") if friction is None else friction
         )
 
     def loss_percent(self):

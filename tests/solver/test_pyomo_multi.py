@@ -45,19 +45,18 @@ def test_scaled_example_gas_incident_pyo():
         use_ext_grid_bounds=False,
         debug=True,
     )
-    # result = monee.run_energy_flow_optimization(
-    #     net_multi, optimization_problem=optimization_problem, solver=PyomoSolver()
-    # )
+    result = monee.run_energy_flow_optimization(
+        net_multi, optimization_problem=optimization_problem, solver=PyomoSolver()
+    )
 
-    # resilience = mp.calc_general_resilience_performance(result.network)
+    resilience = mp.calc_general_resilience_performance(result.network)
 
-    # print(result)
-    # print(result.objective)
-    # print(resilience)
-    assert False
-    # assert resilience[0] == 0
-    # assert math.isclose(resilience[2], 66.09600000018102, abs_tol=0.01)
-    # assert result is not None
+    print(result)
+    print(result.objective)
+    print(resilience)
+    assert resilience[0] == 0
+    assert math.isclose(resilience[2], 0, abs_tol=0.01)
+    assert result is not None
 
 
 def create_in_line_p2h():
@@ -253,7 +252,7 @@ def test_simple_chp():
     assert len(result.dataframes) == 14
     assert math.isclose(
         result.dataframes["ExtPowerGrid"]["p_mw"][0],
-        0.0008044296954891514,
+        -0.006264089217161262,
         abs_tol=0.001,
     )
     assert math.isclose(

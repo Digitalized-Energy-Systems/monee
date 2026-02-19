@@ -30,8 +30,8 @@ class NLDarcyWeisbachNodeFormulation(NodeFormulation):
 
 class NLDarcyWeisbachBranchFormulation(BranchFormulation):
     def ensure_var(self, model):
-        model.t_in_pu = Var(1, min=0, max=3, name="t_in_pu")
-        model.t_out_pu = Var(1, min=0, max=3, name="t_out_pu")
+        model.t_in_pu = Var(1, min=0.3, max=2, name="t_in_pu")
+        model.t_out_pu = Var(1, min=0.3, max=2, name="t_out_pu")
         model.mass_flow_mag = Var(1, min=0, name="mass_flow_mag")
         model.alpha = Var(0.01, min=0, max=1, name="alpha")
         model.t_inc = Var(1, name="temperature_increase")
@@ -118,6 +118,8 @@ class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
                 grid.dynamic_visc,
                 branch._pipe_area,
             ),
+            branch.mass_flow_pos_squared == branch.mass_flow_pos * branch.mass_flow_pos,
+            branch.mass_flow_neg_squared == branch.mass_flow_neg * branch.mass_flow_neg,
             branch.mass_flow_pos <= grid.f_max * branch.direction,
             branch.mass_flow_neg <= grid.f_max * (1 - branch.direction),
             branch.mass_flow_pos <= grid.f_max * branch.on_off,
@@ -126,8 +128,8 @@ class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
             owfmodel.darcy_weisbach_equation(
                 from_node_model.vars["pressure_pu"],
                 to_node_model.vars["pressure_pu"],
-                branch.mass_flow_pos,
-                branch.mass_flow_neg,
+                branch.mass_flow_pos_squared,
+                branch.mass_flow_neg_squared,
                 branch.length_m,
                 branch.diameter_m,
                 grid.fluid_density,

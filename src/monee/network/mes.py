@@ -439,68 +439,68 @@ def create_monee_benchmark_net():
         diameter_m=0.20,
         q_mw=0.03,
     )
-    # mx.create_p2g(
-    #     new_mes,
-    #     from_node_id=node_4,
-    #     to_node_id=bus_to_gas_junc[node_4],
-    #     efficiency=0.7,
-    #     mass_flow_setpoint=1,
-    #     regulation=0,
-    # )
+    mx.create_p2g(
+        new_mes,
+        from_node_id=node_4,
+        to_node_id=bus_to_gas_junc[node_4],
+        efficiency=0.7,
+        mass_flow_setpoint=1,
+        regulation=0,
+    )
     mx.create_chp(
         new_mes,
         power_node_id=node_1,
         heat_node_id=bus_index_to_junction_index[node_0],
         heat_return_node_id=new_water_junc,
         gas_node_id=bus_to_gas_junc[node_3],
-        mass_flow_setpoint=0.05,
+        mass_flow_setpoint=0.005,
         diameter_m=0.1,
         efficiency_power=0.5,
         efficiency_heat=0.5,
         regulation=1,
     )
-    # mx.create_g2p(
-    #     new_mes,
-    #     from_node_id=bus_to_gas_junc[node_1],
-    #     to_node_id=node_1,
-    #     efficiency=0.9,
-    #     p_mw_setpoint=2,
-    #     regulation=0,
-    # )
-    # mx.create_g2p(
-    #     new_mes,
-    #     from_node_id=bus_to_gas_junc[node_6],
-    #     to_node_id=node_6,
-    #     efficiency=0.9,
-    #     p_mw_setpoint=1,
-    #     regulation=0,
-    # )
-    # new_mes.branch(
-    #     mm.PowerLine(
-    #         length_m=100,
-    #         r_ohm_per_m=0.00007,
-    #         x_ohm_per_m=0.00007,
-    #         parallel=1,
-    #         backup=True,
-    #         on_off=0,
-    #         max_i_ka=max_i_ka,
-    #     ),
-    #     node_4,
-    #     node_0,
-    # )
-    # new_mes.branch(
-    #     mm.PowerLine(
-    #         length_m=100,
-    #         r_ohm_per_m=0.00007,
-    #         x_ohm_per_m=0.00007,
-    #         parallel=1,
-    #         backup=True,
-    #         on_off=0,
-    #         max_i_ka=max_i_ka,
-    #     ),
-    #     node_5,
-    #     node_2,
-    # )
+    mx.create_g2p(
+        new_mes,
+        from_node_id=bus_to_gas_junc[node_1],
+        to_node_id=node_1,
+        efficiency=0.9,
+        p_mw_setpoint=2,
+        regulation=0,
+    )
+    mx.create_g2p(
+        new_mes,
+        from_node_id=bus_to_gas_junc[node_6],
+        to_node_id=node_6,
+        efficiency=0.9,
+        p_mw_setpoint=1,
+        regulation=0,
+    )
+    new_mes.branch(
+        mm.PowerLine(
+            length_m=100,
+            r_ohm_per_m=0.00007,
+            x_ohm_per_m=0.00007,
+            parallel=1,
+            backup=True,
+            on_off=0,
+            max_i_ka=max_i_ka,
+        ),
+        node_4,
+        node_0,
+    )
+    new_mes.branch(
+        mm.PowerLine(
+            length_m=100,
+            r_ohm_per_m=0.00007,
+            x_ohm_per_m=0.00007,
+            parallel=1,
+            backup=True,
+            on_off=0,
+            max_i_ka=max_i_ka,
+        ),
+        node_5,
+        node_2,
+    )
     return new_mes
 
 

@@ -575,8 +575,8 @@ def create_power_generator(
 def create_ext_power_grid(
     network: mm.Network,
     node_id,
-    p_mw=1,
-    q_mvar=1,
+    p_mw=0,
+    q_mvar=0,
     vm_pu=1,
     va_degree=0,
     constraints=None,
@@ -592,8 +592,8 @@ def create_ext_power_grid(
     Args:
         network (mm.Network): The network to which the external power grid will be added. Must be a valid `mm.Network` instance.
         node_id: Identifier of the node where the external grid will be connected.
-        p_mw (float, optional): Active power supplied by the external grid in megawatts. Defaults to 1.
-        q_mvar (float, optional): Reactive power supplied by the external grid in megavolt-amperes reactive. Defaults to 1.
+        p_mw (float, optional): Initial value for the active power variable in megawatts. Defaults to 0.
+        q_mvar (float, optional): Initial value for the reactive power variable in megavolt-amperes reactive. Defaults to 0.
         vm_pu (float, optional): Voltage magnitude at the external grid in per unit. Defaults to 1.
         va_degree (float, optional): Voltage angle at the external grid in degrees. Defaults to 0.
         constraints (dict or object, optional): Operational constraints for the external grid, such as power or voltage limits.
@@ -646,6 +646,7 @@ def create_ext_hydr_grid(
     mass_flow=1,
     pressure_pu=1,
     t_k=356,
+    grid_key=mm.GAS_KEY,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -700,6 +701,8 @@ def create_ext_hydr_grid(
         constraints=constraints,
         overwrite_id=overwrite_id,
         name=name,
+        auto_node_creator=mm.Junction,
+        auto_grid_key=grid_key,
     )
 
 
@@ -707,6 +710,7 @@ def create_source(
     network: mm.Network,
     node_id,
     mass_flow=1,
+    grid_key=mm.GAS_KEY,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -721,6 +725,8 @@ def create_source(
         constraints=constraints,
         overwrite_id=overwrite_id,
         name=name,
+        auto_node_creator=mm.Junction,
+        auto_grid_key=grid_key,
     )
 
 
@@ -793,6 +799,7 @@ def create_sink(
     network: mm.Network,
     node_id,
     mass_flow=1,
+    grid_key=mm.GAS_KEY,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -807,6 +814,8 @@ def create_sink(
         constraints=constraints,
         overwrite_id=overwrite_id,
         name=name,
+        auto_node_creator=mm.Junction,
+        auto_grid_key=grid_key,
     )
 
 
@@ -837,6 +846,8 @@ def create_heat_exchanger(
         constraints=constraints,
         grid=grid,
         name=name,
+        auto_node_creator=mm.Junction,
+        auto_grid_key=mm.WATER_KEY,
     )
 
 
@@ -1136,6 +1147,209 @@ def create_g2h(
         gas_node_id=gas_node_id,
         heat_node_id=heat_node_id,
         heat_return_node_id=heat_return_node_id,
+    )
+
+
+def create_trafo(
+    network: mm.Network,
+    from_node_id,
+    to_node_id,
+    vk_percent=12.2,
+    vkr_percent=0.25,
+    sn_trafo_mva=160,
+    shift=0,
+    constraints=None,
+    grid=None,
+    name=None,
+):
+    """
+    Adds a two-winding transformer branch to the network.
+
+    The from-node is treated as the low-voltage side and the to-node as the
+    high-voltage side when computing per-unit impedance. If the referenced
+    nodes do not yet exist, electrical buses are created automatically.
+
+    Args:
+        network (mm.Network): The network to which the transformer is added.
+        from_node_id: Low-voltage bus identifier.
+        to_node_id: High-voltage bus identifier.
+        vk_percent (float): Short-circuit voltage in percent. Defaults to 12.2.
+        vkr_percent (float): Real part of short-circuit voltage in percent. Defaults to 0.25.
+        sn_trafo_mva (float): Rated apparent power in MVA. Defaults to 160.
+        shift (float): Phase shift in radians. Defaults to 0.
+        constraints: Operational constraints for the transformer.
+        grid: Grid type. Defaults to the electrical grid.
+        name (str): Human-readable name for the transformer.
+
+    Returns:
+        mm.Trafo: The created transformer object integrated into the network.
+    """
+    return network.branch(
+        mm.Trafo(
+            vk_percent=vk_percent,
+            vkr_percent=vkr_percent,
+            sn_trafo_mva=sn_trafo_mva,
+            shift=shift,
+        ),
+        from_node_id=from_node_id,
+        to_node_id=to_node_id,
+        constraints=constraints,
+        grid=grid,
+        name=name,
+        auto_node_creator=lambda: mm.Bus(1),
+        auto_grid_key=mm.EL_KEY,
+    )
+
+
+def create_gas_ext_grid(
+    network: mm.Network,
+    node_id,
+    mass_flow=1,
+    pressure_pu=1,
+    t_k=356,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    """
+    Adds an external hydraulic grid to a gas node, auto-creating a gas junction if needed.
+    """
+    return create_ext_hydr_grid(
+        network,
+        node_id,
+        mass_flow=mass_flow,
+        pressure_pu=pressure_pu,
+        t_k=t_k,
+        grid_key=mm.GAS_KEY,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        **kwargs,
+    )
+
+
+def create_water_ext_grid(
+    network: mm.Network,
+    node_id,
+    mass_flow=1,
+    pressure_pu=1,
+    t_k=356,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    """
+    Adds an external hydraulic grid to a water node, auto-creating a water junction if needed.
+    """
+    return create_ext_hydr_grid(
+        network,
+        node_id,
+        mass_flow=mass_flow,
+        pressure_pu=pressure_pu,
+        t_k=t_k,
+        grid_key=mm.WATER_KEY,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        **kwargs,
+    )
+
+
+def create_gas_source(
+    network: mm.Network,
+    node_id,
+    mass_flow=1,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    """
+    Adds a gas source (injection) to a gas node, auto-creating a junction if needed.
+    """
+    return create_source(
+        network,
+        node_id,
+        mass_flow=mass_flow,
+        grid_key=mm.GAS_KEY,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        **kwargs,
+    )
+
+
+def create_gas_sink(
+    network: mm.Network,
+    node_id,
+    mass_flow=1,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    """
+    Adds a gas sink (consumption) to a gas node, auto-creating a junction if needed.
+    """
+    return create_sink(
+        network,
+        node_id,
+        mass_flow=mass_flow,
+        grid_key=mm.GAS_KEY,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        **kwargs,
+    )
+
+
+def create_water_source(
+    network: mm.Network,
+    node_id,
+    mass_flow=1,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    """
+    Adds a water source (injection) to a water node, auto-creating a junction if needed.
+    """
+    return create_source(
+        network,
+        node_id,
+        mass_flow=mass_flow,
+        grid_key=mm.WATER_KEY,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        **kwargs,
+    )
+
+
+def create_water_sink(
+    network: mm.Network,
+    node_id,
+    mass_flow=1,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    """
+    Adds a water sink (consumption) to a water node, auto-creating a junction if needed.
+    """
+    return create_sink(
+        network,
+        node_id,
+        mass_flow=mass_flow,
+        grid_key=mm.WATER_KEY,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        **kwargs,
     )
 
 
