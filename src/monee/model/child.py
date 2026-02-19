@@ -57,6 +57,7 @@ class ExtPowerGrid(NoVarChildModel):
         No docstring provided.
         """
         node_model.vm_pu = Const(self.vm_pu)
+        node_model.vm_pu_squared = Const(self.vm_pu * self.vm_pu)
         node_model.va_degree = Const(self.va_degree)
 
 

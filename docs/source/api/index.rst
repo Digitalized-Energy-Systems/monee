@@ -9,8 +9,6 @@ functions.
 .. automodule:: monee
    :members:
    :undoc-members:
-   :imported-members:
-   :inherited-members:
 
 
 By subpackages
@@ -21,6 +19,7 @@ By subpackages
 
    monee.express
    monee.model
+   monee.model.formulation
    monee.io
    monee.network
    monee.problem

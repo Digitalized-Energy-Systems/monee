@@ -260,7 +260,8 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
 
     CHPControlNode extends MultiGridNodeModel, Junction, and Bus to provide a unified interface for modeling the operational logic and constraints of a CHP unit within a multi-energy network. It tracks key parameters such as fuel mass flow, electrical and thermal efficiencies, and regulation factors, and exposes variables for integration with network branches. Use this class when simulating or optimizing CHP systems that require explicit coupling between gas, heat, and electrical grids.
 
-    Example:
+    Example::
+
         chp_node = CHPControlNode(
             mass_flow_capacity=1.2,
             efficiency_power=0.35,
@@ -343,6 +344,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
 
         Returns:
             tuple: A tuple of equations representing:
+
                 - Heat mass flow balance at the node.
                 - Heat energy flow balance at the node.
                 - Gas mass flow balance at the node.
@@ -662,7 +664,7 @@ class PowerToGas(MultiGridBranchModel):
             == -self.efficiency
             * self.p_from_mw
             * (1 / (grids[GasGrid].higher_heating_value * 3.6)),
-            self.p_from_mw > 0,
+            self.p_from_mw >= 0,
             self.p_from_mw == self.el_mw * self.regulation,
             self.gas_kgps
             == -self.efficiency

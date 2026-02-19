@@ -398,47 +398,47 @@ def create_monee_benchmark_net():
 
     new_mes = pn.copy()
 
-    # # # gas
-    create_gas_net_for_power(pn, new_mes, 1, scaling=1)
+    # gas
+    bus_to_gas_junc = create_gas_net_for_power(pn, new_mes, 1, scaling=1)
 
-    # # heat
+    # # # heat
     bus_index_to_junction_index, bus_index_to_end_junction_index = (
         create_heat_net_for_power(
-            pn, new_mes, 1, mass_flow_rate=3, default_diameter_m=0.16
+            pn, new_mes, 1, mass_flow_rate=1, default_diameter_m=0.16
         )
     )
-    # new_water_junc = mx.create_water_junction(new_mes)
-    # mx.create_sink(
-    #     new_mes,
-    #     new_water_junc,
-    #     mass_flow=3,
-    # )
-    # new_water_junc_2 = mx.create_water_junction(new_mes)
-    # mx.create_sink(
-    #     new_mes,
-    #     new_water_junc_2,
-    #     mass_flow=6,
-    # )
-    # mx.create_heat_exchanger(
-    #     new_mes,
-    #     from_node_id=new_water_junc,
-    #     to_node_id=new_water_junc_2,
-    #     diameter_m=0.20,
-    #     q_mw=3,
-    # )
-    # new_water_junc_3 = mx.create_water_junction(new_mes)
-    # mx.create_sink(
-    #     new_mes,
-    #     new_water_junc_3,
-    #     mass_flow=6,
-    # )
-    # mx.create_heat_exchanger(
-    #     new_mes,
-    #     from_node_id=new_water_junc_2,
-    #     to_node_id=new_water_junc_3,
-    #     diameter_m=0.20,
-    #     q_mw=0.3,
-    # )
+    new_water_junc = mx.create_water_junction(new_mes)
+    mx.create_sink(
+        new_mes,
+        new_water_junc,
+        mass_flow=0.05,
+    )
+    new_water_junc_2 = mx.create_water_junction(new_mes)
+    mx.create_sink(
+        new_mes,
+        new_water_junc_2,
+        mass_flow=0.05,
+    )
+    mx.create_heat_exchanger(
+        new_mes,
+        from_node_id=new_water_junc,
+        to_node_id=new_water_junc_2,
+        diameter_m=0.20,
+        q_mw=0.03,
+    )
+    new_water_junc_3 = mx.create_water_junction(new_mes)
+    mx.create_sink(
+        new_mes,
+        new_water_junc_3,
+        mass_flow=0.06,
+    )
+    mx.create_heat_exchanger(
+        new_mes,
+        from_node_id=new_water_junc_2,
+        to_node_id=new_water_junc_3,
+        diameter_m=0.20,
+        q_mw=0.03,
+    )
     # mx.create_p2g(
     #     new_mes,
     #     from_node_id=node_4,
@@ -447,24 +447,24 @@ def create_monee_benchmark_net():
     #     mass_flow_setpoint=1,
     #     regulation=0,
     # )
-    # mx.create_chp(
-    #     new_mes,
-    #     power_node_id=node_1,
-    #     heat_node_id=bus_index_to_junction_index[node_0],
-    #     heat_return_node_id=new_water_junc,
-    #     gas_node_id=bus_to_gas_junc[node_3],
-    #     mass_flow_setpoint=0.5,
-    #     diameter_m=0.3,
-    #     efficiency_power=0.5,
-    #     efficiency_heat=0.5,
-    #     regulation=1,
-    # )
+    mx.create_chp(
+        new_mes,
+        power_node_id=node_1,
+        heat_node_id=bus_index_to_junction_index[node_0],
+        heat_return_node_id=new_water_junc,
+        gas_node_id=bus_to_gas_junc[node_3],
+        mass_flow_setpoint=0.05,
+        diameter_m=0.1,
+        efficiency_power=0.5,
+        efficiency_heat=0.5,
+        regulation=1,
+    )
     # mx.create_g2p(
     #     new_mes,
     #     from_node_id=bus_to_gas_junc[node_1],
     #     to_node_id=node_1,
     #     efficiency=0.9,
-    #     p_mw_setpoint=20,
+    #     p_mw_setpoint=2,
     #     regulation=0,
     # )
     # mx.create_g2p(
@@ -472,7 +472,7 @@ def create_monee_benchmark_net():
     #     from_node_id=bus_to_gas_junc[node_6],
     #     to_node_id=node_6,
     #     efficiency=0.9,
-    #     p_mw_setpoint=15,
+    #     p_mw_setpoint=1,
     #     regulation=0,
     # )
     # new_mes.branch(

@@ -9,7 +9,6 @@ extensions = [
     "myst_parser",
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
-    "sphinx.ext.autosummary",
     "sphinx.ext.intersphinx",
     "sphinx.ext.viewcode",
     "sphinx.ext.doctest",
@@ -18,13 +17,16 @@ extensions = [
     "sphinx_copybutton",
     "sphinx_autodoc_typehints",
     "sphinx.ext.autosectionlabel",
+    "sphinx_design",
+    "sphinx.ext.mathjax",
 ]
 
 templates_path = ["_templates"]
 exclude_patterns = []
 
-autosummary_generate = True
 autoclass_content = "both"
+suppress_warnings = ["autodoc"]
+autosectionlabel_prefix_document = True
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True
 napoleon_include_init_with_doc = False
@@ -41,6 +43,8 @@ myst_enable_extensions = [
     "substitution",
     "attrs_block",
     "attrs_inline",
+    "dollarmath",
+    "amsmath",
 ]
 
 # Intersphinx mappings

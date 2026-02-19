@@ -5,11 +5,9 @@ def active_power_loss(
 
 
 def reactive_power_loss(
-    var_reactive_power_from, var_reactive_power_to, var_im_ij_pu, resistance_x
+    var_reactive_power_from, var_reactive_power_to, var_im_ij_pu, reactance_x
 ):
-    return (
-        var_reactive_power_from == var_im_ij_pu * resistance_x - var_reactive_power_to
-    )
+    return var_reactive_power_from == var_im_ij_pu * reactance_x - var_reactive_power_to
 
 
 def voltage_drop(

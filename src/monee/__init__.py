@@ -110,7 +110,8 @@ def solve_load_shedding_problem(
         SolverError: If the solver fails to find a feasible solution or encounters an error during optimization.
 
     Examples:
-        Solve a load shedding problem with specific operational bounds:
+        Solve a load shedding problem with specific operational bounds::
+
             result = solve_load_shedding_problem(
                 my_network,
                 bounds_vm=(0.95, 1.05),

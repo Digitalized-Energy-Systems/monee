@@ -41,7 +41,6 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
 
         pipe_outside_r = branch.diameter_m / 2 + branch.insulation_thickness_m
         pipe_inside_r = branch.diameter_m / 2
-
         UA_C = (
             2
             * math.pi
@@ -49,6 +48,8 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
             * branch.length_m
             / math.log(pipe_outside_r / pipe_inside_r)
         ) / ohfmodel.SPECIFIC_HEAT_CAP_WATER
+
+        hydraulicsmodel.piecewise_eq_friction(branch, kwargs["pwl_impl"])
 
         return [
             hydraulicsmodel.reynolds_equation(
@@ -58,12 +59,6 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
                 grid.dynamic_visc,
                 branch._pipe_area,
             ),
-            # # assuming laminar flow (introduces error)
-            branch.friction * (branch.reynolds + 0.001) == 64,
-            # branch.friction == hydraulicsmodel.swamee_jain(branch.reynolds,
-            #                                              branch.diameter_m,
-            #                                              branch.roughness,
-            #                                              kwargs["log_impl"]),
             branch.mass_flow_pos_squared == branch.mass_flow_pos * branch.mass_flow_pos,
             branch.mass_flow_neg_squared == branch.mass_flow_neg * branch.mass_flow_neg,
             branch.mass_flow_pos <= grid.f_max * branch.direction,
@@ -83,32 +78,13 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
                 friction=branch.friction / grid.pressure_ref,
                 **kwargs,
             ),
-            # hydraulicsmodel.flow_rate_equation(
-            #     mean_flow_velocity=branch.velocity,
-            #     flow_rate=branch.mass_flow_pos - branch.mass_flow_neg,
-            #     diameter=branch.diameter_m,
-            #     fluid_density=grid.fluid_density,
-            # ),
-            # ohfmodel.heat_out(branch.t_out_pu,
-            #                   branch.t_in_pu,
-            #                   branch.temperature_ext_k,
-            #                   grid.t_ref,
-            #                   branch.diameter_m,
-            #                   branch.insulation_thickness_m,
-            #                   branch.mass_flow_pos,
-            #                   branch.mass_flow_neg,
-            #                   branch.lambda_insulation_w_per_k,
-            #                   branch.length_m,
-            #                   0),
             branch.mass_flow_mag == branch.mass_flow_pos + branch.mass_flow_neg,
             branch.alpha * (branch.mass_flow_mag + 0.001 + UA_C)
             == branch.mass_flow_mag + 0.001,
-            # (branch.mass_flow_mag + 0.001) * branch.t_in == - (0/ohfmodel.SPECIFIC_HEAT_CAP_WATER * grid.t_ref),
             branch.t_out_pu
             == branch.temperature_ext_k / grid.t_ref
             + branch.alpha * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref)
             + 0,
-            # branch.t_out_pu == branch.temperature_ext_k/grid.t_ref + (branch.t_in_pu - branch.temperature_ext_k/grid.t_ref) * alpha,
             branch.t_in_pu
             == branch.direction * to_node_model.vars["t_pu"]
             + (1 - branch.direction) * from_node_model.vars["t_pu"],
@@ -132,6 +108,8 @@ class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         branch._pipe_area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
 
+        hydraulicsmodel.piecewise_eq_friction(branch, kwargs["pwl_impl"])
+
         return [
             hydraulicsmodel.reynolds_equation(
                 branch.reynolds,
@@ -140,8 +118,6 @@ class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
                 grid.dynamic_visc,
                 branch._pipe_area,
             ),
-            # assuming laminar flow (introduces error)
-            branch.friction * (branch.reynolds + 0.001) == 64,
             branch.mass_flow_pos <= grid.f_max * branch.direction,
             branch.mass_flow_neg <= grid.f_max * (1 - branch.direction),
             branch.mass_flow_pos <= grid.f_max * branch.on_off,
@@ -159,24 +135,6 @@ class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
                 friction=branch.friction / grid.pressure_ref,
                 **kwargs,
             ),
-            # hydraulicsmodel.flow_rate_equation(
-            #     mean_flow_velocity=branch.velocity,
-            #     flow_rate=branch.mass_flow_pos - branch.mass_flow_neg,
-            #     diameter=branch.diameter_m,
-            #     fluid_density=grid.fluid_density,
-            # ),
-            # ohfmodel.heat_out(branch.t_out_pu,
-            #                   branch.t_in_pu,
-            #                   branch.temperature_ext_k,
-            #                   grid.t_ref,
-            #                   branch.diameter_m,
-            #                   0,
-            #                   branch.mass_flow_pos,
-            #                   branch.mass_flow_neg,
-            #                   0,
-            #                   branch.length_m,
-            #                   branch.q_w,
-            #                   no_losses=True),
             branch.mass_flow_mag == branch.mass_flow_pos + branch.mass_flow_neg,
             (branch.mass_flow_mag + 0.001) * branch.t_inc
             == -branch.q_w / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * grid.t_ref),

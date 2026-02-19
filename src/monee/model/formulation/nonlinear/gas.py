@@ -41,6 +41,8 @@ class NLWeymouthBranchFormulation(BranchFormulation):
         p_to = p0 + (1 / (2 * p0)) * (to_node_model.vars["pressure_squared_pu"] - x0)
         p_avg = 0.5 * (p_from + p_to)
 
+        hydraulicsmodel.piecewise_eq_friction(branch, kwargs["pwl_impl"])
+
         return [
             hydraulicsmodel.reynolds_equation(
                 branch.reynolds,
@@ -49,10 +51,6 @@ class NLWeymouthBranchFormulation(BranchFormulation):
                 grid.dynamic_visc,
                 branch._pipe_area,
             ),
-            # branch.friction == hydraulicsmodel.swamee_jain(branch.reynolds,
-            #                                              branch.diameter_m,
-            #                                              branch.roughness,
-            #                                              kwargs["log_impl"]),
             branch.mass_flow_pos_squared == branch.mass_flow_pos * branch.mass_flow_pos,
             branch.mass_flow_neg_squared == branch.mass_flow_neg * branch.mass_flow_neg,
             branch.mass_flow_pos_squared <= grid.f_max**2 * branch.direction,
@@ -71,15 +69,9 @@ class NLWeymouthBranchFormulation(BranchFormulation):
                 t_k=grid.t_k,
                 compressibility=grid.compressibility,
                 on_off=branch.on_off,
-                reynolds=branch.reynolds,
+                friction=branch.friction,
                 **kwargs,
             ),
-            # hydraulicsmodel.flow_rate_equation(
-            #     mean_flow_velocity=branch.velocity,
-            #     flow_rate=branch.mass_flow_pos - branch.mass_flow_neg,
-            #     diameter=branch.diameter_m,
-            #     fluid_density=branch.gas_density,
-            # ),
             branch.gas_density
             == grid.pressure_ref
             * p_avg

@@ -221,10 +221,12 @@ class WaterPipe(BranchModel):
         self.direction = Var(1, integer=True, min=0, max=1, name="direction")
         self.velocity = Var(1, name="velocity")
         self.q_w = Var(1, name="q_w")
-        self.reynolds = Var(1000, min=0, name="reynolds")
+        self.reynolds = Var(1000, min=20, max=1000000, name="reynolds")
         self.t_from_pu = Var(1, min=0, max=3, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=3, name="t_to_pu")
-        self.friction = Var(1, min=0, name="friction") if friction is None else friction
+        self.friction = (
+            Var(1, min=0, max=1, name="friction") if friction is None else friction
+        )
 
     def loss_percent(self):
         """
@@ -275,11 +277,11 @@ class HeatExchanger(BranchModel):
         self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
         self.direction = Var(0, integer=True, min=0, max=1, name="direction")
         self.velocity = Var(1, name="velocity")
-        self.reynolds = Var(1000, min=0, name="reynolds")
+        self.reynolds = Var(1000, min=0, max=1000000, name="reynolds")
         self.t_from_pu = Var(1, min=0, max=3, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=3, name="t_to_pu")
         self.friction = (
-            Var(0.01, min=0, name="friction") if friction is None else friction
+            Var(0.01, min=0, max=1, name="friction") if friction is None else friction
         )
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
@@ -337,7 +339,7 @@ class GasPipe(BranchModel):
         self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
         self.direction = Var(0, integer=True, min=0, max=1)
         self.velocity = Var(1)
-        self.reynolds = Var(1000)
+        self.reynolds = Var(1000, min=0, max=1000000)
         self.gas_density = Var(1)
         self.friction = Var(1) if friction is None else friction
         self.q_w = 0

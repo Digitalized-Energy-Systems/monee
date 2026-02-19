@@ -52,10 +52,10 @@ class GekkoPWLImpl:
     def __init__(self, m):
         self.m = m
 
-    def piecewise_eq(self, *, y, x, xs, ys, name=None):
+    def piecewise_eq(self, y, x, xs, ys, name=None):
         xs = list(xs)
         ys = list(ys)
-        return [y == self.m.pwl(x, xs, ys)]
+        return self.m.pwl(x, y, xs, ys)
 
 
 def _process_intermediate_eqs(m, model, equations):
@@ -398,6 +398,7 @@ class GEKKOSolver(SolverInterface):
         """
         No docstring provided.
         """
+        pwl_impl = GekkoPWLImpl(m)
         for branch in branches:
             if ignore_branch(branch, network, ignored_nodes):
                 continue
@@ -417,6 +418,7 @@ class GEKKOSolver(SolverInterface):
                     log_impl=m.log10,
                     sqrt_impl=m.sqrt,
                     exp_impl=m.exp,
+                    pwl_impl=pwl_impl,
                 )
             )
 

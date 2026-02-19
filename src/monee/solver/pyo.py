@@ -42,11 +42,9 @@ class PyomoPWLImpl:
         if name is None:
             name = f"pwl_{k}"
 
-        # Pyomo Piecewise needs concrete lists
         xs = list(xs)
         ys = list(ys)
 
-        # Optional: ensure x domain coverage doesn't warn (often Reynolds bounds aren't tight)
         pw = pyo.Piecewise(
             y,
             x,
@@ -57,7 +55,6 @@ class PyomoPWLImpl:
             warn_domain_coverage=False,
         )
         setattr(pm, name, pw)
-        return []
 
 
 class PyomoSolver(SolverInterface):
@@ -265,11 +262,29 @@ class PyomoSolver(SolverInterface):
 
         # solve
         solver = pyo.SolverFactory(solver_name)
+        from pyomo.solvers.plugins.solvers.gurobi_persistent import GurobiPersistent
+
+        solver = GurobiPersistent()
+        solver.set_instance(pm)  # pm is your ConcreteModel
+        solver.set_gurobi_param("OutputFlag", 1)
+
         for k, v in DEFAULT_SOLVER_OPTIONS.items():
             solver.options[k] = v
 
-        print(pm.cons[153].expr)
-        solver.solve(pm, tee=True, symbolic_solver_labels=True)
+        solver.solve(pm, tee=True)
+        # Check infeasible
+        grb = solver._solver_model  # the gurobipy.Model
+        print(grb)
+        print("YO")
+
+        if grb.Status == 3:  # GRB.INFEASIBLE
+            pm.write("model.lp", io_options={"symbolic_solver_labels": True})
+
+            grb.computeIIS()
+            print("YOOO")
+            grb.write("model.ilp")  # human-readable IIS
+            grb.write("model.iis")  # IIS in gurobi format
+            print("Wrote IIS to model.ilp / model.iis")
 
         # pull values back into your objects
         self.withdraw_pyomo_vars(nodes, branches, compounds, network)

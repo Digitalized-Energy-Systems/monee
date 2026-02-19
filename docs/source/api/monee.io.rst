@@ -10,7 +10,7 @@ matpower
    :show-inheritance:
 
 pandapower (experimental)
----------------
+-------------------------
 
 .. automodule:: monee.io.from_pandapower
    :members:
@@ -18,7 +18,7 @@ pandapower (experimental)
    :show-inheritance:
 
 simbench (experimental)
----------------
+-----------------------
 
 .. automodule:: monee.io.from_simbench
    :members:

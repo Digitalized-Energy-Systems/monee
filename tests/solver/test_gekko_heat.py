@@ -407,10 +407,9 @@ def test_two_pipes_heat_network():
     heat_net = create_branching_two_pipe_heat_example()
     result = ms.GEKKOSolver().solve(heat_net)
 
-    print(result)
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -33)
     assert len(result.dataframes) == 4
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999840.95027)
+    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999839.46067)
     assert math.isclose(result.dataframes["Junction"]["t_k"][2], 355.90067332)
 
 
@@ -434,7 +433,7 @@ def test_circle_heat_network():
     assert math.isclose(
         result.dataframes["ExtHydrGrid"]["mass_flow"][0], -5, rel_tol=1e-4
     )
-    assert math.isclose(result.dataframes["Junction"]["t_k"][2], 355.90707622)
+    assert math.isclose(result.dataframes["Junction"]["t_k"][2], 355.86103261)
     assert len(result.dataframes) == 5
 
 
@@ -444,8 +443,8 @@ def test_ext_branching_pipes_heat_network():
 
     print(result)
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -5)
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][4], 999252.80958)
-    assert math.isclose(result.dataframes["Junction"]["t_k"][4], 443.11540262)
+    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][4], 999248.27937)
+    assert math.isclose(result.dataframes["Junction"]["t_k"][4], 443.03795234)
     assert len(result.dataframes) == 5
 
 
@@ -456,7 +455,7 @@ def test_heat_exchanger():
     print(result)
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.3)
     assert math.isclose(result.dataframes["Junction"]["t_k"][0], 392.28527037)
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][0], 999991.51504)
+    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][0], 999991.21558)
     assert len(result.dataframes) == 5
 
 
@@ -467,5 +466,5 @@ def test_dead_end():
     assert math.isclose(
         result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.1, rel_tol=1e-5
     )
-    assert math.isclose(result.dataframes["Junction"]["t_k"][0], 343.55436844)
+    assert math.isclose(result.dataframes["Junction"]["t_k"][0], 343.51366117)
     assert len(result.dataframes) == 4

@@ -10,7 +10,7 @@ from monee.model.phys.misoc.pf import (
 
 class MISOCPElectricityNodeFormulation(NodeFormulation):
     def ensure_var(self, node):
-        node.vm_pu_squared = Var(1, min=0)
+        node.vm_pu_squared = Var(1, min=0, max=3)
         node.vm_pu = Intermediate(1)
 
     def equations(
@@ -29,9 +29,8 @@ class MISOCPElectricityNodeFormulation(NodeFormulation):
 
 class MISOCPElectricityBranchFormulation(BranchFormulation):
     def ensure_var(self, branch):
-        branch.big_M = 2
+        branch.big_M = 20
         branch.current_pu = Var(1, min=0)
-        branch.gap = Var(1, min=0)
 
     def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
         return [branch.current_pu * branch.br_r]
@@ -41,8 +40,8 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
             voltage_drop(
                 from_node_model.vars["vm_pu_squared"],
                 to_node_model.vars["vm_pu_squared"],
-                branch.vars["p_from_mw"],
-                branch.vars["q_from_mvar"],
+                branch.vars["p_from_mw"] / grid.sn_mva,
+                branch.vars["q_from_mvar"] / grid.sn_mva,
                 branch.current_pu,
                 branch.br_r,
                 branch.br_x,
@@ -51,8 +50,8 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
             voltage_drop(
                 from_node_model.vars["vm_pu_squared"],
                 to_node_model.vars["vm_pu_squared"],
-                branch.vars["p_from_mw"],
-                branch.vars["q_from_mvar"],
+                branch.vars["p_from_mw"] / grid.sn_mva,
+                branch.vars["q_from_mvar"] / grid.sn_mva,
                 branch.current_pu,
                 branch.br_r,
                 branch.br_x,
@@ -60,21 +59,21 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
             >= -branch.big_M * (1 - branch.on_off),
             soc_rel(
                 from_node_model.vars["vm_pu_squared"],
-                branch.vars["p_from_mw"],
-                branch.vars["q_from_mvar"],
+                branch.vars["p_from_mw"] / grid.sn_mva,
+                branch.vars["q_from_mvar"] / grid.sn_mva,
                 branch.current_pu,
             ),
             active_power_loss(
-                branch.vars["p_from_mw"],
-                branch.vars["p_to_mw"],
+                branch.vars["p_from_mw"] / grid.sn_mva,
+                branch.vars["p_to_mw"] / grid.sn_mva,
                 branch.current_pu,
                 branch.br_r,
             ),
             reactive_power_loss(
-                branch.vars["q_from_mvar"],
-                branch.vars["q_to_mvar"],
+                branch.vars["q_from_mvar"] / grid.sn_mva,
+                branch.vars["q_to_mvar"] / grid.sn_mva,
                 branch.current_pu,
-                branch.br_r,
+                branch.br_x,
             ),
             # Calculate the voltage/current error, However using this make the Problem non-convex
             # branch.gap == gap_expr(from_node_model.vars["vm_pu_squared"],

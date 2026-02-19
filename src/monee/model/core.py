@@ -205,14 +205,15 @@ class NodeModel(GenericModel):
 
     NodeModel provides a foundation for representing nodes within various grid domains (e.g., electrical, gas, heat) in network simulations. Subclasses must implement the abstract `equations` method to specify the physical or operational relationships at the node, such as flow conservation, voltage balance, or other nodal constraints. This class is intended for use in extensible, multi-domain network modeling frameworks and supports integration with branch and child component models.
 
-    Example:
+    Example::
+
         class MyNodeModel(NodeModel):
             def equations(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
                 # Implement nodal balance equations
                 return [eq1, eq2]
 
     Methods:
-        equations(grid, in_branch_models, out_branch_models, childs, **kwargs): Abstract. Must be implemented by subclasses to define the system of equations for the node.
+        equations(grid, in_branch_models, out_branch_models, childs, ``**kwargs``): Abstract. Must be implemented by subclasses to define the system of equations for the node.
     """
 
     @abstractmethod
@@ -236,10 +237,12 @@ class NodeModel(GenericModel):
             NotImplementedError: If not implemented in a subclass.
 
         Examples:
-            class MyNodeModel(NodeModel):
-                def equations(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
-                    # Define nodal balance equations
-                    return [eq1, eq2]
+            .. code-block:: python
+
+                class MyNodeModel(NodeModel):
+                    def equations(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
+                        # Define nodal balance equations
+                        return [eq1, eq2]
         """
 
     def minimize(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
@@ -262,12 +265,13 @@ class BranchModel(GenericModel):
         _ext_data (dict): Stores extra data passed during initialization for use in extended models.
 
     Methods:
-        equations(grid, from_node_model, to_node_model, **kwargs): Abstract. Must be implemented by subclasses to define branch equations.
+        equations(grid, from_node_model, to_node_model, ``**kwargs``): Abstract. Must be implemented by subclasses to define branch equations.
         loss_percent(): Returns the loss percentage for the branch (default 0; override as needed).
         is_cp(): Indicates if the branch is a control point (default False; override as needed).
         init(grid): Optional initialization logic for the branch (default is no-op).
 
-    Example:
+    Example::
+
         class MyCustomBranch(BranchModel):
             def equations(self, grid, from_node_model, to_node_model, **kwargs):
                 # Implement branch-specific equations
@@ -311,13 +315,16 @@ class BranchModel(GenericModel):
             int: Always returns 0, representing zero loss percentage by default.
 
         Examples:
-            # In a custom branch model, override to provide actual loss calculation
-            class MyBranchModel(BranchModel):
-                def loss_percent(self):
-                    return compute_actual_loss(self)
+            .. code-block:: python
 
-            # In base usage
-            loss = branch_model.loss_percent()  # Returns 0 unless overridden
+                # In a custom branch model, override to provide actual loss calculation
+                class MyBranchModel(BranchModel):
+                    def loss_percent(self):
+                        return compute_actual_loss(self)
+
+            In base usage::
+
+                loss = branch_model.loss_percent()  # Returns 0 unless overridden
         """
         return 0
 
@@ -351,11 +358,12 @@ class MultiGridBranchModel(BranchModel):
     This class extends BranchModel to support branches that interact with more than one grid type, enabling the modeling of multi-energy systems and sector coupling. Subclasses must implement the abstract `equations` method to define the physical or operational relationships across the involved grids. The `is_cp` method returns True by default, indicating that multi-grid branches are treated as control points in the network. The `init` method can be overridden to perform any setup or pre-processing required for multi-grid branches.
 
     Methods:
-        equations(grids, from_node_model, to_node_model, **kwargs): Abstract. Must be implemented by subclasses to define the system of equations for the multi-grid branch.
+        equations(grids, from_node_model, to_node_model, ``**kwargs``): Abstract. Must be implemented by subclasses to define the system of equations for the multi-grid branch.
         is_cp(): Returns True, indicating this branch is a control point by default.
         init(grids): Optional initialization logic for the branch (default is no-op).
 
-    Example:
+    Example::
+
         class MyMultiGridBranch(MultiGridBranchModel):
             def equations(self, grids, from_node_model, to_node_model, **kwargs):
                 # Define equations coupling electrical and gas flows
@@ -386,10 +394,12 @@ class MultiGridBranchModel(BranchModel):
             NotImplementedError: If not implemented in a subclass.
 
         Examples:
-            class MyMultiGridBranch(MultiGridBranchModel):
-                def equations(self, grids, from_node_model, to_node_model, **kwargs):
-                    # Define equations coupling electrical and gas flows
-                    return [eq1, eq2, eq3]
+            .. code-block:: python
+
+                class MyMultiGridBranch(MultiGridBranchModel):
+                    def equations(self, grids, from_node_model, to_node_model, **kwargs):
+                        # Define equations coupling electrical and gas flows
+                        return [eq1, eq2, eq3]
         """
 
     def is_cp(self):
@@ -434,7 +444,8 @@ class MultiGridNodeModel(NodeModel):
 
     This class extends NodeModel to support nodes that participate in multiple grid domains (such as electrical, gas, and heat networks) and are treated as control points in network simulations. Use this class when modeling nodes that require special handling for optimization, control, or observability in multi-energy systems. The `is_cp` method returns True, indicating the node's control point status, which can influence system-level strategies.
 
-    Example:
+    Example::
+
         node_model = MultiGridNodeModel(...)
         if node_model.is_cp():
             # Apply control logic for control points

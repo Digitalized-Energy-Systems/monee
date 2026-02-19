@@ -56,3 +56,37 @@ def swamee_jain(reynolds_var, diameter_m, roughness, log_func):
     denominator = log_func(term1 + term2) ** 2
     f = 0.25 / denominator
     return f
+
+
+def piecewise_eq_friction(model, pwl):
+    re_pts = [
+        20,
+        200,
+        500,
+        1000,
+        1500,
+        2000,
+        4000,
+        8000,
+        15000,
+        30000,
+        50000,
+        80000,
+        200000,
+        400000,
+        1000000,
+    ]
+
+    f_pts = []
+    for r in re_pts:
+        if r < 2000:
+            f_pts.append(64.0 / r)
+        else:
+            f_pts.append(swamee_jain(r, model.diameter_m, model.roughness, math.log10))
+
+    pwl.piecewise_eq(
+        y=model.friction,
+        x=model.reynolds,
+        xs=re_pts,
+        ys=f_pts,
+    )

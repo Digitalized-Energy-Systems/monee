@@ -1,9 +1,6 @@
 monee network
 ===================
 
-monee network
------------------------
-
 .. automodule:: monee.network
    :members:
    :undoc-members:

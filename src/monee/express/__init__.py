@@ -31,17 +31,20 @@ def create_bus(
         ValueError: If the network is invalid, not initialized, or if provided parameters are incompatible.
 
     Examples:
-        Create a bus with a base voltage of 11 kV and a custom name:
+        Create a bus with a base voltage of 11 kV and a custom name::
+
             bus = create_bus(my_network, base_kv=11, name='Main Bus')
 
-        Add a bus with voltage constraints and a specific position:
+        Add a bus with voltage constraints and a specific position::
+
             bus = create_bus(
                 my_network,
                 constraints={'vmin': 0.95, 'vmax': 1.05},
                 position=(10, 20)
             )
 
-        Create a gas grid bus with a custom ID and name:
+        Create a gas grid bus with a custom ID and name::
+
             bus = create_bus(
                 my_network,
                 grid=mm.GAS,
@@ -101,14 +104,16 @@ def create_gas_junction(
         ValueError: If the network is invalid, grid type is missing or incorrect, or if provided parameters are incompatible.
 
     Examples:
-        Create a gas junction with a specific name and position:
+        Create a gas junction with a specific name and position::
+
             gas_junction = create_gas_junction(
                 my_network,
                 name='Main Gas Junction',
                 position=(10, 20)
             )
 
-        Create a gas junction with operational constraints and a custom ID:
+        Create a gas junction with operational constraints and a custom ID::
+
             gas_junction = create_gas_junction(
                 my_network,
                 constraints={'max_flow': 1000},
@@ -146,7 +151,8 @@ def create_junction(
         ValueError: If the network is invalid, grid type is missing or incorrect, or if provided parameters are incompatible.
 
     Examples:
-        Create a gas junction with a specific name and position:
+        Create a gas junction with a specific name and position::
+
             gas_junction = create_junction(
                 my_network,
                 grid=mm.GAS,
@@ -154,7 +160,8 @@ def create_junction(
                 position=(10, 20)
             )
 
-        Create a water junction with operational constraints and a custom ID:
+        Create a water junction with operational constraints and a custom ID::
+
             water_junction = create_junction(
                 my_network,
                 grid=mm.WATER,
@@ -202,7 +209,8 @@ def create_el_branch(
         ValueError: If the network is invalid, node identifiers are missing or incorrect, or if the model or other parameters are incompatible.
 
     Examples:
-        Create an electrical branch between two nodes with a specific model:
+        Create an electrical branch between two nodes with a specific model::
+
             el_branch = create_el_branch(
                 my_network,
                 from_node_id=1,
@@ -211,7 +219,8 @@ def create_el_branch(
                 name='Main Line'
             )
 
-        Add a branch with operational constraints and a custom grid type:
+        Add a branch with operational constraints and a custom grid type::
+
             el_branch = create_el_branch(
                 my_network,
                 from_node_id='BUS_A',
@@ -298,7 +307,8 @@ def create_gas_pipe(
         ValueError: If the network is invalid, node identifiers are missing or incorrect, or if parameter values are out of valid ranges or incompatible.
 
     Examples:
-        Add a gas pipe between two nodes with specific diameter and length:
+        Add a gas pipe between two nodes with specific diameter and length::
+
             gas_pipe = create_gas_pipe(
                 my_network,
                 from_node_id=1,
@@ -308,7 +318,8 @@ def create_gas_pipe(
                 name='Main Pipeline'
             )
 
-        Add a gas pipe with custom roughness and operational constraints:
+        Add a gas pipe with custom roughness and operational constraints::
+
             gas_pipe = create_gas_pipe(
                 my_network,
                 from_node_id='J1',
@@ -399,7 +410,8 @@ def create_el_child(
         ValueError: If the network is invalid, node_id is missing or incorrect, or if the model or other parameters are incompatible.
 
     Examples:
-        Add a power load to a network node:
+        Add a power load to a network node::
+
             power_load = create_el_child(
                 my_network,
                 model=mm.PowerLoad(p_mw=5, q_mvar=2),
@@ -407,7 +419,8 @@ def create_el_child(
                 name='Load A'
             )
 
-        Add a generator with operational constraints and a custom ID:
+        Add a generator with operational constraints and a custom ID::
+
             generator = create_el_child(
                 my_network,
                 model=mm.PowerGenerator(p_mw=10),
@@ -482,7 +495,8 @@ def create_gas_child(
         ValueError: If the network is invalid, node_id is missing or incorrect, or if the model or other parameters are incompatible.
 
     Examples:
-        Add a compressor to a network node:
+        Add a compressor to a network node::
+
             compressor = create_gas_child(
                 my_network,
                 model=mm.Compressor(ratio=1.5),
@@ -490,7 +504,8 @@ def create_gas_child(
                 name='Compressor A'
             )
 
-        Add a valve with operational constraints and a custom ID:
+        Add a valve with operational constraints and a custom ID::
+
             valve = create_gas_child(
                 my_network,
                 model=mm.Valve(opening=0.8),
@@ -593,7 +608,8 @@ def create_ext_power_grid(
         ValueError: If the network is invalid, node_id is missing or incorrect, or if parameter values are out of valid ranges or incompatible.
 
     Examples:
-        Add an external power grid with custom power and voltage settings:
+        Add an external power grid with custom power and voltage settings::
+
             ext_power_grid = create_ext_power_grid(
                 my_network,
                 node_id=5,
@@ -604,7 +620,8 @@ def create_ext_power_grid(
                 name='External Grid A'
             )
 
-        Add an external grid with operational constraints and a custom ID:
+        Add an external grid with operational constraints and a custom ID::
+
             ext_power_grid = create_ext_power_grid(
                 my_network,
                 node_id='EXT_NODE',
@@ -657,7 +674,8 @@ def create_ext_hydr_grid(
         ValueError: If the network is invalid, node_id is missing or incorrect, or if parameter values are out of valid ranges or incompatible.
 
     Examples:
-        Add an external hydraulic grid with custom mass flow and pressure:
+        Add an external hydraulic grid with custom mass flow and pressure::
+
             ext_hydr_grid = create_ext_hydr_grid(
                 my_network,
                 node_id=5,
@@ -666,7 +684,8 @@ def create_ext_hydr_grid(
                 name='External hydraulic Grid A'
             )
 
-        Add an external hydraulic grid with operational constraints and a custom ID:
+        Add an external hydraulic grid with operational constraints and a custom ID::
+
             ext_hydr_grid = create_ext_hydr_grid(
                 my_network,
                 node_id='EXT_H2_NODE',
@@ -739,7 +758,8 @@ def create_consume_hydr_grid(
         ValueError: If the network is invalid, node_id is missing or incorrect, or if parameter values are out of valid ranges or incompatible.
 
     Examples:
-        Add a hydraulic consumption grid with custom mass flow and pressure:
+        Add a hydraulic consumption grid with custom mass flow and pressure::
+
             hydr_grid = create_consume_hydr_grid(
                 my_network,
                 node_id=5,
@@ -748,7 +768,8 @@ def create_consume_hydr_grid(
                 name='hydraulic Grid A'
             )
 
-        Add a hydraulic grid with operational constraints and a custom ID:
+        Add a hydraulic grid with operational constraints and a custom ID::
+
             hydr_grid = create_consume_hydr_grid(
                 my_network,
                 node_id='H2_NODE',
@@ -885,7 +906,8 @@ def create_g2p(
         ValueError: If the network is invalid, node identifiers are missing or incorrect, or if parameter values are out of valid ranges or incompatible.
 
     Examples:
-        Add a gas-to-power conversion branch with specific power setpoints and efficiency:
+        Add a gas-to-power conversion branch with specific power setpoints and efficiency::
+
             g2p_branch = create_g2p(
                 my_network,
                 from_node_id=1,
@@ -896,7 +918,8 @@ def create_g2p(
                 name='Gas to Power Line A'
             )
 
-        Add a branch with custom regulation and operational constraints:
+        Add a branch with custom regulation and operational constraints::
+
             g2p_branch = create_g2p(
                 my_network,
                 from_node_id='GAS_NODE',
@@ -962,7 +985,8 @@ def create_chp(
         ValueError: If the network is invalid, any node identifier is missing or incorrect, or if parameter values are out of valid ranges or incompatible.
 
     Examples:
-        Add a CHP unit with specified efficiencies and diameter:
+        Add a CHP unit with specified efficiencies and diameter::
+
             chp = create_chp(
                 my_network,
                 power_node_id=1,
@@ -975,7 +999,8 @@ def create_chp(
                 mass_flow_setpoint=10
             )
 
-        Add a CHP unit with custom regulation and operational constraints:
+        Add a CHP unit with custom regulation and operational constraints::
+
             chp = create_chp(
                 my_network,
                 power_node_id='P1',
@@ -1074,7 +1099,8 @@ def create_g2h(
         ValueError: If the network is invalid, node identifiers are missing or incorrect, or if parameter values are out of valid ranges or incompatible.
 
     Examples:
-        Add a gas-to-heat conversion unit with specific energy output and efficiency:
+        Add a gas-to-heat conversion unit with specific energy output and efficiency::
+
             g2h_unit = create_g2h(
                 my_network,
                 gas_node_id=1,
@@ -1085,7 +1111,8 @@ def create_g2h(
                 efficiency=0.85
             )
 
-        Add a unit with custom external temperature and operational constraints:
+        Add a unit with custom external temperature and operational constraints::
+
             g2h_unit = create_g2h(
                 my_network,
                 gas_node_id='GAS1',

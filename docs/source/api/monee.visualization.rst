@@ -1,9 +1,6 @@
 monee visualization
 ===================
 
-monee visualization
------------------------
-
 .. automodule:: monee.visualization.visualization
    :members:
    :undoc-members:
