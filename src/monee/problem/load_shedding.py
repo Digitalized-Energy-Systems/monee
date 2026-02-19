@@ -134,8 +134,9 @@ def create_load_shedding_optimization_problem(
     if use_ext_grid_objective:
         problem.controllable_ext()
     problem.controllable(
-        component_condition=lambda component: "backup" in component.model.vars
-        and component.model.backup,
+        component_condition=lambda component: (
+            "backup" in component.model.vars and component.model.backup
+        ),
         attributes=[
             (
                 "on_off",

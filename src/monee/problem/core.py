@@ -360,16 +360,21 @@ class OptimizationProblem:
         """
         self.controllable(
             component_condition=lambda component: (
-                isinstance(component.model, HeatExchangerLoad | PowerLoad)
-                or (type(component.model) is Sink and type(component.grid) is GasGrid)
-                or (
-                    type(component.model) is HeatExchanger
-                    and type(component.model.q_w) is not Var
-                    and (component.model.q_w > 0)
+                (
+                    isinstance(component.model, HeatExchangerLoad | PowerLoad)
+                    or (
+                        type(component.model) is Sink
+                        and type(component.grid) is GasGrid
+                    )
+                    or (
+                        type(component.model) is HeatExchanger
+                        and type(component.model.q_w) is not Var
+                        and (component.model.q_w > 0)
+                    )
                 )
-            )
-            and component.active
-            and (not component.ignored),
+                and component.active
+                and (not component.ignored)
+            ),
             attributes=attributes,
         )
         return self
@@ -379,11 +384,13 @@ class OptimizationProblem:
         No docstring provided.
         """
         self.controllable(
-            component_condition=lambda component: isinstance(
-                component.model, HeatExchangerGenerator | PowerGenerator | Source
-            )
-            and component.active
-            and (not component.ignored),
+            component_condition=lambda component: (
+                isinstance(
+                    component.model, HeatExchangerGenerator | PowerGenerator | Source
+                )
+                and component.active
+                and (not component.ignored)
+            ),
             attributes=attributes,
         )
         return self
@@ -394,14 +401,16 @@ class OptimizationProblem:
         """
         self.controllable(
             component_condition=lambda component: (
-                isinstance(component.model, ExtPowerGrid)
-                or (
-                    type(component.model) is ExtHydrGrid
-                    and type(component.grid) is GasGrid
+                (
+                    isinstance(component.model, ExtPowerGrid)
+                    or (
+                        type(component.model) is ExtHydrGrid
+                        and type(component.grid) is GasGrid
+                    )
                 )
-            )
-            and component.active
-            and (not component.ignored),
+                and component.active
+                and (not component.ignored)
+            ),
             attributes=[],
         )
         return self
@@ -411,11 +420,14 @@ class OptimizationProblem:
         No docstring provided.
         """
         self.controllable(
-            component_condition=lambda component: isinstance(
-                component.model, CHPControlNode | PowerToHeatControlNode | PowerToGas
-            )
-            and component.active
-            and (not component.ignored),
+            component_condition=lambda component: (
+                isinstance(
+                    component.model,
+                    CHPControlNode | PowerToHeatControlNode | PowerToGas,
+                )
+                and component.active
+                and (not component.ignored)
+            ),
             attributes=attributes,
         )
         return self
