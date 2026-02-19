@@ -13,7 +13,7 @@ api/index
 
 # monee
 
-::::{div} sd-text-center sd-py-4
+:::::{div} sd-text-center sd-py-4
 
 ```{image} _static/monee-logo.drawio.svg
 :width: 220px
@@ -25,27 +25,34 @@ api/index
 Model, simulate, and optimize interconnected electricity, gas, and heat networks —
 in one unified Python framework.
 
-:::{div} sd-d-flex sd-justify-content-center sd-gap-3 sd-pt-3
+
+::::{grid} 2
+
+:::{grid-item}
 
 ```{button-ref} quickstart
 :color: primary
 :shadow:
 Get started
 ```
+:::
+
+:::{grid-item}
 
 ```{button-link} https://github.com/Digitalized-Energy-Systems/monee
 :color: secondary
 :outline:
 GitHub
 ```
-
 :::
+
+::::
 
 ```{code-block} bash
 pip install monee
 ```
 
-::::
+:::::
 
 ---
 
