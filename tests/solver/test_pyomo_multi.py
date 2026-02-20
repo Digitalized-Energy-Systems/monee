@@ -147,7 +147,7 @@ def create_multi_chp():
     w_node_0 = pn.node(
         mm.Junction(),
         grid=mm.WATER_KEY,
-        child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
+        child_ids=[pn.child(mm.Sink(mass_flow=1))],
     )
     w_node_1 = pn.node(mm.Junction(), grid=mm.WATER_KEY)
     w_node_2 = pn.node(mm.Junction(), grid=mm.WATER_KEY)
@@ -157,12 +157,12 @@ def create_multi_chp():
         child_ids=[pn.child(mm.ExtHydrGrid(t_k=359))],
     )
     pn.branch(
-        mm.WaterPipe(diameter_m=0.15, length_m=100),
+        mm.WaterPipe(diameter_m=0.35, length_m=100),
         w_node_0,
         w_node_1,
     )
     pn.branch(
-        mm.WaterPipe(diameter_m=0.15, length_m=200),
+        mm.WaterPipe(diameter_m=0.35, length_m=200),
         w_node_3,
         w_node_2,
     )
@@ -171,7 +171,7 @@ def create_multi_chp():
     gas_grid = mm.create_gas_grid("gas", type="lgas")
     g_node_0 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Source(mass_flow=1))],
+        child_ids=[pn.child(mm.Source(mass_flow=0.1))],
         grid=gas_grid,
     )
     g_node_1 = pn.node(
@@ -183,14 +183,14 @@ def create_multi_chp():
 
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.75, length_m=100, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.35, length_m=100, temperature_ext_k=300, roughness=0.01
         ),
         g_node_0,
         g_node_1,
     )
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.75, length_m=150, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.35, length_m=150, temperature_ext_k=300, roughness=0.01
         ),
         g_node_0,
         g_node_2,
@@ -232,7 +232,7 @@ def create_multi_chp():
 
     # multi
     pn.compound(
-        mm.CHP(0.5, 0.6, 0.4, 0.00005, regulation=0.5),
+        mm.CHP(0.5, 0.6, 0.4, 0.0, regulation=0.5),
         gas_node_id=g_node_2,
         heat_node_id=w_node_1,
         heat_return_node_id=w_node_2,
@@ -257,8 +257,8 @@ def test_simple_chp():
     )
     assert math.isclose(
         result.dataframes["ExtHydrGrid"]["mass_flow"][1],
-        -2.5e-05,
+        -0.9,
     )
     assert math.isclose(
-        result.dataframes["Junction"]["t_k"][1], 354.8279975979529, abs_tol=0.001
+        result.dataframes["Junction"]["t_k"][1], 357.92586819305546, abs_tol=0.001
     )

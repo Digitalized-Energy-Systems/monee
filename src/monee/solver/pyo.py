@@ -214,7 +214,7 @@ class PyomoSolver(SolverInterface):
         optimization_problem: OptimizationProblem = None,
         draw_debug: bool = False,
         exclude_unconnected_nodes: bool = False,
-        solver_name: str = "gurobi",
+        solver_name: str = "scip",
     ):
         pm = pyo.ConcreteModel()
         pm.cons = pyo.ConstraintList()
@@ -262,29 +262,11 @@ class PyomoSolver(SolverInterface):
 
         # solve
         solver = pyo.SolverFactory(solver_name)
-        from pyomo.solvers.plugins.solvers.gurobi_persistent import GurobiPersistent
-
-        solver = GurobiPersistent()
-        solver.set_instance(pm)  # pm is your ConcreteModel
-        solver.set_gurobi_param("OutputFlag", 1)
 
         for k, v in DEFAULT_SOLVER_OPTIONS.items():
             solver.options[k] = v
 
         solver.solve(pm, tee=True)
-        # Check infeasible
-        grb = solver._solver_model  # the gurobipy.Model
-        print(grb)
-        print("YO")
-
-        if grb.Status == 3:  # GRB.INFEASIBLE
-            pm.write("model.lp", io_options={"symbolic_solver_labels": True})
-
-            grb.computeIIS()
-            print("YOOO")
-            grb.write("model.ilp")  # human-readable IIS
-            grb.write("model.iis")  # IIS in gurobi format
-            print("Wrote IIS to model.ilp / model.iis")
 
         # pull values back into your objects
         self.withdraw_pyomo_vars(nodes, branches, compounds, network)
