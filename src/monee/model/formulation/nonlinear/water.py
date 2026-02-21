@@ -79,8 +79,7 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
                 **kwargs,
             ),
             branch.mass_flow_mag == branch.mass_flow_pos + branch.mass_flow_neg,
-            branch.alpha * (branch.mass_flow_mag + 0.001 + UA_C)
-            == branch.mass_flow_mag + 0.001,
+            branch.alpha * (branch.mass_flow_mag + UA_C) == branch.mass_flow_mag,
             branch.t_out_pu
             == branch.temperature_ext_k / grid.t_ref
             + branch.alpha * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref)
@@ -138,7 +137,7 @@ class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
                 **kwargs,
             ),
             branch.mass_flow_mag == branch.mass_flow_pos + branch.mass_flow_neg,
-            (branch.mass_flow_mag + 0.001) * branch.t_inc
+            (branch.mass_flow_mag) * branch.t_inc
             == -branch.q_w / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * grid.t_ref),
             branch.t_out_pu
             == branch.temperature_ext_k / grid.t_ref

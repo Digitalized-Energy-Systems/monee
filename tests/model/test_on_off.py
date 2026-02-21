@@ -44,9 +44,9 @@ def test_on_off_water():
     j_1 = mx.create_water_junction(net)
     j_2 = mx.create_water_junction(net)
 
-    mx.create_ext_hydr_grid(net, j_1)
-    mx.create_source(net, j_0, 0.1)
-    mx.create_sink(net, j_2, Var(1))
+    mx.create_water_ext_grid(net, j_1)
+    mx.create_water_source(net, j_0, 0.1)
+    mx.create_water_sink(net, j_2, Var(0))
 
     mx.create_water_pipe(net, j_0, j_1, diameter_m=0.1, length_m=100)
 
@@ -59,11 +59,12 @@ def test_on_off_water():
         j_2,
         diameter_m=0.1,
         length_m=100,
-        on_off=Var(1, integer=True),
+        on_off=Var(1, max=1, min=0, integer=True, name="on_off"),
         constraints=[my_constraint],
     )
+    from monee import PyomoSolver
 
-    result = run_energy_flow(net)
+    result = run_energy_flow(net, solver=PyomoSolver())
 
     print(result)
     assert result.dataframes["Sink"]["mass_flow"][0] < 0.000001

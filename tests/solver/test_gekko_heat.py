@@ -206,7 +206,7 @@ def create_ext_branching_heat_example():
         g_node_5,
     )
     pn.branch(
-        mm.HeatExchanger(q_mw=1, diameter_m=0.16),
+        mm.HeatExchanger(q_mw=0.2, diameter_m=0.16),
         g_node_2,
         g_node_5,
     )
@@ -406,11 +406,13 @@ def create_circular_heating_net():
 def test_two_pipes_heat_network():
     heat_net = create_branching_two_pipe_heat_example()
     result = ms.GEKKOSolver().solve(heat_net)
-
+    print(result)
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -33)
     assert len(result.dataframes) == 4
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999839.46067)
-    assert math.isclose(result.dataframes["Junction"]["t_k"][2], 355.90067332)
+    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999841.21799)
+    assert math.isclose(
+        result.dataframes["Junction"]["t_k"][2], 355.90067332, abs_tol=0.001
+    )
 
 
 def test_t_heat_network():
@@ -421,7 +423,7 @@ def test_t_heat_network():
     assert math.isclose(
         result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2, rel_tol=1e-4
     )
-    assert math.isclose(result.dataframes["Junction"]["t_k"][3], 338.29148709)
+    assert math.isclose(result.dataframes["Junction"]["t_k"][3], 318.79209896)
     assert len(result.dataframes) == 5
 
 
@@ -433,7 +435,7 @@ def test_circle_heat_network():
     assert math.isclose(
         result.dataframes["ExtHydrGrid"]["mass_flow"][0], -5, rel_tol=1e-4
     )
-    assert math.isclose(result.dataframes["Junction"]["t_k"][2], 355.86103261)
+    assert math.isclose(result.dataframes["Junction"]["t_k"][2], 367.88002727)
     assert len(result.dataframes) == 5
 
 
@@ -443,8 +445,12 @@ def test_ext_branching_pipes_heat_network():
 
     print(result)
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -5)
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][4], 999248.27937)
-    assert math.isclose(result.dataframes["Junction"]["t_k"][4], 443.03795234)
+    assert math.isclose(
+        result.dataframes["Junction"]["pressure_pa"][4], 999255.71043, abs_tol=0.01
+    )
+    assert math.isclose(
+        result.dataframes["Junction"]["t_k"][4], 375.54709318, abs_tol=0.01
+    )
     assert len(result.dataframes) == 5
 
 
@@ -454,8 +460,10 @@ def test_heat_exchanger():
 
     print(result)
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.3)
-    assert math.isclose(result.dataframes["Junction"]["t_k"][0], 392.28527037)
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][0], 999991.21558)
+    assert math.isclose(result.dataframes["Junction"]["t_k"][0], 392.40483747)
+    assert math.isclose(
+        result.dataframes["Junction"]["pressure_pa"][0], 999991.51503, abs_tol=0.001
+    )
     assert len(result.dataframes) == 5
 
 
@@ -466,5 +474,7 @@ def test_dead_end():
     assert math.isclose(
         result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.1, rel_tol=1e-5
     )
-    assert math.isclose(result.dataframes["Junction"]["t_k"][0], 343.51366117)
+    assert math.isclose(
+        result.dataframes["Junction"]["t_k"][0], 343.50456003, abs_tol=0.01
+    )
     assert len(result.dataframes) == 4

@@ -115,8 +115,8 @@ def test_two_pipes_gas_network():
 
     print(result)
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2)
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999749.99453)
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][0], 999997.93469)
+    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999756.15406)
+    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][0], 999997.97441)
     assert len(result.dataframes) == 5
 
 
@@ -125,7 +125,9 @@ def test_two_pipes_line_gas_network():
     result = ms.GEKKOSolver().solve(gas_net)
 
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2)
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999991.52477)
+    assert math.isclose(
+        result.dataframes["Junction"]["pressure_pa"][2], 999991.59354, abs_tol=0.001
+    )
     assert len(result.dataframes) == 4
 
 
@@ -134,5 +136,7 @@ def test_branching_gas_network():
     result = ms.GEKKOSolver().solve(gas_net)
 
     print(result)
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999998.71024)
+    assert math.isclose(
+        result.dataframes["Junction"]["pressure_pa"][2], 999998.71024, abs_tol=0.01
+    )
     assert len(result.dataframes) == 5

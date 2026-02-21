@@ -1,7 +1,5 @@
 import math
 
-from monee.model.child import ExtHydrGrid, Sink
-
 from .core import Intermediate, IntermediateEq, NodeModel, Var, model
 from .phys.core.hydraulics import junction_mass_flow_balance
 from .phys.nonlinear.ac import power_balance_equation
@@ -190,8 +188,9 @@ class Junction(NodeModel):
                 mpos = bm.vars["mass_flow_pos"] * bm.vars.get("on_off", 1)
                 mneg = bm.vars["mass_flow_neg"] * bm.vars.get("on_off", 1)
 
-                Tin = bm.vars["t_from_pu"]  # inflow at from-end (your definition)
-                terms.append(mneg * Tn - mpos * Tin)
+                Tin = bm.vars["t_from_pu"]
+                Tout = self.t_pu * bm.vars.get("on_off", 1)
+                terms.append(mneg * Tout - mpos * Tin)
 
             # node is TO-end of these branches (branch orientation: other node -> this node)
             for bm in to_branch_models:
@@ -201,18 +200,15 @@ class Junction(NodeModel):
                 mneg = bm.vars["mass_flow_neg"] * bm.vars.get("on_off", 1)
 
                 Tin = bm.vars["t_to_pu"]  # inflow at to-end
-                terms.append(-mneg * Tin + mpos * Tn)
+                Tout = self.t_pu * bm.vars.get("on_off", 1)
+                terms.append(-mneg * Tin + mpos * Tout)
 
             for nm in connected_node_models:
                 if "mass_flow" not in nm.vars:
                     continue
 
                 m_ext = nm.vars["mass_flow"] * nm.vars.get("regulation", 1)
-                if type(nm) is Sink or type(nm) is ExtHydrGrid:
-                    terms.append(m_ext * Tn)
-                else:
-                    terms.append(m_ext)
-
+                terms.append(m_ext * Tn)
             return terms
         else:
             return [0]

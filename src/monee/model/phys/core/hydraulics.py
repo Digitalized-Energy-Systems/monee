@@ -60,27 +60,47 @@ def swamee_jain(reynolds_var, diameter_m, roughness, log_func):
 
 def piecewise_eq_friction(model, pwl):
     re_pts = [
-        20,
+        50,
+        100,
         200,
-        500,
-        1000,
-        1500,
+        400,
+        800,
+        1200,
+        1600,
         2000,
-        4000,
+        2200,
+        2400,
+        2600,
+        2800,
+        3000,
+        3200,
+        3500,
+        3800,
+        4200,
+        4600,
+        5000,
+        6000,
+        7000,
         8000,
-        15000,
-        30000,
-        50000,
-        80000,
-        200000,
-        400000,
-        1000000,
+        1e4,
+        1.5e4,
+        2e4,
+        3e4,
+        5e4,
+        1e5,
+        2e5,
+        5e5,
+        1e6,
+        2e6,
+        5e6,
+        1e7,
     ]
 
     f_pts = []
     for r in re_pts:
+        # -> mass flow is zero -> therefore pressure drop is zero independent of the friction
         if r < 2000:
-            f_pts.append(64.0 / r)
+            f_pts.append(64.0 / (r))
         else:
             f_pts.append(swamee_jain(r, model.diameter_m, model.roughness, math.log10))
 

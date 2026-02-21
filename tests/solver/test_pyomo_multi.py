@@ -136,7 +136,7 @@ def test_in_line_p2h():
     print(result)
     assert len(result.dataframes) == 12
     assert math.isclose(
-        result.dataframes["Junction"]["t_k"][0], 393.76585078258626, abs_tol=0.001
+        result.dataframes["Junction"]["t_k"][0], 394.13290124571745, abs_tol=0.001
     )
 
 
@@ -260,5 +260,5 @@ def test_simple_chp():
         -0.9,
     )
     assert math.isclose(
-        result.dataframes["Junction"]["t_k"][1], 357.92586819305546, abs_tol=0.001
+        result.dataframes["Junction"]["t_k"][1], 357.924809287306, abs_tol=0.001
     )

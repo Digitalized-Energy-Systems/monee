@@ -409,7 +409,7 @@ def test_simple_g2h():
     result = ms.GEKKOSolver().solve(multi_energy_network)
     print(result)
     assert len(result.dataframes) == 9
-    assert math.isclose(result.dataframes["Junction"]["t_k"][3], 373.66722919)
+    assert math.isclose(result.dataframes["Junction"]["t_k"][3], 373.81219485)
 
 
 def test_network_convenience_methods():

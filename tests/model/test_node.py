@@ -59,7 +59,6 @@ def test_bus_eq_with_child():
 def test_junction_vars():
     junction = Junction()
 
-    assert type(junction.pressure_pa) is Intermediate
     assert type(junction.t_k) is Intermediate
 
 

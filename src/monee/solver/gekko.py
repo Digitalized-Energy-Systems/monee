@@ -48,14 +48,14 @@ DEFAULT_SOLVER_OPTIONS = [
 ]
 
 
-class GekkoPWLImpl:
+class GekkoCubicSplineImpl:
     def __init__(self, m):
         self.m = m
 
     def piecewise_eq(self, y, x, xs, ys, name=None):
         xs = list(xs)
         ys = list(ys)
-        return self.m.pwl(x, y, xs, ys)
+        return self.m.cspline(x, y, xs, ys)
 
 
 def _process_intermediate_eqs(m, model, equations):
@@ -398,7 +398,8 @@ class GEKKOSolver(SolverInterface):
         """
         No docstring provided.
         """
-        pwl_impl = GekkoPWLImpl(m)
+        # using spline instead of pwl as spline tends to outperform the gekko pwl
+        pwl_impl = GekkoCubicSplineImpl(m)
         for branch in branches:
             if ignore_branch(branch, network, ignored_nodes):
                 continue

@@ -28,7 +28,7 @@ def test_balance_equation():
 
 
 def test_reynolds_equation():
-    reynolds_correct = ml.reynolds_equation(321, 321, 2, 0.1, 20, abs)
+    reynolds_correct = ml.reynolds_equation(321, 321, 2, 0.1, 20)
 
     assert reynolds_correct
 

@@ -32,4 +32,4 @@ def darcy_weisbach_equation(
 
     Rm = friction * (pipe_length / diameter_m) * (1.0 / (2.0 * fluid_density * A**2))
 
-    return (p_i - p_j) * on_off == Rm * -(m_pos_sq - m_neg_sq)
+    return (p_i - p_j) == Rm * -(m_pos_sq - m_neg_sq)

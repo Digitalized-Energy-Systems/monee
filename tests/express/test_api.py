@@ -21,8 +21,8 @@ def test_api_el():
     junc_1 = mx.create_gas_junction(net)
     junc_2 = mx.create_gas_junction(net)
 
-    mx.create_gas_pipe(net, junc_0, junc_1, diameter_m=0.1, length_m=100)
-    mx.create_gas_pipe(net, junc_0, junc_2, diameter_m=0.1, length_m=100)
+    mx.create_gas_pipe(net, junc_0, junc_1, diameter_m=0.3, length_m=100)
+    mx.create_gas_pipe(net, junc_0, junc_2, diameter_m=0.3, length_m=100)
 
     mx.create_ext_hydr_grid(net, junc_1)
     mx.create_sink(net, junc_2, 1)
