@@ -174,8 +174,8 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
             == [branch for branch in heat_from_branches if type(branch) is SubHE][
                 0
             ].q_w,
-            self.t_pu == self.t_k / grid[1].t_ref,
-            self.pressure_pu == self.pressure_pa / grid[1].pressure_ref,
+            self.t_pu == self.t_k / grid[0].t_ref,
+            self.pressure_pu == self.pressure_pa / grid[0].pressure_ref,
         ]
 
 
@@ -622,10 +622,7 @@ class GasToPower(MultiGridBranchModel):
             == self.efficiency
             * self.from_mass_flow
             * (3.6 * grids[GasGrid].higher_heating_value),
-            -self.el_mw
-            == self.efficiency
-            * self.gas_kgps
-            * (3.6 * grids[GasGrid].higher_heating_value),
+            self.gas_kgps == self.from_mass_flow,
         ]
 
 

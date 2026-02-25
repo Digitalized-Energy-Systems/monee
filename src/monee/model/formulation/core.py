@@ -1,3 +1,28 @@
+class NetworkConstraint:
+    """
+    Solver-agnostic network-level constraint extension.
+
+    Analogous to ``BranchFormulation`` / ``NodeFormulation`` but spanning the
+    entire network.  Register with ``network.add_extension(constraint)``.
+
+    Phase 1 — ``prepare(network)``: called *before* variable injection; add
+    ``Var`` placeholders to model objects so the injection loop picks them up.
+
+    Phase 2 — ``equations(network, ignored_nodes) → list``: called *after*
+    variable injection; return relational expressions (``==``, ``<=``,
+    ``>=``) built from injected model attributes.  The solver registers them
+    with ``m.Equations(eqs)`` / ``pm.cons.add`` without inspecting their
+    content — exactly like branch/node equations.
+    """
+
+    def prepare(self, network) -> None:
+        """Add Var placeholders before variable injection (no-op by default)."""
+
+    def equations(self, network, ignored_nodes: set) -> list:
+        """Return solver-agnostic relational expressions (empty by default)."""
+        return []
+
+
 class Formulation:
     def ensure_var(self, model):
         pass

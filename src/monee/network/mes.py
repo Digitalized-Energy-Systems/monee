@@ -165,7 +165,6 @@ def create_gas_net_for_power(
     mx.create_ext_hydr_grid(
         target_net,
         node_id=bus_index_to_junction_index[power_net_as_st.first_node()],
-        pressure_pa=REF_PA,
         t_k=REF_TEMP,
         name="Grid Connection Gas",
     )
@@ -198,7 +197,6 @@ def create_p2h_in_combined_generated_network(
                     heat_energy_mw=0.015,
                     diameter_m=0.003,
                     efficiency=0.4 * 0.5 * 0.5,
-                    in_line_operation=True,
                 )
 
 
@@ -326,7 +324,7 @@ def create_monee_benchmark_net():
     node_6 = pn.node(
         mm.Bus(base_kv=120),
         mm.EL,
-        child_ids=[pn.child(mm.PowerGenerator(p_mw=20, q_mvar=0, regulation=0.5))],
+        child_ids=[pn.child(mm.GridFormingGenerator(p_mw_max=50, q_mvar_max=50))],
     )
     max_i_ka = 319
     pn.branch(

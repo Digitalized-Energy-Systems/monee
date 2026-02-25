@@ -25,10 +25,11 @@ class TimeseriesData:
     No docstring provided.
     """
 
-    _child_id_to_series: dict[Any, dict[str, list]] = {}
-    _child_name_to_series: dict[str, dict[str, list]] = {}
-    _compound_id_to_series: dict[Any, dict[str, list]] = {}
-    _branch_id_to_series: dict[Any, dict[str, list]] = {}
+    def __init__(self):
+        self._child_id_to_series: dict[Any, dict[str, list]] = {}
+        self._child_name_to_series: dict[str, dict[str, list]] = {}
+        self._compound_id_to_series: dict[Any, dict[str, list]] = {}
+        self._branch_id_to_series: dict[Any, dict[str, list]] = {}
 
     def _add_to(self, target_dict, key_one, key_two, value):
         """
@@ -173,23 +174,23 @@ def apply_to_child(child, timeseries_data, timestep):
     """
     apply_to_by_id(child, timeseries_data.child_id_data, timestep)
     if child.name in timeseries_data.child_name_data:
-        attr_series_dict = timeseries_data.data[child.name]
+        attr_series_dict = timeseries_data.child_name_data[child.name]
         for attr, series in attr_series_dict.items():
             setattr(child.model, attr, series[timestep])
 
 
-def apply_to_branch(branch, timeseries_data, timestep):
+def apply_to_branch(branch, timeseries_data: TimeseriesData, timestep):
     """
     No docstring provided.
     """
     apply_to_by_id(branch, timeseries_data.branch_id_data, timestep)
 
 
-def apply_to_compound(compound, timeseries_data, timestep):
+def apply_to_compound(compound, timeseries_data: TimeseriesData, timestep):
     """
     No docstring provided.
     """
-    apply_to_by_id(compound, timeseries_data.branch_id_data, timestep)
+    apply_to_by_id(compound, timeseries_data.compound_id_data, timestep)
 
 
 class StepHook(ABC):

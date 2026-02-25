@@ -78,11 +78,8 @@ Translates the network model to a [Pyomo](https://www.pyomo.org)
 **Best for:** MILP / MIQCP problems (e.g. MISOCP optimal power flow).
 
 ```bash
-# HiGHS — open-source, recommended
-pip install highspy
-
-# or via conda
-conda install -c conda-forge highs
+# SCIP — recommended non-commerical solver for MIQCP
+conda install -y pyscipopt
 ```
 
 See {doc}`how-to/use_pyomo_solver` for a full walk-through.
@@ -90,19 +87,11 @@ See {doc}`how-to/use_pyomo_solver` for a full walk-through.
 
 ::::
 
-### Available solver binaries for Pyomo
+### Selection of available solver binaries for Pyomo
 
 | Solver | Licence | Problem types | Install |
 |---|---|---|---|
-| [HiGHS](https://highs.dev/) | Open-source | LP · MILP · MIQCP | `pip install highspy` |
+| [HiGHS](https://scipopt.org//) | Open-source | LP · MILP · MIQCP | `conda install -y pyscipopt` |
 | [GLPK](https://www.gnu.org/software/glpk/) | Open-source | LP · MILP | `conda install -c conda-forge glpk` |
 | [CBC](https://github.com/coin-or/Cbc) | Open-source | LP · MILP | `conda install -c conda-forge coincbc` |
-| [Gurobi](https://www.gurobi.com/) | Commercial | LP · MILP · MIQCP · NLP | requires licence |
-
----
-
-## Verify the installation
-
-```bash
-python -c "import monee; print(monee.__version__)"
-```
+| [Gurobi](https://www.gurobi.com/) | Commercial | LP · MILP · MIQCP | requires licence |

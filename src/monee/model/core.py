@@ -6,6 +6,7 @@ WATER_KEY = "water"
 WATER = WATER_KEY
 EL = EL_KEY
 GAS = GAS_KEY
+
 component_list = []
 
 
@@ -94,7 +95,9 @@ class Var:
         """
         No docstring provided.
         """
-        return Var(value=-self.value, max=self.max, min=self.min, name=self.name)
+        actual_max = None if self.max is None else -self.max
+        actual_min = None if self.min is None else -self.min
+        return Var(value=-self.value, max=actual_max, min=actual_min, name=self.name)
 
     def __mul__(self, other):
         """

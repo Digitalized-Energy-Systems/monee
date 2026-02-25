@@ -59,7 +59,7 @@ testpp = [
 
 [project.urls]
 Homepage = "https://monee.readthedocs.io"
-Repository = "https://monee.readthedocs.io"
+Repository = "https://github.com/Digitalized-Energy-Systems/monee"
 Issues = "https://github.com/Digitalized-Energy-Systems/monee/issues"
 
 [tool.pytest.ini_options]

@@ -43,6 +43,15 @@ Plug in HiGHS, Gurobi, GLPK, or CBC as the solver back-end — required for
 MILP / MIQCP problems such as the MISOCP optimal power flow.
 :::
 
+:::{grid-item-card} Solve islanded networks
+:link: islanding
+:link-type: doc
+:shadow: sm
+
+Enable multi-island solves with `enable_islanding()`, add grid-forming
+generators or sources, and retrieve per-island results.
+:::
+
 ::::
 
 ```{toctree}
@@ -53,4 +62,5 @@ load_shedding
 matpower_io
 convert_from_pandapower
 use_pyomo_solver
+islanding
 ```

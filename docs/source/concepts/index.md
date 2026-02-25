@@ -53,6 +53,15 @@ GEKKO vs Pyomo: capabilities, limitations, and guidance on choosing the
 right back-end for each type of problem.
 :::
 
+:::{grid-item-card} Islanding
+:link: islanding
+:link-type: doc
+:shadow: sm
+
+Solve networks with multiple disconnected islands: the connectivity-flow
+MIP formulation, grid-forming nodes, and per-carrier physical constraints.
+:::
+
 ::::
 
 ```{toctree}
@@ -64,4 +73,5 @@ domains
 multi_energy
 formulations
 solvers
+islanding
 ```

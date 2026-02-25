@@ -1,6 +1,19 @@
 from .core import ChildModel, Const, Var, model
 
 
+class GridFormingMixin:
+    """
+    Marker mixin: this child component can serve as the reference node (slack bus /
+    pressure reference) for an islanded sub-network.
+
+    Any child class that carries this mixin *must* implement ``overwrite()`` to pin
+    the carrier-specific reference variable (voltage angle, pressure, …) on the node
+    model it is attached to.  When islanding is enabled, ``find_ignored_nodes`` treats
+    components that contain a ``GridFormingMixin`` child as "leading" and keeps them in
+    the solve.
+    """
+
+
 class NoVarChildModel(ChildModel):
     """
     No docstring provided.
@@ -40,7 +53,7 @@ class PowerGenerator(NoVarChildModel):
 
 
 @model
-class ExtPowerGrid(NoVarChildModel):
+class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
     """
     No docstring provided.
     """
@@ -79,13 +92,13 @@ class Source(NoVarChildModel):
     No docstring provided.
     """
 
-    def __init__(self, mass_flow, t_k=359, **kwargs) -> None:
+    def __init__(self, mass_flow, **kwargs) -> None:
         super().__init__(**kwargs)
         self.mass_flow = -mass_flow
 
 
 @model
-class ExtHydrGrid(NoVarChildModel):
+class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
     """
     No docstring provided.
     """

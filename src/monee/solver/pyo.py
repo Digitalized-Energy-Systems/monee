@@ -96,7 +96,7 @@ class PyomoSolver(SolverInterface):
         for key, value in target.__dict__.items():
             if isinstance(value, Const):
                 setattr(target, key, Const(float("nan")))
-            if isinstance(value, Var | Const):
+            if isinstance(value, Var):
                 setattr(target, key, Var(float("nan"), max=value.max, min=value.min))
 
     @staticmethod
@@ -212,9 +212,9 @@ class PyomoSolver(SolverInterface):
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
-        draw_debug: bool = False,
         exclude_unconnected_nodes: bool = False,
         solver_name: str = "scip",
+        debug=False,
     ):
         pm = pyo.ConcreteModel()
         pm.cons = pyo.ConstraintList()
@@ -225,9 +225,21 @@ class PyomoSolver(SolverInterface):
         if optimization_problem is not None:
             optimization_problem._apply(network)
 
+        # Phase 1: add Var placeholders for all NetworkConstraint extensions
+        for ext in network.extensions:
+            ext.prepare(network)
+
+        # detect islanding config for topology-aware pre-filtering
+        from monee.model.islanding.core import NetworkIslandingConfig
+
+        islanding_config = next(
+            (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
+            None,
+        )
+
         ignored_nodes = set()
         if optimization_problem is None or exclude_unconnected_nodes:
-            ignored_nodes = find_ignored_nodes(network)
+            ignored_nodes = find_ignored_nodes(network, islanding_config)
 
         nodes = network.nodes
         for node in nodes:
@@ -257,6 +269,10 @@ class PyomoSolver(SolverInterface):
         else:
             self.process_internal_oxf_components(pm, network)
 
+        # Phase 2: add NetworkConstraint extension equations after variable injection
+        for ext in network.extensions:
+            self._add_equations(pm, ext.equations(network, ignored_nodes))
+
         # single objective: sum of collected objective expressions
         pm.obj = pyo.Objective(expr=sum(pm.obj_exprs), sense=pyo.minimize)
 
@@ -266,7 +282,7 @@ class PyomoSolver(SolverInterface):
         for k, v in DEFAULT_SOLVER_OPTIONS.items():
             solver.options[k] = v
 
-        solver.solve(pm, tee=True)
+        solver.solve(pm, tee=debug)
 
         # pull values back into your objects
         self.withdraw_pyomo_vars(nodes, branches, compounds, network)
@@ -324,25 +340,6 @@ class PyomoSolver(SolverInterface):
         sqrt_impl = pyo.sqrt
         log_impl = pyo.log
 
-        # IMPORTANT:
-        # GEKKO's if2/if3/max2/sign2/sign3 do NOT map 1:1 to Pyomo.
-        # You must implement these yourself (typically with binaries + big-M or Piecewise),
-        # or change your model.equations() to avoid them for Pyomo runs.
-        def if_impl(*args, **kwargs):
-            raise NotImplementedError(
-                "Replace GEKKO if2/if3 with a Pyomo Piecewise / big-M formulation."
-            )
-
-        def max_impl(*args, **kwargs):
-            raise NotImplementedError(
-                "Replace GEKKO max2 with Pyomo max_ (or explicit constraints)."
-            )
-
-        def sign_impl(*args, **kwargs):
-            raise NotImplementedError(
-                "Replace GEKKO sign2/sign3 with a Pyomo formulation (often binary)."
-            )
-
         for node in nodes:
             if ignore_node(node, network, ignored_nodes):
                 continue
@@ -374,10 +371,7 @@ class PyomoSolver(SolverInterface):
                     connected_childs,
                     sin_impl=sin_impl,
                     cos_impl=cos_impl,
-                    if_impl=if_impl,
                     abs_impl=abs_impl,
-                    max_impl=max_impl,
-                    sign_impl=sign_impl,
                     sqrt_impl=sqrt_impl,
                     log_impl=log_impl,
                 )

@@ -4,18 +4,17 @@ import networkx as nx
 import pandas
 
 from monee.model import (
-    CHP,
     ExtHydrGrid,
     ExtPowerGrid,
-    GasToHeat,
     IntermediateEq,
+    MultGridCompoundModel,
     MultiGridBranchModel,
     Network,
     Node,
-    PowerToHeat,
     Var,
     WaterPipe,
 )
+from monee.model.child import GridFormingMixin
 from monee.problem.core import OptimizationProblem
 
 
@@ -107,14 +106,11 @@ def generate_real_topology(nx_net):
     return net_copy
 
 
-COMPOUND_TYPES_TO_REMOVE = [PowerToHeat, GasToHeat, CHP]
-
-
 def remove_cps(network: Network):
     relevant_compounds = [
         compound
         for compound in network.compounds
-        if type(compound.model) in COMPOUND_TYPES_TO_REMOVE
+        if isinstance(compound.model, MultGridCompoundModel)
     ]
     for comp in relevant_compounds:
         network.remove_compound(comp.id)
@@ -127,21 +123,74 @@ def remove_cps(network: Network):
             network.remove_branch(branch.id)
 
 
-def find_ignored_nodes(network: Network):
+def find_ignored_nodes(network: Network, islanding_config=None):
+    """
+    Return the set of node IDs that should be excluded from the solve.
+
+    When *islanding_config* is ``None`` (default), the original behaviour is
+    preserved: only *active* branches are considered and only components that
+    contain an ``ExtPowerGrid`` or ``ExtHydrGrid`` child are kept.
+
+    When *islanding_config* is provided, the function switches to a more
+    permissive pre-filter:
+
+    * **All** branches are included in the topology (even inactive / on_off=0
+      ones), because a backup line that is currently off may be switched on
+      during the solve.  Only nodes with **no path at all** (through any branch)
+      to a grid-forming node are pre-removed.
+    * Both ``ExtPowerGrid`` / ``ExtHydrGrid`` **and** any child that carries
+      ``GridFormingMixin`` are treated as "leading" for the carriers that have
+      islanding enabled.
+    """
     ignored_nodes = set()
     without_cps = network.copy()
     remove_cps(without_cps)
-    real_topology = generate_real_topology(without_cps._network_internal)
-    components = nx.connected_components(real_topology)
+
+    if islanding_config is not None:
+        # Full topology: every branch is a potential connectivity path.
+        topology = without_cps._network_internal.copy()
+    else:
+        topology = generate_real_topology(without_cps._network_internal)
+
+    components = nx.connected_components(topology)
     for component in components:
         component_leading = False
-        for node in component:
-            int_node: Node = real_topology.nodes[node]["internal_node"]
+        for node_id in component:
+            int_node: Node = topology.nodes[node_id]["internal_node"]
             for child_id in int_node.child_ids:
                 child = without_cps.child_by_id(child_id)
+                if not child.active:
+                    continue
+                # Original check: ExtPowerGrid / ExtHydrGrid are always leading.
                 if isinstance(child.model, ExtPowerGrid | ExtHydrGrid):
                     component_leading = True
                     break
+                # Islanding extension: any GridFormingMixin child is leading for
+                # the carrier of its node, provided that carrier has islanding
+                # enabled.
+                if islanding_config is not None and isinstance(
+                    child.model, GridFormingMixin
+                ):
+                    from monee.model.grid import GasGrid, PowerGrid, WaterGrid
+
+                    node_grid = int_node.grid
+                    carrier_enabled = (
+                        (
+                            isinstance(node_grid, PowerGrid)
+                            and islanding_config.electricity is not None
+                        )
+                        or (
+                            isinstance(node_grid, GasGrid)
+                            and islanding_config.gas is not None
+                        )
+                        or (
+                            isinstance(node_grid, WaterGrid)
+                            and islanding_config.water is not None
+                        )
+                    )
+                    if carrier_enabled:
+                        component_leading = True
+                        break
             if component_leading:
                 break
         if not component_leading:

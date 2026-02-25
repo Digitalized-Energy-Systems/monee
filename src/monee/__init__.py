@@ -3,6 +3,16 @@ import monee.solver as ms
 import monee.problem as mp
 import monee.express as mx
 from monee.model import Network
+from monee.model.islanding import (
+    GridFormingMixin,
+    IslandingMode,
+    NetworkIslandingConfig,
+    ElectricityIslandingMode,
+    GridFormingGenerator,
+    GasIslandingMode,
+    GridFormingSource,
+    WaterIslandingMode,
+)
 from monee.simulation import (
     solve,
     TimeseriesData,
@@ -11,6 +21,37 @@ from monee.simulation import (
     StepHook,
 )
 from monee.solver import GEKKOSolver, PyomoSolver
+
+
+def enable_islanding(
+    network: mm.Network,
+    electricity=None,
+    gas=None,
+    water=None,
+) -> NetworkIslandingConfig:
+    """
+    Enable islanding for *network* and return the ``NetworkIslandingConfig``.
+
+    Each carrier argument accepts:
+    * ``True``   — use the default ``IslandingMode`` for that carrier.
+    * An ``IslandingMode`` instance — use a custom mode.
+    * ``None`` (default) — islanding disabled for that carrier.
+
+    The resulting config is attached to ``network.islanding_config`` so that
+    ``GEKKOSolver`` / ``PyomoSolver`` pick it up automatically on ``solve()``.
+    """
+
+    def _resolve(arg, default_cls):
+        return default_cls() if arg is True else arg
+
+    config = NetworkIslandingConfig(
+        electricity=_resolve(electricity, ElectricityIslandingMode),
+        gas=_resolve(gas, GasIslandingMode),
+        water=_resolve(water, WaterIslandingMode),
+    )
+    network.islanding_config = config  # kept for find_ignored_nodes compat
+    network.add_extension(config)
+    return config
 
 
 def run_energy_flow(net: mm.Network, solver=None, **kwargs):

@@ -211,8 +211,6 @@ class GEKKOSolver(SolverInterface):
         """
         No docstring provided.
         """
-        GKVariable.max = property(lambda self: self.UPPER)
-        GKVariable.min = property(lambda self: self.LOWER)
         m = GEKKO(remote=False)
         m.options.SOLVER = self.solver
         m.options.WEB = 0
@@ -223,9 +221,21 @@ class GEKKOSolver(SolverInterface):
         if optimization_problem is not None:
             optimization_problem._apply(network)
 
+        # Phase 1: add Var placeholders for all NetworkConstraint extensions
+        for ext in network.extensions:
+            ext.prepare(network)
+
+        # detect islanding config for topology-aware pre-filtering
+        from monee.model.islanding.core import NetworkIslandingConfig
+
+        islanding_config = next(
+            (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
+            None,
+        )
+
         ignored_nodes = set()
         if optimization_problem is None or exclude_unconnected_nodes:
-            ignored_nodes = find_ignored_nodes(network)
+            ignored_nodes = find_ignored_nodes(network, islanding_config)
 
         nodes = network.nodes
         for node in nodes:
@@ -250,7 +260,14 @@ class GEKKOSolver(SolverInterface):
             self.process_oxf_components(m, network, optimization_problem)
         else:
             self.process_internal_oxf_components(m, network)
-        m.Obj(sum(objs_exprs))
+
+        # Phase 2: add NetworkConstraint extension equations after variable injection
+        for ext in network.extensions:
+            m.Equations(ext.equations(network, ignored_nodes))
+
+        if objs_exprs:
+            m.Obj(sum(objs_exprs))
+
         try:
             m.solve(disp=False)
         except Exception:

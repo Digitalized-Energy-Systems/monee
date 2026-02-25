@@ -294,7 +294,12 @@ class OptimizationProblem:
                             logger.warning(
                                 "The attribute %s has been replaced", attribute
                             )
-        for min, max, component_condition, attributes in self._bounds_for_controllables:
+        for (
+            min_value,
+            max_value,
+            component_condition,
+            attributes,
+        ) in self._bounds_for_controllables:
             component_list = network.all_components()
             for component in component_list:
                 if (
@@ -306,8 +311,8 @@ class OptimizationProblem:
                         logger.info("The attributes %s are bounded", attributes)
                     for attribute in attributes:
                         var = getattr(component.model, attribute)
-                        var.max = max
-                        var.min = min
+                        var.max = max_value
+                        var.min = min_value
 
     def add_to_controllable(
         self, model, attributes: list[str | tuple[str, AttributeParameter]]

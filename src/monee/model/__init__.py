@@ -62,6 +62,7 @@ from .multi import (
     CHPControlNode,
     GasToHeatControlNode,
     PowerToHeatControlNode,
+    MultGridCompoundModel,
 )
 from .grid import (
     create_gas_grid,
@@ -71,4 +72,14 @@ from .grid import (
     WaterGrid,
     PowerGrid,
     Grid,
+)
+from .islanding import (
+    GridFormingMixin,
+    IslandingMode,
+    NetworkIslandingConfig,
+    ElectricityIslandingMode,
+    GridFormingGenerator,
+    GasIslandingMode,
+    GridFormingSource,
+    WaterIslandingMode,
 )

@@ -1353,6 +1353,198 @@ def create_water_sink(
     )
 
 
+def create_grid_forming_generator(
+    network: mm.Network,
+    node_id,
+    p_mw_max: float,
+    q_mvar_max: float,
+    vm_pu: float = 1.0,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+):
+    """
+    Attach a grid-forming generator to an electricity bus, making it the slack
+    node for its island.
+
+    Unlike ``create_power_generator`` (fixed p/q setpoint), a grid-forming
+    generator has *variable* active and reactive power so it can absorb any
+    supply–demand imbalance within its island.  Its voltage magnitude is pinned
+    to ``vm_pu``; the voltage angle is pinned to 0 by the islanding formulation.
+
+    Requires ``enable_islanding(net, electricity=True)`` (or a custom
+    ``ElectricityIslandingMode``) to be active on the network.
+
+    Args:
+        network (mm.Network): Target network.
+        node_id: Bus identifier where the generator is attached.
+        p_mw_max (float): Maximum active power injection/absorption in MW.
+        q_mvar_max (float): Maximum reactive power injection/absorption in Mvar.
+        vm_pu (float, optional): Voltage magnitude setpoint in per-unit. Defaults to 1.0.
+        constraints: Operational constraints for the child component.
+        overwrite_id: Custom identifier for the child, overriding the auto-assigned one.
+        name (str, optional): Human-readable name.
+
+    Returns:
+        GridFormingGenerator: The created component, already attached to the network.
+
+    Examples:
+        Add an islanded generator that can supply up to 5 MW::
+
+            gf_gen = mx.create_grid_forming_generator(
+                net, bus_island, p_mw_max=5.0, q_mvar_max=2.0
+            )
+    """
+    from monee.model.islanding import GridFormingGenerator
+
+    return create_el_child(
+        network,
+        GridFormingGenerator(p_mw_max=p_mw_max, q_mvar_max=q_mvar_max, vm_pu=vm_pu),
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+    )
+
+
+def create_grid_forming_source(
+    network: mm.Network,
+    node_id,
+    pressure_pu: float = 1.0,
+    t_k: float = 356.0,
+    mass_flow_max: float = 1e6,
+    grid_key=mm.GAS_KEY,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+):
+    """
+    Attach a grid-forming hydraulic source to a gas or water junction, making
+    it the pressure reference for its island.
+
+    The junction's pressure is pinned to ``pressure_pu`` and the source's
+    ``mass_flow`` is a *variable* that absorbs the island's supply–demand
+    imbalance, mirroring the role of ``ExtHydrGrid`` but usable on an isolated
+    island.
+
+    Requires ``enable_islanding(net, gas=True)`` or ``enable_islanding(net, water=True)``
+    to be active on the network for the relevant carrier.
+
+    Args:
+        network (mm.Network): Target network.
+        node_id: Junction identifier where the source is attached.
+        pressure_pu (float, optional): Pressure setpoint in per-unit. Defaults to 1.0.
+        t_k (float, optional): Temperature in Kelvin. Defaults to 356.0.
+        mass_flow_max (float, optional): Maximum absolute mass flow in kg/s. Defaults to 1e6.
+        grid_key: Grid key determining the carrier (``mm.GAS_KEY`` or ``mm.WATER_KEY``).
+            Defaults to ``mm.GAS_KEY``.
+        constraints: Operational constraints for the child component.
+        overwrite_id: Custom identifier for the child, overriding the auto-assigned one.
+        name (str, optional): Human-readable name.
+
+    Returns:
+        GridFormingSource: The created component, already attached to the network.
+
+    Examples:
+        Add an islanded gas source at 1.0 pu pressure::
+
+            gf_src = mx.create_grid_forming_source(net, junction_island, pressure_pu=1.0)
+    """
+    from monee.model.islanding import GridFormingSource
+
+    return network.child_to(
+        GridFormingSource(
+            pressure_pu=pressure_pu, t_k=t_k, mass_flow_max=mass_flow_max
+        ),
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        auto_node_creator=mm.Junction,
+        auto_grid_key=grid_key,
+    )
+
+
+def create_gas_grid_forming_source(
+    network: mm.Network,
+    node_id,
+    pressure_pu: float = 1.0,
+    t_k: float = 356.0,
+    mass_flow_max: float = 1e6,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+):
+    """
+    Attach a grid-forming source to a gas junction.  Shortcut for
+    ``create_grid_forming_source(..., grid_key=mm.GAS_KEY)``.
+
+    Args:
+        network (mm.Network): Target network.
+        node_id: Gas junction identifier.
+        pressure_pu (float, optional): Pressure setpoint in per-unit. Defaults to 1.0.
+        t_k (float, optional): Gas temperature in Kelvin. Defaults to 356.0.
+        mass_flow_max (float, optional): Maximum mass flow in kg/s. Defaults to 1e6.
+        constraints: Operational constraints for the child component.
+        overwrite_id: Custom identifier for the child.
+        name (str, optional): Human-readable name.
+
+    Returns:
+        GridFormingSource: The created component.
+    """
+    return create_grid_forming_source(
+        network,
+        node_id,
+        pressure_pu=pressure_pu,
+        t_k=t_k,
+        mass_flow_max=mass_flow_max,
+        grid_key=mm.GAS_KEY,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+    )
+
+
+def create_water_grid_forming_source(
+    network: mm.Network,
+    node_id,
+    pressure_pu: float = 1.0,
+    t_k: float = 356.0,
+    mass_flow_max: float = 1e6,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+):
+    """
+    Attach a grid-forming source to a water/heat junction.  Shortcut for
+    ``create_grid_forming_source(..., grid_key=mm.WATER_KEY)``.
+
+    Args:
+        network (mm.Network): Target network.
+        node_id: Water junction identifier.
+        pressure_pu (float, optional): Pressure setpoint in per-unit. Defaults to 1.0.
+        t_k (float, optional): Water temperature in Kelvin. Defaults to 356.0.
+        mass_flow_max (float, optional): Maximum mass flow in kg/s. Defaults to 1e6.
+        constraints: Operational constraints for the child component.
+        overwrite_id: Custom identifier for the child.
+        name (str, optional): Human-readable name.
+
+    Returns:
+        GridFormingSource: The created component.
+    """
+    return create_grid_forming_source(
+        network,
+        node_id,
+        pressure_pu=pressure_pu,
+        t_k=t_k,
+        mass_flow_max=mass_flow_max,
+        grid_key=mm.WATER_KEY,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+    )
+
+
 def create_multi_energy_network():
     """
     No docstring provided.

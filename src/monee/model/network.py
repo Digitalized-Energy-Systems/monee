@@ -23,6 +23,7 @@ from .formulation import (
     NL_DARCY_WEISBACH_NETWORK_FORMULATION,
     NL_WEYMOUTH_NETWORK_FORMULATION,
     Formulation,
+    NetworkConstraint,
     NetworkFormulation,
 )
 from .grid import create_gas_grid, create_power_grid, create_water_grid
@@ -36,20 +37,21 @@ class Network:
     def __init__(
         self,
         active_grid=None,
-        el_model=create_power_grid("power"),
-        water_model=create_water_grid("water"),
-        gas_model=create_gas_grid("gas"),
+        el_model=None,
+        water_model=None,
+        gas_model=None,
     ) -> None:
         self._default_grid_models = {
-            EL_KEY: el_model,
-            WATER_KEY: water_model,
-            GAS_KEY: gas_model,
+            EL_KEY: el_model or create_power_grid("power"),
+            WATER_KEY: water_model or create_water_grid("water"),
+            GAS_KEY: gas_model or create_gas_grid("gas"),
         }
         self._network_internal = nx.MultiGraph()
         self._child_dict = {}
         self._compound_dict = {}
         self._constraints = []
         self._objectives = []
+        self._extensions: list[NetworkConstraint] = []
         self.__blacklist = []
         self.__collected_components = []
         self.__force_blacklist = False
@@ -195,6 +197,15 @@ class Network:
         No docstring provided.
         """
         return self._objectives
+
+    @property
+    def extensions(self) -> list[NetworkConstraint]:
+        """Solver-agnostic network-level constraint extensions."""
+        return self._extensions
+
+    def add_extension(self, ext: NetworkConstraint) -> None:
+        """Register a NetworkConstraint extension on this network."""
+        self._extensions.append(ext)
 
     @property
     def compounds(self) -> list[Compound]:
@@ -872,7 +883,7 @@ def _clean_up_compound(network: Network, compound):
             fully_intact = False
     compound_components = compound.component_of_type(Compound)
     for component in compound_components:
-        compound_alive = _clean_up_compound(network, compound)
+        compound_alive = _clean_up_compound(network, component)
         if not compound_alive:
             fully_intact = False
     network.remove_compound(compound)
@@ -897,7 +908,7 @@ def transform_network(network: Network, graph_transform):
         for node in network.nodes:
             if child.id in node.child_ids:
                 referenced = True
-        if referenced:
+        if not referenced:
             network.remove_child(child.id)
     for compound in list(network.compounds):
         _clean_up_compound(network, compound)
@@ -926,7 +937,7 @@ def calc_coordinates(network: Network, component: Component):
         return component.position
     elif type(component) is Branch:
         node_start = network.node_by_id(component.from_node_id)
-        node_end = network.node_by_id(component.from_node_id)
+        node_end = network.node_by_id(component.to_node_id)
         return tuple(
             [
                 (node_start.position[i] + node_end.position[i]) / 2

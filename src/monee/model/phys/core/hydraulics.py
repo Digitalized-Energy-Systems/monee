@@ -2,6 +2,43 @@ import math
 
 import numpy as np
 
+REY_BINS = [
+    50,
+    100,
+    200,
+    400,
+    800,
+    1200,
+    1600,
+    2000,
+    2200,
+    2400,
+    2600,
+    2800,
+    3000,
+    3200,
+    3500,
+    3800,
+    4200,
+    4600,
+    5000,
+    6000,
+    7000,
+    8000,
+    1e4,
+    1.5e4,
+    2e4,
+    3e4,
+    5e4,
+    1e5,
+    2e5,
+    5e5,
+    1e6,
+    2e6,
+    5e6,
+    1e7,
+]
+
 
 def calc_pipe_area(diameter_m):
     """
@@ -59,45 +96,8 @@ def swamee_jain(reynolds_var, diameter_m, roughness, log_func):
 
 
 def piecewise_eq_friction(model, pwl):
-    re_pts = [
-        50,
-        100,
-        200,
-        400,
-        800,
-        1200,
-        1600,
-        2000,
-        2200,
-        2400,
-        2600,
-        2800,
-        3000,
-        3200,
-        3500,
-        3800,
-        4200,
-        4600,
-        5000,
-        6000,
-        7000,
-        8000,
-        1e4,
-        1.5e4,
-        2e4,
-        3e4,
-        5e4,
-        1e5,
-        2e5,
-        5e5,
-        1e6,
-        2e6,
-        5e6,
-        1e7,
-    ]
-
     f_pts = []
-    for r in re_pts:
+    for r in REY_BINS:
         # -> mass flow is zero -> therefore pressure drop is zero independent of the friction
         if r < 2000:
             f_pts.append(64.0 / (r))
@@ -107,6 +107,6 @@ def piecewise_eq_friction(model, pwl):
     pwl.piecewise_eq(
         y=model.friction,
         x=model.reynolds,
-        xs=re_pts,
+        xs=REY_BINS,
         ys=f_pts,
     )
