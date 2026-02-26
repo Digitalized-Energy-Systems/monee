@@ -151,7 +151,7 @@ mx.create_sink(net, j_return, mass_flow=1)
 
 # ── Couple: electric bus drives a heat pump feeding the heating loop ──
 mx.create_p2h(net, bus_1, j_mid, j_return,
-              heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9)
+              heat_energy_w=100_000, diameter_m=0.1, efficiency=0.9)
 
 result = run_energy_flow(net)
 print(result.dataframes["Bus"][["id", "vm_pu", "va_degree"]])

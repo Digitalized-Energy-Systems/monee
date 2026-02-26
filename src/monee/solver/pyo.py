@@ -10,7 +10,9 @@ from monee.model import (
     Network,
     Var,
 )
+from monee.model.core import tracked
 from monee.problem.core import OptimizationProblem
+from monee.simulation.step_state import StepState
 
 from .core import (
     SolverInterface,
@@ -72,8 +74,12 @@ class PyomoSolver(SolverInterface):
         """
         Replace Var/Const fields on `target` with Pyomo Var / numeric constants.
         """
+        # Collect tracked attr names before Var objects are replaced.
+        inter_step_attrs = [k for k, v in target.__dict__.items() if type(v) is tracked]
+        if inter_step_attrs:
+            target._inter_step_attrs = inter_step_attrs
         for key, value in target.__dict__.items():
-            if type(value) is Var:
+            if isinstance(value, Var):
                 # Create a unique Pyomo Var on the ConcreteModel
                 v = pyo.Var(
                     domain=pyo.Integers if value.integer else pyo.Reals,
@@ -145,11 +151,13 @@ class PyomoSolver(SolverInterface):
         Convert Pyomo Var values back into your Var objects.
         Constants stay constants.
         """
+        inter_step_attrs = getattr(target, "_inter_step_attrs", [])
         for key, value in target.__dict__.items():
             if isinstance(value, pyo.Var):
                 lb, ub = value.bounds if value.bounds is not None else (None, None)
                 val = pyo.value(value)
-                setattr(target, key, Var(value=val, min=lb, max=ub))
+                var_cls = tracked if key in inter_step_attrs else Var
+                setattr(target, key, var_cls(value=val, min=lb, max=ub))
             elif isinstance(value, pyo.Expression):
                 setattr(target, key, Intermediate(value=pyo.value(value)))
 
@@ -208,6 +216,89 @@ class PyomoSolver(SolverInterface):
 
     # --------- Core solve ---------
 
+    def process_inter_step_equations(
+        self,
+        pm,
+        network: Network,
+        nodes,
+        branches,
+        compounds,
+        ignored_nodes: set,
+        step_state: StepState,
+    ):
+        """
+        Collect and register inter-step equations from every active model and
+        formulation that implements ``inter_step_equations()``.
+
+        Called after regular equation assembly when a non-None *step_state* is
+        present.  Models/formulations that don't implement the method are
+        silently skipped.
+        """
+        for node in nodes:
+            if ignore_node(node, network, ignored_nodes):
+                continue
+            if hasattr(node.model, "inter_step_equations"):
+                eqs = as_iter(node.model.inter_step_equations(step_state, node.id))
+                self._add_equations(pm, filter_intermediate_eqs(eqs))
+            if node.formulation is not None and hasattr(
+                node.formulation, "inter_step_equations"
+            ):
+                eqs = as_iter(
+                    node.formulation.inter_step_equations(
+                        node.model, step_state, node.id
+                    )
+                )
+                self._add_equations(pm, filter_intermediate_eqs(eqs))
+            for child in network.childs_by_ids(node.child_ids):
+                if ignore_child(child, ignored_nodes):
+                    continue
+                if hasattr(child.model, "inter_step_equations"):
+                    eqs = as_iter(
+                        child.model.inter_step_equations(step_state, child.id)
+                    )
+                    self._add_equations(pm, filter_intermediate_eqs(eqs))
+                if child.formulation is not None and hasattr(
+                    child.formulation, "inter_step_equations"
+                ):
+                    eqs = as_iter(
+                        child.formulation.inter_step_equations(
+                            child.model, step_state, child.id
+                        )
+                    )
+                    self._add_equations(pm, filter_intermediate_eqs(eqs))
+        for branch in branches:
+            if ignore_branch(branch, network, ignored_nodes):
+                continue
+            if hasattr(branch.model, "inter_step_equations"):
+                eqs = as_iter(branch.model.inter_step_equations(step_state, branch.id))
+                self._add_equations(pm, filter_intermediate_eqs(eqs))
+            if branch.formulation is not None and hasattr(
+                branch.formulation, "inter_step_equations"
+            ):
+                eqs = as_iter(
+                    branch.formulation.inter_step_equations(
+                        branch.model, step_state, branch.id
+                    )
+                )
+                self._add_equations(pm, filter_intermediate_eqs(eqs))
+        for compound in compounds:
+            if ignore_compound(compound, ignored_nodes):
+                continue
+            if hasattr(compound.model, "inter_step_equations"):
+                eqs = as_iter(
+                    compound.model.inter_step_equations(step_state, compound.id)
+                )
+                self._add_equations(pm, filter_intermediate_eqs(eqs))
+            if compound.formulation is not None and hasattr(
+                compound.formulation, "inter_step_equations"
+            ):
+                eqs = as_iter(
+                    compound.formulation.inter_step_equations(
+                        compound.model, step_state, compound.id
+                    )
+                )
+                self._add_equations(pm, filter_intermediate_eqs(eqs))
+
     def solve(
         self,
         input_network: Network,
@@ -215,6 +306,7 @@ class PyomoSolver(SolverInterface):
         exclude_unconnected_nodes: bool = False,
         solver_name: str = "scip",
         debug=False,
+        step_state: StepState = None,
     ):
         pm = pyo.ConcreteModel()
         pm.cons = pyo.ConstraintList()
@@ -268,6 +360,11 @@ class PyomoSolver(SolverInterface):
             self.process_oxf_components(pm, network, optimization_problem)
         else:
             self.process_internal_oxf_components(pm, network)
+
+        if step_state is not None:
+            self.process_inter_step_equations(
+                pm, network, nodes, branches, compounds, ignored_nodes, step_state
+            )
 
         # Phase 2: add NetworkConstraint extension equations after variable injection
         for ext in network.extensions:

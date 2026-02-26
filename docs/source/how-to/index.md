@@ -52,6 +52,15 @@ Enable multi-island solves with `enable_islanding()`, add grid-forming
 generators or sources, and retrieve per-island results.
 :::
 
+:::{grid-item-card} Timeseries simulation
+:link: timeseries
+:link-type: doc
+:shadow: sm
+
+Drive a multi-energy network through hundreds or thousands of timesteps with
+time-varying load profiles, ramp constraints, and rich result queries.
+:::
+
 ::::
 
 ```{toctree}
@@ -63,4 +72,5 @@ matpower_io
 convert_from_pandapower
 use_pyomo_solver
 islanding
+timeseries
 ```

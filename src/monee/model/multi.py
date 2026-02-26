@@ -2,8 +2,8 @@ from .branch import HeatExchanger
 from .child import PowerGenerator, PowerLoad, Sink
 from .core import (
     Intermediate,
-    MultGridCompoundModel,
     MultiGridBranchModel,
+    MultiGridCompoundModel,
     MultiGridNodeModel,
     Node,
     Var,
@@ -186,7 +186,7 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
     """
 
     def __init__(
-        self, load_p_mw, load_q_mvar, heat_energy_mw, efficiency, **kwargs
+        self, load_p_mw, load_q_mvar, heat_energy_w, efficiency, **kwargs
     ) -> None:
         super().__init__(**kwargs)
 
@@ -194,7 +194,7 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         self.efficiency = efficiency
 
         self.el_mw = load_p_mw
-        self.heat_w = heat_energy_mw
+        self.heat_w = heat_energy_w
 
         self.t_k = Intermediate(1)
         self.t_pu = Var(1, min=0, max=2, name="t_pu")
@@ -229,12 +229,10 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
             [branch for branch in heat_to_branches if type(branch) is SubHE][0].q_w
-            / 1000000
             == -self.heat_w,
             sum(power_eqs[0]) == 0,
             sum(power_eqs[1]) == 0,
-            self.heat_w == self.efficiency * self.el_mw,
-            # IntermediateEq("t_k", self.t_pu * grid[1].t_ref),
+            self.heat_w == self.efficiency * self.el_mw * 1000000,
         ]
 
 
@@ -415,7 +413,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
 
 
 @model
-class CHP(MultGridCompoundModel):
+class CHP(MultiGridCompoundModel):
     """
     No docstring provided.
     """
@@ -483,7 +481,7 @@ class CHP(MultGridCompoundModel):
 
 
 @model
-class GasToHeat(MultGridCompoundModel):
+class GasToHeat(MultiGridCompoundModel):
     """
     No docstring provided.
     """
@@ -521,14 +519,14 @@ class GasToHeat(MultGridCompoundModel):
 
 
 @model
-class PowerToHeat(MultGridCompoundModel):
+class PowerToHeat(MultiGridCompoundModel):
     """
     No docstring provided.
     """
 
     def __init__(
         self,
-        heat_energy_mw,
+        heat_energy_w,
         diameter_m,
         temperature_ext_k,
         efficiency,
@@ -537,10 +535,8 @@ class PowerToHeat(MultGridCompoundModel):
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
-        self.heat_energy_mw = (
-            heat_energy_mw
-            if type(heat_energy_mw) is Var
-            else MutableFloat(heat_energy_mw)
+        self.heat_energy_w = (
+            heat_energy_w if type(heat_energy_w) is Var else MutableFloat(heat_energy_w)
         )
         self.load_p_mw = Var(1)
         self.load_q_mvar = (
@@ -554,9 +550,9 @@ class PowerToHeat(MultGridCompoundModel):
         No docstring provided.
         """
         if activation_flag:
-            self._control_node.heat_energy_mw = self.heat_energy_mw
+            self._control_node.heat_energy_w = self.heat_energy_w
         else:
-            self._control_node.heat_energy_mw = 0
+            self._control_node.heat_energy_w = 0
 
     def create(
         self,
@@ -569,7 +565,7 @@ class PowerToHeat(MultGridCompoundModel):
         No docstring provided.
         """
         self._control_node = PowerToHeatControlNode(
-            self.load_p_mw, self.load_q_mvar, self.heat_energy_mw, self.efficiency
+            self.load_p_mw, self.load_q_mvar, self.heat_energy_w, self.efficiency
         )
         node_id_control = network.node(
             self._control_node,

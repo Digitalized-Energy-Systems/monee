@@ -120,7 +120,7 @@ def create_in_line_p2h():
 
     # multi
     pn.compound(
-        mm.PowerToHeat(0.02, 0.15, 300, 1),
+        mm.PowerToHeat(0.02 * 1000000, 0.15, 300, 1),
         power_node_id=el_node_2,
         heat_node_id=w_node_2,
         heat_return_node_id=w_node_1,

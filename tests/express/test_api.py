@@ -76,7 +76,13 @@ def test_api_example_index():
 
     # creating connection between el and water grid
     mx.create_p2h(
-        net, bus_1, junc_1, junc_2, heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9
+        net,
+        bus_1,
+        junc_1,
+        junc_2,
+        heat_energy_w=100_000,
+        diameter_m=0.1,
+        efficiency=0.9,
     )
 
     result = run_energy_flow(net)

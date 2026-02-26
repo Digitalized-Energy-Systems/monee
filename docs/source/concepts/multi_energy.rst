@@ -114,15 +114,15 @@ return pipe closes the thermal loop.
         power_node_id=bus_el,
         heat_node_id=junc_supply,
         heat_return_node_id=junc_return,
-        heat_energy_mw=0.5,    # thermal output setpoint [MW]
-        diameter_m=0.1,        # heat-exchange pipe diameter
-        efficiency=0.95,       # electrical-to-thermal efficiency
+        heat_energy_w=500_000,  # thermal output setpoint [W]
+        diameter_m=0.1,         # heat-exchange pipe diameter
+        efficiency=0.95,        # electrical-to-thermal efficiency
     )
 
 **Key parameters:**
 
-- ``heat_energy_mw`` — thermal output setpoint. The solver derives the
-  required electrical input as ``heat_energy_mw / efficiency``.
+- ``heat_energy_w`` — thermal output setpoint in **watts**. The solver derives the
+  required electrical input as ``heat_energy_w / efficiency``.
 - ``efficiency`` — ratio of thermal output to electrical input (≤ 1 for
   resistive heating, > 1 for heat pumps modelled with a fixed COP).
 - ``diameter_m`` — internal pipe diameter of the connecting heat-exchange

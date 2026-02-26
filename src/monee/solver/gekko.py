@@ -16,7 +16,9 @@ from monee.model import (
     Node,
     Var,
 )
+from monee.model.core import tracked
 from monee.problem.core import OptimizationProblem
+from monee.simulation.step_state import StepState
 
 from .core import (
     SolverInterface,
@@ -86,9 +88,13 @@ class GEKKOSolver(SolverInterface):
         """
         No docstring provided.
         """
+        # Collect tracked attr names before Var objects are replaced.
+        inter_step_attrs = [k for k, v in target.__dict__.items() if type(v) is tracked]
+        if inter_step_attrs:
+            target._inter_step_attrs = inter_step_attrs
         i = 0
         for key, value in target.__dict__.items():
-            if type(value) is Var:
+            if isinstance(value, Var):
                 if value.name is not None:
                     name = f"{id}.{value.name}"
                 else:
@@ -170,12 +176,14 @@ class GEKKOSolver(SolverInterface):
         """
         No docstring provided.
         """
+        inter_step_attrs = getattr(target, "_inter_step_attrs", [])
         for key, value in target.__dict__.items():
             if type(value) is GKVariable:
+                var_cls = tracked if key in inter_step_attrs else Var
                 setattr(
                     target,
                     key,
-                    Var(
+                    var_cls(
                         value=value.VALUE.value[0],
                         min=value.LOWER,
                         max=value.UPPER,
@@ -201,12 +209,97 @@ class GEKKOSolver(SolverInterface):
         for compound in compounds:
             GEKKOSolver.withdraw_gekko_vars_attr(compound.model)
 
+    def process_inter_step_equations(
+        self,
+        m,
+        network: Network,
+        nodes,
+        branches,
+        compounds,
+        ignored_nodes: set,
+        step_state: StepState,
+    ):
+        """
+        Collect and register inter-step equations from every active model and
+        formulation that implements ``inter_step_equations()``.
+
+        Called after regular equation assembly when a non-None *step_state* is
+        present.  Models/formulations that don't implement the method are
+        silently skipped, so this is a pure no-op for networks without
+        inter-step coupling.
+        """
+        for node in nodes:
+            if ignore_node(node, network, ignored_nodes):
+                continue
+            if hasattr(node.model, "inter_step_equations"):
+                eqs = as_iter(node.model.inter_step_equations(step_state, node.id))
+                m.Equations(filter_intermediate_eqs(eqs))
+            if node.formulation is not None and hasattr(
+                node.formulation, "inter_step_equations"
+            ):
+                eqs = as_iter(
+                    node.formulation.inter_step_equations(
+                        node.model, step_state, node.id
+                    )
+                )
+                m.Equations(filter_intermediate_eqs(eqs))
+            for child in network.childs_by_ids(node.child_ids):
+                if ignore_child(child, ignored_nodes):
+                    continue
+                if hasattr(child.model, "inter_step_equations"):
+                    eqs = as_iter(
+                        child.model.inter_step_equations(step_state, child.id)
+                    )
+                    m.Equations(filter_intermediate_eqs(eqs))
+                if child.formulation is not None and hasattr(
+                    child.formulation, "inter_step_equations"
+                ):
+                    eqs = as_iter(
+                        child.formulation.inter_step_equations(
+                            child.model, step_state, child.id
+                        )
+                    )
+                    m.Equations(filter_intermediate_eqs(eqs))
+        for branch in branches:
+            if ignore_branch(branch, network, ignored_nodes):
+                continue
+            if hasattr(branch.model, "inter_step_equations"):
+                eqs = as_iter(branch.model.inter_step_equations(step_state, branch.id))
+                m.Equations(filter_intermediate_eqs(eqs))
+            if branch.formulation is not None and hasattr(
+                branch.formulation, "inter_step_equations"
+            ):
+                eqs = as_iter(
+                    branch.formulation.inter_step_equations(
+                        branch.model, step_state, branch.id
+                    )
+                )
+                m.Equations(filter_intermediate_eqs(eqs))
+        for compound in compounds:
+            if ignore_compound(compound, ignored_nodes):
+                continue
+            if hasattr(compound.model, "inter_step_equations"):
+                eqs = as_iter(
+                    compound.model.inter_step_equations(step_state, compound.id)
+                )
+                m.Equations(filter_intermediate_eqs(eqs))
+            if compound.formulation is not None and hasattr(
+                compound.formulation, "inter_step_equations"
+            ):
+                eqs = as_iter(
+                    compound.formulation.inter_step_equations(
+                        compound.model, step_state, compound.id
+                    )
+                )
+                m.Equations(filter_intermediate_eqs(eqs))
+
     def solve(
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
         draw_debug=False,
         exclude_unconnected_nodes=False,
+        step_state: StepState = None,
     ):
         """
         No docstring provided.
@@ -260,6 +353,11 @@ class GEKKOSolver(SolverInterface):
             self.process_oxf_components(m, network, optimization_problem)
         else:
             self.process_internal_oxf_components(m, network)
+
+        if step_state is not None:
+            self.process_inter_step_equations(
+                m, network, nodes, branches, compounds, ignored_nodes, step_state
+            )
 
         # Phase 2: add NetworkConstraint extension equations after variable injection
         for ext in network.extensions:
@@ -315,7 +413,7 @@ class GEKKOSolver(SolverInterface):
             not optimization_problem.constraints.empty
         ):
             m.Equations(optimization_problem.constraints.all(network))
-        obj = 0
+        obj = None
         for objective in optimization_problem.objectives.all(network):
             if obj is not None:
                 obj = obj + objective

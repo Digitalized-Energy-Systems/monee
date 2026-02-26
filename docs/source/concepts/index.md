@@ -62,6 +62,15 @@ Solve networks with multiple disconnected islands: the connectivity-flow
 MIP formulation, grid-forming nodes, and per-carrier physical constraints.
 :::
 
+:::{grid-item-card} Timeseries simulation
+:link: timeseries
+:link-type: doc
+:shadow: sm
+
+Sequential solve architecture, `TimeseriesData`, `StepState`, inter-step
+coupling with `tracked` Vars, and ramp constraints.
+:::
+
 ::::
 
 ```{toctree}
@@ -74,4 +83,5 @@ multi_energy
 formulations
 solvers
 islanding
+timeseries
 ```

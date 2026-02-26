@@ -194,7 +194,7 @@ def create_p2h_in_combined_generated_network(
                     power_node_id=power_node.id,
                     heat_node_id=heat_junc_two,
                     heat_return_node_id=heat_junc,
-                    heat_energy_mw=0.015,
+                    heat_energy_w=15_000,
                     diameter_m=0.003,
                     efficiency=0.4 * 0.5 * 0.5,
                 )

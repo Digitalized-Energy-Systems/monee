@@ -589,9 +589,10 @@ class Network:
         return grid_or_name
 
     def _or_default_formulation(self, model, formulation, grid):
-        for t, form in self.__default_formulation.items():
-            if isinstance(model, t[0]) and (t[1] is None or type(grid) is t[1]):
-                return form
+        if formulation is None:
+            for t, form in self.__default_formulation.items():
+                if isinstance(model, t[0]) and (t[1] is None or type(grid) is t[1]):
+                    return form
         return formulation
 
     def node(
@@ -706,15 +707,17 @@ class Network:
         )
         self.__force_blacklist = True
         self.__collect_components = True
-        model.create(
-            self,
-            **{
-                k.replace("_id", "") if k.endswith("_id") else k: self.node_by_id(v)
-                for k, v in connected_node_ids.items()
-            },
-        )
-        self.__collect_components = False
-        self.__force_blacklist = False
+        try:
+            model.create(
+                self,
+                **{
+                    k.replace("_id", "") if k.endswith("_id") else k: self.node_by_id(v)
+                    for k, v in connected_node_ids.items()
+                },
+            )
+        finally:
+            self.__collect_components = False
+            self.__force_blacklist = False
         compound = Compound(
             compound_id=compound_id,
             formulation=self._or_default_formulation(model, formulation, None),

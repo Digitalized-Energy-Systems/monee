@@ -58,7 +58,7 @@ mx.create_water_pipe(net, junc_0, junc_1, diameter_m=0.12, length_m=100)
 mx.create_sink(net, junc_2, mass_flow=1)
 
 # creating connection between el and water grid
-mx.create_p2h(net, bus_1, junc_1, junc_2, heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9)
+mx.create_p2h(net, bus_1, junc_1, junc_2, heat_energy_w=100_000, diameter_m=0.1, efficiency=0.9)
 
 # execute an energy flow calculating the energy flow for the whole MES
 result = run_energy_flow(net)

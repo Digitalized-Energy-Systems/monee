@@ -4,6 +4,7 @@ from .core import (
     Compound,
     Branch,
     Var,
+    tracked,
     Const,
     Intermediate,
     IntermediateEq,
@@ -17,6 +18,7 @@ from .core import (
     NodeModel,
     CompoundModel,
     MultiGridBranchModel,
+    MultiGridCompoundModel,
     GenericModel,
     EL_KEY,
     GAS_KEY,
@@ -62,7 +64,6 @@ from .multi import (
     CHPControlNode,
     GasToHeatControlNode,
     PowerToHeatControlNode,
-    MultGridCompoundModel,
 )
 from .grid import (
     create_gas_grid,

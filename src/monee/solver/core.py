@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
 
 import networkx as nx
@@ -7,8 +8,8 @@ from monee.model import (
     ExtHydrGrid,
     ExtPowerGrid,
     IntermediateEq,
-    MultGridCompoundModel,
     MultiGridBranchModel,
+    MultiGridCompoundModel,
     Network,
     Node,
     Var,
@@ -21,17 +22,45 @@ from monee.problem.core import OptimizationProblem
 @dataclass
 class SolverResult:
     """
-    No docstring provided.
+    The outcome of a single energy-flow or optimisation solve.
+
+    Attributes:
+        network: The solved network with all ``Var.value`` attributes updated
+            to the solution values.
+        dataframes: Per-component-type result tables, keyed by class name
+            (e.g. ``"Bus"``, ``"PowerLoad"``).  Each DataFrame has one row
+            per component instance and one column per model attribute.
+            Prefer :meth:`get` over direct dict access to avoid string-key typos.
+        objective: Value of the optimisation objective at the solution.
+            ``0.0`` for plain energy-flow (no optimisation problem).
     """
 
     network: Network
     dataframes: dict[str, pandas.DataFrame]
     objective: float
 
+    def get(self, model_type) -> pandas.DataFrame:
+        """
+        Return the result DataFrame for *model_type* using the class itself as key.
+
+        This is the preferred alternative to ``result.dataframes["ClassName"]``
+        because it avoids string-key typos and benefits from IDE autocomplete.
+
+        Args:
+            model_type: The model class (e.g. ``mm.PowerLoad``, ``mm.Bus``).
+
+        Returns:
+            The result :class:`pandas.DataFrame` for that component type, or an
+            empty DataFrame if no instances of that type exist in the network.
+
+        Example::
+
+            df = result.get(mm.PowerLoad)
+            print(df["p_mw"])
+        """
+        return self.dataframes.get(model_type.__name__, pandas.DataFrame())
+
     def __str__(self) -> str:
-        """
-        No docstring provided.
-        """
         result_str = str(self.network)
         result_str += "\n"
         for cls_str, dataframe in self.dataframes.items():
@@ -43,15 +72,32 @@ class SolverResult:
         return result_str
 
 
-class SolverInterface:
+class SolverInterface(ABC):
+    """Abstract base class for solver backends (GEKKO, Pyomo, …)."""
+
+    @abstractmethod
     def solve(
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
         draw_debug=False,
         exclude_unconnected_nodes=False,
-    ):
-        pass
+        step_state=None,
+    ) -> SolverResult:
+        """
+        Solve the energy-flow / optimisation problem for *input_network*.
+
+        Args:
+            input_network: The network to solve.
+            optimization_problem: Optional optimisation problem with objectives
+                and constraints.  If ``None``, performs a plain energy-flow solve.
+            draw_debug: If ``True``, emit debug output from the solver.
+            exclude_unconnected_nodes: Legacy flag; prefer islanding config.
+            step_state: Inter-step state from the previous timeseries step.
+
+        Returns:
+            A :class:`SolverResult` with updated variable values and result DataFrames.
+        """
 
 
 def as_iter(possible_iter):
@@ -97,12 +143,16 @@ def ignore_compound(compound, ignored_nodes):
 
 def generate_real_topology(nx_net):
     net_copy = nx_net.copy()
-    for edge in nx_net.edges.data():
-        branch = edge[2]["internal_branch"]
+    # Iterate with keys=True so we can remove the exact edge (not always key 0)
+    # when there are parallel branches between the same pair of nodes.
+    for u, v, key, data in nx_net.edges(keys=True, data=True):
+        branch = data["internal_branch"]
         if not branch.active or (
-            type(branch.model.on_off) is not Var and branch.model.on_off == 0
+            hasattr(branch.model, "on_off")
+            and type(branch.model.on_off) is not Var
+            and branch.model.on_off == 0
         ):
-            net_copy.remove_edge(edge[0], edge[1], 0)
+            net_copy.remove_edge(u, v, key)
     return net_copy
 
 
@@ -110,7 +160,7 @@ def remove_cps(network: Network):
     relevant_compounds = [
         compound
         for compound in network.compounds
-        if isinstance(compound.model, MultGridCompoundModel)
+        if isinstance(compound.model, MultiGridCompoundModel)
     ]
     for comp in relevant_compounds:
         network.remove_compound(comp.id)

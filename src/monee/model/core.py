@@ -12,7 +12,19 @@ component_list = []
 
 def model(cls):
     """
-    No docstring provided.
+    Class decorator that registers a model class in the global component registry.
+
+    Applying ``@model`` to a ``NodeModel``, ``BranchModel``, ``ChildModel``, or
+    ``CompoundModel`` subclass adds the class to ``component_list``, which is used
+    by introspection utilities (e.g. serialisation helpers) to enumerate all known
+    component types at runtime.
+
+    Usage::
+
+        @model
+        class MyLoad(ChildModel):
+            def equations(self, grid, node_model, **kwargs):
+                return [self.p_mw == node_model.p_mw]
     """
     component_list.append(cls)
     return cls
@@ -72,7 +84,24 @@ def lower(var_or_const):
 
 def value(var_or_const):
     """
-    No docstring provided.
+    Extract the scalar value from a ``Var``, ``Const``, or ``Intermediate``.
+
+    Plain Python numbers and other non-model types are returned unchanged.
+    This is the canonical way to read back a result after a solve, because
+    the solver replaces ``Var`` instances with its own objects during injection
+    and restores them (with updated ``.value``) during withdrawal.
+
+    Args:
+        var_or_const: A ``Var``, ``Const``, ``Intermediate``, or plain scalar.
+
+    Returns:
+        The ``.value`` attribute for model types, or *var_or_const* unchanged.
+
+    Examples::
+
+        v = Var(42.0)
+        value(v)       # 42.0
+        value(3.14)    # 3.14
     """
     if isinstance(var_or_const, Const | Var | Intermediate):
         return var_or_const.value
@@ -81,7 +110,38 @@ def value(var_or_const):
 
 class Var:
     """
-    No docstring provided.
+    A decision variable (or mutable parameter) in the energy-flow / optimisation model.
+
+    During a solve the solver backend replaces ``Var`` instances with its own
+    internal variable objects via the injection/withdrawal protocol.  After the
+    solve, the result is written back to ``Var.value`` so callers can read it
+    with :func:`value`.
+
+    **Sign convention for child components** — positive values represent
+    *consumption* (load), negative values represent *generation* (injection).
+    Child model constructors such as :class:`PowerGenerator` and
+    :class:`Source` negate their constructor argument so that user-facing API
+    always receives positive magnitudes::
+
+        PowerGenerator(p_mw=5)   →  internally stores p_mw = -5  (generation)
+        PowerLoad(p_mw=5)        →  internally stores p_mw = +5  (consumption)
+
+    Comparison operators (``<``, ``<=``, ``>``, ``>=``) compare against the
+    *bound* of the variable, not the current value.  They return ``False``
+    when the relevant bound is ``None`` (i.e. the variable is unbounded in
+    that direction).  This is useful for bound-checking in formulation code::
+
+        v = Var(10, max=100)
+        v < 200   # True  — upper bound 100 < 200
+        v > 0     # False — lower bound is None (not 10)
+
+    Args:
+        value: Initial/default value.  Serves as the solver's starting point.
+        max: Upper bound.  ``None`` means unbounded above.
+        min: Lower bound.  ``None`` means unbounded below.
+        integer: If ``True``, the variable is constrained to integer values
+            (requires a MINLP-capable solver backend).
+        name: Optional symbolic name forwarded to the solver for diagnostics.
     """
 
     def __init__(self, value, max=None, min=None, integer=False, name=None) -> None:
@@ -92,79 +152,160 @@ class Var:
         self.name = name
 
     def __neg__(self):
-        """
-        No docstring provided.
-        """
+        """Return a negated copy with flipped bounds, preserving the concrete subtype (e.g. ``tracked``)."""
         actual_max = None if self.max is None else -self.max
         actual_min = None if self.min is None else -self.min
-        return Var(value=-self.value, max=actual_max, min=actual_min, name=self.name)
+        return type(self)(
+            value=-self.value, max=actual_min, min=actual_max, name=self.name
+        )
 
     def __mul__(self, other):
-        """
-        No docstring provided.
-        """
-        return Var(value=self.value * other, max=self.max, min=self.min, name=self.name)
+        """Return a scaled copy with adjusted bounds, preserving the concrete subtype (e.g. ``tracked``)."""
+        if isinstance(other, (int, float)) and other < 0:
+            # Negative multiplier flips the bounds.
+            new_max = None if self.min is None else self.min * other
+            new_min = None if self.max is None else self.max * other
+        else:
+            new_max = None if self.max is None else self.max * other
+            new_min = None if self.min is None else self.min * other
+        return type(self)(
+            value=self.value * other, max=new_max, min=new_min, name=self.name
+        )
 
     def __lt__(self, other):
-        """
-        No docstring provided.
-        """
+        """Compare the *upper bound* to *other*.  Returns ``False`` when ``max`` is ``None``."""
         if isinstance(other, float | int) and self.max is not None:
             return self.max < other
         return False
 
     def __le__(self, other):
-        """
-        No docstring provided.
-        """
+        """Compare the *upper bound* to *other*.  Returns ``False`` when ``max`` is ``None``."""
         if isinstance(other, float | int) and self.max is not None:
             return self.max <= other
         return False
 
     def __gt__(self, other):
-        """
-        No docstring provided.
-        """
+        """Compare the *lower bound* to *other*.  Returns ``False`` when ``min`` is ``None``."""
         if isinstance(other, float | int) and self.min is not None:
             return self.min > other
         return False
 
     def __ge__(self, other):
-        """
-        No docstring provided.
-        """
+        """Compare the *lower bound* to *other*.  Returns ``False`` when ``min`` is ``None``."""
         if isinstance(other, float | int) and self.min is not None:
             return self.min >= other
         return False
 
+    def __repr__(self):
+        parts = [repr(self.value)]
+        if self.min is not None or self.max is not None:
+            parts.append(f"min={self.min!r}, max={self.max!r}")
+        if self.integer:
+            parts.append("integer=True")
+        if self.name is not None:
+            parts.append(f"name={self.name!r}")
+        return f"{type(self).__name__}({', '.join(parts)})"
+
     def __str__(self):
-        """
-        No docstring provided.
-        """
         return f"{self.value} ({self.min}, {self.max}), is int: {self.integer}"
+
+
+class tracked(Var):
+    """
+    A ``Var`` whose solved value is automatically carried to the next
+    timestep in a timeseries simulation.
+
+    Use this as a drop-in replacement for ``Var`` on any attribute that
+    should participate in inter-step state tracking.  The framework detects
+    ``tracked`` instances during variable injection, records the attribute
+    name on the model, and extracts the solved float value after each step
+    — no ``inter_step_vars()`` method required.
+
+    Example::
+
+        class RampGenerator(PowerGenerator):
+            def __init__(self, p_mw, ramp_up, ramp_down, **kwargs):
+                super().__init__(p_mw, **kwargs)
+                self.p_mw = tracked(p_mw, min=0, max=500)
+                self.ramp_up = ramp_up
+                self.ramp_down = ramp_down
+
+            def inter_step_equations(self, prev_state, component_id, **kwargs):
+                prev_p = prev_state.get(component_id, 'p_mw')
+                if prev_p is None:
+                    return []
+                return [
+                    self.p_mw - prev_p <= self.ramp_up,
+                    prev_p - self.p_mw <= self.ramp_down,
+                ]
+    """
 
 
 class Const:
     """
-    No docstring provided.
+    A fixed (non-optimised) constant that participates in the model attribute protocol.
+
+    Use ``Const`` when a value must be readable by :func:`value` but should never
+    be turned into a solver decision variable.  The primary use-case is inside
+    ``overwrite()`` implementations, where a child component pins a node variable
+    to a fixed setpoint::
+
+        node_model.vm_pu = Const(1.02)   # fixed voltage — not a free variable
+
+    Args:
+        value: The fixed scalar value.
     """
 
     def __init__(self, value) -> None:
         self.value = value
 
+    def __repr__(self):
+        return f"Const({self.value!r})"
+
 
 class Intermediate:
     """
-    No docstring provided.
+    A placeholder for a computed (derived) quantity that is not itself a decision variable.
+
+    The solver backend evaluates ``IntermediateEq`` expressions and writes the
+    result back to the corresponding ``Intermediate.value`` after each solve.
+    Use this when you want a model attribute to hold a derived quantity (e.g. a
+    line loading percentage) that can be read from results but is not an
+    independent variable in the optimisation.
+
+    Args:
+        value: Initial/default value before the first solve.
     """
 
     def __init__(self, value=0):
         self.value = value
 
+    def __repr__(self):
+        return f"Intermediate({self.value!r})"
+
 
 class IntermediateEq:
     """
-    No docstring provided.
+    Declares how to compute an :class:`Intermediate` attribute from other variables.
+
+    Return an ``IntermediateEq`` from a model's ``equations()`` method to
+    register a derived quantity.  The solver extracts it from the equation list,
+    evaluates the expression, and stores the result on the model attribute named
+    by *attr*::
+
+        class MyBranch(BranchModel):
+            def __init__(self):
+                self.loading_percent = Intermediate()
+
+            def equations(self, grid, from_node, to_node, **kwargs):
+                return [
+                    ...,  # regular constraints
+                    IntermediateEq("loading_percent", self.i_from_ka / self.max_i_ka * 100),
+                ]
+
+    Args:
+        attr: Name of the ``Intermediate`` attribute on the model.
+        eq: The expression (solver-native or Python numeric) to evaluate.
     """
 
     def __init__(self, attr, eq):
@@ -174,7 +315,20 @@ class IntermediateEq:
 
 class GenericModel(ABC):
     """
-    No docstring provided.
+    Base class for all component models (nodes, branches, children, compounds).
+
+    Provides the ``vars`` and ``values`` introspection properties that the solver
+    backends use to discover and inject decision variables.  Any attribute whose
+    name does not start with ``_`` is considered part of the model's public state
+    and will be included in ``vars``/``values`` and in the result DataFrames.
+
+    Subclasses should store parameters and decision variables as plain Python
+    attributes in ``__init__``.  Use :class:`Var` for decision variables,
+    :class:`Const` for fixed setpoints that must participate in the attribute
+    protocol, and plain scalars for parameters that never enter the solver.
+
+    Extra keyword arguments passed to ``__init__`` are stored in ``_ext_data``
+    and ignored by the solver.
     """
 
     def __init__(self, **kwargs) -> None:
@@ -183,22 +337,16 @@ class GenericModel(ABC):
 
     @property
     def vars(self):
-        """
-        No docstring provided.
-        """
+        """All public attributes as a ``{name: value}`` dict (includes ``Var``, ``Const``, scalars)."""
         return {k: v for k, v in self.__dict__.items() if k[0] != "_"}
 
     @property
     def values(self):
-        """
-        No docstring provided.
-        """
+        """All public attributes with ``Var``/``Const``/``Intermediate`` unwrapped to scalars."""
         return {k: value(v) for k, v in self.__dict__.items() if k[0] != "_"}
 
     def is_cp(self):
-        """
-        No docstring provided.
-        """
+        """Return ``True`` if this model acts as a multi-grid control point.  Default: ``False``."""
         return False
 
 
@@ -477,18 +625,39 @@ class MultiGridNodeModel(NodeModel):
 
 class CompoundModel(GenericModel):
     """
-    No docstring provided.
+    Base class for composite components that span multiple nodes and/or carriers.
+
+    A ``CompoundModel`` groups several sub-components (internal branches, child
+    attachments, etc.) into a single logical unit — for example a P2H unit that
+    internally creates a water pipe and couples it to an electricity bus.
+
+    Subclasses must implement :meth:`create`, which receives the network and
+    is expected to add the required sub-components.  Optionally override
+    :meth:`equations` to add coupling constraints between the sub-components'
+    variables, and :meth:`minimize` to contribute objective terms.
     """
 
     @abstractmethod
     def create(self, network):
         """
-        No docstring provided.
+        Materialise the compound's sub-components in *network*.
+
+        Called once when the compound is added to the network.  Implementations
+        should call ``network.node()``, ``network.branch()``, ``network.child_to()``
+        etc. to create internal topology.
+
+        Args:
+            network: The :class:`Network` the compound belongs to.
         """
 
     def equations(self, network, **kwargs):
         """
-        No docstring provided.
+        Return coupling constraints between sub-component variables.
+
+        Override this method to add equations that link variables across the
+        compound's internal sub-components (e.g. energy-balance between the
+        electrical and hydraulic side of a P2H unit).  Returns an empty list
+        by default.
         """
         return []
 
@@ -502,7 +671,7 @@ class CompoundModel(GenericModel):
         return []
 
 
-class MultGridCompoundModel(CompoundModel):
+class MultiGridCompoundModel(CompoundModel):
     """
     No docstring provided.
     """
@@ -516,16 +685,44 @@ class MultGridCompoundModel(CompoundModel):
 
 class ChildModel(GenericModel):
     """
-    No docstring provided.
+    Base class for leaf components attached to a single node (loads, generators, ext-grids).
+
+    **Sign convention** — the internal representation follows the *load convention*:
+
+    * **Positive** values represent *consumption* (load, sink).
+    * **Negative** values represent *generation* (injection, source).
+
+    Concrete subclasses such as :class:`PowerGenerator` and :class:`Source`
+    negate the user-supplied magnitude in ``__init__`` so that the public API
+    always accepts positive numbers for generators::
+
+        PowerGenerator(p_mw=5)   → self.p_mw = -5   (injecting 5 MW)
+        PowerLoad(p_mw=5)        → self.p_mw = +5   (consuming 5 MW)
+
+    Args:
+        regulation (float): Scaling factor applied to the component's setpoint,
+            in the range ``[0.0, 1.0]``.  A value of ``1.0`` (default) means
+            full output/consumption; ``0.0`` effectively disables the component.
+            The factor is used by multi-energy coupling components (P2H, CHP, …)
+            to model partial dispatch.
+        **kwargs: Forwarded to :class:`GenericModel`.
     """
 
-    def __init__(self, regulation: int = 1, **kwargs):
+    def __init__(self, regulation: float = 1.0, **kwargs):
         super().__init__(**kwargs)
         self.regulation = regulation
 
     def overwrite(self, node_model, grid):
         """
-        No docstring provided.
+        Pin node variables to fixed setpoints (optional).
+
+        Override this method in grid-forming components (e.g. ``ExtPowerGrid``)
+        to replace free node ``Var`` instances with ``Const`` values before the
+        solver runs.  The default implementation is a no-op.
+
+        Args:
+            node_model: The node model the child is attached to.
+            grid: The grid domain of the node.
         """
 
     @abstractmethod
@@ -617,7 +814,6 @@ class Child(Component):
             child_id, model, formulation, constraints, grid, name, active, independent
         )
         self.node_id = None
-        self.independent = independent
 
     def equations(self, grid, node_model, **kwargs):
         model_eqs = self.model.equations(grid, node_model, **kwargs)
