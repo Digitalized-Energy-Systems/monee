@@ -5,8 +5,10 @@ import networkx as nx
 import pandas
 
 from monee.model import (
+    Const,
     ExtHydrGrid,
     ExtPowerGrid,
+    GenericModel,
     IntermediateEq,
     MultiGridBranchModel,
     MultiGridCompoundModel,
@@ -99,6 +101,97 @@ class SolverInterface(ABC):
             A :class:`SolverResult` with updated variable values and result DataFrames.
         """
 
+    @abstractmethod
+    def _add_equations(self, solver_obj, eqs):
+        """Register a list of equations/constraints with the backend solver object."""
+
+    def init_branches(self, branches):
+        for branch in branches:
+            branch.model.init(branch.grid)
+
+    def process_inter_step_equations(
+        self,
+        solver_obj,
+        network: Network,
+        nodes,
+        branches,
+        compounds,
+        ignored_nodes: set,
+        step_state,
+    ):
+        """
+        Collect and register inter-step equations from every active model and
+        formulation that implements ``inter_step_equations()``.
+
+        Called after regular equation assembly when a non-None *step_state* is
+        present.  Models/formulations that don't implement the method are
+        silently skipped.
+        """
+        for node in nodes:
+            if ignore_node(node, network, ignored_nodes):
+                continue
+            if hasattr(node.model, "inter_step_equations"):
+                eqs = as_iter(node.model.inter_step_equations(step_state, node.id))
+                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+            if node.formulation is not None and hasattr(
+                node.formulation, "inter_step_equations"
+            ):
+                eqs = as_iter(
+                    node.formulation.inter_step_equations(
+                        node.model, step_state, node.id
+                    )
+                )
+                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+            for child in network.childs_by_ids(node.child_ids):
+                if ignore_child(child, ignored_nodes):
+                    continue
+                if hasattr(child.model, "inter_step_equations"):
+                    eqs = as_iter(
+                        child.model.inter_step_equations(step_state, child.id)
+                    )
+                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+                if child.formulation is not None and hasattr(
+                    child.formulation, "inter_step_equations"
+                ):
+                    eqs = as_iter(
+                        child.formulation.inter_step_equations(
+                            child.model, step_state, child.id
+                        )
+                    )
+                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+        for branch in branches:
+            if ignore_branch(branch, network, ignored_nodes):
+                continue
+            if hasattr(branch.model, "inter_step_equations"):
+                eqs = as_iter(branch.model.inter_step_equations(step_state, branch.id))
+                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+            if branch.formulation is not None and hasattr(
+                branch.formulation, "inter_step_equations"
+            ):
+                eqs = as_iter(
+                    branch.formulation.inter_step_equations(
+                        branch.model, step_state, branch.id
+                    )
+                )
+                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+        for compound in compounds:
+            if ignore_compound(compound, ignored_nodes):
+                continue
+            if hasattr(compound.model, "inter_step_equations"):
+                eqs = as_iter(
+                    compound.model.inter_step_equations(step_state, compound.id)
+                )
+                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+            if compound.formulation is not None and hasattr(
+                compound.formulation, "inter_step_equations"
+            ):
+                eqs = as_iter(
+                    compound.formulation.inter_step_equations(
+                        compound.model, step_state, compound.id
+                    )
+                )
+                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+
 
 def as_iter(possible_iter):
     if possible_iter is None:
@@ -108,6 +201,73 @@ def as_iter(possible_iter):
 
 def filter_intermediate_eqs(eqs):
     return [eq for eq in eqs if type(eq) is not IntermediateEq]
+
+
+def inject_nans(target: GenericModel):
+    """Replace Var/Const fields on *target* with NaN placeholders (for ignored components)."""
+    for key, value in target.__dict__.items():
+        if isinstance(value, Const):
+            setattr(target, key, Const(float("nan")))
+        if isinstance(value, Var):
+            setattr(
+                target,
+                key,
+                Var(float("nan"), max=value.max, min=value.min, name=value.name),
+            )
+
+
+def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
+    """
+    Traverse all network components and call *inject_fn* for each active one.
+
+    *inject_fn* has signature ``inject_fn(model, component, category)`` where
+    *category* is one of ``"branch"``, ``"node"``, ``"child"``, ``"compound"``.
+    Ignored components receive NaN placeholders via :func:`inject_nans` instead.
+    """
+    for branch in branches:
+        if ignore_branch(branch, network, ignored_nodes):
+            branch.ignored = True
+            inject_nans(branch.model)
+            continue
+        inject_fn(branch.model, branch, "branch")
+
+    for node in nodes:
+        if ignore_node(node, network, ignored_nodes):
+            node.ignored = True
+            for child in network.childs_by_ids(node.child_ids):
+                child.ignored = True
+                inject_nans(child.model)
+            inject_nans(node.model)
+            continue
+        inject_fn(node.model, node, "node")
+        for child in network.childs_by_ids(node.child_ids):
+            if ignore_child(child, ignored_nodes):
+                child.ignored = True
+                inject_nans(child.model)
+                continue
+            inject_fn(child.model, child, "child")
+
+    for compound in compounds:
+        if ignore_compound(compound, ignored_nodes):
+            compound.ignored = True
+            inject_nans(compound.model)
+            continue
+        inject_fn(compound.model, compound, "compound")
+
+
+def withdraw_vars(withdraw_fn, nodes, branches, compounds, network):
+    """
+    Traverse all network components and call *withdraw_fn(model)* on each,
+    converting backend-specific variable objects back to :class:`Var` instances.
+    """
+    for branch in branches:
+        withdraw_fn(branch.model)
+    for node in nodes:
+        withdraw_fn(node.model)
+        for child in network.childs_by_ids(node.child_ids):
+            withdraw_fn(child.model)
+    for compound in compounds:
+        withdraw_fn(compound.model)
 
 
 def ignore_branch(branch, network: Network, ignored_nodes):

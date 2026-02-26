@@ -1,16 +1,21 @@
-======================
-Optimization basics
-======================
+==================================
+01 · Minimum-cost load curtailment
+==================================
 
-This tutorial shows how to formulate an optimisation problem in monee and pass
-it to the solver. The example solves a simplified **load-shedding** problem:
-given a network, the solver must find the minimum amount of demand that can
-remain served while respecting voltage constraints.
+**Scenario.** A radial feeder connects a substation (Bus 0) to two loads via
+two line segments. Bus 1 serves a small **factory** (0.6 MW); Bus 2 serves a
+**warehouse** (0.4 MW).  An upstream fault limits the substation connection to
+at most 0.6 MW — far less than the combined 1.0 MW demand.  Some load must be
+shed.
+
+Interrupting the factory costs **30 monetary units/MW** (critical production
+process); interrupting the warehouse costs only **5 units/MW** (deferrable
+refrigeration).  The optimiser finds the cheapest curtailment plan.
 
 .. tip::
 
-   For a ready-made one-call load-shedding interface, see
-   :doc:`../how-to/load_shedding`. This tutorial builds the problem from
+   For a ready-made one-call load-shedding interface see
+   :doc:`../how-to/load_shedding`.  This tutorial builds the problem from
    scratch to show the full API.
 
 ----
@@ -18,74 +23,92 @@ remain served while respecting voltage constraints.
 Building the network
 ====================
 
-First, create a small electricity grid:
-
 .. testcode::
 
     import monee.express as mx
+    import monee.model as mm
+    import monee.problem as mp
     from monee import run_energy_flow_optimization
 
     net = mx.create_multi_energy_network()
 
-    bus_0 = mx.create_bus(net)
-    bus_1 = mx.create_bus(net)
+    # Three buses on a radial feeder: substation → factory → warehouse
+    bus_sub = mx.create_bus(net)
+    bus_fac = mx.create_bus(net)
+    bus_wh  = mx.create_bus(net)
 
-    mx.create_line(net, bus_0, bus_1, 100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-    mx.create_ext_power_grid(net, bus_0)
-    mx.create_power_load(net, bus_1, p_mw=0.5, q_mvar=0.0)
+    mx.create_line(net, bus_sub, bus_fac, 1000, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+    mx.create_line(net, bus_fac, bus_wh,  1000, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+
+    mx.create_ext_power_grid(net, bus_sub)
+
+    fac_id = mx.create_power_load(net, bus_fac, p_mw=0.6, q_mvar=0.0)
+    wh_id  = mx.create_power_load(net, bus_wh,  p_mw=0.4, q_mvar=0.0)
+
+    # Attach penalty and nominal demand as plain attributes on the model objects.
+    # These are read by the objective at solve time.
+    fac_model = net.child_by_id(fac_id).model
+    wh_model  = net.child_by_id(wh_id).model
+
+    fac_model._penalty   = 30   # high: critical process
+    fac_model._p_nominal = 0.6  # MW
+    wh_model._penalty    = 5    # low: deferrable
+    wh_model._p_nominal  = 0.4  # MW
 
 ----
 
 Defining the optimisation problem
 ==================================
 
-An :class:`~monee.problem.core.OptimizationProblem` specifies:
+An :class:`~monee.problem.core.OptimizationProblem` has three building blocks:
 
-- **Controllables** — which model attributes the solver may vary.
-- **Bounds** — operational limits enforced as constraints.
-- **Objective** — the scalar value to minimise.
+- **Controllables** — which attributes the solver may vary (here: the
+  ``regulation`` fraction of each load).
+- **Constraints** — additional restrictions beyond the energy-flow equations
+  (here: the 0.6 MW substation limit).
+- **Objective** — the scalar to minimise (here: total curtailment cost).
 
 .. testcode::
 
-    import monee.problem as mp
-    import monee.model as mm
+    problem = mp.OptimizationProblem()
 
-    problem = mp.OptimizationProblem(debug=True)
-
-    # ── Controllables ─────────────────────────────────────────────────────
-    # Allow the solver to scale each demand between 0 % and 100 % of its
-    # nominal value using a 'regulation' multiplier.
+    # ── Controllables ──────────────────────────────────────────────────────────
+    # regulation ∈ [0, 1]: fraction of each load that remains served.
+    # 1 = fully served, 0 = completely curtailed.
     problem.controllable_demands([
         (
             "regulation",
             mp.AttributeParameter(
                 min=lambda attr, val: 0,
                 max=lambda attr, val: 1,
-                val=lambda attr, val: 1,
+                val=lambda attr, val: 1,   # initialise at full service
             ),
         )
     ])
 
-    # ── Bounds ────────────────────────────────────────────────────────────
-    # Enforce voltage magnitude between 0.9 pu and 1.1 pu at every bus.
-    problem.bounds((0.9, 1.1), lambda m, _: type(m) is mm.Bus, ["vm_pu"])
-
-    # ── Objective ─────────────────────────────────────────────────────────
-    # Minimise total served load (each shed MW costs 10 units of penalty).
-    objectives = mp.Objectives()
-    objectives.with_models(problem.controllables_link) \
-              .data(lambda model: 10) \
-              .calculate(lambda model_to_data: sum(model_to_data.values()))
-
-    # ── Constraints ───────────────────────────────────────────────────────
-    # Ensure the external grid only injects power (no curtailment).
+    # ── Constraint ─────────────────────────────────────────────────────────────
+    # The substation can inject at most 0.6 MW (upstream fault limit).
     constraints = mp.Constraints()
     constraints.select_types(mm.ExtPowerGrid).equation(
-        lambda model: model.p_mw >= 0
+        lambda model: model.p_mw <= 0.6
     )
-
-    # Attach objectives and constraints to the problem
     problem.constraints = constraints
+
+    # ── Objective ──────────────────────────────────────────────────────────────
+    # Minimise total curtailment cost:
+    #   cost = Σ (1 - regulation_i) × p_nominal_i × penalty_i
+    #
+    # The penalty attributes were stored on the model objects above.
+    # At solve time model.regulation is a solver variable; the expression
+    # (1 - model.regulation) is therefore part of the optimisation problem.
+    objectives = mp.Objectives()
+    objectives.select(
+        lambda model: isinstance(model, mm.PowerLoad) and hasattr(model, "_penalty")
+    ).data(
+        lambda model: (1 - model.regulation) * model._p_nominal * model._penalty
+    ).calculate(
+        lambda model_to_data: sum(model_to_data.values())
+    )
     problem.objectives = objectives
 
 ----
@@ -93,48 +116,68 @@ An :class:`~monee.problem.core.OptimizationProblem` specifies:
 Running the optimisation
 ========================
 
-Pass the problem to :func:`~monee.run_energy_flow_optimization`:
-
 .. testcode::
 
     result = run_energy_flow_optimization(net, problem)
+    print(f"Objective (curtailment cost): {result.objective:.2f}")
 
-The ``result`` object is a :class:`~monee.solver.core.SolverResult` with:
+.. testoutput::
+   :options: +SKIP
 
-- ``result.network`` — the solved network with variable values filled in.
-- ``result.dataframes`` — per-model-type DataFrames for easy inspection.
-- ``result.objective`` — the achieved objective value.
+    Objective (curtailment cost): 2.00
+
+The objective value of **2.00** matches the expected optimum: curtail the entire
+warehouse (0.4 MW × penalty 5 = 2.0 units), which is far cheaper than reducing
+the factory.
 
 ----
 
 Inspecting results
 ==================
 
+:meth:`~monee.solver.core.SolverResult.get` returns the result DataFrame for a
+given model type:
+
 .. testcode::
 
-    # Voltage magnitude at every bus
-    bus_df = result.dataframes.get("Bus")
-    if bus_df is not None:
-        print(list(bus_df.columns))
+    load_df = result.get(mm.PowerLoad)
+    print(load_df[["p_mw", "regulation"]].round(3))
 
 .. testoutput::
    :options: +SKIP
 
-    ['vm_pu', 'va_radians', ...]
+       p_mw  regulation
+    0   0.6       1.000
+    1   0.0       0.000
+
+The factory (row 0) keeps its full 0.6 MW at ``regulation = 1.0``.  The
+warehouse (row 1) is completely curtailed to ``regulation = 0.0``.  The
+substation import equals exactly the 0.6 MW limit:
+
+.. testcode::
+
+    ext_df = result.get(mm.ExtPowerGrid)
+    print(f"Substation import: {ext_df['p_mw'].sum():.2f} MW")
+
+.. testoutput::
+   :options: +SKIP
+
+    Substation import: 0.60 MW
 
 .. note::
 
-   The ``debug=True`` flag on :class:`~monee.problem.core.OptimizationProblem`
-   enables verbose logging during solve, which is useful during development
-   but should be disabled in production.
+   Removing ``debug=False`` (the default) from
+   :class:`~monee.problem.core.OptimizationProblem` keeps the solver output
+   quiet.  Pass ``debug=True`` while developing to see which attributes were
+   made controllable.
 
 ----
 
 Next steps
 ==========
 
-- See :doc:`02_timeseries_simulation` to run the optimisation over a time
-  series.
-- Learn about :doc:`../concepts/formulations` to pick the right equation
-  set for your problem.
-- See :doc:`../how-to/use_pyomo_solver` to use a MILP solver back-end.
+- See :doc:`02_timeseries_simulation` to run energy-flow calculations over a
+  time series with varying demand profiles.
+- Explore :doc:`../how-to/load_shedding` for the ready-made one-call interface.
+- Read :doc:`../how-to/use_pyomo_solver` to switch to a MILP solver back-end
+  (HiGHS, Gurobi, etc.) for integer-programming formulations.

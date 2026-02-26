@@ -7,23 +7,24 @@ simulation or optimisation. Each tutorial builds on the {doc}`../quickstart`.
 ::::{grid} 1 1 2 2
 :gutter: 4
 
-:::{grid-item-card} 01 · Optimisation basics
+:::{grid-item-card} 01 · Minimum-cost load curtailment
 :link: 01_optimization_basics
 :link-type: doc
 :shadow: sm
 
-Formulate a **load-shedding** optimisation problem from scratch: define
-controllables, voltage bounds, an objective, and constraints — then run and
-inspect the results.
+A feeder serves a factory and a warehouse.  An upstream fault caps supply at
+0.6 MW.  Define controllables, a differentiated-cost objective, and a power
+constraint — the optimiser sheds the cheapest load first.
 :::
 
-:::{grid-item-card} 02 · Time-series simulation
+:::{grid-item-card} 02 · Solar feeder — day-ahead
 :link: 02_timeseries_simulation
 :link-type: doc
 :shadow: sm
 
-Drive a network through a sequence of time steps with varying load profiles,
-collect per-step results, and inject custom logic with step hooks.
+Simulate a residential bus with rooftop PV across eight three-hour slots.
+Track the grid import "duck curve", query per-step voltages, and monitor
+under-voltage events with a step hook.
 :::
 
 ::::

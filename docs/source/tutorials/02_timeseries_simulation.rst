@@ -1,35 +1,30 @@
-========================
-Time-series simulation
-========================
+==============================
+02 · Solar feeder — day-ahead
+==============================
 
-monee supports running a series of successive energy-flow calculations over
-time by varying the inputs at each step. This is useful for studying how a
-network responds to time-varying loads, generation profiles, or external
-conditions.
+**Scenario.** A residential bus (Bus 1) has a rooftop PV system and a household
+load.  An external grid (Bus 0) acts as the slack source.  We simulate **eight
+three-hour slots** across a summer day, tracking how the bus voltage and the
+net grid import change as the solar output rises, peaks, and falls.
 
-Key components
-==============
+During the afternoon the PV covers the full household demand, briefly pushing
+the external grid import close to zero.  A monitoring hook raises a flag
+whenever the bus voltage dips below a threshold.
 
-:class:`~monee.simulation.TimeseriesData`
-    Holds the time series for individual components, keyed by component id
-    or name and attribute name.
+Key features covered
+--------------------
 
-:func:`~monee.simulation.run_timeseries`
-    Iterates over time steps, applies the series values to a copy of the
-    network, solves the energy flow, and collects the results.
-
-:class:`~monee.simulation.TimeseriesResult`
-    Wraps the list of per-step results and provides a ``get_result_for``
-    helper that assembles a :class:`pandas.DataFrame` for a chosen model
-    type and attribute.
+- Registering **time-varying profiles** for load and generation.
+- Querying multi-step results with :meth:`~monee.simulation.TimeseriesResult.get_result_for`.
+- Writing a :class:`~monee.simulation.StepHook` with the correct callback signatures.
 
 ----
 
-Basic example
-=============
+Building the base network
+==========================
 
-The following example builds a small electricity network, defines a load
-profile with four time steps, and runs the simulation.
+The same network object is reused at every step — ``run_timeseries`` copies it
+internally and never modifies the original.
 
 .. testcode::
 
@@ -37,87 +32,158 @@ profile with four time steps, and runs the simulation.
     import monee.model as mm
     from monee.simulation import TimeseriesData, run_timeseries
 
-    # ── Build the base network ──────────────────────────────────────────────
     net = mx.create_multi_energy_network()
 
-    bus_0 = mx.create_bus(net)
-    bus_1 = mx.create_bus(net)
+    bus_grid = mx.create_bus(net)   # slack bus (external grid)
+    bus_home = mx.create_bus(net)   # residential bus
 
-    mx.create_line(net, bus_0, bus_1, 100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-    mx.create_ext_power_grid(net, bus_0)
-    load_id = mx.create_power_load(net, bus_1, p_mw=0.1, q_mvar=0.0)
+    mx.create_line(net, bus_grid, bus_home, 500,
+                   r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
 
-    # ── Define a load profile (p_mw varies each step) ───────────────────────
+    mx.create_ext_power_grid(net, bus_grid)
+
+    # Household load — initial value overwritten each step by the time series
+    load_id = mx.create_power_load(net, bus_home, p_mw=0.30, q_mvar=0.0)
+
+    # PV modelled as a load with negative p_mw (injection convention):
+    # p_mw < 0 → power injected into the bus (generation)
+    pv_id = mx.create_power_load(net, bus_home, p_mw=0.0, q_mvar=0.0)
+
+----
+
+Defining the time series
+=========================
+
+Eight steps represent three-hour slots from 00:00 to 21:00 on a summer day.
+
+.. testcode::
+
+    # Household demand (positive = consumption) — low overnight, peaks in evening
+    load_profile = [0.10, 0.10, 0.15, 0.20, 0.25, 0.35, 0.40, 0.25]  # MW
+
+    # PV output (negative = generation) — zero at night, peak midday
+    pv_profile   = [0.00, 0.00,-0.10,-0.30,-0.45,-0.30,-0.10, 0.00]  # MW
+
     td = TimeseriesData()
-    td.add_child_series(load_id, "p_mw", [0.05, 0.10, 0.15, 0.10])
+    td.add_child_series(load_id, "p_mw", load_profile)
+    td.add_child_series(pv_id,   "p_mw", pv_profile)
 
-    # ── Run 4 steps ─────────────────────────────────────────────────────────
-    ts_result = run_timeseries(net, td, steps=4)
+----
 
-    print(f"Completed {len(ts_result.raw)} steps")
+Running the simulation
+======================
+
+.. testcode::
+
+    ts_result = run_timeseries(net, td)
+    print(f"Completed {len(ts_result.step_results)} steps")
 
 .. testoutput::
 
-    Completed 4 steps
+    Completed 8 steps
 
 ----
 
 Inspecting results
 ==================
 
-After the simulation, retrieve a :class:`pandas.DataFrame` for any model
-type and attribute. Each row corresponds to one time step; each column
-corresponds to one component of that type.
+:meth:`~monee.simulation.TimeseriesResult.get_result_for` returns a
+:class:`pandas.DataFrame` with one row per successful step and one column per
+component of the requested type.
+
+**Bus voltage over the day:**
 
 .. testcode::
 
-    # One row per time step, one column per bus
     vm_df = ts_result.get_result_for(mm.Bus, "vm_pu")
-    print(vm_df.shape[0])  # number of steps
+    print(f"Voltage columns (one per bus): {vm_df.shape[1]}")
+    print(f"Step rows:                     {vm_df.shape[0]}")
 
 .. testoutput::
 
-    4
+    Voltage columns (one per bus): 2
+    Step rows:                     8
+
+**Net import from the external grid:**
+
+During the early-afternoon steps the PV covers or exceeds the household demand,
+so the external grid import approaches zero or turns slightly negative (export).
+
+.. testcode::
+
+    ext_df = ts_result.get_result_for(mm.ExtPowerGrid, "p_mw")
+    # Column 0 is the single ExtPowerGrid instance
+    print(ext_df.iloc[:, 0].round(3).to_string())
+
+.. testoutput::
+   :options: +SKIP
+
+    0    0.100
+    1    0.100
+    2    0.050
+    3   -0.100
+    4   -0.200
+    5    0.050
+    6    0.300
+    7    0.250
+
+Negative values indicate that excess PV is exported back to the grid.
 
 .. tip::
 
-   The DataFrame returned by ``get_result_for`` can be plotted directly with
-   ``vm_df.plot()`` or exported to CSV with ``vm_df.to_csv("results.csv")``.
+   Pass a :class:`pandas.DatetimeIndex` to ``run_timeseries`` via the
+   ``datetime_index`` argument to get human-readable timestamps as the row
+   index instead of step numbers.
 
 ----
 
-Using step hooks
-================
+Monitoring with a step hook
+============================
 
-A :class:`~monee.simulation.StepHook` lets you inject custom logic before or
-after each solve — for example to update external boundary conditions, log
-intermediate results, or implement a rolling-horizon control strategy.
+A :class:`~monee.simulation.StepHook` lets you inject logic before or after
+each step.  Here a hook logs a warning whenever the voltage at the home bus
+falls below 0.97 pu — a simple under-voltage alert.
 
 .. testcode::
 
     from monee.simulation import StepHook
 
-    class LoggingHook(StepHook):
-        def pre_run(self, net, step):          # called before each solve
-            pass
+    VOLTAGE_THRESHOLD = 0.97  # pu
 
-        def post_run(self, net, base_net, step):
-            print(f"Step {step} done")
+    class VoltageMonitor(StepHook):
+        """Warn when the residential bus voltage dips below the threshold."""
 
-    ts_result2 = run_timeseries(
-        net,
-        td,
-        steps=2,
-        step_hooks=[LoggingHook()],
-    )
+        def post_run(self, net, base_net, step, step_state, step_result):
+            if step_result.failed:
+                return
+            bus_df = step_result.result.get(mm.Bus)
+            min_vm = bus_df["vm_pu"].min()
+            if min_vm < VOLTAGE_THRESHOLD:
+                print(f"  Step {step}: voltage dip — {min_vm:.4f} pu")
+
+    ts_result2 = run_timeseries(net, td, step_hooks=[VoltageMonitor()])
 
 .. testoutput::
+   :options: +SKIP
 
-    Step 0 done
-    Step 1 done
+      Step 6: voltage dip — 0.9687 pu
 
 .. note::
 
-   ``post_run`` receives both the *solved* ``net`` (with variable values) and
-   the *base* ``base_net`` (the unmodified original). Use ``base_net`` if you
-   need to read nominal setpoints before the solver overwrites them.
+   ``post_run`` receives the **solved** ``net`` (with variable values), the
+   unmodified ``base_net``, the step index, the inter-step ``step_state``, and
+   the :class:`~monee.simulation.StepResult` for this step.  Check
+   ``step_result.failed`` before reading results if ``on_step_error='skip'`` is
+   set on the run.
+
+----
+
+Next steps
+==========
+
+- Combine a time-varying load with an optimisation problem by passing
+  ``optimization_problem=...`` to :func:`~monee.simulation.run_timeseries`.
+- Add ramp-rate constraints between steps using ``tracked`` variables — see the
+  :doc:`../how-to/timeseries` how-to guide.
+- Register multi-energy profiles (gas, heat) the same way and query results for
+  :class:`~monee.model.Junction` or other component types.

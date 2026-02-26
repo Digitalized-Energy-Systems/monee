@@ -6,14 +6,11 @@ from gekko.gk_operators import GK_Intermediate, GK_Operators
 from gekko.gk_variable import GKVariable
 
 from monee.model import (
-    Branch,
-    Compound,
     Const,
     GenericModel,
     Intermediate,
     IntermediateEq,
     Network,
-    Node,
     Var,
 )
 from monee.model.core import tracked
@@ -31,7 +28,9 @@ from .core import (
     ignore_child,
     ignore_compound,
     ignore_node,
+    inject_vars,
     remove_cps,
+    withdraw_vars,
 )
 
 DEFAULT_SOLVER_OPTIONS = [
@@ -85,9 +84,6 @@ class GEKKOSolver(SolverInterface):
 
     @staticmethod
     def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel, id):
-        """
-        No docstring provided.
-        """
         # Collect tracked attr names before Var objects are replaced.
         inter_step_attrs = [k for k, v in target.__dict__.items() if type(v) is tracked]
         if inter_step_attrs:
@@ -95,10 +91,7 @@ class GEKKOSolver(SolverInterface):
         i = 0
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
-                if value.name is not None:
-                    name = f"{id}.{value.name}"
-                else:
-                    name = f"{id}.{i}"
+                name = f"{id}.{value.name}" if value.name is not None else f"{id}.{i}"
                 setattr(
                     target,
                     key,
@@ -115,67 +108,7 @@ class GEKKOSolver(SolverInterface):
                 setattr(target, key, gekko.Const(value.value))
 
     @staticmethod
-    def inject_nans(target: GenericModel):
-        """
-        No docstring provided.
-        """
-        for key, value in target.__dict__.items():
-            if isinstance(value, Const):
-                setattr(target, key, Const(float("nan")))
-            if isinstance(value, Var):
-                setattr(
-                    target,
-                    key,
-                    Var(float("nan"), max=value.max, min=value.min, name=value.name),
-                )
-
-    @staticmethod
-    def inject_gekko_vars(
-        gekko_model: GEKKO,
-        nodes: list[Node],
-        branches: list[Branch],
-        compounds: list[Compound],
-        network: Network,
-        ignored_nodes: set,
-    ):
-        """
-        No docstring provided.
-        """
-        for branch in branches:
-            if ignore_branch(branch, network, ignored_nodes):
-                branch.ignored = True
-                GEKKOSolver.inject_nans(branch.model)
-                continue
-            GEKKOSolver.inject_gekko_vars_attr(gekko_model, branch.model, branch.nid)
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                node.ignored = True
-                for child in network.childs_by_ids(node.child_ids):
-                    child.ignored = True
-                    GEKKOSolver.inject_nans(child.model)
-                GEKKOSolver.inject_nans(node.model)
-                continue
-            GEKKOSolver.inject_gekko_vars_attr(gekko_model, node.model, node.tid)
-            for child in network.childs_by_ids(node.child_ids):
-                if ignore_child(child, ignored_nodes):
-                    child.ignored = True
-                    GEKKOSolver.inject_nans(child.model)
-                    continue
-                GEKKOSolver.inject_gekko_vars_attr(gekko_model, child.model, child.tid)
-        for compound in compounds:
-            if ignore_compound(compound, ignored_nodes):
-                compound.ignored = True
-                GEKKOSolver.inject_nans(compound.model)
-                continue
-            GEKKOSolver.inject_gekko_vars_attr(
-                gekko_model, compound.model, compound.tid
-            )
-
-    @staticmethod
     def withdraw_gekko_vars_attr(target: GenericModel):
-        """
-        No docstring provided.
-        """
         inter_step_attrs = getattr(target, "_inter_step_attrs", [])
         for key, value in target.__dict__.items():
             if type(value) is GKVariable:
@@ -195,103 +128,8 @@ class GEKKOSolver(SolverInterface):
             if type(value) is GK_Intermediate:
                 setattr(target, key, Intermediate(value=value.VALUE.value[0]))
 
-    @staticmethod
-    def withdraw_gekko_vars(nodes, branches, compounds, network):
-        """
-        No docstring provided.
-        """
-        for branch in branches:
-            GEKKOSolver.withdraw_gekko_vars_attr(branch.model)
-        for node in nodes:
-            GEKKOSolver.withdraw_gekko_vars_attr(node.model)
-            for child in network.childs_by_ids(node.child_ids):
-                GEKKOSolver.withdraw_gekko_vars_attr(child.model)
-        for compound in compounds:
-            GEKKOSolver.withdraw_gekko_vars_attr(compound.model)
-
-    def process_inter_step_equations(
-        self,
-        m,
-        network: Network,
-        nodes,
-        branches,
-        compounds,
-        ignored_nodes: set,
-        step_state: StepState,
-    ):
-        """
-        Collect and register inter-step equations from every active model and
-        formulation that implements ``inter_step_equations()``.
-
-        Called after regular equation assembly when a non-None *step_state* is
-        present.  Models/formulations that don't implement the method are
-        silently skipped, so this is a pure no-op for networks without
-        inter-step coupling.
-        """
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                continue
-            if hasattr(node.model, "inter_step_equations"):
-                eqs = as_iter(node.model.inter_step_equations(step_state, node.id))
-                m.Equations(filter_intermediate_eqs(eqs))
-            if node.formulation is not None and hasattr(
-                node.formulation, "inter_step_equations"
-            ):
-                eqs = as_iter(
-                    node.formulation.inter_step_equations(
-                        node.model, step_state, node.id
-                    )
-                )
-                m.Equations(filter_intermediate_eqs(eqs))
-            for child in network.childs_by_ids(node.child_ids):
-                if ignore_child(child, ignored_nodes):
-                    continue
-                if hasattr(child.model, "inter_step_equations"):
-                    eqs = as_iter(
-                        child.model.inter_step_equations(step_state, child.id)
-                    )
-                    m.Equations(filter_intermediate_eqs(eqs))
-                if child.formulation is not None and hasattr(
-                    child.formulation, "inter_step_equations"
-                ):
-                    eqs = as_iter(
-                        child.formulation.inter_step_equations(
-                            child.model, step_state, child.id
-                        )
-                    )
-                    m.Equations(filter_intermediate_eqs(eqs))
-        for branch in branches:
-            if ignore_branch(branch, network, ignored_nodes):
-                continue
-            if hasattr(branch.model, "inter_step_equations"):
-                eqs = as_iter(branch.model.inter_step_equations(step_state, branch.id))
-                m.Equations(filter_intermediate_eqs(eqs))
-            if branch.formulation is not None and hasattr(
-                branch.formulation, "inter_step_equations"
-            ):
-                eqs = as_iter(
-                    branch.formulation.inter_step_equations(
-                        branch.model, step_state, branch.id
-                    )
-                )
-                m.Equations(filter_intermediate_eqs(eqs))
-        for compound in compounds:
-            if ignore_compound(compound, ignored_nodes):
-                continue
-            if hasattr(compound.model, "inter_step_equations"):
-                eqs = as_iter(
-                    compound.model.inter_step_equations(step_state, compound.id)
-                )
-                m.Equations(filter_intermediate_eqs(eqs))
-            if compound.formulation is not None and hasattr(
-                compound.formulation, "inter_step_equations"
-            ):
-                eqs = as_iter(
-                    compound.formulation.inter_step_equations(
-                        compound.model, step_state, compound.id
-                    )
-                )
-                m.Equations(filter_intermediate_eqs(eqs))
+    def _add_equations(self, m, eqs):
+        m.Equations(eqs)
 
     def solve(
         self,
@@ -341,8 +179,15 @@ class GEKKOSolver(SolverInterface):
         branches = network.branches
         compounds = network.compounds
 
-        GEKKOSolver.inject_gekko_vars(
-            m, nodes, branches, compounds, network, ignored_nodes
+        inject_vars(
+            lambda model, comp, cat: GEKKOSolver.inject_gekko_vars_attr(
+                m, model, comp.nid if cat == "branch" else comp.tid
+            ),
+            nodes,
+            branches,
+            compounds,
+            network,
+            ignored_nodes,
         )
         objs_exprs = []
         self.init_branches(branches)
@@ -382,7 +227,9 @@ class GEKKOSolver(SolverInterface):
                 )
                 plt.savefig("debug-network.pdf")
             raise
-        GEKKOSolver.withdraw_gekko_vars(nodes, branches, compounds, network)
+        withdraw_vars(
+            GEKKOSolver.withdraw_gekko_vars_attr, nodes, branches, compounds, network
+        )
         solver_result = SolverResult(
             network, network.as_result_dataframe_dict(), m.options.OBJFCNVAL
         )
@@ -502,10 +349,6 @@ class GEKKOSolver(SolverInterface):
 
                 _process_intermediate_eqs(m, child.model, child_eqs)
                 m.Equations(filter_intermediate_eqs(child_eqs))
-
-    def init_branches(self, branches):
-        for branch in branches:
-            branch.model.init(branch.grid)
 
     def process_equations_branches(
         self, m, network, branches, ignored_nodes, objs_exprs

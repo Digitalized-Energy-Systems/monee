@@ -24,6 +24,8 @@ from .core import (
     ignore_child,
     ignore_compound,
     ignore_node,
+    inject_vars,
+    withdraw_vars,
 )
 
 DEFAULT_SOLVER_OPTIONS = {}
@@ -71,16 +73,12 @@ class PyomoSolver(SolverInterface):
     def inject_pyomo_vars_attr(
         pm: pyo.ConcreteModel, target: GenericModel, prefix: str
     ):
-        """
-        Replace Var/Const fields on `target` with Pyomo Var / numeric constants.
-        """
-        # Collect tracked attr names before Var objects are replaced.
+        """Replace Var/Const fields on `target` with Pyomo Var / numeric constants."""
         inter_step_attrs = [k for k, v in target.__dict__.items() if type(v) is tracked]
         if inter_step_attrs:
             target._inter_step_attrs = inter_step_attrs
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
-                # Create a unique Pyomo Var on the ConcreteModel
                 v = pyo.Var(
                     domain=pyo.Integers if value.integer else pyo.Reals,
                     bounds=(value.min, value.max),
@@ -88,69 +86,12 @@ class PyomoSolver(SolverInterface):
                 )
                 setattr(pm, f"{prefix}__{key}", v)
                 setattr(target, key, v)
-
             elif type(value) is Const:
-                # Pyomo can use plain floats; Param is optional.
                 setattr(target, key, float(value.value))
 
     @staticmethod
-    def inject_nans(target: GenericModel):
-        """
-        If a component is ignored, replace its Vars/Consts with NaN placeholders
-        (keeps downstream code from crashing when it tries to read attributes).
-        """
-        for key, value in target.__dict__.items():
-            if isinstance(value, Const):
-                setattr(target, key, Const(float("nan")))
-            if isinstance(value, Var):
-                setattr(target, key, Var(float("nan"), max=value.max, min=value.min))
-
-    @staticmethod
-    def inject_pyomo_vars(pm, nodes, branches, compounds, network, ignored_nodes):
-        for branch in branches:
-            if ignore_branch(branch, network, ignored_nodes):
-                branch.ignored = True
-                PyomoSolver.inject_nans(branch.model)
-                continue
-            PyomoSolver.inject_pyomo_vars_attr(
-                pm, branch.model, prefix=f"branch_{branch.id}"
-            )
-
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                node.ignored = True
-                for child in network.childs_by_ids(node.child_ids):
-                    child.ignored = True
-                    PyomoSolver.inject_nans(child.model)
-                PyomoSolver.inject_nans(node.model)
-                continue
-
-            PyomoSolver.inject_pyomo_vars_attr(pm, node.model, prefix=f"node_{node.id}")
-
-            for child in network.childs_by_ids(node.child_ids):
-                if ignore_child(child, ignored_nodes):
-                    child.ignored = True
-                    PyomoSolver.inject_nans(child.model)
-                    continue
-                PyomoSolver.inject_pyomo_vars_attr(
-                    pm, child.model, prefix=f"child_{child.id}"
-                )
-
-        for compound in compounds:
-            if ignore_compound(compound, ignored_nodes):
-                compound.ignored = True
-                PyomoSolver.inject_nans(compound.model)
-                continue
-            PyomoSolver.inject_pyomo_vars_attr(
-                pm, compound.model, prefix=f"compound_{compound.id}"
-            )
-
-    @staticmethod
     def withdraw_pyomo_vars_attr(target: GenericModel):
-        """
-        Convert Pyomo Var values back into your Var objects.
-        Constants stay constants.
-        """
+        """Convert Pyomo Var values back into Var objects."""
         inter_step_attrs = getattr(target, "_inter_step_attrs", [])
         for key, value in target.__dict__.items():
             if isinstance(value, pyo.Var):
@@ -161,29 +102,13 @@ class PyomoSolver(SolverInterface):
             elif isinstance(value, pyo.Expression):
                 setattr(target, key, Intermediate(value=pyo.value(value)))
 
-    @staticmethod
-    def withdraw_pyomo_vars(nodes, branches, compounds, network):
-        for branch in branches:
-            PyomoSolver.withdraw_pyomo_vars_attr(branch.model)
-        for node in nodes:
-            PyomoSolver.withdraw_pyomo_vars_attr(node.model)
-            for child in network.childs_by_ids(node.child_ids):
-                PyomoSolver.withdraw_pyomo_vars_attr(child.model)
-        for compound in compounds:
-            PyomoSolver.withdraw_pyomo_vars_attr(compound.model)
-
     # --------- Constraint helpers ---------
 
     @staticmethod
     def _add_equation(pm, expr):
-        """
-        GEKKO m.Equation(expr) becomes pm.cons.add(expr).
-        `expr` must be a Pyomo relational expression (==, <=, >=).
-        """
         pm.cons.add(expr)
 
-    @staticmethod
-    def _add_equations(pm, exprs):
+    def _add_equations(self, pm, exprs):
         for e in exprs:
             pm.cons.add(e)
 
@@ -215,89 +140,6 @@ class PyomoSolver(SolverInterface):
                 setattr(model_obj, intermediate_eq.attr, e)
 
     # --------- Core solve ---------
-
-    def process_inter_step_equations(
-        self,
-        pm,
-        network: Network,
-        nodes,
-        branches,
-        compounds,
-        ignored_nodes: set,
-        step_state: StepState,
-    ):
-        """
-        Collect and register inter-step equations from every active model and
-        formulation that implements ``inter_step_equations()``.
-
-        Called after regular equation assembly when a non-None *step_state* is
-        present.  Models/formulations that don't implement the method are
-        silently skipped.
-        """
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                continue
-            if hasattr(node.model, "inter_step_equations"):
-                eqs = as_iter(node.model.inter_step_equations(step_state, node.id))
-                self._add_equations(pm, filter_intermediate_eqs(eqs))
-            if node.formulation is not None and hasattr(
-                node.formulation, "inter_step_equations"
-            ):
-                eqs = as_iter(
-                    node.formulation.inter_step_equations(
-                        node.model, step_state, node.id
-                    )
-                )
-                self._add_equations(pm, filter_intermediate_eqs(eqs))
-            for child in network.childs_by_ids(node.child_ids):
-                if ignore_child(child, ignored_nodes):
-                    continue
-                if hasattr(child.model, "inter_step_equations"):
-                    eqs = as_iter(
-                        child.model.inter_step_equations(step_state, child.id)
-                    )
-                    self._add_equations(pm, filter_intermediate_eqs(eqs))
-                if child.formulation is not None and hasattr(
-                    child.formulation, "inter_step_equations"
-                ):
-                    eqs = as_iter(
-                        child.formulation.inter_step_equations(
-                            child.model, step_state, child.id
-                        )
-                    )
-                    self._add_equations(pm, filter_intermediate_eqs(eqs))
-        for branch in branches:
-            if ignore_branch(branch, network, ignored_nodes):
-                continue
-            if hasattr(branch.model, "inter_step_equations"):
-                eqs = as_iter(branch.model.inter_step_equations(step_state, branch.id))
-                self._add_equations(pm, filter_intermediate_eqs(eqs))
-            if branch.formulation is not None and hasattr(
-                branch.formulation, "inter_step_equations"
-            ):
-                eqs = as_iter(
-                    branch.formulation.inter_step_equations(
-                        branch.model, step_state, branch.id
-                    )
-                )
-                self._add_equations(pm, filter_intermediate_eqs(eqs))
-        for compound in compounds:
-            if ignore_compound(compound, ignored_nodes):
-                continue
-            if hasattr(compound.model, "inter_step_equations"):
-                eqs = as_iter(
-                    compound.model.inter_step_equations(step_state, compound.id)
-                )
-                self._add_equations(pm, filter_intermediate_eqs(eqs))
-            if compound.formulation is not None and hasattr(
-                compound.formulation, "inter_step_equations"
-            ):
-                eqs = as_iter(
-                    compound.formulation.inter_step_equations(
-                        compound.model, step_state, compound.id
-                    )
-                )
-                self._add_equations(pm, filter_intermediate_eqs(eqs))
 
     def solve(
         self,
@@ -345,7 +187,16 @@ class PyomoSolver(SolverInterface):
         compounds = network.compounds
 
         # inject vars
-        self.inject_pyomo_vars(pm, nodes, branches, compounds, network, ignored_nodes)
+        inject_vars(
+            lambda model, comp, cat: PyomoSolver.inject_pyomo_vars_attr(
+                pm, model, prefix=f"{cat}_{comp.id}"
+            ),
+            nodes,
+            branches,
+            compounds,
+            network,
+            ignored_nodes,
+        )
 
         # init branches
         self.init_branches(branches)
@@ -382,7 +233,9 @@ class PyomoSolver(SolverInterface):
         solver.solve(pm, tee=debug)
 
         # pull values back into your objects
-        self.withdraw_pyomo_vars(nodes, branches, compounds, network)
+        withdraw_vars(
+            PyomoSolver.withdraw_pyomo_vars_attr, nodes, branches, compounds, network
+        )
 
         # objective value
         obj_val = pyo.value(pm.obj)
@@ -491,10 +344,6 @@ class PyomoSolver(SolverInterface):
                 child_eqs = as_iter(child.equations(grid, node))
                 self._process_intermediate_eqs(pm, child.model, child_eqs)
                 self._add_equations(pm, filter_intermediate_eqs(child_eqs))
-
-    def init_branches(self, branches):
-        for branch in branches:
-            branch.model.init(branch.grid)
 
     def process_equations_branches(self, pm, network, branches, ignored_nodes):
         sin_impl = pyo.sin
