@@ -11,6 +11,7 @@ from monee.model.core import Var, tracked
 from monee.model.core import value as _model_value
 from monee.simulation.core import solve
 from monee.simulation.step_state import StepState
+from monee.solver.core import _TABLE_CSS, _col_summary, _display_df
 
 _log = logging.getLogger(__name__)
 
@@ -370,27 +371,69 @@ class TimeseriesResult:
         step_indices = []
         for sr in self._successful():
             raw_df = sr.result.dataframes[model_type.__name__]
-            raw_attribute_series_t = raw_df[attribute].transpose()
-            rows.append(raw_attribute_series_t.to_dict())
+            # Use component IDs as column names so callers can do df[bus_id]
+            if "id" in raw_df.columns:
+                row = dict(zip(raw_df["id"], raw_df[attribute]))
+            else:
+                row = raw_df[attribute].to_dict()
+            rows.append(row)
             step_indices.append(sr.step)
         df = pandas.DataFrame(rows, index=self._make_index(step_indices))
         self._cache[model_type, attribute] = df
         return df
 
     def get_result_for(self, model_type, attribute: str) -> pandas.DataFrame:
-        """
-        Return a DataFrame of *attribute* values across all successful steps.
+        """Return a DataFrame of *attribute* values across all successful steps.
 
-        One row per step, columns are positional component indices within the
-        type DataFrame.
+        One row per step, one column per component — **columns are labelled by
+        component id** so you can select a specific instance with
+        ``df[bus_id]`` instead of relying on positional indices.
 
         Args:
-            model_type: The model class (e.g. ``md.PowerLoad``).
+            model_type: The model class (e.g. ``mm.PowerLoad``, ``mm.Bus``).
             attribute: The attribute name (e.g. ``'p_mw'``).
+
+        Example::
+
+            vm_df = ts_result.get_result_for(mm.Bus, "vm_pu")
+            print(vm_df[bus_home_id])   # time-series for one bus
         """
         if (model_type, attribute) in self._cache:
             return self._cache[model_type, attribute]
         return self._create_result_for(model_type, attribute)
+
+    def __getitem__(self, component_id) -> pandas.DataFrame:
+        """Return all result attributes for *component_id* across every step.
+
+        Each column is one result attribute; each row is one successful step
+        (indexed by step number or datetime if a ``datetime_index`` was
+        provided).  Internal bookkeeping columns (``active``, ``independent``,
+        ``ignored``) are excluded.
+
+        Raises :exc:`KeyError` if *component_id* is not found in any step.
+
+        Example::
+
+            df = ts_result[bus_home_id]
+            print(df["vm_pu"])          # voltage series
+            print(df["va_degree"].min()) # worst angle
+        """
+        rows: list[dict] = []
+        step_indices: list[int] = []
+        for sr in self._successful():
+            for df in sr.result.dataframes.values():
+                if "id" not in df.columns:
+                    continue
+                mask = df["id"] == component_id
+                if not mask.any():
+                    continue
+                row = _display_df(df[mask].iloc[0].to_frame().T).iloc[0]
+                rows.append({k: v for k, v in row.items() if k != "id"})
+                step_indices.append(sr.step)
+                break
+        if not rows:
+            raise KeyError(component_id)
+        return pandas.DataFrame(rows, index=self._make_index(step_indices))
 
     def get_result_for_id(self, component_id, attribute: str) -> pandas.Series:
         """
@@ -424,6 +467,169 @@ class TimeseriesResult:
             step_indices.append(sr.step)
         return pandas.Series(
             values, index=self._make_index(step_indices), name=attribute
+        )
+
+    def summary(self):
+        return repr(self)
+
+    def __repr__(self) -> str:
+        n_total = len(self._step_results)
+        n_failed = len(self.failed_steps)
+        n_skipped = sum(1 for sr in self._step_results if sr.skipped)
+
+        status_parts = [f"{n_total} step{'s' if n_total != 1 else ''}"]
+        if n_failed:
+            status_parts.append(f"{n_failed} failed")
+        if n_skipped:
+            status_parts.append(f"{n_skipped} skipped")
+
+        SEP = "─" * 68
+        lines = [f"TimeseriesResult  {' · '.join(status_parts)}", SEP]
+
+        # Component-type summary from first successful step
+        successful = self._successful()
+        if successful:
+            for type_name, df in successful[0].result.dataframes.items():
+                n_comp = len(df)
+                # Aggregate key numeric attrs across all steps for this type
+                all_dfs = [
+                    sr.result.dataframes[type_name]
+                    for sr in successful
+                    if type_name in sr.result.dataframes
+                ]
+                combined = pandas.concat(all_dfs, ignore_index=True)
+                vis_num = (
+                    _display_df(combined)
+                    .drop(columns=["id", "node_id"], errors="ignore")
+                    .select_dtypes(include="number")
+                )
+                parts = []
+                for col in vis_num.columns:
+                    s = _col_summary(vis_num[col])
+                    if s is None:
+                        continue
+                    parts.append(f"{col} ∈ {s}" if "[" in s else f"{col} = {s}")
+                row = f"  {type_name:<22} ×{n_comp:>2}"
+                if parts:
+                    row += "  │  " + "  ·  ".join(parts[:3])
+                lines.append(row)
+        else:
+            lines.append("  (no successful steps)")
+
+        lines.append(SEP)
+        return "\n".join(lines)
+
+    def __str__(self) -> str:
+        """Full per-type table dump showing the last successful step's data.
+
+        Printing all N steps inline would be impractical; the last step gives
+        a concrete snapshot of the network state.  Use ``get_result_for()`` or
+        ``self[component_id]`` to retrieve the full time-series programmatically.
+        """
+        n_total = len(self._step_results)
+        n_failed = len(self.failed_steps)
+        successful = self._successful()
+
+        status_parts = [f"{n_total} step{'s' if n_total != 1 else ''}"]
+        if n_failed:
+            status_parts.append(f"{n_failed} failed")
+        title = f"TimeseriesResult  {' · '.join(status_parts)}"
+
+        if not successful:
+            return title + "\n  (no successful steps)"
+
+        last = successful[-1]
+        SEP = "─" * 68
+        lines = [title, f"  [showing step {last.step}]"]
+        for type_name, df in last.result.dataframes.items():
+            vis = _display_df(df)
+            n = len(vis)
+            plural = "instance" if n == 1 else "instances"
+            lines.append("")
+            lines.append(f"  {type_name}  ({n} {plural})")
+            lines.append("  " + SEP)
+            table = vis.to_string(index=False, float_format=lambda x: f"{x:.4g}")
+            for line in table.splitlines():
+                lines.append("  " + line)
+        return "\n".join(lines)
+
+    def _repr_html_(self) -> str:
+        n_total = len(self._step_results)
+        n_failed = len(self.failed_steps)
+        n_skipped = sum(1 for sr in self._step_results if sr.skipped)
+        n_ok = n_total - n_failed - n_skipped
+
+        step_info = f"{n_total} step{'s' if n_total != 1 else ''}"
+        extra_parts = []
+        if n_ok < n_total:
+            extra_parts.append(f"<span style='color:#090'>{n_ok} ok</span>")
+        if n_failed:
+            extra_parts.append(f"<span style='color:#c00'>{n_failed} failed</span>")
+        if n_skipped:
+            extra_parts.append(f"<span style='color:#888'>{n_skipped} skipped</span>")
+        status_html = " &nbsp;·&nbsp; ".join(extra_parts) if extra_parts else ""
+
+        sections = []
+        successful = self._successful()
+        if successful:
+            # Collect all step dataframes per type
+            type_dfs: dict[str, list[pandas.DataFrame]] = {}
+            for sr in successful:
+                for type_name, df in sr.result.dataframes.items():
+                    type_dfs.setdefault(type_name, []).append(df)
+
+            for type_name, dfs in type_dfs.items():
+                n_comp = len(dfs[0])
+                plural = "instance" if n_comp == 1 else "instances"
+                combined = pandas.concat(dfs, ignore_index=True)
+
+                # Build per-attribute stats table aggregated over all steps
+                vis = _display_df(combined).drop(
+                    columns=["id", "node_id"], errors="ignore"
+                )
+                num_cols = vis.select_dtypes(include="number").columns.tolist()
+                stat_rows = []
+                for col in num_cols:
+                    vals = combined[col].dropna()
+                    if vals.empty:
+                        continue
+                    stat_rows.append(
+                        {
+                            "attribute": col,
+                            "min": f"{float(vals.min()):.4g}",
+                            "mean": f"{float(vals.mean()):.4g}",
+                            "max": f"{float(vals.max()):.4g}",
+                        }
+                    )
+
+                if stat_rows:
+                    stats_df = pandas.DataFrame(stat_rows)
+                    tbl = stats_df.to_html(index=False, border=0, classes=[])
+                else:
+                    tbl = "<em style='color:#888'>(no numeric attributes)</em>"
+
+                sections.append(
+                    f"<details open style='margin-bottom:6px'>"
+                    f"<summary style='cursor:pointer;font-weight:bold;color:#333;"
+                    f"padding:2px 0'>{type_name} "
+                    f"<span style='color:#999;font-weight:normal'>"
+                    f"({n_comp} {plural})</span></summary>"
+                    f"<div style='color:#888;font-size:.82em;padding:1px 0 3px'>"
+                    f"aggregated over {len(dfs)} step{'s' if len(dfs) != 1 else ''}"
+                    f"</div>{tbl}</details>"
+                )
+
+        header = (
+            f"<div style='font-weight:bold;font-size:1.05em;padding:4px 0 8px'>"
+            f"TimeseriesResult &nbsp;"
+            f"<span style='font-weight:normal;color:#555'>{step_info}</span>"
+            + (f" &nbsp;·&nbsp; {status_html}" if status_html else "")
+            + "</div>"
+        )
+        return (
+            f"{_TABLE_CSS}"
+            f"<div class='monee-result'>"
+            f"{header}" + "\n".join(sections) + "</div>"
         )
 
 

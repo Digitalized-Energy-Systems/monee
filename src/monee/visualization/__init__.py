@@ -1,1 +1,2 @@
 from monee.visualization.visualization import plot_network
+from monee.visualization.result_visualization import plot_result

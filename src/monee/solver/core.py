@@ -20,6 +20,47 @@ from monee.model import (
 from monee.model.child import GridFormingMixin
 from monee.problem.core import OptimizationProblem
 
+# ---------------------------------------------------------------------------
+# Display helpers (also imported by simulation.timeseries)
+# ---------------------------------------------------------------------------
+
+#: Internal bookkeeping columns omitted from pretty-printed output.
+_META_COLS: frozenset[str] = frozenset({"active", "independent", "ignored"})
+
+
+def _display_df(df: pandas.DataFrame) -> pandas.DataFrame:
+    """Return *df* with internal bookkeeping columns removed."""
+    return df.drop(columns=[c for c in _META_COLS if c in df.columns])
+
+
+def _col_summary(series: pandas.Series) -> str | None:
+    """One-line numeric summary for a single attribute column.
+
+    Returns ``'val'`` for a constant column, ``'[lo, hi]'`` when values vary,
+    or ``None`` when the series is empty or entirely NaN.
+    """
+    vals = series.dropna()
+    if vals.empty:
+        return None
+    lo, hi = float(vals.min()), float(vals.max())
+    if abs(hi - lo) < 1e-9 * max(1.0, abs(hi)):
+        return f"{lo:.4g}"
+    return f"[{lo:.4g}, {hi:.4g}]"
+
+
+_TABLE_CSS = (
+    "<style>"
+    ".monee-result table{border-collapse:collapse;font-size:.88em;margin-top:4px}"
+    ".monee-result th{background:#e8e8e8;padding:3px 10px;border:1px solid #ccc;"
+    "text-align:right;font-weight:600}"
+    ".monee-result td{padding:3px 10px;border:1px solid #ddd;text-align:right;"
+    "white-space:nowrap}"
+    ".monee-result tr:nth-child(even) td{background:#f6f6f6}"
+    "</style>"
+)
+
+# ---------------------------------------------------------------------------
+
 
 @dataclass
 class SolverResult:
@@ -41,12 +82,14 @@ class SolverResult:
     dataframes: dict[str, pandas.DataFrame]
     objective: float
 
-    def get(self, model_type) -> pandas.DataFrame:
-        """
-        Return the result DataFrame for *model_type* using the class itself as key.
+    def summary(self):
+        return repr(self)
 
-        This is the preferred alternative to ``result.dataframes["ClassName"]``
-        because it avoids string-key typos and benefits from IDE autocomplete.
+    def get(self, model_type) -> pandas.DataFrame:
+        """Return the result DataFrame for *model_type*.
+
+        Preferred over ``result.dataframes["ClassName"]`` — avoids string-key
+        typos and benefits from IDE autocomplete.
 
         Args:
             model_type: The model class (e.g. ``mm.PowerLoad``, ``mm.Bus``).
@@ -62,16 +105,142 @@ class SolverResult:
         """
         return self.dataframes.get(model_type.__name__, pandas.DataFrame())
 
+    def __getitem__(self, component_id) -> pandas.Series:
+        """Return the result row for the component with *component_id*.
+
+        Searches all component-type DataFrames and returns the matching row as
+        a :class:`pandas.Series`.  Raises :exc:`KeyError` if no component with
+        that id is found.
+
+        Example::
+
+            row = result[bus_id]
+            print(row["vm_pu"])
+        """
+        for df in self.dataframes.values():
+            if "id" in df.columns:
+                mask = df["id"] == component_id
+                if mask.any():
+                    return df[mask].iloc[0]
+        raise KeyError(component_id)
+
+    def __repr__(self) -> str:
+        SEP = "─" * 68
+        title = "SolverResult"
+        if self.objective != 0.0:
+            title += f"  (objective = {self.objective:.6g})"
+        lines = [title, SEP]
+        for type_name, df in self.dataframes.items():
+            n = len(df)
+            vis = _display_df(df).drop(columns=["id", "node_id"], errors="ignore")
+            num = vis.select_dtypes(include="number")
+            parts = []
+            for col in num.columns:
+                s = _col_summary(num[col])
+                if s is None:
+                    continue
+                parts.append(f"{col} ∈ {s}" if "[" in s else f"{col} = {s}")
+            row = f"  {type_name:<22} {n:>2}"
+            if parts:
+                row += "  │  " + "  ·  ".join(parts[:4])
+            lines.append(row)
+        lines.append(SEP)
+        return "\n".join(lines)
+
     def __str__(self) -> str:
-        result_str = str(self.network)
-        result_str += "\n"
-        for cls_str, dataframe in self.dataframes.items():
-            result_str += cls_str
-            result_str += "\n"
-            result_str += dataframe.to_string()
-            result_str += "\n"
-            result_str += "\n"
-        return result_str
+        """Full per-type table dump, one section per component class.
+
+        This is what ``print(result)`` renders.  Use ``repr(result)`` (or just
+        evaluate ``result`` in a REPL) for the compact one-line-per-type summary.
+        """
+        title = "SolverResult"
+        if self.objective != 0.0:
+            title += f"  (objective = {self.objective:.6g})"
+        SEP = "─" * 68
+        lines = [title]
+        for type_name, df in self.dataframes.items():
+            vis = _display_df(df)
+            n = len(vis)
+            plural = "instance" if n == 1 else "instances"
+            lines.append("")
+            lines.append(f"  {type_name}  ({n} {plural})")
+            lines.append("  " + SEP)
+            table = vis.to_string(index=False, float_format=lambda x: f"{x:.4g}")
+            for line in table.splitlines():
+                lines.append("  " + line)
+        return "\n".join(lines)
+
+    def _repr_html_(self) -> str:
+        obj_extra = ""
+        if self.objective != 0.0:
+            obj_extra = (
+                f" &nbsp;<span style='color:#888;font-weight:normal'>"
+                f"objective = {self.objective:.6g}</span>"
+            )
+        sections = []
+        for type_name, df in self.dataframes.items():
+            vis = _display_df(df)
+            n = len(vis)
+            plural = "instance" if n == 1 else "instances"
+            tbl = vis.to_html(
+                index=False,
+                border=0,
+                classes=[],
+                na_rep="—",
+                float_format=lambda x: f"{x:.5g}",
+            )
+            sections.append(
+                f"<details open style='margin-bottom:6px'>"
+                f"<summary style='cursor:pointer;font-weight:bold;color:#333;"
+                f"padding:2px 0'>{type_name} "
+                f"<span style='color:#999;font-weight:normal'>({n} {plural})</span>"
+                f"</summary>{tbl}</details>"
+            )
+        return (
+            f"{_TABLE_CSS}"
+            f"<div class='monee-result'>"
+            f"<div style='font-weight:bold;font-size:1.05em;padding:4px 0 8px'>"
+            f"SolverResult{obj_extra}</div>" + "\n".join(sections) + "</div>"
+        )
+
+    def plot(
+        self,
+        title: str | None = None,
+        show_children: bool = True,
+        use_monee_positions: bool = False,
+        write_to: str | None = None,
+    ):
+        """Plot this result as an annotated interactive network graph.
+
+        Delegates to :func:`monee.visualization.plot_result`.  Requires
+        *plotly* (already a project dependency).
+
+        Args:
+            title: Figure title.  Defaults to ``"Network Result"``.
+            show_children: Show child components (loads, generators, …) in
+                parent-node hover text.  Default ``True``.
+            use_monee_positions: Use stored ``node.position`` coordinates
+                instead of automatic layout.
+            write_to: Optional path to export the figure (PDF / PNG / SVG).
+
+        Returns:
+            A :class:`plotly.graph_objects.Figure`.
+
+        Example::
+
+            result = solver.solve(network)
+            result.plot()          # display in Jupyter
+            result.plot(write_to="result.pdf")
+        """
+        from monee.visualization.result_visualization import plot_result
+
+        return plot_result(
+            self,
+            title=title,
+            show_children=show_children,
+            use_monee_positions=use_monee_positions,
+            write_to=write_to,
+        )
 
 
 class SolverInterface(ABC):

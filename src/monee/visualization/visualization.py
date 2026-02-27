@@ -1,378 +1,456 @@
+"""Annotated interactive graph visualization for :class:`~monee.model.Network`.
+
+Entry point: :func:`plot_network`.
+"""
+
 import networkx as nx
-import networkx.drawing.nx_agraph as nxd
-import plotly.express as px
 import plotly.graph_objects as go
-import plotly.io as pio
 
-import monee.model as mm
+import monee.model as mm  # kept for Network type hint only
+from monee.model.core import Intermediate, IntermediateEq, Var
 
-pio.templates["publish"] = go.layout.Template(
-    layout=go.Layout(
-        font=dict(family="sans-serif", size=19),
-    )
-)
-pio.templates["publish3"] = go.layout.Template(
-    layout=go.Layout(
-        font=dict(family="sans-serif", size=19),
-    )
-)
-pio.templates["publish2"] = go.layout.Template(
-    layout=go.Layout(
-        font=dict(family="sans-serif", size=13),
-    )
-)
-pio.templates["publish1"] = go.layout.Template(
-    layout=go.Layout(
-        font=dict(family="sans-serif", size=9),
-    )
+# Import shared theme and layout helpers from result_visualization so the two
+# functions always look identical.
+from monee.visualization.result_visualization import (
+    _ACCENT,
+    _BG,
+    _BORDER,
+    _DIM_COLOR,
+    _FONT,
+    _FONT_COLOR,
+    _GRID_LABEL,
+    _GRID_SYMBOL,
+    _PANEL,
+    _TL_GRAY,
+    _compute_layout,
+    _fmt,
+    _grid_type,
+    _sep,
 )
 
-GRID_NAME_TO_SHIFT_X = {
-    "power": 0,
-    "water": 0.0003,
-    "gas": 0.0006,
-    "None": 0.0003,
-    None: 0.0003,
-}
-GRID_NAME_TO_SHIFT_Y = {
-    "power": 0,
-    "water": 0.0003,
-    "gas": 0.0006,
-    "None": -0.0003,
-    None: -0.0003,
-}
+_SKIP_ATTRS: frozenset[str] = frozenset({"active", "independent", "ignored"})
+
+# Pyomo-like solver objects – hide these from hover text (they carry no useful
+# design-time information for the user).
+_SOLVER_TYPES = (Var, Intermediate, IntermediateEq)
 
 
-def _retr_grid_name(grid):
-    if isinstance(grid, list):
-        return "None"
-    return grid.name
+# ---------------------------------------------------------------------------
+# Model parameter extraction
+# ---------------------------------------------------------------------------
+
+
+def _model_params(model) -> dict:
+    """Extract scalar constructor parameters from a model instance.
+
+    Skips private attributes and solver-variable objects (Var, Intermediate).
+    Returns only plain Python scalars (int, float, bool, str).
+    """
+    params: dict = {}
+    try:
+        attrs = vars(model)
+    except TypeError:
+        return params
+    for name, val in attrs.items():
+        if name.startswith("_"):
+            continue
+        if isinstance(val, _SOLVER_TYPES):
+            continue
+        if callable(val):
+            continue
+        if isinstance(val, (int, float, bool, str)):
+            params[name] = val
+    return params
+
+
+# ---------------------------------------------------------------------------
+# Inline labels shown directly on the graph
+# ---------------------------------------------------------------------------
+
+
+def _node_label(int_node) -> str:
+    """Short text placed above a node marker."""
+    model = int_node.model
+    bkv = getattr(model, "base_kv", None)
+    if bkv is not None:
+        try:
+            return f"{float(bkv):.4g} kV"
+        except (TypeError, ValueError):
+            pass
+    return ""
+
+
+def _branch_label(int_branch) -> str:
+    """Short text placed at a branch midpoint."""
+    model = int_branch.model
+    parts: list[str] = []
+
+    d = getattr(model, "diameter_m", None)
+    if d is not None:
+        try:
+            mm_val = float(d) * 1000
+            parts.append(f"⌀{mm_val:.0f}mm")
+        except (TypeError, ValueError):
+            pass
+
+    length = getattr(model, "length_m", None)
+    if length is not None:
+        try:
+            lm = float(length)
+            parts.append(f"{lm / 1000:.4g}km" if lm >= 1000 else f"{lm:.4g}m")
+        except (TypeError, ValueError):
+            pass
+
+    if not parts:
+        # PowerLine fallback: total resistance
+        r = getattr(model, "r_ohm_per_m", None)
+        if r is not None and length is not None:
+            try:
+                parts.append(f"{float(r) * float(length):.3g} Ω")
+            except (TypeError, ValueError):
+                pass
+
+    return "  ".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Rich hover text
+# ---------------------------------------------------------------------------
+
+
+def _node_hover(int_node, children: list) -> str:
+    """HTML hover for a network node, showing all scalar model parameters."""
+    model = int_node.model
+    typename = type(model).__name__
+    nid = getattr(int_node, "id", "?")
+    nname = getattr(int_node, "name", None)
+
+    if nname:
+        header = (
+            f"<b>{nname}</b>  <span style='color:{_DIM_COLOR}'>{typename} #{nid}</span>"
+        )
+    else:
+        header = f"<b>{typename} #{nid}</b>"
+
+    lines = [header, _sep()]
+    for k, v in _model_params(model).items():
+        if k in _SKIP_ATTRS:
+            continue
+        lines.append(
+            f"<span style='color:{_DIM_COLOR}'>{k}</span>&nbsp;&nbsp;<b>{_fmt(v)}</b>"
+        )
+
+    if children:
+        lines.append("<br>" + _sep("children"))
+        for child in children:
+            ctype = type(child.model).__name__
+            cparams = _model_params(child.model)
+            vals = "  ".join(
+                f"<span style='color:{_DIM_COLOR}'>{k}</span>&nbsp;{_fmt(v)}"
+                for k, v in cparams.items()
+                if k not in _SKIP_ATTRS
+            )
+            lines.append(f"<i>[{ctype}]</i>&nbsp;&nbsp;{vals}")
+
+    return "<br>".join(lines)
+
+
+def _branch_hover(int_branch, from_id, to_id) -> str:
+    """HTML hover for a network branch, showing all scalar model parameters."""
+    model = int_branch.model
+    typename = type(model).__name__
+    bname = getattr(int_branch, "name", None)
+
+    if bname:
+        header = f"<b>{bname}</b>  <span style='color:{_DIM_COLOR}'>{typename}</span>"
+    else:
+        header = f"<b>{typename}</b>"
+
+    lines = [
+        header,
+        f"<span style='color:{_DIM_COLOR}'>{from_id} → {to_id}</span>",
+        _sep(),
+    ]
+    for k, v in _model_params(model).items():
+        if k in _SKIP_ATTRS:
+            continue
+        lines.append(
+            f"<span style='color:{_DIM_COLOR}'>{k}</span>&nbsp;&nbsp;<b>{_fmt(v)}</b>"
+        )
+
+    return "<br>".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Main function
+# ---------------------------------------------------------------------------
 
 
 def plot_network(
     network: mm.Network,
-    color_df=None,
-    color_name=None,
-    color_legend_text=None,
-    title=None,
-    plot_node_characteristics=True,
-    template="plotly_white+publish",
-    without_nodes=False,
-    use_monee_positions=False,
-    write_to="net.pdf",
-):
-    """Plot a monee network using plotly.
+    title: str | None = None,
+    show_children: bool = True,
+    use_monee_positions: bool = False,
+    write_to: str | None = None,
+) -> go.Figure:
+    """Plot a :class:`~monee.model.Network` as an annotated interactive graph.
+
+    Nodes are colored by energy-carrier type (electricity, heat/water, gas,
+    coupling point).  Branch midpoints show compact parameter labels.  Hovering
+    over any element reveals the full set of scalar model parameters.
 
     Args:
-        network (mm.Network): _description_
-        color_df (_type_, optional): _description_. Defaults to None.
-        color_name (_type_, optional): _description_. Defaults to None.
-        color_legend_text (_type_, optional): _description_. Defaults to None.
-        title (_type_, optional): _description_. Defaults to None.
-        plot_node_characteristics (bool, optional): _description_. Defaults to True.
-        template (str, optional): _description_. Defaults to "plotly_white+publish".
-        without_nodes (bool, optional): _description_. Defaults to False.
-        use_monee_positions (bool, optional): _description_. Defaults to False.
-        write_to (str, optional): _description_. Defaults to "net.pdf".
+        network: The :class:`~monee.model.Network` to visualise.
+        title: Figure title.  Defaults to ``"Network"``.
+        show_children: Show attached child components (loads, generators, …)
+            in the parent node's hover tooltip.
+        use_monee_positions: Use stored ``node.position`` coordinates instead
+            of the automatic graph layout.
+        write_to: Optional path to export the figure (PDF / PNG / SVG).
 
     Returns:
-        _type_: the plotly figure
+        A :class:`plotly.graph_objects.Figure`.
     """
     graph: nx.Graph = network._network_internal
-    pos = {}
-    if not use_monee_positions:
-        pos = nxd.pygraphviz_layout(graph, prog="fdp")
-    x_edges = []
-    y_edges = []
-    color_edges = []
-    cp_edge = []
-    for from_node, to_node, uid in graph.edges:
-        from_m_node = network.node_by_id(from_node)
-        to_m_node = network.node_by_id(to_node)
-        if use_monee_positions:
-            add_to_from_x = GRID_NAME_TO_SHIFT_X[_retr_grid_name(from_m_node.grid)]
-            add_to_from_y = GRID_NAME_TO_SHIFT_Y[_retr_grid_name(from_m_node.grid)]
-            add_to_to_x = GRID_NAME_TO_SHIFT_X[_retr_grid_name(to_m_node.grid)]
-            add_to_to_y = GRID_NAME_TO_SHIFT_Y[_retr_grid_name(to_m_node.grid)]
-            x0, y0 = (
-                from_m_node.position[0] + add_to_from_x,
-                from_m_node.position[1] + add_to_from_y,
-            )
-            x1, y1 = (
-                to_m_node.position[0] + add_to_to_x,
-                to_m_node.position[1] + add_to_to_y,
-            )
-            pos[from_node] = (x0, y0)
-            pos[to_node] = (x1, y1)
-        else:
-            x0, y0 = pos[from_node]
-            x1, y1 = pos[to_node]
-        if color_df is not None:
-            color_data = 0
-            color_data_list = list(
-                color_df.loc[
-                    color_df["id"] == f"branch:({from_node}, {to_node}, {uid})"
-                ][color_name]
-            )
-            if len(color_data_list) > 0:
-                color_data = color_data_list[0]
-            color_edges.append(color_data)
-        x_edges.append([x0, x1, None])
-        y_edges.append([y0, y1, None])
-        branch = network.get_branch_between(from_node, to_node)
-        cp_edge.append(isinstance(branch.model, mm.MultiGridBranchModel))
-    node_x_power = []
-    node_y_power = []
-    node_color_power = []
-    node_text_power = []
-    node_x_heat = []
-    node_y_heat = []
-    node_color_heat = []
-    node_text_heat = []
-    node_x_gas = []
-    node_y_gas = []
-    node_color_gas = []
-    node_text_gas = []
-    node_cp_x = []
-    node_cp_y = []
-    node_color_cp = []
-    node_text_cp = []
-    for node in graph.nodes:
-        node_id = f"node:{node}"
-        x, y = pos[node]
-        node_data = graph.nodes[node]
-        int_node = node_data["internal_node"]
-        color_data = 0
-        if color_df is not None:
-            color_data_list = list(color_df.loc[color_df["id"] == node_id][color_name])
-            if len(color_data_list) > 0:
-                color_data = color_data_list[0]
+    pos = _compute_layout(graph, network, use_monee_positions)
 
-        if not int_node.independent:
-            node_cp_x.append(x)
-            node_cp_y.append(y)
-            node_color_cp.append(color_data)
-            node_text = ""
-            node_text_cp.append(node_text)
-        elif "Water" in str(type(int_node.grid)):
-            node_x_heat.append(x)
-            node_y_heat.append(y)
-            node_color_heat.append(color_data)
-            node_text = ""
-            if plot_node_characteristics:
-                node_text = f"<b>{round(mm.value(int_node.model.t_k), 2)}</b>"
-            node_text_heat.append(node_text)
-        elif "Gas" in str(type(int_node.grid)):
-            node_x_gas.append(x)
-            node_y_gas.append(y)
-            node_color_gas.append(color_data)
-            node_text = ""
-            if plot_node_characteristics:
-                node_text = f"<b>{round(mm.value(int_node.model.mass_flow), 2)}</b>"
-            node_text_gas.append(node_text)
-        elif "Power" in str(type(int_node.grid)):
-            node_x_power.append(x)
-            node_y_power.append(y)
-            node_color_power.append(color_data)
-            node_text = ""
-            if plot_node_characteristics:
-                node_text = f"<b>{round(mm.value(int_node.model.p_mw), 2)}</b>"
-            node_text_power.append(node_text)
+    # -----------------------------------------------------------------------
+    # Node data – collected per grid type
+    # -----------------------------------------------------------------------
+    grid_data: dict[str, dict] = {
+        g: {"x": [], "y": [], "hover": [], "labels": []}
+        for g in ("power", "water", "gas", "cp")
+    }
 
-    max_color_val = max(
-        color_edges
-        if without_nodes
-        else node_color_gas
-        + node_color_cp
-        + node_color_heat
-        + node_color_power
-        + color_edges
-    )
-    edge_traces = []
-    coloraxis_v = None if color_df is None else "coloraxis"
-    for i in range(len(x_edges)):
-        edge_text = "" if color_df is None else f"{color_edges[i]}"
-        edge_traces.append(
+    for node_id in graph.nodes:
+        int_node = graph.nodes[node_id]["internal_node"]
+        gtype = "cp" if not int_node.independent else _grid_type(int_node.grid)
+
+        x, y = pos[node_id]
+        children = network.childs_by_ids(int_node.child_ids) if show_children else []
+
+        d = grid_data[gtype]
+        d["x"].append(x)
+        d["y"].append(y)
+        d["hover"].append(_node_hover(int_node, children))
+        d["labels"].append(_node_label(int_node))
+
+    # Build node traces: soft glow behind each marker
+    glow_traces: list = []
+    marker_traces: list = []
+
+    for gtype, d in grid_data.items():
+        if not d["x"]:
+            continue
+        color = _ACCENT[gtype]
+
+        glow_traces.append(
             go.Scatter(
-                x=x_edges[i],
-                y=y_edges[i],
-                line=dict(
-                    dash="dash" if cp_edge[i] else "solid",
-                    width=3,
-                    color="rgb(0,0,0)"
-                    if color_df is None
-                    else px.colors.sample_colorscale(
-                        px.colors.sequential.Sunsetdark,
-                        (color_edges[i] / max_color_val) + min(color_edges),
-                    )[0],
-                ),
-                hoverinfo="text",
-                mode="lines",
-                text=edge_text,
+                x=d["x"],
+                y=d["y"],
+                mode="markers",
+                hoverinfo="skip",
                 showlegend=False,
                 marker=dict(
-                    coloraxis=coloraxis_v,
+                    symbol=_GRID_SYMBOL[gtype],
+                    size=42,
+                    color=color,
+                    opacity=0.10,
+                    line=dict(width=0),
                 ),
             )
         )
-    edge_traces.append(
+
+        marker_traces.append(
+            go.Scatter(
+                x=d["x"],
+                y=d["y"],
+                mode="markers+text",
+                textposition="top center",
+                text=d["labels"],
+                textfont=dict(family=_FONT, size=11, color=_DIM_COLOR),
+                hovertext=d["hover"],
+                hoverinfo="text",
+                name=_GRID_LABEL[gtype],
+                marker=dict(
+                    symbol=_GRID_SYMBOL[gtype],
+                    size=24,
+                    color=color,
+                    opacity=0.75,
+                    line=dict(width=3, color=color),
+                ),
+            )
+        )
+
+    # -----------------------------------------------------------------------
+    # Branch traces
+    # Grouped by (color, is_cp) for efficient rendering; one midpoint trace
+    # carries per-branch hover text and inline labels.
+    # -----------------------------------------------------------------------
+    color_groups: dict[tuple, list] = {}
+
+    mid_x: list[float] = []
+    mid_y: list[float] = []
+    mid_hover: list[str] = []
+    mid_label: list[str] = []
+    mid_colors: list[str] = []
+
+    for from_node, to_node, key in graph.edges(keys=True):
+        int_branch = graph.edges[from_node, to_node, key]["internal_branch"]
+        is_cp = int_branch.model.is_cp()
+
+        if is_cp:
+            color = _ACCENT["cp"]
+        else:
+            int_node_from = graph.nodes[from_node]["internal_node"]
+            gtype = (
+                _grid_type(int_node_from.grid) if int_node_from.independent else "cp"
+            )
+            color = _ACCENT.get(gtype, _TL_GRAY)
+
+        x0, y0 = pos[from_node]
+        x1, y1 = pos[to_node]
+        color_groups.setdefault((color, is_cp), []).append((x0, y0, x1, y1))
+
+        mid_x.append((x0 + x1) / 2)
+        mid_y.append((y0 + y1) / 2)
+        mid_hover.append(_branch_hover(int_branch, from_node, to_node))
+        mid_label.append(_branch_label(int_branch))
+        mid_colors.append(color)
+
+    edge_traces: list = []
+    for (color, is_cp), segs in color_groups.items():
+        x_pts: list = []
+        y_pts: list = []
+        for x0, y0, x1, y1 in segs:
+            x_pts += [x0, x1, None]
+            y_pts += [y0, y1, None]
+        edge_traces.append(
+            go.Scatter(
+                x=x_pts,
+                y=y_pts,
+                mode="lines",
+                hoverinfo="none",
+                showlegend=False,
+                line=dict(
+                    color=color,
+                    width=3.5 if not is_cp else 2,
+                    dash="dot" if is_cp else "solid",
+                ),
+                opacity=0.55,
+            )
+        )
+
+    midpoint_trace = go.Scatter(
+        x=mid_x,
+        y=mid_y,
+        mode="markers+text",
+        text=mid_label,
+        textposition="middle right",
+        textfont=dict(family=_FONT, size=10, color=_DIM_COLOR),
+        hovertext=mid_hover,
+        hoverinfo="text",
+        showlegend=False,
+        marker=dict(
+            size=9,
+            color=mid_colors,
+            symbol="circle",
+            opacity=0.85,
+            line=dict(width=1.5, color=_BG),
+        ),
+    )
+
+    # -----------------------------------------------------------------------
+    # Legend
+    # -----------------------------------------------------------------------
+    legend_entries: list = []
+    for gtype, label in _GRID_LABEL.items():
+        legend_entries.append(
+            go.Scatter(
+                x=[None],
+                y=[None],
+                mode="markers",
+                marker=dict(
+                    size=11,
+                    color=_ACCENT[gtype],
+                    symbol=_GRID_SYMBOL[gtype],
+                    line=dict(width=2, color=_ACCENT[gtype]),
+                ),
+                name=label,
+            )
+        )
+    legend_entries.append(
         go.Scatter(
             x=[None],
             y=[None],
             mode="lines",
-            line=dict(color="black", width=3, dash="solid"),
-            name="Branches",
-            showlegend=True,
-        )
-    )
-    edge_traces.append(
-        go.Scatter(
-            x=[None],
-            y=[None],
-            mode="lines",
-            line=dict(color="black", width=3, dash="dash"),
-            name="CP Branches",
-            showlegend=True,
+            line=dict(color=_ACCENT["cp"], width=2, dash="dot"),
+            name="Coupling branch (CP)",
         )
     )
 
-    # cp
-    node_trace_cp = go.Scatter(
-        x=node_cp_x,
-        y=node_cp_y,
-        mode="markers+text",
-        textposition="top center",
-        hoverinfo="text",
-        text=node_text_cp,
-        legendgroup="points",
-        showlegend=True,
-        name="CP",
-        marker=dict(
-            color=node_color_cp,
-            symbol="diamond",
-            size=12,
-            coloraxis=coloraxis_v,
-            line=dict(width=3, color="#616161"),
-        ),
-    )
-
-    # heat
-    node_trace_heat = go.Scatter(
-        x=node_x_heat,
-        y=node_y_heat,
-        mode="markers+text",
-        textposition="top center",
-        hoverinfo="text",
-        text=node_text_heat,
-        legendgroup="points",
-        showlegend=True,
-        name="Heat",
-        marker=dict(
-            color=node_color_heat,
-            symbol="pentagon",
-            size=12,
-            coloraxis=coloraxis_v,
-            line=dict(width=3, color="#d62728"),
-        ),
-    )
-    # power
-    node_trace_power = go.Scatter(
-        x=node_x_power,
-        y=node_y_power,
-        mode="markers+text",
-        textposition="top center",
-        hoverinfo="text",
-        text=node_text_power,
-        legendgroup="points",
-        showlegend=True,
-        name="Electricity",
-        marker=dict(
-            color=node_color_power,
-            symbol="square",
-            size=12,
-            coloraxis=coloraxis_v,
-            line=dict(width=3, color="#2ca02c"),
-        ),
-    )
-    # gas
-    node_trace_gas = go.Scatter(
-        x=node_x_gas,
-        y=node_y_gas,
-        mode="markers+text",
-        textposition="top center",
-        hoverinfo="text",
-        text=node_text_gas,
-        legendgroup="points",
-        showlegend=True,
-        name="Gas",
-        marker=dict(
-            color=node_color_gas,
-            symbol="triangle-up",
-            size=12,
-            coloraxis=coloraxis_v,
-            line=dict(width=3, color="#1f77b4"),
-        ),
+    # -----------------------------------------------------------------------
+    # Assemble – render order: edges → midpoints → glow → markers → legend
+    # -----------------------------------------------------------------------
+    all_traces = (
+        edge_traces + [midpoint_trace] + glow_traces + marker_traces + legend_entries
     )
 
     fig = go.Figure(
-        data=edge_traces
-        + (
-            [
-                go.Scatter(
-                    x=[None],
-                    y=[None],
-                    mode="markers",
-                    marker=dict(
-                        coloraxis=coloraxis_v,
-                        showscale=True,
-                    ),
-                    hoverinfo="none",
-                )
-            ]
-            if without_nodes
-            else [
-                node_trace_heat,
-                node_trace_power,
-                node_trace_gas,
-                node_trace_cp,
-            ]
-        ),
+        data=all_traces,
         layout=go.Layout(
-            title=title,
+            title=dict(
+                text=title or "Network",
+                font=dict(family=_FONT, size=18, color=_FONT_COLOR),
+                x=0.5,
+                xanchor="center",
+                y=0.97,
+            ),
+            paper_bgcolor=_BG,
+            plot_bgcolor=_BG,
             hovermode="closest",
-            xaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            yaxis=dict(showgrid=False, zeroline=False, showticklabels=False),
-            template=template,
+            hoverlabel=dict(
+                bgcolor=_PANEL,
+                bordercolor=_BORDER,
+                font=dict(family=_FONT, size=12, color=_FONT_COLOR),
+                namelength=-1,
+            ),
+            xaxis=dict(
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+                showline=False,
+            ),
+            yaxis=dict(
+                showgrid=False,
+                zeroline=False,
+                showticklabels=False,
+                showline=False,
+                scaleanchor="x",
+            ),
+            font=dict(family=_FONT, color=_FONT_COLOR),
+            autosize=True,
+            margin=dict(l=30, r=200, t=60, b=30),
+            legend=dict(
+                title=dict(
+                    text="Legend",
+                    font=dict(family=_FONT, size=12, color=_DIM_COLOR),
+                ),
+                x=1.02,
+                y=1.0,
+                xanchor="left",
+                yanchor="top",
+                bgcolor="rgba(246, 248, 250, 0.95)",
+                bordercolor=_BORDER,
+                borderwidth=1,
+                font=dict(family=_FONT, size=11, color=_FONT_COLOR),
+                itemsizing="constant",
+                tracegroupgap=6,
+            ),
         ),
     )
-    fig.update_layout(
-        height=400,
-        width=600,
-        margin={"l": 20, "b": 30, "r": 10, "t": 30},
-        xaxis_title="",
-        legend={"title": color_legend_text},
-        yaxis_title="",
-        title=title,
-        coloraxis_colorbar=dict(
-            title=color_legend_text,
-        ),
-    )
-    if color_df is not None:
-        fig.layout.coloraxis.showscale = True
-        fig.layout.coloraxis.colorscale = "Sunsetdark"
-        fig.layout.coloraxis.reversescale = False
-        fig.layout.coloraxis.colorbar.thickness = 15
-        fig.layout.coloraxis.colorbar.xanchor = "left"
-        fig.layout.coloraxis.colorbar.outlinewidth = 2
-        fig.layout.coloraxis.colorbar.outlinecolor = "#888"
-        fig.layout.coloraxis.cmin = min(
-            node_color_gas
-            + node_color_cp
-            + node_color_heat
-            + node_color_power
-            + color_edges
-        )
-        fig.layout.coloraxis.cmax = max_color_val
+
     if write_to is not None:
         fig.write_image(write_to)
+
     return fig

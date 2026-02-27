@@ -353,6 +353,7 @@ def test_small_p2g_network():
 
     result = ms.GEKKOSolver().solve(multi_energy_network)
     print(result)
+    print(result.summary())
     assert len(result.dataframes) == 11
     assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -2.5219502259)
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.05)

@@ -21,5 +21,5 @@ def test_visu_with_cigre_bench_net():
     net = create_mv_multi_cigre()
     result = run_energy_flow(net, solver=PyomoSolver())
 
-    plot_network(result.network, plot_node_characteristics=False, write_to="net.pdf")
+    plot_network(result.network, write_to="net.pdf")
     os.remove("net.pdf")

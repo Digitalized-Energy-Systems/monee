@@ -262,3 +262,18 @@ def test_simple_chp():
     assert math.isclose(
         result.dataframes["Junction"]["t_k"][1], 357.924809287306, abs_tol=0.001
     )
+
+
+def test_monee_visu():
+    import plotly.graph_objects as go
+
+    net_multi: mm.Network = create_monee_benchmark_net()
+    net_multi.apply_formulation(MISOCP_NETWORK_FORMULATION)
+
+    result = monee.run_energy_flow(net_multi, solver=PyomoSolver())
+
+    from monee.visualization import plot_result
+
+    fig = plot_result(result)
+    assert isinstance(fig, go.Figure)
+    assert len(fig.data) > 0
