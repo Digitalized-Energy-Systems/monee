@@ -194,8 +194,10 @@ subclass the appropriate model base class and implement ``equations``:
     pn = mm.Network(mm.PowerGrid(name="power", sn_mva=1))
 
     child_id = pn.child(FlexibleLoad(c=0.5))
-    pn.node(mm.Bus(base_kv=1), grid=mm.EL)                       # slack
-    pn.node(mm.Bus(base_kv=1), child_ids=[child_id], grid=mm.EL) # load bus
+    node_id = pn.node(mm.Bus(base_kv=1), grid=mm.EL)                       # slack
+    node_load = pn.node(mm.Bus(base_kv=1), child_ids=[child_id], grid=mm.EL) # load bus
+    pn.branch(mm.PowerLine(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1),
+           from_node_id=node_id, to_node_id=node_load, grid=mm.EL)
 
 Read the :doc:`concepts/data_model` concept page for the full model contract
 and how to implement custom branches and nodes.
