@@ -174,6 +174,7 @@ subclass the appropriate model base class and implement ``equations``:
 .. testcode::
 
     import monee.model as mm
+    from monee import run_energy_flow
 
     @mm.model
     class FlexibleLoad(mm.PowerLoad):
@@ -194,10 +195,36 @@ subclass the appropriate model base class and implement ``equations``:
     pn = mm.Network(mm.PowerGrid(name="power", sn_mva=1))
 
     child_id = pn.child(FlexibleLoad(c=0.5))
-    node_id = pn.node(mm.Bus(base_kv=1), grid=mm.EL)                       # slack
+    node_id = pn.node(mm.Bus(base_kv=1), child_ids=[pn.child(mm.ExtPowerGrid(p_mw=1, q_mvar=1))], grid=mm.EL)                       # slack
     node_load = pn.node(mm.Bus(base_kv=1), child_ids=[child_id], grid=mm.EL) # load bus
     pn.branch(mm.PowerLine(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1),
            from_node_id=node_id, to_node_id=node_load, grid=mm.EL)
+    print(run_energy_flow(pn))
+
+.. testoutput::
+
+    SolverResult
+
+      Bus  (2 instances)
+      ────────────────────────────────────────────────────────────────────
+       id  base_kv  vm_pu  vm_pu_squared  va_radians  va_degree      p_mw     q_mvar
+        0        1      1              1   1.887e-05          0 -0.003774 -1.424e-07
+        1        1      1              1  -1.887e-05  -0.001081  0.003773          0
+
+      FlexibleLoad  (1 instance)
+      ────────────────────────────────────────────────────────────────────
+       id  regulation     p_mw  q_mvar  node_id
+        0           1 0.003773       0        1
+
+      ExtPowerGrid  (1 instance)
+      ────────────────────────────────────────────────────────────────────
+       id  regulation      p_mw     q_mvar  vm_pu  va_degree  node_id
+        1           1 -0.003774 -1.424e-07      1          0        0
+
+      PowerLine  (1 instance)
+      ────────────────────────────────────────────────────────────────────
+             id  tap  shift  br_r  br_x  g_fr  b_fr  g_to  b_to  max_i_ka  backup  on_off  p_from_mw  q_from_mvar  i_from_ka  loading_from_percent   p_to_mw  q_to_mvar   i_to_ka  loading_to_percent  length_m  r_ohm_per_m  x_ohm_per_m  parallel
+      (0, 1, 0)    1      0  0.01  0.01     0     0     0     0      3.19   False       1   0.003774    1.424e-07  8.222e-06             2.577e-06 -0.003773          0 8.221e-06           2.577e-06       100       0.0001       0.0001         1
 
 Read the :doc:`concepts/data_model` concept page for the full model contract
 and how to implement custom branches and nodes.

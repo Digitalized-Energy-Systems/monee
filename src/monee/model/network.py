@@ -658,6 +658,8 @@ class Network:
         to_node = self.node_by_id_or_create(
             to_node_id, auto_node_creator=auto_node_creator, auto_grid_key=auto_grid_key
         )
+        if grid is not None:
+            grid = self._or_default(grid)
         branch = Branch(
             model,
             from_node_id,
