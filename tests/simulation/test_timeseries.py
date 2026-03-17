@@ -385,10 +385,10 @@ class _RecordingHook(StepHook):
         self.pre_calls = []
         self.post_calls = []
 
-    def pre_run(self, net, base_net, step, step_state):
+    def pre_run(self, net, step, step_state):
         self.pre_calls.append((step, type(step_state).__name__))
 
-    def post_run(self, net, base_net, step, step_state, step_result):
+    def post_run(self, net, step, step_state, step_result, base_net):
         self.post_calls.append((step, step_result.failed))
 
 
@@ -410,7 +410,7 @@ def test_callable_hook_called_post_step():
     td.add_child_series(net.childs[1].id, "p_mw", [0.5, 0.8])
 
     post_args = []
-    run(net, td, step_hooks=[lambda nc, bn, s: post_args.append(s)])
+    run(net, td, step_hooks=[lambda nc, s, *_: post_args.append(s)])
 
     assert post_args == [0, 1]
 
@@ -423,7 +423,7 @@ def test_step_hook_post_receives_step_result():
     received = []
 
     class _ResultHook(StepHook):
-        def post_run(self, net, base_net, step, step_state, step_result):
+        def post_run(self, net, step, step_state, step_result, base_net):
             received.append(step_result)
 
     run(net, td, step_hooks=[_ResultHook()])
@@ -497,7 +497,7 @@ def test_tracked_var_extracted_into_step_state():
     state_snapshots = []
 
     class _StateCapture(StepHook):
-        def post_run(self, net, base_net, step, step_state, step_result):
+        def post_run(self, net, step, step_state, step_result, base_net):
             val = step_state.get(load.id, "p_mw")
             state_snapshots.append(val)
 

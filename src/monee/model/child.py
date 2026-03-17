@@ -86,11 +86,30 @@ class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
         q_mvar (float): Initial reactive power exchange in Mvar.
         vm_pu (float): Voltage magnitude setpoint in per-unit. Defaults to 1.0.
         va_degree (float): Voltage angle setpoint in degrees. Defaults to 0.0.
+        max_import_mw (float | None): Maximum power that can be drawn from the
+            external grid (positive direction).  ``None`` = unlimited.
+        max_export_mw (float | None): Maximum power that can be fed back into
+            the external grid (positive magnitude; internally stored as a lower
+            bound ``-max_export_mw``).  ``None`` = unlimited.
     """
 
-    def __init__(self, p_mw, q_mvar, vm_pu=1, va_degree=0, **kwargs) -> None:
+    def __init__(
+        self,
+        p_mw,
+        q_mvar,
+        vm_pu=1,
+        va_degree=0,
+        max_import_mw=None,
+        max_export_mw=None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
-        self.p_mw = Var(p_mw, name="ext_grid_p_mw")
+        self.p_mw = Var(
+            p_mw,
+            min=None if max_import_mw is None else -max_import_mw,
+            max=max_export_mw,
+            name="ext_grid_p_mw",
+        )
         self.q_mvar = Var(q_mvar, name="ext_grid_q_mvar")
         self.vm_pu = vm_pu
         self.va_degree = va_degree
@@ -162,11 +181,30 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
             (source), positive = consumption (sink). Defaults to -1.
         pressure_pu (float): Junction pressure setpoint in per-unit. Defaults to 1.0.
         t_k (float): Supply temperature setpoint in Kelvin. Defaults to 356 K.
+        max_import_kgs (float | None): Maximum mass flow the external grid can
+            inject into the network (kg/s, positive magnitude; stored as lower
+            bound ``-max_import_kgs``).  ``None`` = unlimited.
+        max_export_kgs (float | None): Maximum mass flow the external grid can
+            absorb from the network (kg/s; stored as upper bound).
+            ``None`` = unlimited.
     """
 
-    def __init__(self, mass_flow=-1, pressure_pu=1, t_k=356, **kwargs) -> None:
+    def __init__(
+        self,
+        mass_flow=-1,
+        pressure_pu=1,
+        t_k=356,
+        max_import_kgs=None,
+        max_export_kgs=None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = Var(mass_flow, name="ext_grid_mass_flow")
+        self.mass_flow = Var(
+            mass_flow,
+            min=None if max_import_kgs is None else -max_import_kgs,
+            max=max_export_kgs,
+            name="ext_grid_mass_flow",
+        )
         self.pressure_pu = pressure_pu
         self.t_k = t_k
 

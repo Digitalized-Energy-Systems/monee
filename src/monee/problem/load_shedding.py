@@ -17,7 +17,12 @@ from monee.model.child import (
 )
 from monee.model.core import Var
 from monee.model.grid import GasGrid, WaterGrid
-from monee.model.multi import CHPControlNode, PowerToGas, PowerToHeat
+from monee.model.multi import (
+    CHPControlNode,
+    PowerToGas,
+    PowerToHeat,
+    PowerToHeatControlNode,
+)
 from monee.model.node import Bus, Junction
 from monee.problem.core import (
     AttributeParameter,
@@ -81,6 +86,8 @@ def retrieve_power_uniform(model):
             model.mass_flow * 3.6 * HHV,
         )
     elif isinstance(model, CHPControlNode):
+        return (0, 0)
+    elif isinstance(model, PowerToHeatControlNode):
         return (0, 0)
     elif isinstance(model, PowerToHeat):
         return (0, 0)

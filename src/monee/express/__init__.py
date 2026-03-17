@@ -518,6 +518,8 @@ def create_ext_power_grid(
     q_mvar=0,
     vm_pu=1,
     va_degree=0,
+    max_import_mw=None,
+    max_export_mw=None,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -535,6 +537,10 @@ def create_ext_power_grid(
         q_mvar (float, optional): Initial reactive power exchange guess in Mvar. Defaults to 0.
         vm_pu (float, optional): Voltage magnitude setpoint in per-unit. Defaults to 1.0.
         va_degree (float, optional): Voltage angle setpoint in degrees. Defaults to 0.0.
+        max_import_mw (float | None, optional): Maximum power drawn from the external
+            grid in MW.  ``None`` = unlimited (default).
+        max_export_mw (float | None, optional): Maximum power fed back to the external
+            grid in MW.  ``None`` = unlimited (default).
         constraints (list, optional): Constraint callables.
         overwrite_id: Custom identifier.
         name (str, optional): Human-readable name.
@@ -545,7 +551,15 @@ def create_ext_power_grid(
     """
     return create_el_child(
         network,
-        mm.ExtPowerGrid(p_mw, q_mvar, vm_pu, va_degree, **kwargs),
+        mm.ExtPowerGrid(
+            p_mw,
+            q_mvar,
+            vm_pu,
+            va_degree,
+            max_import_mw=max_import_mw,
+            max_export_mw=max_export_mw,
+            **kwargs,
+        ),
         node_id=node_id,
         constraints=constraints,
         overwrite_id=overwrite_id,
@@ -560,6 +574,8 @@ def create_ext_hydr_grid(
     pressure_pu=1,
     t_k=356,
     grid_key=mm.GAS_KEY,
+    max_import_kgs=None,
+    max_export_kgs=None,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -580,6 +596,10 @@ def create_ext_hydr_grid(
         grid_key (str, optional): Carrier key — ``mm.GAS_KEY`` or ``mm.WATER_KEY``.
             Prefer the carrier-specific shortcuts :func:`create_gas_ext_grid` and
             :func:`create_water_ext_grid`. Defaults to ``mm.GAS_KEY``.
+        max_import_kgs (float | None, optional): Maximum mass flow the external grid
+            can inject into the network (kg/s).  ``None`` = unlimited (default).
+        max_export_kgs (float | None, optional): Maximum mass flow the external grid
+            can absorb from the network (kg/s).  ``None`` = unlimited (default).
         constraints (list, optional): Constraint callables.
         overwrite_id: Custom identifier.
         name (str, optional): Human-readable name.
@@ -613,7 +633,14 @@ def create_ext_hydr_grid(
             )
     """
     return network.child_to(
-        mm.ExtHydrGrid(mass_flow=mass_flow, pressure_pu=pressure_pu, t_k=t_k, **kwargs),
+        mm.ExtHydrGrid(
+            mass_flow=mass_flow,
+            pressure_pu=pressure_pu,
+            t_k=t_k,
+            max_import_kgs=max_import_kgs,
+            max_export_kgs=max_export_kgs,
+            **kwargs,
+        ),
         node_id=node_id,
         constraints=constraints,
         overwrite_id=overwrite_id,

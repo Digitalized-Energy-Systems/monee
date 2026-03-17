@@ -29,6 +29,7 @@ from .core import (
     ignore_compound,
     ignore_node,
     inject_vars,
+    mark_ignored_components,
     remove_cps,
     withdraw_vars,
 )
@@ -149,9 +150,6 @@ class GEKKOSolver(SolverInterface):
         m.solver_options = DEFAULT_SOLVER_OPTIONS
         network = input_network.copy()
 
-        if optimization_problem is not None:
-            optimization_problem._apply(network)
-
         # Phase 1: add Var placeholders for all NetworkConstraint extensions
         for ext in network.extensions:
             ext.prepare(network)
@@ -164,9 +162,17 @@ class GEKKOSolver(SolverInterface):
             None,
         )
 
+        # Compute ignored_nodes BEFORE _apply() so that controllable filters
+        # (e.g. controllable_demands) honouring component.ignored correctly
+        # exclude disconnected components.
         ignored_nodes = set()
         if optimization_problem is None or exclude_unconnected_nodes:
             ignored_nodes = find_ignored_nodes(network, islanding_config)
+            if ignored_nodes:
+                mark_ignored_components(network, ignored_nodes)
+
+        if optimization_problem is not None:
+            optimization_problem._apply(network)
 
         nodes = network.nodes
         for node in nodes:

@@ -115,8 +115,8 @@ def test_two_pipes_gas_network():
 
     print(result)
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2)
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999756.15406)
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][0], 999997.97441)
+    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999887.91473)
+    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][0], 999998.1367)
     assert len(result.dataframes) == 5
 
 
@@ -126,7 +126,7 @@ def test_two_pipes_line_gas_network():
 
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2)
     assert math.isclose(
-        result.dataframes["Junction"]["pressure_pa"][2], 999991.59354, abs_tol=0.001
+        result.dataframes["Junction"]["pressure_pa"][2], 999992.2388, abs_tol=0.001
     )
     assert len(result.dataframes) == 4
 
@@ -137,6 +137,6 @@ def test_branching_gas_network():
 
     print(result)
     assert math.isclose(
-        result.dataframes["Junction"]["pressure_pa"][2], 999998.71024, abs_tol=0.01
+        result.dataframes["Junction"]["pressure_pa"][2], 999998.8892, abs_tol=0.01
     )
     assert len(result.dataframes) == 5

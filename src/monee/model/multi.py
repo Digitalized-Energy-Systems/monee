@@ -264,7 +264,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
             mass_flow_capacity=1.2,
             efficiency_power=0.35,
             efficiency_heat=0.5,
-            hhv=42.5e6,
+            hhv=11.8,
             q_mvar=0,
             regulation=1
         )
@@ -274,7 +274,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         mass_flow_capacity: Maximum or setpoint mass flow of fuel (e.g., gas) supplied to the CHP unit.
         efficiency_power: Electrical efficiency (fraction, 0 < value ≤ 1).
         efficiency_heat: Thermal efficiency (fraction, 0 < value ≤ 1).
-        hhv: Higher heating value of the fuel (J/kg).
+        hhv: Higher heating value of the fuel (kWh/kg).
         q_mvar (optional): Reactive power setpoint for the generator. Defaults to 0.
         regulation (optional): Regulation factor for operational flexibility. Defaults to 1.
         **kwargs: Additional keyword arguments for parent class initialization.

@@ -95,18 +95,70 @@ def swamee_jain(reynolds_var, diameter_m, roughness, log_func):
     return f
 
 
+def churchill_friction(Re, D, eps):
+    Re = max(Re, 1.0)
+    A = (2.457 * math.log(1.0 / ((7.0 / Re) ** 0.9 + 0.27 * eps / D))) ** 16
+    B = (37530.0 / Re) ** 16
+    return 8.0 * ((8.0 / Re) ** 12 + 1.0 / (A + B) ** 1.5) ** (1.0 / 12.0)
+
+
+def filter_near_linear(xs, ys, rtol=1e-6):
+    if len(xs) <= 2:
+        return xs, ys
+
+    keep_x = [xs[0]]
+    keep_y = [ys[0]]
+
+    prev_slope = (ys[1] - ys[0]) / (xs[1] - xs[0])
+
+    for i in range(1, len(xs) - 1):
+        slope = (ys[i + 1] - ys[i]) / (xs[i + 1] - xs[i])
+
+        if abs(slope - prev_slope) > rtol * max(1.0, abs(prev_slope)):
+            keep_x.append(xs[i])
+            keep_y.append(ys[i])
+            prev_slope = slope
+
+    keep_x.append(xs[-1])
+    keep_y.append(ys[-1])
+
+    return keep_x, keep_y
+
+
+def friction_value(Re, D, eps):
+    if Re < 2300:
+        return 64.0 / Re
+    return swamee_jain(Re, D, eps, math.log10)
+
+
+def logspace(a, b, n):
+    la = math.log10(a)
+    lb = math.log10(b)
+    return [10 ** (la + i * (lb - la) / (n - 1)) for i in range(n)]
+
+
 def piecewise_eq_friction(model, pwl):
-    f_pts = []
-    for r in REY_BINS:
-        # -> mass flow is zero -> therefore pressure drop is zero independent of the friction
-        if r < 2000:
-            f_pts.append(64.0 / (r))
-        else:
-            f_pts.append(swamee_jain(r, model.diameter_m, model.roughness, math.log10))
+    D = model.diameter_m
+    eps = model.roughness
+
+    xs = []
+
+    # intentionally coarse below 2000
+    xs += logspace(10.0, 2000.0, 8)
+
+    # modest resolution in transition
+    xs += logspace(2000.0, 4000.0, 8)[1:]
+
+    # more detail in turbulent regime
+    xs += logspace(4000.0, 1e7, 8)[1:]
+
+    ys = [friction_value(x, D, eps) for x in xs]
+
+    xs, ys = filter_near_linear(xs, ys, rtol=1e-7)
 
     pwl.piecewise_eq(
         y=model.friction,
         x=model.reynolds,
-        xs=REY_BINS,
-        ys=f_pts,
+        xs=xs,
+        ys=ys,
     )

@@ -105,7 +105,7 @@ class GasGrid(Grid):
         molar_mass (float): Molar mass of the gas (kg/mol).
         gas_temperature (float): Operating temperature of the gas (K).
         dynamic_visc (float): Dynamic viscosity of the gas (Pa·s).
-        higher_heating_value (float): Higher heating value of the gas (J/kg).
+        higher_heating_value (float): Higher heating value of the gas (kWh/kg).
         universal_gas_constant (float): Universal gas constant (J/(mol·K)).
         t_k (float): Absolute temperature in Kelvin for calculations.
         t_ref (float): Reference temperature in Kelvin.

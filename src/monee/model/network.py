@@ -838,6 +838,12 @@ class Network:
             result_str += "\n"
         return result_str
 
+    def __repr__(self):
+        return self.as_dataframe_dict_str()
+
+    def __str__(self):
+        return self.as_dataframe_dict_str()
+
     def statistics(self):
         """
         No docstring provided.

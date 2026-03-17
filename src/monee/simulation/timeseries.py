@@ -722,7 +722,6 @@ class StepHook(ABC):
     Both callbacks receive:
 
     - *net*: the current-step network copy (timeseries data already applied).
-    - *base_net*: the original unmodified base network.
     - *step*: zero-based step index.
     - *step_state*: ``StepState`` carrying inter-step solved values (readable
       and writable).
@@ -735,7 +734,6 @@ class StepHook(ABC):
 
     def pre_run(
         self,
-        net: Network,
         base_net: Network,
         step: int,
         step_state: StepState,
@@ -745,10 +743,10 @@ class StepHook(ABC):
     def post_run(
         self,
         net: Network,
-        base_net: Network,
         step: int,
         step_state: StepState,
         step_result: StepResult,
+        base_net: Network,
     ) -> None:
         """Called after the step's solve (whether it succeeded or failed)."""
 
@@ -780,8 +778,8 @@ def run(
             series length.
         step_hooks: Hooks called before and after each step.  Items may be
             ``StepHook`` subclasses or plain callables
-            ``(net_copy, base_net, step) -> None`` called in the post-step
-            position.
+            ``(net_copy, step, step_state, step_result) -> None`` called in
+            the post-step position.
         solver: Solver instance.  If ``None``, the default GEKKO solver is
             used.
         optimization_problem: Optional optimization problem passed to the
@@ -822,12 +820,12 @@ def run(
     step_state = StepState()
 
     for step in range(steps):
-        net_copy = net.copy()
-        timeseries_data.apply_to_network(net_copy, step)
-
         for hook in step_hooks:
             if isinstance(hook, StepHook):
-                hook.pre_run(net_copy, net, step, step_state)
+                hook.pre_run(net, step, step_state)
+
+        net_copy = net.copy()
+        timeseries_data.apply_to_network(net_copy, step)
 
         if solve_flag:
             try:
@@ -851,9 +849,9 @@ def run(
 
         for hook in step_hooks:
             if isinstance(hook, StepHook):
-                hook.post_run(net_copy, net, step, step_state, sr)
+                hook.post_run(net_copy, step, step_state, sr, net)
             else:
-                hook(net_copy, net, step)
+                hook(net_copy, step, step_state, sr, net)
 
         if progress_callback is not None:
             progress_callback(step, steps)

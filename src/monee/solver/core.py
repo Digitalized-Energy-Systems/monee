@@ -383,6 +383,29 @@ def inject_nans(target: GenericModel):
                 key,
                 Var(float("nan"), max=value.max, min=value.min, name=value.name),
             )
+    # Ignored (disconnected) components receive no power: reflect this in regulation.
+    if hasattr(target, "regulation") and not isinstance(target.regulation, Var):
+        target.regulation = 0.0
+
+
+def mark_ignored_components(network, ignored_nodes):
+    """Pre-mark component.ignored for all components in ignored nodes/branches/compounds.
+
+    Call this *before* ``optimization_problem._apply()`` so that controllable
+    filters that check ``component.ignored`` (e.g. ``controllable_demands``)
+    correctly exclude disconnected components.
+    """
+    for branch in network.branches:
+        if ignore_branch(branch, network, ignored_nodes):
+            branch.ignored = True
+    for node in network.nodes:
+        if ignore_node(node, network, ignored_nodes):
+            node.ignored = True
+            for child in network.childs_by_ids(node.child_ids):
+                child.ignored = True
+    for compound in network.compounds:
+        if ignore_compound(compound, ignored_nodes):
+            compound.ignored = True
 
 
 def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
