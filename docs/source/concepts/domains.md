@@ -81,9 +81,23 @@ where the **hydraulic resistance** *R*\_m is:
 
 $$R_m = f \cdot \frac{L}{D} \cdot \frac{1}{2 \rho A^2}$$
 
-with *f* the friction factor (laminar approximation *f* = 64 / Re), *L*
-the pipe length, *D* the inner diameter, *ρ* the fluid density, and *A*
-the cross-sectional area.
+with *f* the Darcy friction factor, *L* the pipe length, *D* the inner
+diameter, *ρ* the fluid density, and *A* the cross-sectional area.
+
+The friction factor is a **piecewise-linear function of the Reynolds number**
+built at network construction time. Three regions are covered with
+logarithmically-spaced breakpoints:
+
+| Region | Reynolds range | Formula |
+|---|---|---|
+| Laminar | Re < 2 300 | *f* = 64 / Re |
+| Transition | 2 300 – 4 000 | Swamee–Jain (continuous) |
+| Turbulent | 4 000 – 10⁷ | Swamee–Jain |
+
+Redundant collinear breakpoints are removed automatically so the solver
+receives the smallest PWL table that meets the accuracy target.
+The Reynolds number itself is a decision variable bounded by the pipe's
+physical operating range.
 
 ## Temperature propagation
 

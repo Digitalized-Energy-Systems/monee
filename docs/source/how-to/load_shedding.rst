@@ -90,7 +90,18 @@ different bounds — use
         debug=False,
     )
 
-    result = run_energy_flow_optimization(net, problem)
+    result = run_energy_flow_optimization(
+        net, problem, exclude_unconnected_nodes=True
+    )
+
+.. note::
+
+   Pass ``exclude_unconnected_nodes=True`` when the network may contain buses
+   or junctions that are topologically disconnected (e.g. because a line is
+   deactivated).  Without this flag such nodes are included in the solve,
+   which can cause infeasibility.  With it, disconnected components are
+   automatically excluded and their ``regulation`` is reported as ``0.0``
+   (fully shed) in the result.
 
 Key parameters of ``create_load_shedding_optimization_problem``:
 

@@ -1,65 +1,219 @@
 <p align="center">
-
-![logo](docs/source/_static/monee-logo.drawio.svg)
-
+  <img src="docs/source/_static/monee-logo.drawio.svg" width="220" alt="monee"/>
 </p>
 
-[PyPi](https://pypi.org/project/monee/) | [Docs](https://monee.readthedocs.io)
+<p align="center">
+  <strong>Modular Network-based Energy Grid Optimization</strong><br>
+  Steady-state simulation and optimal energy flow for coupled electricity, gas, and heat networks
+</p>
 
-![lifecycle](https://img.shields.io/badge/lifecycle-maturing-blue.svg)
-[![MIT License](https://img.shields.io/badge/license-MIT-green.svg)](https://github.com/Digitalized-Energy-Systems/monee/blob/development/LICENSE)
-[![Test mango-python](https://github.com/Digitalized-Energy-Systems/monee/actions/workflows/test-monee.yml/badge.svg)](https://github.com/Digitalized-Energy-Systems/monee/actions/workflows/test-monee.yml)
-[![codecov](https://codecov.io/gh/Digitalized-Energy-Systems/monee/graph/badge.svg?token=KSBSBQGNBZ)](https://codecov.io/gh/Digitalized-Energy-Systems/monee)
-[![Quality Gate Status](https://sonarcloud.io/api/project_badges/measure?project=Digitalized-Energy-Systems_monee&metric=alert_status)](https://sonarcloud.io/summary/new_code?id=Digitalized-Energy-Systems_monee)
+<p align="center">
+  <a href="https://pypi.org/project/monee/"><img src="https://img.shields.io/pypi/v/monee?color=blue" alt="PyPI"/></a>
+  <a href="https://monee.readthedocs.io"><img src="https://img.shields.io/badge/docs-readthedocs-blue" alt="Docs"/></a>
+  <img src="https://img.shields.io/badge/lifecycle-maturing-blue.svg" alt="lifecycle"/>
+  <a href="https://github.com/Digitalized-Energy-Systems/monee/blob/development/LICENSE"><img src="https://img.shields.io/badge/license-MIT-green.svg" alt="MIT License"/></a>
+  <a href="https://github.com/Digitalized-Energy-Systems/monee/actions/workflows/test-monee.yml"><img src="https://github.com/Digitalized-Energy-Systems/monee/actions/workflows/test-monee.yml/badge.svg" alt="Tests"/></a>
+  <a href="https://codecov.io/gh/Digitalized-Energy-Systems/monee"><img src="https://codecov.io/gh/Digitalized-Energy-Systems/monee/graph/badge.svg?token=KSBSBQGNBZ" alt="Coverage"/></a>
+  <a href="https://sonarcloud.io/summary/new_code?id=Digitalized-Energy-Systems_monee"><img src="https://sonarcloud.io/api/project_badges/measure?project=Digitalized-Energy-Systems_monee&metric=alert_status" alt="Quality Gate"/></a>
+</p>
 
-The python project `monee` (a Modular Network-based Energy Grid Optimization) can be used to calculate the steady-state energy flow of coupled grids (electricity, water (heating), gas). It is also capable to flexibly formulate and solve optimal energy flow problems. For this `monee` currently uses [GEKKO](https://gekko.readthedocs.io/en/latest/) to solve these problems (further integrations are planned).
+---
 
-Further, there are unique key aspects of monee such as:
-* Timeseries simulation
-* Native support of multi-energy components as P2H/CHP/P2G
-* Integration of networkx as main internal datastructure, this enables easy appliance of graph-based approaches.
-* Modular component definitions
-* Importing of MATPOWER networks
-* Restricted import of [pandapower](pandapower.org) and therefore [simbench](simbench.de) networks.
+**monee** is a Python framework for steady-state simulation and optimal energy flow of **multi-energy systems (MES)**. It models electricity, gas, and district-heat networks in a single unified directed graph, couples them via standard conversion units (CHP, P2H, P2G, G2P), and exposes the coupled system to two solver back-ends. The framework is designed for research workflows that require flexible problem formulation, reproducible benchmarks, and straightforward integration with external optimisers.
 
-# Installation
+## Capabilities
 
-The `monee` framework is hosted on pypi, as such you can install it with:
+**Physical modelling**
+- AC power flow (full nonlinear or MISOCP relaxation)
+- Weymouth gas flow (*p*² formulation, Swamee–Jain friction)
+- Darcy–Weisbach hydraulic flow with piecewise-linear friction factor and temperature propagation
+- Coupling components: CHP, P2H (heat pump / electric boiler), P2G, G2P, G2H
+
+**Optimisation**
+- Optimal energy flow via GEKKO (IPOPT) or Pyomo (HiGHS, Gurobi, GLPK, CBC)
+- MISOCP relaxation for convex AC OPF
+- Built-in minimum-curtailment (load shedding) formulation with per-carrier bounds
+- Capacity limits on all external grid connections (`max_import` / `max_export`)
+- Custom objectives and constraints through a composable problem API
+
+**Simulation**
+- Sequential multi-step timeseries simulation with time-varying profiles
+- Ramp constraints and inter-step state tracking
+- Per-step hooks for custom logic
+
+**Interoperability**
+- Import from MATPOWER, pandapower, and SimBench
+- NetworkX as the internal graph structure
+- Typed result DataFrames, one row per component
+
+---
+
+## Installation
 
 ```bash
 pip install monee
 ```
 
-# Examples
+The default GEKKO solver (IPOPT) is bundled. For MILP/MIQCP problems, install a Pyomo-compatible solver:
 
-## Creating a network (express API)
+```bash
+pip install highspy   # HiGHS — open source, recommended
+pip install gurobipy  # Gurobi — commercial, free academic licence available
+```
+
+---
+
+## Quick start
+
+Build a coupled electricity and district-heat network and run an energy-flow calculation:
 
 ```python
 from monee import mx, run_energy_flow
 
-# create multi-grid container the monee.Network
 net = mx.create_multi_energy_network()
 
-# electricity grid
+# Electricity grid
 bus_0 = mx.create_bus(net)
 bus_1 = mx.create_bus(net)
-
-mx.create_line(net, bus_0, bus_1, 100, r_ohm_per_m=0.00007, x_ohm_per_m=0.00007)
+mx.create_line(net, bus_0, bus_1, length_m=100,
+               r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
 mx.create_ext_power_grid(net, bus_0)
-mx.create_power_load(net, bus_1, 0.1, 0)
+mx.create_power_load(net, bus_1, p_mw=0.1, q_mvar=0.0)
 
-# water-based district heating grid
-junc_0 = mx.create_water_junction(net)
-junc_1 = mx.create_water_junction(net)
-junc_2 = mx.create_water_junction(net)
+# District heating loop
+j_supply = mx.create_water_junction(net)
+j_mid    = mx.create_water_junction(net)
+j_return = mx.create_water_junction(net)
+mx.create_ext_hydr_grid(net, j_supply)
+mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.12, length_m=100)
+mx.create_sink(net, j_return, mass_flow=1.0)
 
-mx.create_ext_hydr_grid(net, junc_0)
-mx.create_water_pipe(net, junc_0, junc_1, diameter_m=0.12, length_m=100)
-mx.create_sink(net, junc_2, mass_flow=1)
+# Coupling: bus_1 drives a heat pump that feeds the heating loop
+mx.create_p2h(net, bus_1, j_mid, j_return,
+              heat_energy_w=100_000, diameter_m=0.1, efficiency=0.9)
 
-# creating connection between el and water grid
-mx.create_p2h(net, bus_1, junc_1, junc_2, heat_energy_w=100_000, diameter_m=0.1, efficiency=0.9)
-
-# execute an energy flow calculating the energy flow for the whole MES
 result = run_energy_flow(net)
+print(result.get("Bus")[["vm_pu", "va_degree"]])
+print(result.get("WaterPipe")[["mass_flow"]])
 ```
+
+---
+
+## Optimal energy flow and load shedding
+
+Solve minimum-curtailment problems with per-carrier operational bounds:
+
+```python
+from monee import run_energy_flow_optimization, PyomoSolver
+from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.problem import create_load_shedding_optimization_problem
+
+net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+
+problem = create_load_shedding_optimization_problem(
+    bounds_el=(0.9, 1.1),    # voltage bounds (pu)
+    bounds_heat=(0.9, 1.1),  # temperature bounds (pu)
+    bounds_gas=(0.9, 1.1),   # pressure bounds (pu)
+    use_ext_grid_bounds=False,
+)
+
+result = run_energy_flow_optimization(
+    net, problem,
+    solver=PyomoSolver(), solver_name="highs",
+    exclude_unconnected_nodes=True,
+)
+
+# regulation == 1.0: fully served; regulation == 0.0: completely shed
+print(result.dataframes["PowerLoad"][["regulation"]])
+```
+
+---
+
+## Formulations
+
+monee separates the **physical equations** from the **network topology** through a `NetworkFormulation` layer. A formulation maps each model type (node, branch, child, compound) to a corresponding set of equations and — for optimisation — objective contributions. The active formulation is set on the network object and is picked up automatically by both solver back-ends:
+
+```python
+from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+
+net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+```
+
+Two built-in formulations ship with the library:
+
+| Formulation | Electricity | Gas | Heat | Solver requirement |
+|---|---|---|---|---|
+| `AC_NETWORK_FORMULATION` (default) | Nonlinear AC power flow | Weymouth (*p*²) | Darcy–Weisbach + temperature | NLP (IPOPT / GEKKO) |
+| `MISOCP_NETWORK_FORMULATION` | MISOCP relaxation (lifted voltages, SOC constraints) | Weymouth (*p*²) | Darcy–Weisbach + temperature | MIQCP (Gurobi, HiGHS) |
+
+Custom formulations are constructed by supplying per-type dictionaries to `NetworkFormulation`:
+
+```python
+from monee.model.formulation.core import NetworkFormulation, BranchFormulation, NodeFormulation
+from monee.model.branch import GasPipe
+from monee.model.node import Junction
+
+class MyGasPipeFormulation(BranchFormulation):
+    def equations(self, branch, grid, from_node, to_node, **kwargs):
+        # return solver-agnostic relational expressions
+        return [from_node.pressure - to_node.pressure == branch.resistance * branch.mass_flow]
+
+my_formulation = NetworkFormulation(
+    branch_type_to_formulations={(GasPipe, Junction): MyGasPipeFormulation()},
+)
+net.apply_formulation(my_formulation)
+```
+
+---
+
+## Extensibility
+
+Every layer of the framework is designed to be subclassed or replaced without modifying the library internals.
+
+**Custom components** — subclass `NodeModel`, `BranchModel`, `ChildModel`, or `CompoundModel` and register the model with `NetworkFormulation`. The solver infrastructure (variable injection, result extraction, timeseries state tracking) handles the new type automatically.
+
+**Custom objectives and constraints** — the optimisation problem API accepts arbitrary penalty terms and relational expressions alongside the built-in load-shedding objective:
+
+```python
+from monee.problem import OptimizationProblem
+
+class MinimiseCurtailmentWithCost(OptimizationProblem):
+    def objective(self, network, **kwargs):
+        # return any solver-agnostic scalar expression
+        return sum(
+            child.regulation * child.cost
+            for child in network.childs
+            if hasattr(child.model, "regulation")
+        )
+```
+
+**Network-level constraints** — implement `NetworkConstraint` (with `prepare` and `equations` methods) and attach it via `network.add_extension(constraint)`. The constraint participates in both variable injection and equation registration without any solver-specific glue code.
+
+---
+
+## Timeseries simulation
+
+```python
+from monee import run_timeseries, TimeseriesData
+import numpy as np
+
+td = TimeseriesData()
+td.add_child_series(load_id, "p_mw", np.linspace(0.5, 1.5, 96))
+
+ts_result = run_timeseries(net, td)
+# DataFrame indexed by timestep, columns by component ID
+print(ts_result.get_result_for("Bus", "vm_pu"))
+```
+
+---
+
+## Documentation
+
+Full documentation with tutorials, concept explanations, and API reference:
+**[monee.readthedocs.io](https://monee.readthedocs.io)**
+
+---
+
+## License
+
+MIT © [Digitalized Energy Systems](https://github.com/Digitalized-Energy-Systems)

@@ -61,6 +61,15 @@ Drive a multi-energy network through hundreds or thousands of timesteps with
 time-varying load profiles, ramp constraints, and rich result queries.
 :::
 
+:::{grid-item-card} Reference networks
+:link: reference_networks
+:link-type: doc
+:shadow: sm
+
+Load ready-made multi-energy test cases (urban district, industrial hub,
+regional MES) for benchmarking, tutorials, and quick experiments.
+:::
+
 ::::
 
 ```{toctree}
@@ -73,4 +82,5 @@ convert_from_pandapower
 use_pyomo_solver
 islanding
 timeseries
+reference_networks
 ```

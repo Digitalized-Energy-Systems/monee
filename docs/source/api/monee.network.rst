@@ -13,6 +13,15 @@ monee network
    :show-inheritance:
 
 
+Reference energy systems
+--------------------------
+
+.. automodule:: monee.network.res
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+
 monee generate net from simbench
 -----------------------------------
 
