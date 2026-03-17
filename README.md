@@ -131,37 +131,38 @@ print(result.dataframes["PowerLoad"][["regulation"]])
 
 ## Formulations
 
-monee separates the **physical equations** from the **network topology** through a `NetworkFormulation` layer. A formulation maps each model type (node, branch, child, compound) to a corresponding set of equations and — for optimisation — objective contributions. The active formulation is set on the network object and is picked up automatically by both solver back-ends:
+monee separates the **physical equations** from the **network topology** through a `NetworkFormulation` layer. Each formulation covers a **single energy domain** and maps the component types in that domain to a set of equations. Calling `apply_formulation()` overwrites the equations for only the component types included in that formulation, leaving all other domains untouched.
+
+Every new `Network` starts with three single-domain defaults:
+
+| Formulation constant | Domain | Equations |
+|---|---|---|
+| `AC_NETWORK_FORMULATION` | Electricity | Nonlinear AC power flow (voltage magnitude + angle) |
+| `NL_WEYMOUTH_NETWORK_FORMULATION` | Gas | Weymouth equation (*p*² formulation) |
+| `NL_DARCY_WEISBACH_NETWORK_FORMULATION` | Water / Heat | Darcy–Weisbach + temperature propagation |
+
+To use the convex MISOCP relaxation for electricity optimal power flow, apply it over the defaults — gas and heat equations remain unchanged:
 
 ```python
 from monee.model.formulation import MISOCP_NETWORK_FORMULATION
 
-net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+net.apply_formulation(MISOCP_NETWORK_FORMULATION)   # replaces electricity equations only
 ```
 
-Two built-in formulations ship with the library:
-
-| Formulation | Electricity | Gas | Heat | Solver requirement |
-|---|---|---|---|---|
-| `AC_NETWORK_FORMULATION` (default) | Nonlinear AC power flow | Weymouth (*p*²) | Darcy–Weisbach + temperature | NLP (IPOPT / GEKKO) |
-| `MISOCP_NETWORK_FORMULATION` | MISOCP relaxation (lifted voltages, SOC constraints) | Weymouth (*p*²) | Darcy–Weisbach + temperature | MIQCP (Gurobi, HiGHS) |
-
-Custom formulations are constructed by supplying per-type dictionaries to `NetworkFormulation`:
+Custom formulations follow the same pattern — subclass the appropriate base class and register it for the target component types:
 
 ```python
-from monee.model.formulation.core import NetworkFormulation, BranchFormulation, NodeFormulation
+from monee.model.formulation.core import BranchFormulation, NetworkFormulation
 from monee.model.branch import GasPipe
-from monee.model.node import Junction
 
 class MyGasPipeFormulation(BranchFormulation):
-    def equations(self, branch, grid, from_node, to_node, **kwargs):
-        # return solver-agnostic relational expressions
-        return [from_node.pressure - to_node.pressure == branch.resistance * branch.mass_flow]
+    def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
+        return [from_node_model.pressure_pu - to_node_model.pressure_pu
+                == branch.resistance * branch.mass_flow]
 
-my_formulation = NetworkFormulation(
-    branch_type_to_formulations={(GasPipe, Junction): MyGasPipeFormulation()},
-)
-net.apply_formulation(my_formulation)
+net.apply_formulation(NetworkFormulation(
+    branch_type_to_formulations={GasPipe: MyGasPipeFormulation()},
+))
 ```
 
 ---
