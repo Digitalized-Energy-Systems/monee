@@ -74,11 +74,11 @@ optimal power flow using the MISOCP relaxation and HiGHS:
     mx.create_power_load(net, bus_1, p_mw=0.1, q_mvar=0.0)
 
     # Switch to the MISOCP formulation
-    net.set_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
 
     # Solve with Pyomo + HiGHS
     result = PyomoSolver().solve(net, solver_name="highs")
-    print(result.objective_value)
+    print(result.objective)
 
 ----
 
@@ -94,14 +94,16 @@ the GEKKO solver:
     from monee.solver.pyo import PyomoSolver
 
     problem = mp.OptimizationProblem()
-    problem.controllable_demands((
-        "regulation",
-        mp.AttributeParameter(
-            min=lambda a, v: 0,
-            max=lambda a, v: 1,
-            val=lambda a, v: 1,
-        ),
-    ))
+    problem.controllable_demands([
+        (
+            "regulation",
+            mp.AttributeParameter(
+                min=lambda a, v: 0,
+                max=lambda a, v: 1,
+                val=lambda a, v: 1,
+            ),
+        )
+    ])
 
     result = PyomoSolver().solve(
         net,

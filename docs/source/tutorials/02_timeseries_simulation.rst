@@ -153,7 +153,7 @@ falls below 0.97 pu — a simple under-voltage alert.
     class VoltageMonitor(StepHook):
         """Warn when the residential bus voltage dips below the threshold."""
 
-        def post_run(self, net, base_net, step, step_state, step_result):
+        def post_run(self, net, step, step_state, step_result, base_net):
             if step_result.failed:
                 return
             bus_df = step_result.result.get(mm.Bus)
@@ -171,10 +171,10 @@ falls below 0.97 pu — a simple under-voltage alert.
 .. note::
 
    ``post_run`` receives the **solved** ``net`` (with variable values), the
-   unmodified ``base_net``, the step index, the inter-step ``step_state``, and
-   the :class:`~monee.simulation.StepResult` for this step.  Check
-   ``step_result.failed`` before reading results if ``on_step_error='skip'`` is
-   set on the run.
+   step index, the inter-step ``step_state``, the
+   :class:`~monee.simulation.StepResult` for this step, and finally the
+   unmodified ``base_net``.  Check ``step_result.failed`` before reading
+   results if ``on_step_error='skip'`` is set on the run.
 
 ----
 

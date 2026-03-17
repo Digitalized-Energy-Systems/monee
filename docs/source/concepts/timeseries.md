@@ -187,22 +187,22 @@ keyword arguments (grid, network, …).
 
 ```
 ─── step k ──────────────────────────────────────────────────────────────────
+ → StepHook.pre_run(net, k, step_state)       # net = base network, before copy
  net_copy = net.copy()
  timeseries_data.apply_to_network(net_copy, k)
- → StepHook.pre_run(net_copy, net, k, step_state)
  result = solve(net_copy, ..., step_state=step_state)
  _extract_step_state(step_state, result.network)
- → StepHook.post_run(net_copy, net, k, step_state, step_result)
+ → StepHook.post_run(net_copy, k, step_state, step_result, net)
 ─────────────────────────────────────────────────────────────────────────────
 ```
 
-`pre_run` sees the network after timeseries data has been applied but before
-the solve.  `post_run` sees both the solved network copy and the `StepResult`
-(including the `SolverResult` with its dataframes).  Both callbacks receive the
-live `StepState`, so a hook can read or write inter-step values.
+`pre_run` receives the base network before the per-step copy is made.
+`post_run` receives the solved step copy (`net_copy`) and the original base
+network as the last argument.  Both callbacks receive the live `StepState`, so
+a hook can read or write inter-step values.
 
-Plain callables registered as hooks are invoked only in the `post_run`
-position with the signature `(net_copy, base_net, step)`.
+Plain callables are also supported at the `post_run` position with the
+signature `(net_copy, step, step_state, step_result, base_net)`.
 
 ---
 

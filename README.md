@@ -172,19 +172,41 @@ Every layer of the framework is designed to be subclassed or replaced without mo
 
 **Custom components** — subclass `NodeModel`, `BranchModel`, `ChildModel`, or `CompoundModel` and register the model with `NetworkFormulation`. The solver infrastructure (variable injection, result extraction, timeseries state tracking) handles the new type automatically.
 
-**Custom objectives and constraints** — the optimisation problem API accepts arbitrary penalty terms and relational expressions alongside the built-in load-shedding objective:
+**Custom objectives and constraints** — the optimisation problem is assembled with a composable builder API. `Objectives` and `Constraints` objects are attached to an `OptimizationProblem`; the solver evaluates them without any solver-specific glue:
 
 ```python
-from monee.problem import OptimizationProblem
+import monee.model as mm
+from monee import run_energy_flow_optimization
+from monee.problem import AttributeParameter, Constraints, Objectives, OptimizationProblem
 
-class MinimiseCurtailmentWithCost(OptimizationProblem):
-    def objective(self, network, **kwargs):
-        # return any solver-agnostic scalar expression
-        return sum(
-            child.regulation * child.cost
-            for child in network.childs
-            if hasattr(child.model, "regulation")
-        )
+problem = OptimizationProblem()
+
+# Make regulation ∈ [0, 1] a solver decision variable for each demand
+problem.controllable_demands([
+    ("regulation", AttributeParameter(
+        min=lambda attr, val: 0,
+        max=lambda attr, val: 1,
+        val=lambda attr, val: 1,
+    ))
+])
+
+# Objective: minimise curtailment cost weighted by load priority
+objectives = Objectives()
+objectives.select(
+    lambda model: isinstance(model, mm.PowerLoad) and hasattr(model, "_priority")
+).data(
+    lambda model: (1 - model.regulation) * model.p_mw * model._priority
+).calculate(
+    lambda model_to_data: sum(model_to_data.values())
+)
+problem.objectives = objectives
+
+# Constraint: cap the substation import
+constraints = Constraints()
+constraints.select_types(mm.ExtPowerGrid).equation(lambda model: model.p_mw <= 0.6)
+problem.constraints = constraints
+
+result = run_energy_flow_optimization(net, problem)
 ```
 
 **Network-level constraints** — implement `NetworkConstraint` (with `prepare` and `equations` methods) and attach it via `network.add_extension(constraint)`. The constraint participates in both variable injection and equation registration without any solver-specific glue code.

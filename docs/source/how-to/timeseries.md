@@ -211,12 +211,12 @@ Hooks let you inspect or modify the network copy before and after each solve.
 from monee.simulation import StepHook
 
 class MyHook(StepHook):
-    def pre_run(self, net, base_net, step, step_state):
-        # Called after timeseries data is applied, before the solve.
+    def pre_run(self, net, step, step_state):
+        # Called before the step's solve (net is the base network, unmodified copy).
         print(f"Step {step}: starting solve")
 
-    def post_run(self, net, base_net, step, step_state, step_result):
-        # Called after the solve (even on failure).
+    def post_run(self, net, step, step_state, step_result, base_net):
+        # Called after the solve (even on failure). net is the solved step copy.
         if step_result.failed:
             print(f"Step {step}: FAILED — {step_result.error}")
 
@@ -226,7 +226,7 @@ result = run_timeseries(net, td, step_hooks=[MyHook()])
 ### Callable hook (post-step only)
 
 ```python
-def log_step(net_copy, base_net, step):
+def log_step(net_copy, step, step_state, step_result, base_net):
     print(f"Step {step} done")
 
 result = run_timeseries(net, td, step_hooks=[log_step])
