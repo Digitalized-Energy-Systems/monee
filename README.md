@@ -138,6 +138,7 @@ Every new `Network` starts with three single-domain defaults:
 | Formulation constant | Domain | Equations |
 |---|---|---|
 | `AC_NETWORK_FORMULATION` | Electricity | Nonlinear AC power flow (voltage magnitude + angle) |
+| `MISOCP_NETWORK_FORMULATION` | Electricity | MISOCP relaxation (lifted voltages, SOC constraints) |
 | `NL_WEYMOUTH_NETWORK_FORMULATION` | Gas | Weymouth equation (*p*² formulation) |
 | `NL_DARCY_WEISBACH_NETWORK_FORMULATION` | Water / Heat | Darcy–Weisbach + temperature propagation |
 
