@@ -486,8 +486,7 @@ def ignore_compound(compound, ignored_nodes):
     if any([value in ignored_nodes for value in compound.connected_to.values()]):
         if hasattr(compound.model, "set_active"):
             compound.model.set_active(False)
-        else:
-            ig = True
+        ig = True  # always ignore the compound when any connected node is isolated
     elif hasattr(compound.model, "set_active"):
         compound.model.set_active(True)
     return ig

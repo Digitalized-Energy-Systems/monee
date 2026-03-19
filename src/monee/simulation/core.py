@@ -11,6 +11,5 @@ def solve(
     """
     actual_solver = solver
     if actual_solver is None:
-        solver_impl_id = 1 if optimization_problem is None else 3
-        actual_solver = ms.GEKKOSolver(solver=solver_impl_id)
+        actual_solver = ms.GEKKOSolver()
     return actual_solver.solve(net, optimization_problem=optimization_problem, **kwargs)
