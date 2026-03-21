@@ -1,6 +1,7 @@
 import types
 
 import pyomo.environ as pyo
+from pyomo.opt import SolverStatus
 
 from monee.model import (
     Const,
@@ -236,7 +237,7 @@ class PyomoSolver(SolverInterface):
         for k, v in DEFAULT_SOLVER_OPTIONS.items():
             solver.options[k] = v
 
-        solver.solve(pm, tee=debug)
+        result = solver.solve(pm, tee=debug)
 
         # pull values back into your objects
         withdraw_vars(
@@ -246,7 +247,12 @@ class PyomoSolver(SolverInterface):
         # objective value
         obj_val = pyo.value(pm.obj)
 
-        return SolverResult(network, network.as_result_dataframe_dict(), obj_val)
+        return SolverResult(
+            network,
+            network.as_result_dataframe_dict(),
+            obj_val,
+            result.solver.status == SolverStatus.ok,
+        )
 
     # --------- Your original processing rewritten to Pyomo ---------
 

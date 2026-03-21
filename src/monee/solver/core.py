@@ -81,9 +81,13 @@ class SolverResult:
     network: Network
     dataframes: dict[str, pandas.DataFrame]
     objective: float
+    success: bool
 
     def summary(self):
         return repr(self)
+
+    def full(self):
+        return self.network.as_result_dataframe_dict_str()
 
     def get(self, model_type) -> pandas.DataFrame:
         """Return the result DataFrame for *model_type*.
@@ -486,7 +490,8 @@ def ignore_compound(compound, ignored_nodes):
     if any([value in ignored_nodes for value in compound.connected_to.values()]):
         if hasattr(compound.model, "set_active"):
             compound.model.set_active(False)
-        ig = True  # always ignore the compound when any connected node is isolated
+        else:
+            ig = True
     elif hasattr(compound.model, "set_active"):
         compound.model.set_active(True)
     return ig

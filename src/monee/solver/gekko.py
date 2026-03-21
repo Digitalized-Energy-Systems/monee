@@ -237,7 +237,10 @@ class GEKKOSolver(SolverInterface):
             GEKKOSolver.withdraw_gekko_vars_attr, nodes, branches, compounds, network
         )
         solver_result = SolverResult(
-            network, network.as_result_dataframe_dict(), m.options.OBJFCNVAL
+            network,
+            network.as_result_dataframe_dict(),
+            m.options.OBJFCNVAL,
+            m.options.APPSTATUS == 1,
         )
         return solver_result
 

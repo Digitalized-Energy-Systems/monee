@@ -824,6 +824,20 @@ class Network:
             dataframe_dict[result_type] = pandas.DataFrame(dict_list)
         return dataframe_dict
 
+    def as_result_dataframe_dict_str(self):
+        """
+        No docstring provided.
+        """
+        dataframes = self.as_result_dataframe_dict()
+        result_str = ""
+        for cls_str, dataframe in dataframes.items():
+            result_str += cls_str
+            result_str += "\n"
+            result_str += dataframe.to_string()
+            result_str += "\n"
+            result_str += "\n"
+        return result_str
+
     def as_dataframe_dict_str(self):
         """
         No docstring provided.

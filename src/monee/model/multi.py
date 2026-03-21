@@ -160,6 +160,9 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
+        # if SubHE is deactive ignore equations
+        if not [branch for branch in heat_from_branches if type(branch) is SubHE]:
+            return []
         return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
@@ -225,6 +228,9 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
+        # if SubHE is deactive ignore equations
+        if not [branch for branch in heat_from_branches if type(branch) is SubHE]:
+            return []
         return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
@@ -386,6 +392,9 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
+        # if SubHE is deactive ignore equations
+        if not [branch for branch in heat_from_branches if type(branch) is SubHE]:
+            return []
         return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
@@ -445,6 +454,18 @@ class CHP(MultiGridCompoundModel):
             else MutableFloat(q_mvar_setpoint)
         )
 
+    def set_active(self, activation_flag):
+        """
+        No docstring provided.
+        """
+        if activation_flag:
+            self._control_node.gas_kgps = self.mass_flow_setpoint
+            self._old_regulation = self._control_node.regulation
+            self._control_node.regulation = 0
+        else:
+            self._control_node.gas_kgps = 0
+            self._control_node.regulation = self._control_node.regulation
+
     def create(
         self,
         network: Network,
@@ -493,6 +514,15 @@ class GasToHeat(MultiGridCompoundModel):
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
         self.heat_energy_w = MutableFloat(-heat_energy_w)
+
+    def set_active(self, activation_flag):
+        """
+        No docstring provided.
+        """
+        if activation_flag:
+            self._control_node.heat_w = self.heat_energy_w
+        else:
+            self._control_node.heat_w = 0
 
     def create(
         self, network: Network, gas_node: Node, heat_node: Node, heat_return_node: Node
@@ -550,9 +580,9 @@ class PowerToHeat(MultiGridCompoundModel):
         No docstring provided.
         """
         if activation_flag:
-            self._control_node.heat_energy_w = self.heat_energy_w
+            self._control_node.heat_w = self.heat_energy_w
         else:
-            self._control_node.heat_energy_w = 0
+            self._control_node.heat_w = 0
 
     def create(
         self,

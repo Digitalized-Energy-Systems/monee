@@ -85,6 +85,7 @@ def create_urban_district_net() -> mm.Network:
     h5 = mx.create_water_junction(net, name="H5_sink")  # P2H heat_return_node
 
     mx.create_ext_hydr_grid(net, h0)
+    mx.create_sink(net, h2, mass_flow=0.091)  # return-side mass withdrawal
     mx.create_sink(net, h3, mass_flow=1.684)  # return-side mass withdrawal
     mx.create_sink(net, h5, mass_flow=0.191)  # return-side mass withdrawal
 
