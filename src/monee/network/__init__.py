@@ -5,7 +5,10 @@ from monee.network.mes import (
 )
 
 from monee.network.res import (
+    create_balanced_urban_mes_net,
+    create_balanced_urban_mes_timeseries,
     create_industrial_hub_net,
     create_regional_mes_net,
+    create_resilient_urban_mes_net,
     create_urban_district_net,
 )

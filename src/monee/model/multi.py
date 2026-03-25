@@ -229,7 +229,7 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
             heat_from_branches, heat_to_branches, [], None
         )
         # if SubHE is deactive ignore equations
-        if not [branch for branch in heat_from_branches if type(branch) is SubHE]:
+        if not [branch for branch in heat_to_branches if type(branch) is SubHE]:
             return []
         return [
             junction_mass_flow_balance(heat_eqs),
@@ -453,6 +453,7 @@ class CHP(MultiGridCompoundModel):
             if type(q_mvar_setpoint) is Var
             else MutableFloat(q_mvar_setpoint)
         )
+        self._old_regulation = self.regulation
 
     def set_active(self, activation_flag):
         """
@@ -460,11 +461,11 @@ class CHP(MultiGridCompoundModel):
         """
         if activation_flag:
             self._control_node.gas_kgps = self.mass_flow_setpoint
-            self._old_regulation = self._control_node.regulation
-            self._control_node.regulation = 0
+            self._control_node.regulation = self._old_regulation
         else:
+            self._old_regulation = self._control_node.regulation
             self._control_node.gas_kgps = 0
-            self._control_node.regulation = self._control_node.regulation
+            self._control_node.regulation = 0
 
     def create(
         self,
