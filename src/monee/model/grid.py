@@ -44,6 +44,7 @@ class PowerGrid(Grid):
     """
 
     sn_mva: float = 1
+    vm_pu_max: float = 1.5
 
 
 @model
