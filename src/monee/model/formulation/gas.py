@@ -3,9 +3,14 @@ from monee.model.grid import GasGrid
 from monee.model.node import Junction
 
 from .core import NetworkFormulation
-from .nonlinear.gas import NLWeymouthBranchFormulation, NLWeymouthNodeFormulation
+from .nonlinear.gas import (
+    NLWeymouthBranchFormulation,
+    NLWeymouthNodeFormulation,
+)
 
 NL_WEYMOUTH_NETWORK_FORMULATION = NetworkFormulation(
-    branch_type_to_formulations={GasPipe: NLWeymouthBranchFormulation()},
+    branch_type_to_formulations={
+        GasPipe: NLWeymouthBranchFormulation(),
+    },
     node_type_to_formulations={(Junction, GasGrid): NLWeymouthNodeFormulation()},
 )

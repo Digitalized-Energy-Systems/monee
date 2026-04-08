@@ -17,50 +17,27 @@ from .phys.nonlinear.ac import power_balance_equation
 
 
 class MutableFloat(float):
-    """
-    No docstring provided.
-    """
-
     def __init__(self, val):
         self._val = val
 
     def __int__(self):
-        """
-        No docstring provided.
-        """
         return self._val
 
     def __index__(self):
-        """
-        No docstring provided.
-        """
         return self._val
 
     def __str__(self):
-        """
-        No docstring provided.
-        """
         return str(self._val)
 
     def __repr__(self):
-        """
-        No docstring provided.
-        """
         return repr(self._val)
 
     def set(self, val):
-        """
-        No docstring provided.
-        """
         self._val = val
 
 
 @model
 class GenericTransferBranch(MultiGridBranchModel):
-    """
-    No docstring provided.
-    """
-
     def __init__(self, loss=0, **kwargs) -> None:
         super().__init__(**kwargs)
         self._mass_flow_pos = Var(1, min=0, name="mass_flow_pos")
@@ -73,21 +50,12 @@ class GenericTransferBranch(MultiGridBranchModel):
         self._loss = loss
 
     def loss_percent(self):
-        """
-        No docstring provided.
-        """
         return self._loss
 
     def is_cp(self):
-        """
-        No docstring provided.
-        """
         return False
 
     def init(self, grids):
-        """
-        No docstring provided.
-        """
         if type(grids) is WaterGrid or (type(grids) is dict and WaterGrid in grids):
             self.mass_flow_pos = self._mass_flow_pos
             self.mass_flow_neg = self._mass_flow_neg
@@ -118,10 +86,6 @@ class GenericTransferBranch(MultiGridBranchModel):
 
 @model
 class GasToHeatControlNode(MultiGridNodeModel, Junction):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self, heat_gen_w, efficiency_heat, hhv, regulation=1, **kwargs
     ) -> None:
@@ -139,9 +103,6 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
         self.pressure_pu = Var(1)
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
-        """
-        No docstring provided.
-        """
         heat_to_branches = [
             branch
             for branch in to_branch_models
@@ -184,10 +145,6 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
 
 @model
 class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self, load_p_mw, load_q_mvar, heat_energy_w, efficiency, **kwargs
     ) -> None:
@@ -205,9 +162,6 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         self.pressure_pu = Var(1, min=0, max=3, name="p_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
-        """
-        No docstring provided.
-        """
         heat_to_branches = [
             branch
             for branch in to_branch_models
@@ -423,10 +377,6 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
 
 @model
 class CHP(MultiGridCompoundModel):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         diameter_m: float,
@@ -456,9 +406,6 @@ class CHP(MultiGridCompoundModel):
         self._old_regulation = self.regulation
 
     def set_active(self, activation_flag):
-        """
-        No docstring provided.
-        """
         if activation_flag:
             self._control_node.gas_kgps = self.mass_flow_setpoint
             self._control_node.regulation = self._old_regulation
@@ -475,9 +422,6 @@ class CHP(MultiGridCompoundModel):
         heat_return_node: Node,
         power_node: Node,
     ):
-        """
-        No docstring provided.
-        """
         self._gas_grid = gas_node.grid
         self._control_node = CHPControlNode(
             self.mass_flow,
@@ -504,10 +448,6 @@ class CHP(MultiGridCompoundModel):
 
 @model
 class GasToHeat(MultiGridCompoundModel):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self, heat_energy_w, diameter_m, temperature_ext_k, efficiency
     ) -> None:
@@ -517,9 +457,6 @@ class GasToHeat(MultiGridCompoundModel):
         self.heat_energy_w = MutableFloat(-heat_energy_w)
 
     def set_active(self, activation_flag):
-        """
-        No docstring provided.
-        """
         if activation_flag:
             self._control_node.heat_w = self.heat_energy_w
         else:
@@ -528,14 +465,12 @@ class GasToHeat(MultiGridCompoundModel):
     def create(
         self, network: Network, gas_node: Node, heat_node: Node, heat_return_node: Node
     ):
-        """
-        No docstring provided.
-        """
         self._gas_grid = gas_node.grid
+        self._control_node = GasToHeatControlNode(
+            self.heat_energy_w, self.efficiency, gas_node.grid.higher_heating_value
+        )
         node_id_control = network.node(
-            GasToHeatControlNode(
-                self.heat_energy_w, self.efficiency, gas_node.grid.higher_heating_value
-            ),
+            self._control_node,
             grid=[heat_node.grid, gas_node.grid],
             position=gas_node.position,
         )
@@ -551,10 +486,6 @@ class GasToHeat(MultiGridCompoundModel):
 
 @model
 class PowerToHeat(MultiGridCompoundModel):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         heat_energy_w,
@@ -577,9 +508,6 @@ class PowerToHeat(MultiGridCompoundModel):
         )
 
     def set_active(self, activation_flag):
-        """
-        No docstring provided.
-        """
         if activation_flag:
             self._control_node.heat_w = self.heat_energy_w
         else:
@@ -592,9 +520,6 @@ class PowerToHeat(MultiGridCompoundModel):
         heat_node: Node,
         heat_return_node: Node,
     ):
-        """
-        No docstring provided.
-        """
         self._control_node = PowerToHeatControlNode(
             self.load_p_mw, self.load_q_mvar, self.heat_energy_w, self.efficiency
         )
@@ -615,10 +540,6 @@ class PowerToHeat(MultiGridCompoundModel):
 
 @model
 class GasToPower(MultiGridBranchModel):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self, efficiency, p_mw_setpoint, q_mvar_setpoint=0, regulation=1
     ) -> None:
@@ -634,15 +555,9 @@ class GasToPower(MultiGridBranchModel):
         self.regulation = regulation
 
     def loss_percent(self):
-        """
-        No docstring provided.
-        """
         return 1 - self.efficiency
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
-        """
-        No docstring provided.
-        """
         return [
             self.p_to_mw == self.regulation * self.el_mw,
             -self.p_to_mw
@@ -655,10 +570,6 @@ class GasToPower(MultiGridBranchModel):
 
 @model
 class PowerToGas(MultiGridBranchModel):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self, efficiency, mass_flow_setpoint, consume_q_mvar_setpoint=0, regulation=1
     ) -> None:
@@ -674,15 +585,9 @@ class PowerToGas(MultiGridBranchModel):
         self.regulation = regulation
 
     def loss_percent(self):
-        """
-        No docstring provided.
-        """
         return 1 - self.efficiency
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
-        """
-        No docstring provided.
-        """
         return [
             self.to_mass_flow
             == -self.efficiency

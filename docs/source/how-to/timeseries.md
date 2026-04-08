@@ -1,192 +1,172 @@
 
 # Timeseries simulation
 
-This guide shows how to drive a multi-energy network through a sequence of
-timesteps — varying load profiles, generator setpoints, mass flows, and any
-other model attribute — and how to query the results.
+Drive a multi-energy network through a sequence of timesteps with time-varying
+profiles, ramp constraints, and step hooks.
 
-For background on the underlying architecture see
-{doc}`../concepts/timeseries`.
-
----
-
-## Prerequisites
-
-* A solved base network (run `run_energy_flow` once to check it converges).
-* One or more time series for component attributes (plain Python lists, pandas
-  `Series`, or a pandas `DataFrame`).
+For the architectural background see {doc}`../concepts/timeseries`.
 
 ---
 
 ## Quick start
 
-```python
-import monee as mn
+```{testcode}
 import monee.model as mm
 import monee.express as mx
 from monee.simulation import TimeseriesData, run_timeseries
 
 # 1. Build a simple two-bus power network
-net = mm.Network()
-bus_0 = mx.create_bus(net)
-bus_1 = mx.create_bus(net)
-mx.create_ext_power_grid(net, bus_0)
-load = mx.create_power_load(net, bus_1, p_mw=1.0, q_mvar=0.0, name="demand")
-mx.create_line(net, bus_0, bus_1, length_m=1000, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+net = mx.create_multi_energy_network()
+bus0 = mx.create_bus(net)
+bus1 = mx.create_bus(net)
+mx.create_ext_power_grid(net, bus0)
+mx.create_line(net, bus0, bus1,
+               length_m=1000, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+mx.create_power_load(net, bus1, p_mw=1.0, q_mvar=0.0, name="demand")
 
-# 2. Define time-varying load profile (24 hourly values)
+# 2. Define a 6-step load profile
 td = TimeseriesData()
-td.add_child_series_by_name("demand", "p_mw", [0.4, 0.5, 0.6, 0.8, 1.0, 1.2,
-                                                1.3, 1.1, 1.0, 0.9, 0.8, 0.7,
-                                                0.6, 0.7, 0.8, 1.0, 1.2, 1.3,
-                                                1.1, 0.9, 0.7, 0.6, 0.5, 0.4])
+td.add_child_series_by_name("demand", "p_mw",
+                             [0.4, 0.6, 1.0, 1.2, 0.9, 0.5])
 
-# 3. Run — steps inferred from series length
+# 3. Run
 result = run_timeseries(net, td)
-print(f"Simulated {len(result.raw)} steps, {len(result.failed_steps)} failures")
+print(f"{len(result.raw)} steps,  {len(result.failed_steps)} failures")
+```
+
+```{testoutput}
+6 steps,  0 failures
 ```
 
 ---
 
 ## Registering time series
 
-### By component id
+::::{tab-set}
 
-Use the integer id returned when you add a component to the network:
+:::{tab-item} By name
+Components added with a `name=` keyword can be referenced directly:
 
-```python
-td = TimeseriesData()
-td.add_child_series(load.id, "p_mw", profile)        # child (load, generator …)
-td.add_branch_series(pipe.id, "on_off", [1, 1, 0])   # branch
-td.add_compound_series(chp.id, "regulation", ramps)  # compound (CHP, P2H …)
-td.add_node_series(bus.id, "some_attr", values)       # node model attribute
+```{testcode}
+from monee.simulation import TimeseriesData
+
+td2 = TimeseriesData()
+td2.add_child_series_by_name("demand",    "p_mw",  [0.4, 0.8, 1.2])
+td2.add_branch_series_by_name("main_pipe","on_off", [1, 0, 1])
+td2.add_compound_series_by_name("boiler", "regulation", [1.0, 0.5, 1.0])
 ```
+:::
 
-### By name
+:::{tab-item} By id
+Use the integer id returned when the component was added:
 
-Components added with a `name` keyword can be referenced by that name:
+```{testcode}
+import monee.model as mm
+import monee.express as mx
+from monee.simulation import TimeseriesData
 
-```python
-mx.create_power_load(net, bus, p_mw=1.0, q_mvar=0, name="factory_load")
-mx.create_gas_pipe(net, j0, j1, diameter_m=0.5, length_m=500, name="main_pipe")
+net3 = mx.create_multi_energy_network()
+b0 = mx.create_bus(net3)
+b1 = mx.create_bus(net3)
+mx.create_ext_power_grid(net3, b0)
+mx.create_line(net3, b0, b1, length_m=500,
+               r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+ld = mx.create_power_load(net3, b1, p_mw=1.0, q_mvar=0.0)
 
-td.add_child_series_by_name("factory_load", "p_mw", values)
-td.add_branch_series_by_name("main_pipe", "on_off", [1, 0, 1])
-td.add_compound_series_by_name("boiler_1", "regulation", values)
+td3 = TimeseriesData()
+td3.add_child_series(ld, "p_mw", [0.5, 0.9, 1.3])
 ```
+:::
 
-### From a pandas DataFrame
-
-When your data lives in a DataFrame (one column per attribute, one row per
-timestep):
-
+:::{tab-item} From DataFrame
 ```python
-import pandas
+import pandas as pd
+from monee.simulation import TimeseriesData
 
-df = pandas.read_csv("load_profile.csv")   # columns: p_mw, q_mvar
-td = TimeseriesData.from_dataframe(df, component_type="child", component_id=load.id)
-
-# or by name
-td = TimeseriesData.from_dataframe(df, component_type="child", component_name="demand")
+df = pd.read_csv("load_profile.csv")   # columns: p_mw, q_mvar
+td = TimeseriesData.from_dataframe(
+    df, component_type="child", component_name="demand"
+)
 ```
-
 `component_type` is one of `'node'`, `'child'`, `'branch'`, or `'compound'`.
-Name-based lookup is not available for nodes.
+:::
 
-### Validation
+::::
 
-All registered series must have the same length.  A mismatch raises
-`ValueError` at registration time, not during the run:
+### Merging
 
-```python
-td.add_child_series(1, "p_mw", [1.0, 2.0, 3.0])
-td.add_child_series(2, "p_mw", [1.0, 2.0])       # ← ValueError immediately
+```{testcode}
+from monee.simulation import TimeseriesData
+
+td_a = TimeseriesData()
+td_a.add_child_series_by_name("demand", "p_mw", [0.4, 0.8])
+
+td_b = TimeseriesData()
+td_b.add_branch_series_by_name("main_pipe", "on_off", [1, 0])
+
+combined = td_a + td_b
+print(combined.length)
 ```
 
----
-
-## Step count
-
-By default `steps` is inferred from the registered series length:
-
-```python
-result = run_timeseries(net, td)         # steps = len(series)
-result = run_timeseries(net, td, steps=8)  # explicit override — must not exceed series length
+```{testoutput}
+2
 ```
 
----
-
-## Combining TimeseriesData objects
-
-```python
-td_loads  = TimeseriesData()
-td_loads.add_child_series(load_id, "p_mw", load_profile)
-
-td_pipes  = TimeseriesData()
-td_pipes.add_branch_series(pipe_id, "on_off", switch_profile)
-
-td_combined = td_loads + td_pipes
-```
-
-`extend()` merges a second `TimeseriesData` into an existing one.  For
-duplicate (component, attribute) pairs the **existing value wins**.
+For duplicate `(component, attribute)` pairs the **left operand wins**.
 
 ---
 
 ## Querying results
 
-### By model class
+::::{tab-set}
 
+:::{tab-item} By model class
 ```python
-df = result.get_result_for(mm.PowerLoad, "p_mw")
-# DataFrame: rows = timesteps, columns = positional component index
+# DataFrame: rows = successful steps, columns = component ids
+vm = result.get_result_for(mm.Bus, "vm_pu")
+p  = result.get_result_for(mm.PowerLoad, "p_mw")
 ```
+:::
 
-### By component id
-
+:::{tab-item} By component id
 ```python
+# pandas Series: one value per successful step
 s = result.get_result_for_id(load.id, "p_mw")
-# pandas Series: index = step number (or datetime), values = p_mw per step
 ```
+:::
 
-### Datetime index
-
-Pass a `pd.DatetimeIndex` to `run_timeseries` to label results with real
-timestamps:
-
+:::{tab-item} Datetime index
 ```python
 import pandas as pd
 
-idx = pd.date_range("2024-01-01", periods=24, freq="h")
+idx = pd.date_range("2024-01-01", periods=6, freq="h")
 result = run_timeseries(net, td, datetime_index=idx)
-
-df = result.get_result_for(mm.PowerLoad, "p_mw")
-print(df.index)   # DatetimeIndex(['2024-01-01 00:00', '2024-01-01 01:00', ...])
+vm = result.get_result_for(mm.Bus, "vm_pu")
+print(vm.index)   # DatetimeIndex
 ```
+:::
+
+::::
 
 ---
 
 ## Error handling
 
-By default the run raises immediately on any step failure.  Set
-`on_step_error='skip'` to record the failure and continue:
+By default the runner raises immediately on any step failure.  Set
+`on_step_error='skip'` to record failures and continue:
 
 ```python
 result = run_timeseries(net, td, on_step_error="skip")
 
-print("Failed steps:", result.failed_steps)   # e.g. [3, 17]
+print("Failed steps:", result.failed_steps)
 for sr in result.step_results:
     if sr.failed:
         print(f"  step {sr.step}: {sr.error}")
 ```
 
-The `StepResult` dataclass exposes `step`, `result`, `failed`, and `error`.
-
 ---
 
 ## Progress reporting
-
-For long runs pass a callback that receives `(current_step, total_steps)`:
 
 ```python
 from tqdm import tqdm
@@ -203,122 +183,165 @@ bar.close()
 
 ## Step hooks
 
-Hooks let you inspect or modify the network copy before and after each solve.
-
-### Class-based hook
-
-```python
+```{testcode}
 from monee.simulation import StepHook
 
-class MyHook(StepHook):
+class LogHook(StepHook):
     def pre_run(self, net, step, step_state):
-        # Called before the step's solve (net is the base network, unmodified copy).
-        print(f"Step {step}: starting solve")
+        pass   # called before each solve
 
-    def post_run(self, net, step, step_state, step_result, base_net):
-        # Called after the solve (even on failure). net is the solved step copy.
+    def post_run(self, net, step, step_state, step_result):
         if step_result.failed:
             print(f"Step {step}: FAILED — {step_result.error}")
-
-result = run_timeseries(net, td, step_hooks=[MyHook()])
 ```
 
-### Callable hook (post-step only)
+Plain callables work as post-step hooks too:
 
-```python
-def log_step(net_copy, step, step_state, step_result, base_net):
-    print(f"Step {step} done")
-
-result = run_timeseries(net, td, step_hooks=[log_step])
+```{testcode}
+def log_step(net_copy, step, step_state, step_result):
+    pass   # net_copy is the solved network for this step
 ```
 
-Hooks also receive the `StepState` object, which holds solved values from the
-previous timestep — useful for building custom inter-step logic inside a hook.
+```{note}
+Both `pre_run` and `post_run` receive the live `StepState` — hooks can read
+or write inter-step values directly.
+```
 
 ---
 
 ## Inter-step coupling: ramp constraints
 
-Use `tracked` in place of `Var` to automatically carry a variable's solved
-value into the next timestep.  Pair it with `inter_step_equations` to impose
-constraints that link consecutive steps.
+Implement `inter_temporal_equations` to add constraints that link consecutive
+steps.  The previous step's solved values are provided via
+`temporal_state.get(component_id, attribute)`:
 
-```python
-from monee.model import tracked
-from monee.model.child import PowerGenerator
+```{testcode}
+from monee.model.core import Var, model
+from monee.model.child import ChildModel
 
-class RampGenerator(PowerGenerator):
+@model
+class RampGenerator(ChildModel):
     """Generator with up/down ramp limits between consecutive timesteps."""
 
     def __init__(self, p_mw, ramp_up, ramp_down, **kwargs):
-        super().__init__(p_mw, **kwargs)
-        self.p_mw = tracked(p_mw, min=0.0, max=500.0)  # track across steps
+        super().__init__(**kwargs)
+        self.p_mw      = Var(p_mw, min=0.0, max=500.0, name="p_mw")
+        self.q_mvar    = 0.0
         self.ramp_up   = ramp_up
         self.ramp_down = ramp_down
 
-    def inter_step_equations(self, prev_state, component_id, **kwargs):
-        prev_p = prev_state.get(component_id, "p_mw")
+    def inter_temporal_equations(self, temporal_state, component_id, **kwargs):
+        prev_p = temporal_state.get(component_id, "p_mw")
         if prev_p is None:
-            return []   # first timestep — no previous value yet
+            return []   # first step — no history yet
         return [
             self.p_mw - prev_p <= self.ramp_up,
             prev_p - self.p_mw <= self.ramp_down,
         ]
 ```
 
-Attaching it to the network:
-
-```python
-gen = RampGenerator(p_mw=100.0, ramp_up=20.0, ramp_down=30.0, q_mvar=0)
-mx.create_el_child(net, gen, node_id=bus.id, name="ramp_gen")
-
-result = run_timeseries(net, td)
+```{tip}
+`inter_temporal_equations` is called in **both** timeseries and multi-period
+solves.  The same model works in both contexts without any changes — see
+{doc}`multi_period` for the multi-period workflow.
 ```
-
-The framework automatically:
-1. Detects `tracked` Vars at injection time and records them.
-2. Extracts their solved values after each step into `StepState`.
-3. Passes `StepState` to `inter_step_equations` before the next solve.
-
-No `inter_step_vars()` method is needed when using `tracked`.
 
 ---
 
-## Multi-energy example
+## Thermal and gas storage extensions
 
-```python
-# Gas network with varying demand
-td_gas = TimeseriesData()
-td_gas.add_child_series_by_name("industrial_sink", "mass_flow",
-                                 [0.05, 0.08, 0.12, 0.10, 0.06])
+For network-wide time coupling — thermal inertia in junctions, gas stored in
+pipelines — attach a {doc}`../concepts/network_aspects` extension before the
+first run:
 
-# Coupled electricity network with varying load
-td_el = TimeseriesData()
-td_el.add_child_series_by_name("factory_load", "p_mw",
-                                [0.4, 0.6, 0.9, 0.7, 0.5])
+```{testcode}
+import monee.model as mm
+import monee.express as mx
+from monee.model import LumpedThermalCapacitance, GasLinepack
 
-result = run_timeseries(mes_net, td_gas + td_el)
+net_ext = mx.create_multi_energy_network()
 
-# Retrieve gas flow across all steps
-gas_s = result.get_result_for_id(sink_id, "mass_flow")
-# Retrieve electricity consumption
-el_df = result.get_result_for(mm.PowerLoad, "p_mw")
+# Water side
+jw0 = mx.create_water_junction(net_ext)
+jw1 = mx.create_water_junction(net_ext)
+mx.create_ext_hydr_grid(net_ext, jw0)
+mx.create_water_pipe(net_ext, jw0, jw1, diameter_m=0.3, length_m=500)
+
+# Gas side
+jg0 = mx.create_gas_junction(net_ext)
+jg1 = mx.create_gas_junction(net_ext)
+mx.create_gas_ext_grid(net_ext, jg0)
+pipe_ext_id = mx.create_gas_pipe(net_ext, jg0, jg1,
+                                 diameter_m=0.4, length_m=20_000)
+
+net_ext.add_extension(LumpedThermalCapacitance())
+net_ext.add_extension(GasLinepack(overrides={
+    pipe_ext_id: dict(linepack_kg_initial=1_000, linepack_kg_max=5_000)
+}))
 ```
+
+See {doc}`../concepts/temporal_extensions` for step-by-step walkthroughs.
 
 ---
 
 ## API reference
 
+### TimeseriesData
+
 | Symbol | Description |
 |---|---|
-| `TimeseriesData` | Container for per-component time series |
+| `TimeseriesData()` | Container for per-component time series |
+| `td.add_child_series(id, attr, values)` | Register series by component id |
+| `td.add_child_series_by_name(name, attr, values)` | Register series by component name |
+| `td.add_branch_series(id, attr, values)` | Register series for a branch |
+| `td.add_branch_series_by_name(name, attr, values)` | Register series for a branch by name |
+| `td.add_node_series(id, attr, values)` | Register series for a node |
+| `td.add_compound_series(id, attr, values)` | Register series for a compound |
+| `td.add_compound_series_by_name(name, attr, values)` | Register series for a compound by name |
 | `TimeseriesData.from_dataframe(df, type, id/name)` | Build from a pandas DataFrame |
-| `TimeseriesData.length` | Inferred step count from registered series |
+| `td.length` | Inferred step count |
+| `td_a + td_b` | Merge two `TimeseriesData` objects (left wins on conflicts) |
+| `td.extend(other)` | In-place merge |
+
+### Running and results
+
+| Symbol | Description |
+|---|---|
 | `run_timeseries(net, td, ...)` | Execute the timeseries simulation |
-| `TimeseriesResult.get_result_for(ModelClass, attr)` | DataFrame: steps × components |
-| `TimeseriesResult.get_result_for_id(id, attr)` | Series: step values for one component |
-| `TimeseriesResult.failed_steps` | List of step indices that failed |
-| `TimeseriesResult.step_results` | List of `StepResult` objects (all steps) |
-| `StepResult` | Dataclass: `step`, `result`, `failed`, `error` |
+| `result.get_result_for(ModelClass, attr)` | DataFrame (steps × component ids) |
+| `result.get_result_for_id(id, attr)` | Series: one value per successful step |
+| `result[component_id]` | DataFrame of all attributes for one component |
+| `result.failed_steps` | List of step indices that failed to converge |
+| `result.step_results` | List of `StepResult` objects (incl. failed steps) |
+| `result.raw` | List of successful `SolverResult` objects (backward compat) |
+
+### StepResult
+
+| Attribute | Description |
+|---|---|
+| `step` | Zero-based step index |
+| `result` | `SolverResult` for this step, or `None` if failed/skipped |
+| `failed` | `True` if the solve raised an exception |
+| `skipped` | `True` if the solve was not attempted |
+| `error` | The exception that caused the failure, or `None` |
+
+### StepHook
+
+| Symbol | Description |
+|---|---|
 | `StepHook` | Base class for pre/post step callbacks |
-| `tracked` | `Var` subclass that participates in inter-step state |
+| `hook.pre_run(net, step, step_state)` | Called before each step's solve |
+| `hook.post_run(net, step, step_state, step_result)` | Called after each step's solve |
+
+Plain callables `(net, step, step_state, step_result) -> None` are accepted as
+post-step hooks without subclassing.
+
+### StepState
+
+`StepState` is passed to `inter_temporal_equations` and to hooks.
+
+| Symbol | Description |
+|---|---|
+| `state.get(component_id, attr, step=-1)` | Float from a prior solved step (`-1` = most recent) |
+| `state.has(component_id, attr)` | `True` if a non-`None` value is available |
+| `state.dt_h` | Duration of the current timestep in hours |

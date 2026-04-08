@@ -12,16 +12,10 @@ from .native import native_dict_to_network
 
 
 def as_controllable(start_value):
-    """
-    No docstring provided.
-    """
     return {"value": start_value, "max": None, "min": None}
 
 
 def number_of_lines_with_from_to(from_node, to_node, branch_list):
-    """
-    No docstring provided.
-    """
     number = 0
     for branch in branch_list:
         branch_id = branch["id"]
@@ -31,9 +25,6 @@ def number_of_lines_with_from_to(from_node, to_node, branch_list):
 
 
 def read_matpower_data(mat_data):
-    """
-    No docstring provided.
-    """
     mpc = mat_data["mpc"]
     base_mva = mpc["baseMVA"][0][0][0]
     bus_mat = mpc["bus"][0][0]
@@ -62,9 +53,6 @@ def read_matpower_data(mat_data):
 
 
 def fill_branch_dict(branch_mat, branch_dict_list):
-    """
-    No docstring provided.
-    """
     for i in range(len(branch_mat)):
         branch_dict = {}
         branch_row = branch_mat[i]
@@ -94,9 +82,6 @@ def fill_branch_dict(branch_mat, branch_dict_list):
 
 
 def fill_child_dict(gen_mat, node_dict_list, child_dict_list):
-    """
-    No docstring provided.
-    """
     for i in range(len(gen_mat)):
         child_dict = {}
         gen_row = gen_mat[i]
@@ -119,9 +104,6 @@ def fill_child_dict(gen_mat, node_dict_list, child_dict_list):
 
 
 def fill_node_dict(bus_mat, node_dict_list, child_dict_list):
-    """
-    No docstring provided.
-    """
     for i in range(len(bus_mat)):
         node_dict = {}
         bus_row = bus_mat[i]
@@ -147,7 +129,4 @@ def fill_node_dict(bus_mat, node_dict_list, child_dict_list):
 
 
 def read_matpower_case(file):
-    """
-    No docstring provided.
-    """
     return read_matpower_data(scipy.io.loadmat(file))

@@ -4,11 +4,11 @@ from monee.problem import OptimizationProblem
 
 
 def solve(
-    net: Network, optimization_problem: OptimizationProblem, solver=None, **kwargs
+    net: Network,
+    optimization_problem: OptimizationProblem = None,
+    solver=None,
+    **kwargs,
 ):
-    """
-    No docstring provided.
-    """
     actual_solver = solver
     if actual_solver is None:
         actual_solver = ms.GEKKOSolver()

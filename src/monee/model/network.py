@@ -23,17 +23,13 @@ from .formulation import (
     NL_DARCY_WEISBACH_NETWORK_FORMULATION,
     NL_WEYMOUTH_NETWORK_FORMULATION,
     Formulation,
-    NetworkConstraint,
+    NetworkAspect,
     NetworkFormulation,
 )
 from .grid import create_gas_grid, create_power_grid, create_water_grid
 
 
 class Network:
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         active_grid=None,
@@ -51,7 +47,7 @@ class Network:
         self._compound_dict = {}
         self._constraints = []
         self._objectives = []
-        self._extensions: list[NetworkConstraint] = []
+        self._extensions: list[NetworkAspect] = []
         self.__blacklist = []
         self.__collected_components = []
         self.__force_blacklist = False
@@ -87,35 +83,20 @@ class Network:
                     component.formulation = formulation
 
     def set_default_grid(self, key, grid):
-        """
-        No docstring provided.
-        """
         self._default_grid_models[key] = grid
 
     def activate_grid(self, grid):
-        """
-        No docstring provided.
-        """
         self.__current_grid = grid
 
     @property
     def grids(self):
-        """
-        No docstring provided.
-        """
         return list(set([node.grid for node in self.nodes]))
 
     @property
     def graph(self):
-        """
-        No docstring provided.
-        """
         return self._network_internal
 
     def _set_active(self, cls, id, active):
-        """
-        No docstring provided.
-        """
         if cls == Node:
             self.node_by_id(id).active = active
         elif cls == Branch:
@@ -136,45 +117,24 @@ class Network:
             self.child_by_id(id).active = active
 
     def deactivate_by_id(self, cls, id):
-        """
-        No docstring provided.
-        """
         self._set_active(cls, id, False)
 
     def activate_by_id(self, cls, id):
-        """
-        No docstring provided.
-        """
         self._set_active(cls, id, True)
 
     def activate(self, component):
-        """
-        No docstring provided.
-        """
         self.activate_by_id(type(component), component.id)
 
     def deactivate(self, component):
-        """
-        No docstring provided.
-        """
         self.deactivate_by_id(type(component), component.id)
 
     def all_models(self):
-        """
-        No docstring provided.
-        """
         return [model_container.model for model_container in self.all_components()]
 
     def all_components(self):
-        """
-        No docstring provided.
-        """
         return self.childs + self.compounds + self.branches + self.nodes
 
     def all_models_with_grid(self):
-        """
-        No docstring provided.
-        """
         model_container_list = self.childs + self.compounds + self.branches + self.nodes
         return [
             (
@@ -186,64 +146,40 @@ class Network:
 
     @property
     def constraints(self):
-        """
-        No docstring provided.
-        """
         return self._constraints
 
     @property
     def objectives(self):
-        """
-        No docstring provided.
-        """
         return self._objectives
 
     @property
-    def extensions(self) -> list[NetworkConstraint]:
-        """Solver-agnostic network-level constraint extensions."""
+    def extensions(self) -> list[NetworkAspect]:
+        """Solver-agnostic network-level extensions."""
         return self._extensions
 
-    def add_extension(self, ext: NetworkConstraint) -> None:
-        """Register a NetworkConstraint extension on this network."""
+    def add_extension(self, ext: NetworkAspect) -> None:
+        """Register a NetworkAspect extension on this network."""
         self._extensions.append(ext)
 
     @property
     def compounds(self) -> list[Compound]:
-        """
-        No docstring provided.
-        """
         return list(self._compound_dict.values())
 
     @property
     def childs(self) -> list[Child]:
-        """
-        No docstring provided.
-        """
         return list(self._child_dict.values())
 
     @property
     def cps(self) -> list[GenericModel]:
-        """
-        No docstring provided.
-        """
         return [comp for comp in self.all_components() if comp.model.is_cp()]
 
     def has_child(self, child_id):
-        """
-        No docstring provided.
-        """
         return child_id in self._child_dict
 
     def remove_child(self, child_id):
-        """
-        No docstring provided.
-        """
         del self._child_dict[child_id]
 
     def compound_of_node(self, node_id):
-        """
-        No docstring provided.
-        """
         for compound in self.compounds:
             for subcomponent in compound.subcomponents:
                 if isinstance(subcomponent, Node):
@@ -252,22 +188,13 @@ class Network:
         return None
 
     def remove_node(self, node_id):
-        """
-        No docstring provided.
-        """
         self._network_internal.remove_node(node_id)
 
     def remove_branch(self, branch_id):
-        """
-        No docstring provided.
-        """
         branch: Branch = self.branch_by_id(branch_id)
         self.remove_branch_between(branch.from_node_id, branch.to_node_id)
 
     def remove_compound(self, compound_id):
-        """
-        No docstring provided.
-        """
         compound: Compound = self.compound_by_id(compound_id)
         del self._compound_dict[compound_id]
         for subcomponent in compound.subcomponents:
@@ -278,17 +205,11 @@ class Network:
                     self.remove_branch(subcomponent.id)
 
     def remove_branch_between(self, node_one, node_two, key=0):
-        """
-        No docstring provided.
-        """
         self._network_internal.remove_edge(node_one, node_two, key)
         self.node_by_id(node_one).remove_branch((node_one, node_two, key))
         self.node_by_id(node_two).remove_branch((node_one, node_two, key))
 
     def move_branch(self, branch_id, new_from_id, new_to_id):
-        """
-        No docstring provided.
-        """
         branch: Branch = self.branch_by_id(branch_id)
         self.remove_branch_between(branch_id[0], branch_id[1], key=branch_id[2])
         return self.branch(
@@ -301,52 +222,28 @@ class Network:
         )
 
     def child_by_id(self, child_id):
-        """
-        No docstring provided.
-        """
         return self._child_dict[child_id]
 
     def childs_by_type(self, cls):
-        """
-        No docstring provided.
-        """
         return [child for child in self.childs if type(child.model) is cls]
 
     def compound_by_id(self, compound_id):
-        """
-        No docstring provided.
-        """
         return self._compound_dict[compound_id]
 
     def compounds_by_type(self, cls):
-        """
-        No docstring provided.
-        """
         return [compound for compound in self.compounds if type(compound.model) is cls]
 
     def nodes_by_type(self, cls):
-        """
-        No docstring provided.
-        """
         return [node for node in self.nodes if type(node.model) is cls]
 
     def childs_by_ids(self, child_ids) -> list[Child]:
-        """
-        No docstring provided.
-        """
         return [self.child_by_id(child_id) for child_id in child_ids]
 
     def has_any_child_of_type(self, branch, cls) -> bool:
-        """
-        No docstring provided.
-        """
         childs = self.get_childs_by_type(branch, cls)
         return len(childs) > 0
 
     def get_childs_by_type(self, branch, cls) -> list[Child]:
-        """
-        No docstring provided.
-        """
         return [
             child
             for child in self.childs_by_ids(branch.child_ids)
@@ -354,47 +251,26 @@ class Network:
         ]
 
     def branches_by_ids(self, branch_ids) -> list[Branch]:
-        """
-        No docstring provided.
-        """
         return [self.branch_by_id(branch_id) for branch_id in branch_ids]
 
     def is_blacklisted(self, obj):
-        """
-        No docstring provided.
-        """
         return obj in self.__blacklist
 
     def has_node(self, node_id):
-        """
-        No docstring provided.
-        """
         return node_id in self._network_internal.nodes
 
     def has_branch(self, branch_id):
-        """
-        No docstring provided.
-        """
         return branch_id in self._network_internal.edges
 
     def get_branch_between(self, node_id_one, node_id_two):
-        """
-        No docstring provided.
-        """
         return self._network_internal.get_edge_data(node_id_one, node_id_two)[0][
             "internal_branch"
         ]
 
     def has_branch_between(self, node_id_one, node_id_two):
-        """
-        No docstring provided.
-        """
         return self._network_internal.has_edge(node_id_one, node_id_two)
 
     def compounds_connected_to(self, node_id) -> list[Component]:
-        """
-        No docstring provided.
-        """
         return [
             compound
             for compound in self.compounds
@@ -402,9 +278,6 @@ class Network:
         ]
 
     def compound_of(self, subcomponent_component_id) -> list[Component]:
-        """
-        No docstring provided.
-        """
         compounds = [
             compound
             for compound in self.compounds
@@ -415,9 +288,6 @@ class Network:
         return compounds[0]
 
     def components_connected_to(self, node_id) -> list[Component]:
-        """
-        No docstring provided.
-        """
         node = self.node_by_id(node_id)
         return (
             self.childs_by_ids(node.child_ids)
@@ -427,9 +297,6 @@ class Network:
         )
 
     def branches_connected_to(self, node_id) -> list[Branch]:
-        """
-        No docstring provided.
-        """
         node = self.node_by_id(node_id)
         return self.branches_by_ids(node.to_branch_ids) + self.branches_by_ids(
             node.from_branch_ids
@@ -437,9 +304,6 @@ class Network:
 
     @property
     def nodes(self) -> list[Node]:
-        """
-        No docstring provided.
-        """
         return [
             self._network_internal.nodes[node]["internal_node"]
             for node in self._network_internal.nodes
@@ -447,18 +311,12 @@ class Network:
 
     @property
     def branches(self) -> list[Branch]:
-        """
-        No docstring provided.
-        """
         return [
             self._network_internal.edges[edge]["internal_branch"]
             for edge in self._network_internal.edges
         ]
 
     def node_by_id(self, node_id) -> Node:
-        """
-        No docstring provided.
-        """
         if node_id not in self._network_internal.nodes:
             raise ValueError(
                 f"The node id '{node_id}' is not valid. The valid ids are {self._network_internal.nodes.keys()}"
@@ -466,37 +324,22 @@ class Network:
         return self._network_internal.nodes[node_id]["internal_node"]
 
     def branch_by_id(self, branch_id):
-        """
-        No docstring provided.
-        """
         if branch_id not in self._network_internal.edges:
             raise ValueError(f"The branch id '{branch_id}' is not valid.")
         return self._network_internal.edges[branch_id]["internal_branch"]
 
     def branches_by_type(self, cls):
-        """
-        No docstring provided.
-        """
         return [branch for branch in self.branches if isinstance(branch.model, cls)]
 
     def __insert_to_blacklist_if_forced(self, obj):
-        """
-        No docstring provided.
-        """
         if self.__force_blacklist:
             self.__blacklist.append(obj)
 
     def __insert_to_container_if_collect_toggled(self, obj):
-        """
-        No docstring provided.
-        """
         if self.__collect_components:
             self.__collected_components.append(obj)
 
     def node_by_id_or_create(self, node_id, auto_node_creator, auto_grid_key):
-        """
-        No docstring provided.
-        """
         if not self.has_node(node_id):
             return self.node_by_id(
                 self.node(auto_node_creator(), grid=auto_grid_key, overwrite_id=node_id)
@@ -514,9 +357,6 @@ class Network:
         auto_node_creator=None,
         auto_grid_key=None,
     ):
-        """
-        No docstring provided.
-        """
         child_id = overwrite_id or (
             0 if len(self._child_dict) == 0 else max(self._child_dict.keys()) + 1
         )
@@ -552,9 +392,6 @@ class Network:
         auto_node_creator=None,
         auto_grid_key=None,
     ):
-        """
-        No docstring provided.
-        """
         return self.child(
             model,
             formulation=formulation,
@@ -567,15 +404,9 @@ class Network:
         )
 
     def first_node(self):
-        """
-        No docstring provided.
-        """
         return min(self._network_internal)
 
     def _or_default(self, grid_or_name):
-        """
-        No docstring provided.
-        """
         if isinstance(grid_or_name, str):
             return self._default_grid_models[grid_or_name]
         if grid_or_name is None:
@@ -647,9 +478,6 @@ class Network:
         auto_grid_key=None,
         **kwargs,
     ):
-        """
-        No docstring provided.
-        """
         from_node = self.node_by_id_or_create(
             from_node_id,
             auto_node_creator=auto_node_creator,
@@ -701,9 +529,6 @@ class Network:
         overwrite_id=None,
         **connected_node_ids,
     ):
-        """
-        No docstring provided.
-        """
         compound_id = overwrite_id or (
             0 if len(self._compound_dict) == 0 else max(self._compound_dict.keys()) + 1
         )
@@ -733,22 +558,13 @@ class Network:
         return compound_id
 
     def constraint(self, constraint_equation):
-        """
-        No docstring provided.
-        """
         self._constraints.append(constraint_equation)
 
     def objective(self, objective_function):
-        """
-        No docstring provided.
-        """
         self._objectives.append(objective_function)
 
     @staticmethod
     def _model_dict_to_input(container):
-        """
-        No docstring provided.
-        """
         model_dict = container.model.__dict__
         input_dict = {
             "active": container.active,
@@ -768,9 +584,6 @@ class Network:
         return input_dict
 
     def as_dataframe_dict(self):
-        """
-        No docstring provided.
-        """
         input_dict_list_dict = {}
         model_containers = self.nodes + self.childs + self.branches
         for container in model_containers:
@@ -788,9 +601,6 @@ class Network:
 
     @staticmethod
     def _model_dict_to_results(container):
-        """
-        No docstring provided.
-        """
         model_dict = container.model.vars
         result_dict = {
             "active": container.active,
@@ -806,9 +616,6 @@ class Network:
         return result_dict
 
     def as_result_dataframe_dict(self):
-        """
-        No docstring provided.
-        """
         result_dict_list_dict = {}
         model_containers = self.nodes + self.childs + self.branches
         for container in model_containers:
@@ -825,9 +632,6 @@ class Network:
         return dataframe_dict
 
     def as_result_dataframe_dict_str(self):
-        """
-        No docstring provided.
-        """
         dataframes = self.as_result_dataframe_dict()
         result_str = ""
         for cls_str, dataframe in dataframes.items():
@@ -839,9 +643,6 @@ class Network:
         return result_str
 
     def as_dataframe_dict_str(self):
-        """
-        No docstring provided.
-        """
         dataframes = self.as_dataframe_dict()
         result_str = ""
         for cls_str, dataframe in dataframes.items():
@@ -859,9 +660,6 @@ class Network:
         return self.as_dataframe_dict_str()
 
     def statistics(self):
-        """
-        No docstring provided.
-        """
         type_to_number = {}
         model_containers = self.nodes + self.childs + self.branches + self.compounds
         for container in model_containers:
@@ -875,24 +673,15 @@ class Network:
         return type_to_number
 
     def copy(self):
-        """
-        No docstring provided.
-        """
         return copy.deepcopy(self)
 
     def clear_childs(self):
-        """
-        No docstring provided.
-        """
         self._child_dict = {}
         for node in self.nodes:
             node.child_ids = []
 
 
 def _clean_up_compound(network: Network, compound):
-    """
-    No docstring provided.
-    """
     node_components = compound.component_of_type(Node)
     fully_intact = True
     for component in node_components:
@@ -916,16 +705,10 @@ def _clean_up_compound(network: Network, compound):
 
 
 def to_spanning_tree(network: Network):
-    """
-    No docstring provided.
-    """
     return transform_network(network, nx.minimum_spanning_tree)
 
 
 def transform_network(network: Network, graph_transform):
-    """
-    No docstring provided.
-    """
     network = network.copy()
     network._network_internal = graph_transform(network.graph)
     for child in list(network.childs):
@@ -941,23 +724,14 @@ def transform_network(network: Network, graph_transform):
 
 
 def _add_tuple(a, b):
-    """
-    No docstring provided.
-    """
     return [a[i] + b[i] for i in range(len(a))]
 
 
 def _div_tuple(a, div):
-    """
-    No docstring provided.
-    """
     return tuple([a[i] / div for i in range(len(a))])
 
 
 def calc_coordinates(network: Network, component: Component):
-    """
-    No docstring provided.
-    """
     if type(component) is Node:
         return component.position
     elif type(component) is Branch:

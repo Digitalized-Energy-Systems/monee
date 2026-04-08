@@ -7,9 +7,6 @@ from .matpower import read_matpower_case
 
 
 def from_pandapower_net(net):
-    """
-    No docstring provided.
-    """
     id_file = uuid.uuid4()
     name_file = f"{id_file}.mat"
     pc.to_mpc(net, init="flat", filename=name_file)

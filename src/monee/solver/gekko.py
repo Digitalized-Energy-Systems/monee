@@ -13,7 +13,6 @@ from monee.model import (
     Network,
     Var,
 )
-from monee.model.core import tracked
 from monee.problem.core import OptimizationProblem
 from monee.simulation.step_state import StepState
 
@@ -61,9 +60,6 @@ class GekkoCubicSplineImpl:
 
 
 def _process_intermediate_eqs(m, model, equations):
-    """
-    No docstring provided.
-    """
     for intermediate_eq in [eq for eq in equations if type(eq) is IntermediateEq]:
         attr_intermediate_var = getattr(model, intermediate_eq.attr)
         eq = (
@@ -76,19 +72,11 @@ def _process_intermediate_eqs(m, model, equations):
 
 
 class GEKKOSolver(SolverInterface):
-    """
-    No docstring provided.
-    """
-
     def __init__(self, solver=1):
         self.solver: int = solver
 
     @staticmethod
     def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel, id):
-        # Collect tracked attr names before Var objects are replaced.
-        inter_step_attrs = [k for k, v in target.__dict__.items() if type(v) is tracked]
-        if inter_step_attrs:
-            target._inter_step_attrs = inter_step_attrs
         i = 0
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
@@ -110,14 +98,12 @@ class GEKKOSolver(SolverInterface):
 
     @staticmethod
     def withdraw_gekko_vars_attr(target: GenericModel):
-        inter_step_attrs = getattr(target, "_inter_step_attrs", [])
         for key, value in target.__dict__.items():
             if type(value) is GKVariable:
-                var_cls = tracked if key in inter_step_attrs else Var
                 setattr(
                     target,
                     key,
-                    var_cls(
+                    Var(
                         value=value.VALUE.value[0],
                         min=value.LOWER,
                         max=value.UPPER,
@@ -140,9 +126,6 @@ class GEKKOSolver(SolverInterface):
         exclude_unconnected_nodes=False,
         step_state: StepState = None,
     ):
-        """
-        No docstring provided.
-        """
         m = GEKKO(remote=False)
         m.options.SOLVER = self.solver
         m.options.WEB = 0
@@ -150,7 +133,7 @@ class GEKKOSolver(SolverInterface):
         m.solver_options = DEFAULT_SOLVER_OPTIONS
         network = input_network.copy()
 
-        # Phase 1: add Var placeholders for all NetworkConstraint extensions
+        # Phase 1: add Var placeholders for all NetworkAspect extensions
         for ext in network.extensions:
             ext.prepare(network)
 
@@ -195,6 +178,12 @@ class GEKKOSolver(SolverInterface):
             network,
             ignored_nodes,
         )
+        # Phase 1.5: let extensions mark nodes before equations are assembled.
+        if step_state is not None:
+            for ext in network.extensions:
+                ext.activate_timeseries(network, ignored_nodes, step_state=step_state)
+            self.mark_temporal_components(network, ignored_nodes)
+
         objs_exprs = []
         self.init_branches(branches)
         self.process_equations_nodes_childs(m, network, nodes, ignored_nodes)
@@ -209,8 +198,17 @@ class GEKKOSolver(SolverInterface):
             self.process_inter_step_equations(
                 m, network, nodes, branches, compounds, ignored_nodes, step_state
             )
+            # Also collect inter-step equations from NetworkAspect extensions
+            # (e.g. LTC thermal-mass constraints that couple T[t] to T[t-1]).
+            for ext in network.extensions:
+                m.Equations(
+                    ext.inter_step_equations(network, ignored_nodes, step_state)
+                )
+                m.Equations(
+                    ext.inter_temporal_equations(network, ignored_nodes, step_state)
+                )
 
-        # Phase 2: add NetworkConstraint extension equations after variable injection
+        # Phase 2: add NetworkAspect extension equations after variable injection
         for ext in network.extensions:
             m.Equations(ext.equations(network, ignored_nodes))
 
@@ -245,9 +243,6 @@ class GEKKOSolver(SolverInterface):
         return solver_result
 
     def process_internal_oxf_components(self, m, network):
-        """
-        No docstring provided.
-        """
         for constraint in network.constraints:
             m.Equation(constraint(network))
         obj = None
@@ -262,15 +257,16 @@ class GEKKOSolver(SolverInterface):
     def process_oxf_components(
         self, m, network: Network, optimization_problem: OptimizationProblem
     ):
-        """
-        No docstring provided.
-        """
         if optimization_problem.constraints is not None and (
             not optimization_problem.constraints.empty
         ):
             m.Equations(optimization_problem.constraints.all(network))
         obj = None
-        for objective in optimization_problem.objectives.all(network):
+        for objective in (
+            optimization_problem.objectives.all(network)
+            if optimization_problem.objectives is not None
+            else []
+        ):
             if obj is not None:
                 obj = obj + objective
             else:
@@ -279,9 +275,6 @@ class GEKKOSolver(SolverInterface):
             m.Obj(obj)
 
     def process_equations_compounds(self, m, network, compounds, ignored_nodes):
-        """
-        No docstring provided.
-        """
         for compound in compounds:
             if ignore_compound(compound, ignored_nodes):
                 continue
@@ -296,9 +289,6 @@ class GEKKOSolver(SolverInterface):
                 m.Equations(filter_intermediate_eqs(as_iter(equations)))
 
     def process_equations_nodes_childs(self, m, network: Network, nodes, ignored_nodes):
-        """
-        No docstring provided.
-        """
         for node in nodes:
             if ignore_node(node, network, ignored_nodes):
                 continue
@@ -362,9 +352,6 @@ class GEKKOSolver(SolverInterface):
     def process_equations_branches(
         self, m, network, branches, ignored_nodes, objs_exprs
     ):
-        """
-        No docstring provided.
-        """
         # using spline instead of pwl as spline tends to outperform the gekko pwl
         pwl_impl = GekkoCubicSplineImpl(m)
         for branch in branches:

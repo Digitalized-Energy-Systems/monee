@@ -119,7 +119,7 @@ networks without switchable pipes the bound is a nice-to-have.
 
 ## Solver integration
 
-Islanding constraints are implemented as a `NetworkConstraint` — the same
+Islanding constraints are implemented as a `NetworkAspect` — the same
 interface used by the formulation layer — so they integrate with both solver
 back-ends without modification.
 
@@ -144,11 +144,11 @@ island B's buses from being pruned before the MIP solve even starts.
 ## Class hierarchy
 
 ```
-NetworkConstraint
+NetworkAspect
 └── NetworkIslandingConfig        ← bundles all per-carrier modes
     registered via network.add_extension()
 
-NetworkConstraint (ABC)
+NetworkAspect (ABC)
 └── IslandingMode                 ← per-carrier base class
     ├── ElectricityIslandingMode  ← PowerGrid; angle pinning
     ├── GasIslandingMode          ← GasGrid; pressure bounds

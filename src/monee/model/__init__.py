@@ -36,6 +36,7 @@ from .network import (
 from .node import Bus, Junction
 from .branch import (
     GenericPowerBranch,
+    GasCompressor,
     GasPipe,
     PowerBranch,
     PowerLine,
@@ -44,6 +45,11 @@ from .branch import (
     HeatExchangerGenerator,
     HeatExchangerLoad,
     Trafo,
+)
+from .storage import (
+    ElectricStorage,
+    GasStorage,
+    ThermalStorage,
 )
 from .child import (
     ExtHydrGrid,
@@ -74,6 +80,8 @@ from .grid import (
     PowerGrid,
     Grid,
 )
+from .formulation.ltc import LumpedThermalCapacitance
+from .formulation.linepack import GasLinepack
 from .islanding import (
     GridFormingMixin,
     IslandingMode,

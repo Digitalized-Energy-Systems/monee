@@ -211,7 +211,7 @@ problem.constraints = constraints
 result = run_energy_flow_optimization(net, problem)
 ```
 
-**Network-level constraints** — implement `NetworkConstraint` (with `prepare` and `equations` methods) and attach it via `network.add_extension(constraint)`. The constraint participates in both variable injection and equation registration without any solver-specific glue code.
+**Network-level extensions** — implement `NetworkAspect` (with `prepare` and `equations` methods) and attach it via `network.add_extension(aspect)`. The extension participates in both variable injection and equation registration without any solver-specific glue code.
 
 ---
 

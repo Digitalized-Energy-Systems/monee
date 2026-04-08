@@ -7,6 +7,7 @@ release = "latest"
 # -- General configuration ---------------------------------------------------
 extensions = [
     "myst_parser",
+    "matplotlib.sphinxext.plot_directive",
     "sphinx.ext.autodoc",
     "sphinx.ext.napoleon",
     "sphinx.ext.intersphinx",
@@ -36,6 +37,10 @@ napoleon_attr_annotations = True
 typehints_fully_qualified = True
 typehints_use_rtype = False
 typehints_use_signature = True
+
+plot_html_show_source_link = False
+plot_html_show_formats = False
+plot_include_source = False
 
 myst_enable_extensions = [
     "colon_fence",

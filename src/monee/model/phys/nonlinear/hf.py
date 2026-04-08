@@ -4,16 +4,10 @@ SPECIFIC_HEAT_CAP_WATER = 4184
 
 
 def to_celsius(t_k):
-    """
-    No docstring provided.
-    """
     return t_k - 273.15
 
 
 def calc_prandtl(t_k):
-    """
-    No docstring provided.
-    """
     return 50000 / (to_celsius(t_k) ** 2 + 155 * to_celsius(t_k) + 3700)
 
 
@@ -26,9 +20,6 @@ def heat_transfer_loss(
     pipe_inside_radius,
     pipe_outside_radius,
 ):
-    """
-    No docstring provided.
-    """
     return (
         heat_transfer_flow_loss_var
         == 2
@@ -41,9 +32,6 @@ def heat_transfer_loss(
 
 
 def temp_flow(t_in_scaled, t_out_scaled, heat_loss, mass_flow, t_ref):
-    """
-    No docstring provided.
-    """
     return (
         heat_loss
         == mass_flow * SPECIFIC_HEAT_CAP_WATER * (t_in_scaled - t_out_scaled) * t_ref
@@ -58,9 +46,6 @@ def heat_transfer_coefficient_inside_pipe_db(
     pipe_inside_diameter,
     thermal_conductivity=0.598,
 ):
-    """
-    No docstring provided.
-    """
     return (
         heat_transfer_coefficient_var
         == 0.023
@@ -78,9 +63,6 @@ def heat_transfer_coefficient_inside_pipe(
     pipe_inside_diameter,
     thermal_conductivity=0.598,
 ):
-    """
-    No docstring provided.
-    """
     prandtl = calc_prandtl((t_1_var + t_2_var) / 2)
     friction_f = abs(reynolds_var) / 64
     return (

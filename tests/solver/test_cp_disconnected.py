@@ -181,11 +181,16 @@ def _build_p2h_power_isolated(deactivate: bool):
 
 
 def test_p2h_power_bus_isolated():
-    """P2H: power_node (Bus) disconnected → compound NaN'd, heat grid intact."""
+    """P2H: power_node (Bus) disconnected → compound deactivated (heat_w=0), heat grid intact.
+
+    The control node stays active as a thermal junction (set_active zeroes the
+    heat contribution without removing the node from the thermal grid).
+    """
     pn, p_slack, p_p2h, j_supply = _build_p2h_power_isolated(deactivate=True)
     result = _solve(pn)
+    print(result)
     _assert_bus_nan(result, p_p2h, "p_p2h")
-    _assert_control_node_nan(result, "PowerToHeatControlNode", "P2H bus isolated")
+    _assert_control_node_solved(result, "PowerToHeatControlNode", "P2H bus isolated")
     _assert_bus_solved(result, p_slack, "p_slack", expected_vm=1.0)
     _assert_junction_solved(result, j_supply, "j_supply")
 
@@ -219,12 +224,15 @@ def _build_p2h_heat_isolated(deactivate: bool):
 
 
 def test_p2h_heat_junctions_isolated():
-    """P2H: heat_node + heat_return_node cluster disconnected → compound NaN'd, power intact."""
+    """P2H: heat_node + heat_return_node cluster disconnected → compound deactivated, power intact.
+
+    The control node stays active as a thermal junction; heat contribution is zeroed.
+    """
     pn, p_slack, j_main, j_heat_a, j_heat_b = _build_p2h_heat_isolated(deactivate=True)
     result = _solve(pn)
     _assert_junction_nan(result, j_heat_a, "j_heat_a")
     _assert_junction_nan(result, j_heat_b, "j_heat_b")
-    _assert_control_node_nan(result, "PowerToHeatControlNode", "P2H heat isolated")
+    _assert_control_node_solved(result, "PowerToHeatControlNode", "P2H heat isolated")
     _assert_bus_solved(result, p_slack, "p_slack", expected_vm=1.0)
     _assert_junction_solved(result, j_main, "j_main")
 
@@ -259,11 +267,14 @@ def _build_chp_gas_isolated(deactivate: bool):
 
 
 def test_chp_gas_junction_isolated():
-    """CHP: gas_node (Junction) disconnected → compound NaN'd, power + heat intact."""
+    """CHP: gas_node (Junction) disconnected → compound deactivated, power + heat intact.
+
+    The control node stays active as a thermal/power junction; gas + heat contribution zeroed.
+    """
     pn, p_slack, j_gas_chp, j_heat_supply = _build_chp_gas_isolated(deactivate=True)
     result = _solve(pn)
     _assert_junction_nan(result, j_gas_chp, "j_gas_chp")
-    _assert_control_node_nan(result, "CHPControlNode", "CHP gas isolated")
+    _assert_control_node_solved(result, "CHPControlNode", "CHP gas isolated")
     _assert_bus_solved(result, p_slack, "p_slack", expected_vm=1.0)
     _assert_junction_solved(result, j_heat_supply, "j_heat_supply")
 
@@ -298,13 +309,16 @@ def _build_chp_power_isolated(deactivate: bool):
 
 
 def test_chp_power_bus_isolated():
-    """CHP: power_node (Bus) disconnected → compound NaN'd, heat + gas intact."""
+    """CHP: power_node (Bus) disconnected → compound deactivated, heat + gas intact.
+
+    The control node stays active as a thermal junction; contribution zeroed via set_active.
+    """
     pn, p_slack, p_chp, j_heat_supply, j_gas_chp = _build_chp_power_isolated(
         deactivate=True
     )
     result = _solve(pn)
     _assert_bus_nan(result, p_chp, "p_chp")
-    _assert_control_node_nan(result, "CHPControlNode", "CHP bus isolated")
+    _assert_control_node_solved(result, "CHPControlNode", "CHP bus isolated")
     _assert_bus_solved(result, p_slack, "p_slack", expected_vm=1.0)
     _assert_junction_solved(result, j_heat_supply, "j_heat_supply")
     _assert_junction_solved(result, j_gas_chp, "j_gas_chp")
@@ -329,11 +343,16 @@ def _build_g2h_gas_isolated(deactivate: bool):
 
 
 def test_g2h_gas_junction_isolated():
-    """GasToHeat: gas_node (Junction) disconnected → compound NaN'd, heat grid intact."""
+    """GasToHeat: gas_node (Junction) disconnected → compound deactivated, heat grid intact.
+
+    The control node stays active as a thermal junction; heat contribution zeroed via set_active.
+    """
     pn, j_gas_g2h, j_heat_supply = _build_g2h_gas_isolated(deactivate=True)
     result = _solve(pn)
     _assert_junction_nan(result, j_gas_g2h, "j_gas_g2h")
-    _assert_control_node_nan(result, "GasToHeatControlNode", "GasToHeat gas isolated")
+    _assert_control_node_solved(
+        result, "GasToHeatControlNode", "GasToHeat gas isolated"
+    )
     _assert_junction_solved(result, j_heat_supply, "j_heat_supply")
 
 
@@ -367,14 +386,19 @@ def _build_g2h_heat_isolated(deactivate: bool):
 
 
 def test_g2h_heat_junctions_isolated():
-    """GasToHeat: heat_node + heat_return_node cluster disconnected → compound NaN'd, gas intact."""
+    """GasToHeat: heat_node + heat_return_node cluster disconnected → compound deactivated, gas intact.
+
+    The control node stays active as a gas junction; heat contribution zeroed via set_active.
+    """
     pn, j_gas_g2h, j_heat_main, j_heat_a, j_heat_b = _build_g2h_heat_isolated(
         deactivate=True
     )
     result = _solve(pn)
     _assert_junction_nan(result, j_heat_a, "j_heat_a")
     _assert_junction_nan(result, j_heat_b, "j_heat_b")
-    _assert_control_node_nan(result, "GasToHeatControlNode", "GasToHeat heat isolated")
+    _assert_control_node_solved(
+        result, "GasToHeatControlNode", "GasToHeat heat isolated"
+    )
     _assert_junction_solved(result, j_heat_main, "j_heat_main")
     _assert_junction_solved(result, j_gas_g2h, "j_gas_g2h")
 

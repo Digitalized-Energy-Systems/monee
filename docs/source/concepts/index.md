@@ -67,8 +67,35 @@ MIP formulation, grid-forming nodes, and per-carrier physical constraints.
 :link-type: doc
 :shadow: sm
 
-Sequential solve architecture, `TimeseriesData`, `StepState`, inter-step
-coupling with `tracked` Vars, and ramp constraints.
+Sequential pipeline, `TimeseriesData`, `StepState`, and per-step
+inter-step coupling.
+:::
+
+:::{grid-item-card} Multi-period optimization
+:link: multi_period
+:link-type: doc
+:shadow: sm
+
+Globally-optimal dispatch over T periods, `PeriodState`, rolling-horizon MPC,
+and terminal state constraints.
+:::
+
+:::{grid-item-card} NetworkAspect
+:link: network_aspects
+:link-type: doc
+:shadow: sm
+
+The general plug-in mechanism — inject variables and equations across the
+whole network. Used by islanding, thermal capacitance, and linepack.
+:::
+
+:::{grid-item-card} Temporal extensions
+:link: temporal_extensions
+:link-type: doc
+:shadow: sm
+
+`LumpedThermalCapacitance` and `GasLinepack` — step-by-step walkthroughs
+with physics background and visualisation code.
 :::
 
 ::::
@@ -84,4 +111,7 @@ formulations
 solvers
 islanding
 timeseries
+multi_period
+network_aspects
+temporal_extensions
 ```

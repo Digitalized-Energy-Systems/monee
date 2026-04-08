@@ -6,9 +6,6 @@ from monee.simulation.timeseries import TimeseriesData
 
 
 def _attr_by_type(t):
-    """
-    No docstring provided.
-    """
     if t == "load":
         return None
     else:
@@ -16,9 +13,6 @@ def _attr_by_type(t):
 
 
 def obtain_simbench_profile_by_pp_net(pp_net) -> TimeseriesData:
-    """
-    No docstring provided.
-    """
     td = TimeseriesData()
     profile_dict = pp_net.profiles
     for t, profile_df in profile_dict.items():
@@ -35,24 +29,15 @@ def obtain_simbench_profile_by_pp_net(pp_net) -> TimeseriesData:
 
 
 def obtain_simbench_profile(sb_code) -> TimeseriesData:
-    """
-    No docstring provided.
-    """
     net = simbench.get_simbench_net(sb_code)
     return obtain_simbench_profile_by_pp_net(net)
 
 
 def obtain_simbench_net(sb_code) -> md.Network:
-    """
-    No docstring provided.
-    """
     net = simbench.get_simbench_net(sb_code)
     return from_pandapower_net(net)
 
 
 def obtain_simbench_net_with_td(sb_code) -> tuple[md.Network, TimeseriesData]:
-    """
-    No docstring provided.
-    """
     net = simbench.get_simbench_net(sb_code)
     return (from_pandapower_net(net), obtain_simbench_profile_by_pp_net(net))

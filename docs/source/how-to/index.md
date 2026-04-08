@@ -61,6 +61,24 @@ Drive a multi-energy network through hundreds or thousands of timesteps with
 time-varying load profiles, ramp constraints, and rich result queries.
 :::
 
+:::{grid-item-card} Multi-period optimization
+:link: multi_period
+:link-type: doc
+:shadow: sm
+
+Jointly optimize storage dispatch, CHP scheduling, and linepack usage over a
+full planning horizon — including rolling-horizon MPC.
+:::
+
+:::{grid-item-card} Storage dispatch
+:link: storage
+:link-type: doc
+:shadow: sm
+
+Attach electric, gas, and thermal storage to a network.  Prescribe a charge
+schedule via `TimeseriesData` or let the optimizer choose the dispatch.
+:::
+
 :::{grid-item-card} Reference networks
 :link: reference_networks
 :link-type: doc
@@ -82,5 +100,7 @@ convert_from_pandapower
 use_pyomo_solver
 islanding
 timeseries
+multi_period
+storage
 reference_networks
 ```

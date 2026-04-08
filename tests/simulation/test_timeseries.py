@@ -11,7 +11,7 @@ import pytest
 
 import monee.model as mm
 from monee import run_energy_flow
-from monee.model import Network, tracked
+from monee.model import Network, Var
 from monee.model.branch import PowerLine
 from monee.model.child import ExtHydrGrid, ExtPowerGrid, PowerLoad, Sink
 from monee.model.grid import PowerGrid
@@ -488,7 +488,7 @@ def test_tracked_var_extracted_into_step_state():
     net = _el_net()
     load = net.childs[1]
     # Replace the plain float p_mw with a tracked Var on the model instance
-    load.model.p_mw = tracked(0.5, min=0.0, max=10.0)
+    load.model.p_mw = Var(0.5, min=0.0, max=10.0)
 
     td = TimeseriesData()
     # Inject values via series so the tracked var is overwritten before solve

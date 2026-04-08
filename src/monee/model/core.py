@@ -210,35 +210,8 @@ class Var:
         return f"{self.value} ({self.min}, {self.max}), is int: {self.integer}"
 
 
-class tracked(Var):
-    """
-    A ``Var`` whose solved value is automatically carried to the next
-    timestep in a timeseries simulation.
-
-    Use this as a drop-in replacement for ``Var`` on any attribute that
-    should participate in inter-step state tracking.  The framework detects
-    ``tracked`` instances during variable injection, records the attribute
-    name on the model, and extracts the solved float value after each step
-    — no ``inter_step_vars()`` method required.
-
-    Example::
-
-        class RampGenerator(PowerGenerator):
-            def __init__(self, p_mw, ramp_up, ramp_down, **kwargs):
-                super().__init__(p_mw, **kwargs)
-                self.p_mw = tracked(p_mw, min=0, max=500)
-                self.ramp_up = ramp_up
-                self.ramp_down = ramp_down
-
-            def inter_step_equations(self, prev_state, component_id, **kwargs):
-                prev_p = prev_state.get(component_id, 'p_mw')
-                if prev_p is None:
-                    return []
-                return [
-                    self.p_mw - prev_p <= self.ramp_up,
-                    prev_p - self.p_mw <= self.ramp_down,
-                ]
-    """
+# Backward-compatibility alias — tracked is now identical to Var.
+tracked = Var
 
 
 class Const:
@@ -443,9 +416,7 @@ class BranchModel(GenericModel):
 
     @abstractmethod
     def equations(self, grid, from_node_model, to_node_model, **kwargs):
-        """
-        No docstring provided.
-        """
+        pass
 
     def minimize(self, grid, from_node_model, to_node_model, **kwargs):
         """
@@ -497,9 +468,7 @@ class BranchModel(GenericModel):
         return False
 
     def init(self, grid):
-        """
-        No docstring provided.
-        """
+        pass
 
 
 class MultiGridBranchModel(BranchModel):
@@ -672,14 +641,7 @@ class CompoundModel(GenericModel):
 
 
 class MultiGridCompoundModel(CompoundModel):
-    """
-    No docstring provided.
-    """
-
     def is_cp(self):
-        """
-        No docstring provided.
-        """
         return False
 
 
@@ -727,9 +689,7 @@ class ChildModel(GenericModel):
 
     @abstractmethod
     def equations(self, grid, node_model, **kwargs):
-        """
-        No docstring provided.
-        """
+        pass
 
     def minimize(self, grid, node_model, **kwargs):
         """
@@ -742,10 +702,6 @@ class ChildModel(GenericModel):
 
 
 class Component(ABC):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         id,
@@ -770,16 +726,10 @@ class Component(ABC):
 
     @property
     def tid(self):
-        """
-        No docstring provided.
-        """
         return f"{self.__class__.__name__}-{self.id}".lower()
 
     @property
     def nid(self):
-        """
-        No docstring provided.
-        """
         return f"{self.model.__class__.__name__}-{self.id}".lower()
 
     @property
@@ -795,10 +745,6 @@ class Component(ABC):
 
 
 class Child(Component):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         child_id,
@@ -839,10 +785,6 @@ class Child(Component):
 
 
 class Compound(Component):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         compound_id,
@@ -882,9 +824,6 @@ class Compound(Component):
         return form_eqs + model_eqs
 
     def component_of_type(self, comp_type):
-        """
-        No docstring provided.
-        """
         return [
             component
             for component in self.subcomponents
@@ -1064,10 +1003,6 @@ class Node(Component):
 
 
 class Branch(Component):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         model,
@@ -1115,9 +1050,6 @@ class Branch(Component):
 
     @property
     def tid(self):
-        """
-        No docstring provided.
-        """
         if self.id[0] > self.id[1]:
             return f"branch-{self.id[0]}-{self.id[1]}"
         else:

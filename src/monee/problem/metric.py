@@ -4,56 +4,32 @@ import monee.model as md
 
 
 class PerformanceMetric(ABC):
-    """
-    No docstring provided.
-    """
-
     @abstractmethod
     def calc(self, network: md.Network):
-        """
-        No docstring provided.
-        """
+        pass
 
 
 class ResilienceMetric(ABC):
-    """
-    No docstring provided.
-    """
-
     @abstractmethod
     def gather(self, network: md.Network, step, **kwargs):
-        """
-        No docstring provided.
-        """
+        pass
 
     @abstractmethod
     def calc(self):
-        """
-        No docstring provided.
-        """
+        pass
 
 
 class rlist(list):
-    """
-    No docstring provided.
-    """
-
     def __init__(self, default):
         self._default = default
 
     def __setitem__(self, key, value):
-        """
-        No docstring provided.
-        """
         if key >= len(self):
             self += [self._default] * (key - len(self) + 1)
         super().__setitem__(key, value)
 
 
 def is_load(component):
-    """
-    No docstring provided.
-    """
     model = component.model
     grid = component.grid
     return (
@@ -67,14 +43,7 @@ def is_load(component):
 
 
 class GeneralResiliencePerformanceMetric(PerformanceMetric):
-    """
-    No docstring provided.
-    """
-
     def get_relevant_components(self, network: md.Network):
-        """
-        No docstring provided.
-        """
         return [
             component
             for component in network.childs + network.branches
@@ -82,9 +51,6 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
         ]
 
     def calc(self, network, inv=False, include_ext_grid=True):
-        """
-        No docstring provided.
-        """
         relevant_components = self.get_relevant_components(network)
         power_load_curtailed = 0
         heat_load_curtailed = 0

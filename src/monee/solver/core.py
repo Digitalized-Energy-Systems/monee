@@ -123,7 +123,12 @@ class SolverResult:
         """
         for df in self.dataframes.values():
             if "id" in df.columns:
-                mask = df["id"] == component_id
+                try:
+                    mask = df["id"] == component_id
+                except (ValueError, TypeError):
+                    # Tuple branch IDs can trigger a pandas broadcasting error
+                    # when the id column has a different dtype (e.g. int64 vs tuple).
+                    mask = df["id"].apply(lambda x: x == component_id)
                 if mask.any():
                     return df[mask].iloc[0]
         raise KeyError(component_id)
@@ -247,6 +252,41 @@ class SolverResult:
         )
 
 
+class SinglePeriodSolverProtocol:
+    """
+    Documents the interface a solver backend must expose to be usable as a
+    delegate inside :class:`~monee.simulation.multi_period.GekkoMultiPeriodSolver`
+    and :class:`~monee.simulation.multi_period.PyomoMultiPeriodSolver`.
+
+    Not enforced at runtime — it exists purely for documentation.  Both
+    :class:`GEKKOSolver` and :class:`PyomoSolver` satisfy this protocol through
+    their concrete implementations of the methods listed below.
+
+    Required methods
+    ----------------
+    ``inject_*_vars_attr`` (static)
+        Replace :class:`~monee.model.core.Var` attrs on a model with
+        backend-native variable objects.
+    ``withdraw_*_vars_attr`` (static)
+        Copy solved values from backend objects back to :class:`~monee.model.core.Var`.
+    ``init_branches``
+        Initialise branch model parameters before equation assembly.
+    ``process_equations_nodes_childs``
+        Build node balance and child equations for all non-ignored nodes.
+    ``process_equations_branches``
+        Build branch flow equations for all non-ignored branches.
+    ``process_equations_compounds``
+        Build compound equations for all non-ignored compounds.
+    ``process_oxf_components`` / ``process_internal_oxf_components``
+        Apply optimisation-problem objectives and constraints.
+    ``process_inter_step_equations``
+        Collect and register ``inter_step_equations`` from all models,
+        linking current-period variables to *prev_state*.
+    ``_add_equations``
+        Register a list of relational expressions with the backend model.
+    """
+
+
 class SolverInterface(ABC):
     """Abstract base class for solver backends (GEKKO, Pyomo, …)."""
 
@@ -282,6 +322,127 @@ class SolverInterface(ABC):
         for branch in branches:
             branch.model.init(branch.grid)
 
+    @staticmethod
+    def mark_temporal_components(network, ignored_nodes: set) -> None:
+        """Set ``_temporal_active = True`` on every component model that has any
+        temporal method (``inter_temporal_equations``, ``inter_step_equations``,
+        or ``inter_period_equations``).
+
+        Called after ``activate_timeseries`` and before ``equations()`` so that
+        models can suppress static-only constraints (e.g. the linepack-pipe's
+        ``to_mass_flow == from_mass_flow``) when temporal coupling is active.
+        """
+        _temporal_methods = frozenset(
+            (
+                "inter_temporal_equations",
+                "inter_step_equations",
+                "inter_period_equations",
+            )
+        )
+        for node in network.nodes:
+            if node.id in ignored_nodes or node.ignored:
+                continue
+            if any(hasattr(node.model, m) for m in _temporal_methods):
+                node.model._temporal_active = True
+            for child in network.childs_by_ids(node.child_ids):
+                if child.ignored:
+                    continue
+                if any(hasattr(child.model, m) for m in _temporal_methods):
+                    child.model._temporal_active = True
+        for branch in network.branches:
+            if branch.ignored:
+                continue
+            if any(hasattr(branch.model, m) for m in _temporal_methods):
+                branch.model._temporal_active = True
+        for compound in network.compounds:
+            if compound.ignored:
+                continue
+            if any(hasattr(compound.model, m) for m in _temporal_methods):
+                compound.model._temporal_active = True
+
+    def _collect_temporal_eqs(
+        self,
+        solver_obj,
+        network,
+        nodes,
+        branches,
+        compounds,
+        ignored_nodes,
+        state,
+        mode_method,
+    ):
+        """Collect and register temporal equations for all active components.
+
+        Calls ``inter_temporal_equations`` (mode-agnostic) and *mode_method*
+        (either ``inter_step_equations`` or ``inter_period_equations``) on every
+        model and formulation that implements them.
+
+        Args:
+            mode_method: ``"inter_step_equations"`` (timeseries) or
+                ``"inter_period_equations"`` (multi-period).
+        """
+        methods = ("inter_temporal_equations", mode_method)
+        for node in nodes:
+            if ignore_node(node, network, ignored_nodes):
+                continue
+            for method in methods:
+                if hasattr(node.model, method):
+                    eqs = as_iter(getattr(node.model, method)(state, node.id))
+                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+                if node.formulation is not None and hasattr(node.formulation, method):
+                    eqs = as_iter(
+                        getattr(node.formulation, method)(node.model, state, node.id)
+                    )
+                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+            for child in network.childs_by_ids(node.child_ids):
+                if ignore_child(child, ignored_nodes):
+                    continue
+                for method in methods:
+                    if hasattr(child.model, method):
+                        eqs = as_iter(getattr(child.model, method)(state, child.id))
+                        self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+                    if child.formulation is not None and hasattr(
+                        child.formulation, method
+                    ):
+                        eqs = as_iter(
+                            getattr(child.formulation, method)(
+                                child.model, state, child.id
+                            )
+                        )
+                        self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+        for branch in branches:
+            if ignore_branch(branch, network, ignored_nodes):
+                continue
+            for method in methods:
+                if hasattr(branch.model, method):
+                    eqs = as_iter(getattr(branch.model, method)(state, branch.id))
+                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+                if branch.formulation is not None and hasattr(
+                    branch.formulation, method
+                ):
+                    eqs = as_iter(
+                        getattr(branch.formulation, method)(
+                            branch.model, state, branch.id
+                        )
+                    )
+                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+        for compound in compounds:
+            if ignore_compound(compound, ignored_nodes):
+                continue
+            for method in methods:
+                if hasattr(compound.model, method):
+                    eqs = as_iter(getattr(compound.model, method)(state, compound.id))
+                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+                if compound.formulation is not None and hasattr(
+                    compound.formulation, method
+                ):
+                    eqs = as_iter(
+                        getattr(compound.formulation, method)(
+                            compound.model, state, compound.id
+                        )
+                    )
+                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+
     def process_inter_step_equations(
         self,
         solver_obj,
@@ -292,78 +453,41 @@ class SolverInterface(ABC):
         ignored_nodes: set,
         step_state,
     ):
-        """
-        Collect and register inter-step equations from every active model and
-        formulation that implements ``inter_step_equations()``.
+        """Collect timeseries inter-step equations (``inter_step_equations`` +
+        ``inter_temporal_equations``) for all active components."""
+        self._collect_temporal_eqs(
+            solver_obj,
+            network,
+            nodes,
+            branches,
+            compounds,
+            ignored_nodes,
+            step_state,
+            "inter_step_equations",
+        )
 
-        Called after regular equation assembly when a non-None *step_state* is
-        present.  Models/formulations that don't implement the method are
-        silently skipped.
-        """
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                continue
-            if hasattr(node.model, "inter_step_equations"):
-                eqs = as_iter(node.model.inter_step_equations(step_state, node.id))
-                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-            if node.formulation is not None and hasattr(
-                node.formulation, "inter_step_equations"
-            ):
-                eqs = as_iter(
-                    node.formulation.inter_step_equations(
-                        node.model, step_state, node.id
-                    )
-                )
-                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-            for child in network.childs_by_ids(node.child_ids):
-                if ignore_child(child, ignored_nodes):
-                    continue
-                if hasattr(child.model, "inter_step_equations"):
-                    eqs = as_iter(
-                        child.model.inter_step_equations(step_state, child.id)
-                    )
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-                if child.formulation is not None and hasattr(
-                    child.formulation, "inter_step_equations"
-                ):
-                    eqs = as_iter(
-                        child.formulation.inter_step_equations(
-                            child.model, step_state, child.id
-                        )
-                    )
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-        for branch in branches:
-            if ignore_branch(branch, network, ignored_nodes):
-                continue
-            if hasattr(branch.model, "inter_step_equations"):
-                eqs = as_iter(branch.model.inter_step_equations(step_state, branch.id))
-                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-            if branch.formulation is not None and hasattr(
-                branch.formulation, "inter_step_equations"
-            ):
-                eqs = as_iter(
-                    branch.formulation.inter_step_equations(
-                        branch.model, step_state, branch.id
-                    )
-                )
-                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-        for compound in compounds:
-            if ignore_compound(compound, ignored_nodes):
-                continue
-            if hasattr(compound.model, "inter_step_equations"):
-                eqs = as_iter(
-                    compound.model.inter_step_equations(step_state, compound.id)
-                )
-                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-            if compound.formulation is not None and hasattr(
-                compound.formulation, "inter_step_equations"
-            ):
-                eqs = as_iter(
-                    compound.formulation.inter_step_equations(
-                        compound.model, step_state, compound.id
-                    )
-                )
-                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+    def process_inter_period_equations(
+        self,
+        solver_obj,
+        network: Network,
+        nodes,
+        branches,
+        compounds,
+        ignored_nodes: set,
+        period_state,
+    ):
+        """Collect multi-period inter-period equations (``inter_period_equations`` +
+        ``inter_temporal_equations``) for all active components."""
+        self._collect_temporal_eqs(
+            solver_obj,
+            network,
+            nodes,
+            branches,
+            compounds,
+            ignored_nodes,
+            period_state,
+            "inter_period_equations",
+        )
 
 
 def as_iter(possible_iter):

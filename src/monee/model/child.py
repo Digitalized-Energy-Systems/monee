@@ -25,9 +25,6 @@ class NoVarChildModel(ChildModel):
     """
 
     def set(self, n, value):
-        """
-        No docstring provided.
-        """
         user_attributes = [
             attr
             for attr in dir(self)
@@ -39,9 +36,6 @@ class NoVarChildModel(ChildModel):
         setattr(self, attr_name, value)
 
     def equations(self, grid, node, **kwargs):
-        """
-        No docstring provided.
-        """
         return []
 
 
@@ -62,6 +56,15 @@ class PowerGenerator(NoVarChildModel):
     """
 
     def __init__(self, p_mw, q_mvar, **kwargs) -> None:
+        # isinstance guard: compound models (e.g. CHP) internally construct
+        # PowerGenerator with a live solver variable as p_mw. Sign validation
+        # only makes sense for plain numeric inputs from user code.
+        if isinstance(p_mw, (int, float)) and p_mw < 0:
+            raise ValueError(
+                f"PowerGenerator expects a positive generation magnitude; "
+                f"got p_mw={p_mw}.  Pass the absolute value — the sign is "
+                f"handled internally (load convention)."
+            )
         super().__init__(**kwargs)
         self.p_mw = -p_mw
         self.q_mvar = -q_mvar
@@ -159,6 +162,14 @@ class Source(NoVarChildModel):
     """
 
     def __init__(self, mass_flow, **kwargs) -> None:
+        # isinstance guard: same reasoning as PowerGenerator — internal callers
+        # may pass solver variables; sign validation only applies to user code.
+        if isinstance(mass_flow, (int, float)) and mass_flow < 0:
+            raise ValueError(
+                f"Source expects a positive injection magnitude; "
+                f"got mass_flow={mass_flow}.  Pass the absolute value — the "
+                f"sign is handled internally (load convention)."
+            )
         super().__init__(**kwargs)
         self.mass_flow = -mass_flow
 

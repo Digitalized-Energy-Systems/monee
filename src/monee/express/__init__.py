@@ -259,6 +259,44 @@ def create_gas_pipe(
     )
 
 
+def create_compressor(
+    network: mm.Network,
+    from_node_id,
+    to_node_id,
+    compression_ratio=1.5,
+    max_flow_kgs=10.0,
+    grid=None,
+    name=None,
+):
+    """
+    Add a gas compressor branch between two junctions.
+
+    The compressor raises pressure from *from_node* (suction) to *to_node*
+    (discharge) by ``compression_ratio``.  Flow is strictly unidirectional.
+
+    Args:
+        network: Target network.
+        from_node_id: Suction-side junction ID.
+        to_node_id: Discharge-side junction ID.
+        compression_ratio (float): Outlet/inlet pressure ratio (≥ 1). Defaults to 1.5.
+        max_flow_kgs (float): Maximum mass throughput in kg/s. Defaults to 10.
+        grid: Grid domain override.
+        name (str, optional): Human-readable name.
+
+    Returns:
+        tuple: Branch ID ``(from_node_id, to_node_id, edge_key)``.
+    """
+    return network.branch(
+        mm.GasCompressor(compression_ratio, max_flow_kgs),
+        from_node_id=from_node_id,
+        to_node_id=to_node_id,
+        grid=grid,
+        name=name,
+        auto_node_creator=lambda: mm.Junction(),
+        auto_grid_key=mm.GAS_KEY,
+    )
+
+
 def create_water_pipe(
     network: mm.Network,
     from_node_id,
@@ -329,9 +367,7 @@ def create_el_child(
     **kwargs,
 ):
     """
-    Adds an electrical component as a child to a specified node in the network, supporting flexible configuration and automatic node creation.
-
-    This function is used to attach electrical elements—such as loads, generators, or external grids—to a node within a network. Use it during network construction, expansion, or scenario modeling to represent new sources, sinks, or interconnections. The function ensures the component is properly connected to the specified node, applies any operational constraints, and allows for custom identification and naming. If the target node does not exist, an electrical bus is automatically created to facilitate integration.
+    Attach any electrical child model to a bus node.
 
     Args:
         network (mm.Network): Target network.
@@ -405,9 +441,7 @@ def create_gas_child(
     **kwargs,
 ):
     """
-    Adds a gas component as a child to a specified node in the network, supporting flexible integration and automatic node creation.
-
-    This function is used to attach gas-related elements—such as compressors, valves, or junctions—to a node within a network. Use it during network construction, expansion, or scenario modeling to represent new gas infrastructure or control devices. The function ensures the component is properly connected to the specified node, applies any operational constraints, and allows for custom identification and naming. If the target node does not exist, a gas junction is automatically created to facilitate integration.
+    Attach any gas child model to a junction node.
 
     Args:
         network (mm.Network): Target network.

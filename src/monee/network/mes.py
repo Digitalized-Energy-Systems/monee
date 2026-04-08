@@ -13,9 +13,6 @@ DEFAULT_LENGTH = 100
 def get_length(
     net: mm.Network, branch, node1_id, node2_id, default_length=DEFAULT_LENGTH
 ):
-    """
-    No docstring provided.
-    """
     if hasattr(branch.model, "length_m"):
         return branch.model.length_m
     node1 = net.node_by_id(node1_id)
@@ -37,9 +34,6 @@ def create_heat_net_for_power(
     default_length=DEFAULT_LENGTH,
     power_scale=1,
 ):
-    """
-    No docstring provided.
-    """
     heat_grid = mm.create_water_grid("water")
     heat_grid.t_ref = REF_TEMP
     heat_grid.pressure_ref = REF_PA
@@ -117,9 +111,6 @@ def create_gas_net_for_power(
     length_scale=1,
     default_length=100,
 ):
-    """
-    No docstring provided.
-    """
     gas_grid = mm.create_gas_grid("gas", type="lgas")
     gas_grid.pressure_ref = REF_PA
     gas_grid.t_ref = REF_TEMP
@@ -178,9 +169,6 @@ def create_p2h_in_combined_generated_network(
     end_bus_to_heat_junc,
     p2h_density,
 ):
-    """
-    No docstring provided.
-    """
     for power_node in net_power.nodes:
         heat_junc = bus_to_heat_junc[power_node.id]
         heat_junc_two = end_bus_to_heat_junc[power_node.id]
@@ -208,9 +196,6 @@ def create_chp_in_combined_generated_network(
     bus_to_gas_junc,
     chp_density,
 ):
-    """
-    No docstring provided.
-    """
     for power_node in net_power.nodes:
         heat_junc = bus_to_heat_junc[power_node.id]
         heat_junc_two = end_bus_to_heat_junc[power_node.id]
@@ -237,9 +222,6 @@ def create_chp_in_combined_generated_network(
 def create_p2g_in_combined_generated_network(
     new_mes_net, net_power, bus_to_gas_junc, p2g_density
 ):
-    """
-    No docstring provided.
-    """
     for power_node in net_power.nodes:
         gas_junc = bus_to_gas_junc[power_node.id]
         if random.random() <= p2g_density:
@@ -260,9 +242,6 @@ def generate_mes_based_on_power_net(
     p2g_density=0.02,
     p2h_density=0.1,
 ):
-    """
-    No docstring provided.
-    """
     new_mes_net = net_power.copy()
     bus_to_heat_junc, end_bus_to_heat_junc = create_heat_net_for_power(
         net_power, new_mes_net, heat_deployment_rate

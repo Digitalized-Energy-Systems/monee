@@ -2,9 +2,6 @@ import math
 
 
 def darcy_friction(reynolds_var):
-    """
-    No docstring provided.
-    """
     return 64 / (reynolds_var + 1)
 
 

@@ -7,8 +7,7 @@ from typing import Any
 import pandas
 
 from monee.model import Network
-from monee.model.core import Var, tracked
-from monee.model.core import value as _model_value
+from monee.model.core import Var
 from monee.simulation.core import solve
 from monee.simulation.step_state import StepState
 from monee.solver.core import _TABLE_CSS, _col_summary, _display_df
@@ -155,20 +154,15 @@ class TimeseriesData:
         """Set *attr* on *model* to *value*.
 
         * For plain (non-``Var``) attributes the value is replaced directly.
-        * For ordinary ``Var`` instances the value is updated in place so that
-          the type and bounds are preserved.
-        * For ``tracked`` instances the value *and* both bounds are set to the
-          series value, effectively pinning the variable at that setpoint for
-          this step while keeping the ``tracked`` type so the solved value is
-          still recorded in ``StepState`` for inter-step coupling.
+        * For ``Var`` instances the value, min, and max are all pinned to the
+          series value, fixing the variable at that setpoint for this step
+          while keeping it a ``Var`` so it remains accessible via ``StepState``.
         """
         current = getattr(model, attr, None)
-        if type(current) is tracked:
+        if isinstance(current, Var):
             current.value = value
             current.min = value
             current.max = value
-        elif isinstance(current, Var):
-            current.value = value
         else:
             setattr(model, attr, value)
 
@@ -457,7 +451,11 @@ class TimeseriesResult:
             found = False
             for df in sr.result.dataframes.values():
                 if "id" in df.columns and attribute in df.columns:
-                    row = df[df["id"] == component_id]
+                    try:
+                        mask = df["id"] == component_id
+                    except (ValueError, TypeError):
+                        mask = df["id"].apply(lambda x: x == component_id)
+                    row = df[mask]
                     if not row.empty:
                         values.append(row.iloc[0][attribute])
                         found = True
@@ -633,65 +631,6 @@ class TimeseriesResult:
         )
 
 
-def _attrs_to_track(model) -> list:
-    """
-    Return the list of attribute names whose solved values should be recorded
-    in ``StepState`` for *model*.
-
-    Two protocols are supported (both may coexist):
-
-    * **``tracked`` vars** — attributes that are currently ``tracked``
-      instances on the model (restored from ``tracked`` to ``tracked`` during
-      solver withdrawal so this check works post-solve).
-    * **``inter_step_vars()``** — explicit string-list method, kept for
-      backward compatibility.
-    """
-    attrs = [k for k, v in model.__dict__.items() if type(v) is tracked]
-    if hasattr(model, "inter_step_vars"):
-        for attr in model.inter_step_vars():
-            if attr not in attrs:
-                attrs.append(attr)
-    return attrs
-
-
-def _extract_step_state(state: StepState, net: Network) -> None:
-    """
-    Walk the solved network and record the values of all tracked attributes
-    into *state*.
-
-    Called after each timestep's solve + withdraw so that the values stored
-    are plain Python floats ready for the next step.
-    """
-    for node in net.nodes:
-        if node.ignored:
-            continue
-        for attr in _attrs_to_track(node.model):
-            v = getattr(node.model, attr, None)
-            if v is not None:
-                state.set(node.id, attr, _model_value(v))
-        for child in net.childs_by_ids(node.child_ids):
-            if child.ignored:
-                continue
-            for attr in _attrs_to_track(child.model):
-                v = getattr(child.model, attr, None)
-                if v is not None:
-                    state.set(child.id, attr, _model_value(v))
-    for branch in net.branches:
-        if branch.ignored:
-            continue
-        for attr in _attrs_to_track(branch.model):
-            v = getattr(branch.model, attr, None)
-            if v is not None:
-                state.set(branch.id, attr, _model_value(v))
-    for compound in net.compounds:
-        if compound.ignored:
-            continue
-        for attr in _attrs_to_track(compound.model):
-            v = getattr(compound.model, attr, None)
-            if v is not None:
-                state.set(compound.id, attr, _model_value(v))
-
-
 def apply_to_by_id(component, data: dict, timestep: int) -> None:
     if component.id in data:
         for attr, series in data[component.id].items():
@@ -753,7 +692,7 @@ class StepHook(ABC):
 
 def run(
     net: Network,
-    timeseries_data: TimeseriesData,
+    timeseries_data: TimeseriesData | None = None,
     steps: int | None = None,
     step_hooks: list[StepHook | Callable] | None = None,
     solver=None,
@@ -797,12 +736,18 @@ def run(
     Returns:
         A ``TimeseriesResult`` containing per-step outcomes.
     """
+    if steps is None and timeseries_data is None:
+        raise ValueError(
+            "Without timeseries data, the number of steps *steps* needs to be provided."
+        )
     if steps is None:
         steps = timeseries_data.length
         if steps is None:
             raise ValueError(
                 "Cannot infer step count: no series registered and 'steps' not provided."
             )
+    if timeseries_data is None:
+        timeseries_data = TimeseriesData()
     if timeseries_data.length is not None and steps > timeseries_data.length:
         raise ValueError(
             f"'steps' ({steps}) exceeds the length of the registered series "
@@ -820,6 +765,10 @@ def run(
     step_state = StepState()
 
     for step in range(steps):
+        if datetime_index is not None and step > 0:
+            delta = datetime_index[step] - datetime_index[step - 1]
+            step_state.dt_h = delta.total_seconds() / 3600.0
+
         for hook in step_hooks:
             if isinstance(hook, StepHook):
                 hook.pre_run(net, step, step_state)
@@ -835,7 +784,7 @@ def run(
                     solver=solver,
                     step_state=step_state,
                 )
-                _extract_step_state(step_state, result.network)
+                step_state.push(result.network)
                 sr = StepResult(step=step, result=result)
             except Exception as exc:
                 if on_step_error == "raise":

@@ -50,9 +50,6 @@ CONTROLLABLE_ATTRIBUTES_CP = [
 
 
 def _or_zero(var):
-    """
-    No docstring provided.
-    """
     if type(var) is Var and math.isnan(var.value):
         return 0
     if (
@@ -68,9 +65,6 @@ HHV = 15.3
 
 
 def retrieve_power_uniform(model):
-    """
-    No docstring provided.
-    """
 
     if isinstance(model, HeatExchangerLoad | HeatExchangerGenerator | HeatExchanger):
         return (model.q_w_set / 1000000.0 * model.regulation, model.q_w_set / 1000000.0)
@@ -101,9 +95,6 @@ def retrieve_power_uniform(model):
 
 
 def calculate_objective(model_to_data):
-    """
-    No docstring provided.
-    """
     power_coeff = [
         (
             model,
@@ -131,9 +122,6 @@ def create_load_shedding_optimization_problem(
     check_t=True,
     debug=False,
 ):
-    """
-    No docstring provided.
-    """
     problem = OptimizationProblem(debug=debug)
     problem.controllable_demands(CONTROLLABLE_ATTRIBUTES)
     problem.controllable_generators(CONTROLLABLE_ATTRIBUTES)

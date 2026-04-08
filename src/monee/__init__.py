@@ -19,6 +19,11 @@ from monee.simulation import (
     run_timeseries,
     TimeseriesResult,
     StepHook,
+    run_multi_period,
+    run_mpc,
+    MultiPeriodResult,
+    GekkoMultiPeriodSolver,
+    PyomoMultiPeriodSolver,
 )
 from monee.solver import GEKKOSolver, PyomoSolver
 

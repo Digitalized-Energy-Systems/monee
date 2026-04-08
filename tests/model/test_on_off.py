@@ -81,21 +81,21 @@ def test_on_off_gas():
     j_1 = mx.create_gas_junction(net)
     j_2 = mx.create_gas_junction(net)
 
-    mx.create_ext_hydr_grid(net, j_1, pressure_pa=1)
+    mx.create_ext_hydr_grid(net, j_1, pressure_pu=1)
     mx.create_source(net, j_0, 0.1)
     mx.create_sink(net, j_2, Var(1))
 
-    mx.create_gas_pipe(net, j_0, j_1, diameter_m=0.7, length_m=100)
-
     def my_constraint(line, grid, fn, tn, **kwargs):
         return line.on_off == 0
+
+    mx.create_gas_pipe(net, j_0, j_1, diameter_m=0.1, length_m=1000, roughness=0.001)
 
     mx.create_gas_pipe(
         net,
         j_0,
         j_2,
-        diameter_m=0.7,
-        length_m=100,
+        diameter_m=0.1,
+        length_m=1000,
         on_off=Var(1, min=0, max=1, integer=True),
         constraints=[my_constraint],
     )
@@ -103,6 +103,7 @@ def test_on_off_gas():
     result = run_energy_flow(net)
 
     print(result)
+
     assert result.dataframes["Sink"]["mass_flow"][0] == 0
     assert (
         result.dataframes["GasPipe"]["mass_flow"][1] < 0.001

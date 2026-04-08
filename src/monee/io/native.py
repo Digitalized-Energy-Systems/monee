@@ -6,15 +6,10 @@ from monee.model.core import Var, component_list
 
 
 class PersistenceException(Exception):
-    """
-    No docstring provided.
-    """
+    pass
 
 
 def init_model(model_type, preprocessed_dict):
-    """
-    No docstring provided.
-    """
     model = None
     model_type_dict = {
         component_cls.__name__: component_cls for component_cls in component_list
@@ -42,9 +37,6 @@ def init_model(model_type, preprocessed_dict):
 
 
 def preprocess_dict(model_dict):
-    """
-    No docstring provided.
-    """
     result = {}
     for k, v in model_dict.items():
         if type(v) is dict:
@@ -56,9 +48,6 @@ def preprocess_dict(model_dict):
 
 
 def native_dict_to_network(dict_struct) -> Network:
-    """
-    No docstring provided.
-    """
     network = Network(None)
     grid_by_name = dict_struct["grids"]
     for k, v in grid_by_name.items():
@@ -104,9 +93,6 @@ def native_dict_to_network(dict_struct) -> Network:
 
 
 def load_to_network(file) -> Network:
-    """
-    No docstring provided.
-    """
     dict_struct = None
     with open(file) as read_fp:
         dict_struct = json.load(read_fp)
@@ -114,9 +100,6 @@ def load_to_network(file) -> Network:
 
 
 def write_omef_network(file, network: Network):
-    """
-    No docstring provided.
-    """
     grids = {}
     nodes = network.nodes
     branches = network.branches
@@ -152,9 +135,6 @@ def write_omef_network(file, network: Network):
 
 
 def child_to_dict(child):
-    """
-    No docstring provided.
-    """
     return dict(
         id=child.id,
         values=model_to_dict(child.model),
@@ -163,9 +143,6 @@ def child_to_dict(child):
 
 
 def compound_to_dict(compound):
-    """
-    No docstring provided.
-    """
     return dict(
         id=compound.id,
         values=model_to_dict(compound.model),
@@ -175,9 +152,6 @@ def compound_to_dict(compound):
 
 
 def fetch_grid_to_dict(grid_dict, grid_from_model):
-    """
-    No docstring provided.
-    """
     if grid_from_model.name not in grid_dict:
         grid_dict[grid_from_model.name] = grid_from_model
     elif grid_dict[grid_from_model.name] is not grid_from_model:
@@ -187,9 +161,6 @@ def fetch_grid_to_dict(grid_dict, grid_from_model):
 
 
 def branch_to_dict(branch, grids):
-    """
-    No docstring provided.
-    """
     fetch_grid_to_dict(grids, branch.grid)
     return dict(
         id=branch.id,
@@ -202,9 +173,6 @@ def branch_to_dict(branch, grids):
 
 
 def node_to_dict(node, grids):
-    """
-    No docstring provided.
-    """
     fetch_grid_to_dict(grids, node.grid)
     return dict(
         id=node.id,
@@ -216,9 +184,6 @@ def node_to_dict(node, grids):
 
 
 def model_to_dict(model):
-    """
-    No docstring provided.
-    """
     base_dict = model.vars
     result = dict(base_dict)
     return result

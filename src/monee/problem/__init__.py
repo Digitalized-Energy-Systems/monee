@@ -12,7 +12,4 @@ from monee.problem.core import (
 
 
 def calc_general_resilience_performance(network: md.Network, **kwargs):
-    """
-    No docstring provided.
-    """
     return GeneralResiliencePerformanceMetric().calc(network, **kwargs)

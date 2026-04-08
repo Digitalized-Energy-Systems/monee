@@ -10,10 +10,6 @@ from .grid import GasGrid, PowerGrid, WaterGrid
 
 @model
 class GenericPowerBranch(BranchModel):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         tap,
@@ -29,18 +25,6 @@ class GenericPowerBranch(BranchModel):
         on_off=1,
         **kwargs,
     ) -> None:
-        """_summary_
-
-        Args:
-            tap (_type_): _description_
-            shift (_type_): _description_
-            br_r (_type_): resistence
-            br_x (_type_): reactance
-            g_fr (_type_): from conductance
-            b_fr (_type_): from susceptance
-            g_to (_type_): to conductance
-            b_to (_type_): to susceptance
-        """
         super().__init__()
         self.tap = tap
         self.shift = shift
@@ -64,21 +48,12 @@ class GenericPowerBranch(BranchModel):
 
     @property
     def loading_percent(self):
-        """
-        No docstring provided.
-        """
         return max(self.loading_to_percent.value, self.loading_from_percent.value)
 
     def loss_percent(self):
-        """
-        No docstring provided.
-        """
         return abs((self.p_from_mw.value - self.p_to_mw.value) / self.p_from_mw.value)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
-        """
-        No docstring provided.
-        """
         return [
             self.loading_to_percent == self.i_to_ka / self.max_i_ka,
             self.loading_from_percent == self.i_from_ka / self.max_i_ka,
@@ -87,10 +62,6 @@ class GenericPowerBranch(BranchModel):
 
 @model
 class PowerBranch(GenericPowerBranch, ABC):
-    """
-    No docstring provided.
-    """
-
     def __init__(self, tap, shift, backup=False, on_off=1, **kwargs) -> None:
         super().__init__(
             tap, shift, 0, 0, 0, 0, 0, 0, backup=backup, on_off=on_off, **kwargs
@@ -104,24 +75,15 @@ class PowerBranch(GenericPowerBranch, ABC):
 
     @abstractmethod
     def calc_r_x(self, grid, from_node_model, to_node_model):
-        """
-        No docstring provided.
-        """
+        pass
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
-        """
-        No docstring provided.
-        """
         self.br_r, self.br_x = self.calc_r_x(grid, from_node_model, to_node_model)
         return super().equations(grid, from_node_model, to_node_model, **kwargs)
 
 
 @model
 class PowerLine(PowerBranch):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         length_m,
@@ -139,9 +101,6 @@ class PowerLine(PowerBranch):
         self.parallel = parallel
 
     def calc_r_x(self, grid: PowerGrid, from_node_model, to_node_model):
-        """
-        No docstring provided.
-        """
         base_r = from_node_model.base_kv**2 / grid.sn_mva
         br_r = self.r_ohm_per_m * self.length_m / base_r / self.parallel
         br_x = self.x_ohm_per_m * self.length_m / base_r / self.parallel
@@ -150,10 +109,6 @@ class PowerLine(PowerBranch):
 
 @model
 class Trafo(PowerBranch):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self, vk_percent=12.2, vkr_percent=0.25, sn_trafo_mva=160, shift=0
     ) -> None:
@@ -164,9 +119,6 @@ class Trafo(PowerBranch):
         self.vn_trafo_lv = 1
 
     def calc_r_x(self, grid: PowerGrid, lv_model, hv_model):
-        """
-        No docstring provided.
-        """
         tap_lv = np.square(lv_model.base_kv / hv_model.base_kv) * grid.sn_mva
         z_sc = self.vk_percent / 100.0 / self.sn_trafo_mva * tap_lv
         r_sc = self.vkr_percent / 100.0 / self.sn_trafo_mva * tap_lv
@@ -174,26 +126,16 @@ class Trafo(PowerBranch):
         return (r_sc, x_sc)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
-        """
-        No docstring provided.
-        """
         self.tap = 1
         return super().equations(grid, from_node_model, to_node_model, **kwargs)
 
 
 def sign(v):
-    """
-    No docstring provided.
-    """
     return 1 if v >= 0 else -1
 
 
 @model
 class WaterPipe(BranchModel):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         diameter_m,
@@ -231,9 +173,6 @@ class WaterPipe(BranchModel):
         )
 
     def loss_percent(self):
-        """
-        No docstring provided.
-        """
         return abs(self.q_w.value) / (
             abs(self.mass_flow.value)
             * ohfmodel.SPECIFIC_HEAT_CAP_WATER
@@ -246,10 +185,6 @@ class WaterPipe(BranchModel):
 
 @model
 class HeatExchanger(BranchModel):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         q_mw,
@@ -295,30 +230,18 @@ class HeatExchanger(BranchModel):
 
 @model
 class HeatExchangerLoad(HeatExchanger):
-    """
-    No docstring provided.
-    """
-
     def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
         super().__init__(q_mw, diameter_m, temperature_ext_k)
 
 
 @model
 class HeatExchangerGenerator(HeatExchanger):
-    """
-    No docstring provided.
-    """
-
     def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
         super().__init__(q_mw, diameter_m, temperature_ext_k)
 
 
 @model
 class GasPipe(BranchModel):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         diameter_m,
@@ -347,7 +270,40 @@ class GasPipe(BranchModel):
         self.q_w = 0
 
     def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):
-        """
-        No docstring provided.
-        """
         return [IntermediateEq("mass_flow", self.mass_flow_pos - self.mass_flow_neg)]
+
+
+@model
+class GasCompressor(BranchModel):
+    """
+    Ideal gas compressor — raises pressure from suction junction to discharge junction
+    by a fixed compression ratio.
+
+    The pressure boost equation uses the same first-order linearisation around
+    ``grid.nominal_pressure_pu`` as the Weymouth pipe formulation, keeping the
+    overall system linear.  Mass flow is strictly unidirectional (suction →
+    discharge); no ``mass_flow_neg`` variable is needed.
+
+    Args:
+        compression_ratio (float): Desired outlet/inlet pressure ratio (≥ 1).
+        max_flow_kgs (float): Upper bound on mass throughput in kg/s.
+    """
+
+    def __init__(self, compression_ratio=1.5, max_flow_kgs=10.0) -> None:
+        super().__init__()
+        self.compression_ratio = compression_ratio
+        self.max_flow_kgs = max_flow_kgs
+        self.mass_flow = Intermediate(0.1)
+        # Gas convention: forward physical flow (suction→discharge) uses mass_flow_neg,
+        # matching the sign convention of GasPipe (Weymouth uses mf_neg for forward flow).
+        self.mass_flow_neg = Var(0.1, min=0, max=max_flow_kgs, name="mass_flow_neg")
+        self.on_off = 1
+
+    def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):
+        p_sq_from = from_node_model.vars["pressure_squared_pu"]
+        p_sq_to = to_node_model.vars["pressure_squared_pu"]
+        return [
+            IntermediateEq("mass_flow", -self.mass_flow_neg),
+            # p_to² = ratio² · p_from²  (linear when ratio is a fixed scalar)
+            self.compression_ratio**2 * p_sq_from == p_sq_to,
+        ]

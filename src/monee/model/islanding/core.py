@@ -3,7 +3,7 @@ Islanding system for multi-carrier grid restoration.
 
 Carrier-independent backbone:
 
-* ``IslandingMode``          – base class per carrier; implements ``NetworkConstraint``.
+* ``IslandingMode``          – base class per carrier; implements ``NetworkAspect``.
 * ``NetworkIslandingConfig`` – bundles per-carrier modes; registered via
                                ``network.add_extension()``.
 
@@ -18,7 +18,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from monee.model.child import GridFormingMixin
-from monee.model.formulation.core import NetworkConstraint
+from monee.model.formulation.core import NetworkAspect
 from monee.model.network import Network
 from monee.model.phys.islanding import (
     connectivity_arc_capacity_line,
@@ -157,11 +157,11 @@ def _build_connectivity_equations(
 
 
 # ---------------------------------------------------------------------------
-# IslandingMode — implements NetworkConstraint
+# IslandingMode — implements NetworkAspect
 # ---------------------------------------------------------------------------
 
 
-class IslandingMode(NetworkConstraint, ABC):
+class IslandingMode(NetworkAspect, ABC):
     """
     Per-carrier islanding configuration.
 
@@ -169,7 +169,7 @@ class IslandingMode(NetworkConstraint, ABC):
     and may override ``add_physical_constraints`` to add carrier-specific constraints
     (e.g. angle pinning for DC electricity, pressure bounds for gas/water).
 
-    Implements ``NetworkConstraint``:
+    Implements ``NetworkAspect``:
     - ``prepare(network)``               → Phase 1: adds Var placeholders.
     - ``equations(network, ignored)``    → Phase 2: returns constraint list.
     """
@@ -228,11 +228,11 @@ class IslandingMode(NetworkConstraint, ABC):
 
 
 # ---------------------------------------------------------------------------
-# NetworkIslandingConfig — implements NetworkConstraint
+# NetworkIslandingConfig — implements NetworkAspect
 # ---------------------------------------------------------------------------
 
 
-class NetworkIslandingConfig(NetworkConstraint):
+class NetworkIslandingConfig(NetworkAspect):
     """
     Container bundling per-carrier ``IslandingMode`` instances.
 

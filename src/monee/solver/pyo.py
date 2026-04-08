@@ -11,7 +11,6 @@ from monee.model import (
     Network,
     Var,
 )
-from monee.model.core import tracked
 
 # detect islanding config for topology-aware pre-filtering
 from monee.model.islanding.core import NetworkIslandingConfig
@@ -79,9 +78,6 @@ class PyomoSolver(SolverInterface):
         pm: pyo.ConcreteModel, target: GenericModel, prefix: str
     ):
         """Replace Var/Const fields on `target` with Pyomo Var / numeric constants."""
-        inter_step_attrs = [k for k, v in target.__dict__.items() if type(v) is tracked]
-        if inter_step_attrs:
-            target._inter_step_attrs = inter_step_attrs
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
                 v = pyo.Var(
@@ -97,13 +93,11 @@ class PyomoSolver(SolverInterface):
     @staticmethod
     def withdraw_pyomo_vars_attr(target: GenericModel):
         """Convert Pyomo Var values back into Var objects."""
-        inter_step_attrs = getattr(target, "_inter_step_attrs", [])
         for key, value in target.__dict__.items():
             if isinstance(value, pyo.Var):
                 lb, ub = value.bounds if value.bounds is not None else (None, None)
                 val = pyo.value(value)
-                var_cls = tracked if key in inter_step_attrs else Var
-                setattr(target, key, var_cls(value=val, min=lb, max=ub))
+                setattr(target, key, Var(value=val, min=lb, max=ub))
             elif isinstance(value, pyo.Expression):
                 setattr(target, key, Intermediate(value=pyo.value(value)))
 
@@ -161,7 +155,7 @@ class PyomoSolver(SolverInterface):
 
         network = input_network.copy()
 
-        # Phase 1: add Var placeholders for all NetworkConstraint extensions
+        # Phase 1: add Var placeholders for all NetworkAspect extensions
         for ext in network.extensions:
             ext.prepare(network)
 
@@ -205,6 +199,12 @@ class PyomoSolver(SolverInterface):
             ignored_nodes,
         )
 
+        # Phase 1.5: let extensions mark nodes before equations are assembled.
+        if step_state is not None:
+            for ext in network.extensions:
+                ext.activate_timeseries(network, ignored_nodes, step_state=step_state)
+            self.mark_temporal_components(network, ignored_nodes)
+
         # init branches
         self.init_branches(branches)
 
@@ -223,8 +223,16 @@ class PyomoSolver(SolverInterface):
             self.process_inter_step_equations(
                 pm, network, nodes, branches, compounds, ignored_nodes, step_state
             )
+            # Also collect inter-step equations from NetworkAspect extensions.
+            for ext in network.extensions:
+                self._add_equations(
+                    pm, ext.inter_step_equations(network, ignored_nodes, step_state)
+                )
+                self._add_equations(
+                    pm, ext.inter_temporal_equations(network, ignored_nodes, step_state)
+                )
 
-        # Phase 2: add NetworkConstraint extension equations after variable injection
+        # Phase 2: add NetworkAspect extension equations after variable injection
         for ext in network.extensions:
             self._add_equations(pm, ext.equations(network, ignored_nodes))
 
@@ -275,7 +283,11 @@ class PyomoSolver(SolverInterface):
             self._add_equations(pm, optimization_problem.constraints.all(network))
 
         obj = None
-        for objective in optimization_problem.objectives.all(network):
+        for objective in (
+            optimization_problem.objectives.all(network)
+            if optimization_problem.objectives is not None
+            else []
+        ):
             obj = objective if obj is None else (obj + objective)
         if obj is not None:
             pm.obj_exprs.append(obj)

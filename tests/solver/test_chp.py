@@ -209,10 +209,10 @@ def test_chp_efficiency_ratio():
     """el_mw scales with efficiency_power; heat_w scales with efficiency_heat."""
     # Use small mass_flow_setpoint to keep heat output within pipe capacity
     net_a = _build_chp_network(
-        efficiency_power=0.7, efficiency_heat=0.2, mass_flow_setpoint=0.0001
+        efficiency_power=0.7, efficiency_heat=0.2, mass_flow_setpoint=0.001
     )
     net_b = _build_chp_network(
-        efficiency_power=0.3, efficiency_heat=0.6, mass_flow_setpoint=0.0001
+        efficiency_power=0.3, efficiency_heat=0.6, mass_flow_setpoint=0.001
     )
     ra = ms.GEKKOSolver().solve(net_a)
     rb = ms.GEKKOSolver().solve(net_b)
