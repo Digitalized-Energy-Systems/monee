@@ -78,6 +78,60 @@ Quick start
 
    6 successful steps, 0 failures
 
+.. plot::
+   :caption: Six-step load profile — bus voltage and grid import track the varying demand
+
+   import monee.model as mm
+   import monee.express as mx
+   from monee.simulation import TimeseriesData, run_timeseries
+   import matplotlib.pyplot as plt
+
+   LOAD_PROFILE = [0.4, 0.8, 1.2, 1.0, 0.6, 0.3]
+   STEPS = list(range(len(LOAD_PROFILE)))
+
+   net = mx.create_multi_energy_network()
+   bus0 = mx.create_bus(net)
+   bus1 = mx.create_bus(net)
+   mx.create_ext_power_grid(net, bus0)
+   mx.create_line(net, bus0, bus1,
+                  length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+   load = mx.create_power_load(net, bus1, p_mw=1.0, q_mvar=0.0, name="demand")
+
+   td = TimeseriesData()
+   td.add_child_series_by_name("demand", "p_mw", LOAD_PROFILE)
+   result = run_timeseries(net, td)
+
+   vm_df  = result.get_result_for(mm.Bus, "vm_pu")
+   ext_df = result.get_result_for(mm.ExtPowerGrid, "p_mw")
+   vm1    = vm_df.iloc[:, 1].values        # residential bus
+   grid_p = ext_df.iloc[:, 0].values
+
+   fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 6),
+                             gridspec_kw={"hspace": 0.45})
+
+   axes[0].step(STEPS, LOAD_PROFILE, where="post", lw=2, color="#f4a261")
+   axes[0].fill_between(STEPS, 0, LOAD_PROFILE, step="post",
+                         color="#f4a261", alpha=0.18)
+   axes[0].set_ylabel("Load  [MW]")
+   axes[0].set_title("Demand profile", fontsize=10)
+   axes[0].grid(axis="y", alpha=0.3)
+
+   axes[1].bar(STEPS, grid_p, color="#2c7bb6", alpha=0.8, width=0.6)
+   axes[1].axhline(0, color="grey", lw=0.8)
+   axes[1].set_ylabel("Grid import  [MW]")
+   axes[1].set_title("External grid flow", fontsize=10)
+   axes[1].grid(axis="y", alpha=0.3)
+
+   axes[2].plot(STEPS, vm1, marker="o", lw=2, color="#1a9641")
+   axes[2].set_ylabel("Voltage  [pu]")
+   axes[2].set_xlabel("Step")
+   axes[2].set_title("Bus 1 voltage", fontsize=10)
+   axes[2].set_xticks(STEPS)
+   axes[2].grid(axis="y", alpha=0.3)
+
+   fig.suptitle("Timeseries simulation — quick start", fontsize=12, fontweight="bold")
+   plt.tight_layout()
+
 ----
 
 TimeseriesData
@@ -222,7 +276,7 @@ Implement ``inter_temporal_equations`` on any model to add coupling constraints.
 The method receives a ``temporal_state`` object whose ``.get()`` returns the
 previous step's solved float (or ``None`` on the first step):
 
-.. code-block:: python
+.. testcode::
 
    from monee.model.core import ChildModel, Var, model
 

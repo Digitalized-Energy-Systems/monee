@@ -1,5 +1,6 @@
+import math
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import networkx as nx
 import pandas
@@ -76,12 +77,15 @@ class SolverResult:
             Prefer :meth:`get` over direct dict access to avoid string-key typos.
         objective: Value of the optimisation objective at the solution.
             ``0.0`` for plain energy-flow (no optimisation problem).
+            ``None`` when per-period objectives are not meaningful (e.g.
+            from :meth:`MultiPeriodResult.get_period_result`).
     """
 
     network: Network
     dataframes: dict[str, pandas.DataFrame]
-    objective: float
+    objective: float | None
     success: bool
+    violations: dict[str, float] = field(default_factory=dict)
 
     def summary(self):
         return repr(self)
@@ -136,7 +140,7 @@ class SolverResult:
     def __repr__(self) -> str:
         SEP = "─" * 68
         title = "SolverResult"
-        if self.objective != 0.0:
+        if self.objective is not None and self.objective != 0.0:
             title += f"  (objective = {self.objective:.6g})"
         lines = [title, SEP]
         for type_name, df in self.dataframes.items():
@@ -154,6 +158,11 @@ class SolverResult:
                 row += "  │  " + "  ·  ".join(parts[:4])
             lines.append(row)
         lines.append(SEP)
+        if self.violations:
+            lines.append("  VIOLATIONS:")
+            for key, mag in self.violations.items():
+                lines.append(f"    {key}: {mag:.4g}")
+            lines.append(SEP)
         return "\n".join(lines)
 
     def __str__(self) -> str:
@@ -163,7 +172,7 @@ class SolverResult:
         evaluate ``result`` in a REPL) for the compact one-line-per-type summary.
         """
         title = "SolverResult"
-        if self.objective != 0.0:
+        if self.objective is not None and self.objective != 0.0:
             title += f"  (objective = {self.objective:.6g})"
         SEP = "─" * 68
         lines = [title]
@@ -181,7 +190,7 @@ class SolverResult:
 
     def _repr_html_(self) -> str:
         obj_extra = ""
-        if self.objective != 0.0:
+        if self.objective is not None and self.objective != 0.0:
             obj_extra = (
                 f" &nbsp;<span style='color:#888;font-weight:normal'>"
                 f"objective = {self.objective:.6g}</span>"
@@ -452,9 +461,12 @@ class SolverInterface(ABC):
         compounds,
         ignored_nodes: set,
         step_state,
+        optimization_problem=None,
+        period_index=None,
     ):
         """Collect timeseries inter-step equations (``inter_step_equations`` +
-        ``inter_temporal_equations``) for all active components."""
+        ``inter_temporal_equations``) for all active components, plus any
+        user-defined temporal constraints from the optimization problem."""
         self._collect_temporal_eqs(
             solver_obj,
             network,
@@ -464,6 +476,9 @@ class SolverInterface(ABC):
             ignored_nodes,
             step_state,
             "inter_step_equations",
+        )
+        self._collect_oxf_temporal_eqs(
+            solver_obj, network, step_state, optimization_problem, period_index
         )
 
     def process_inter_period_equations(
@@ -475,9 +490,12 @@ class SolverInterface(ABC):
         compounds,
         ignored_nodes: set,
         period_state,
+        optimization_problem=None,
+        period_index=None,
     ):
         """Collect multi-period inter-period equations (``inter_period_equations`` +
-        ``inter_temporal_equations``) for all active components."""
+        ``inter_temporal_equations``) for all active components, plus any
+        user-defined temporal constraints from the optimization problem."""
         self._collect_temporal_eqs(
             solver_obj,
             network,
@@ -488,6 +506,24 @@ class SolverInterface(ABC):
             period_state,
             "inter_period_equations",
         )
+        self._collect_oxf_temporal_eqs(
+            solver_obj, network, period_state, optimization_problem, period_index
+        )
+
+    def _collect_oxf_temporal_eqs(
+        self, solver_obj, network, temporal_state, optimization_problem, period_index
+    ):
+        """Evaluate user-defined temporal constraints from the optimization problem."""
+        if optimization_problem is None:
+            return
+        constraints = optimization_problem.constraints
+        if constraints is None or not constraints.has_temporal:
+            return
+        eqs = constraints.all_temporal(
+            network, temporal_state, period_index=period_index
+        )
+        if eqs:
+            self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
 
 
 def as_iter(possible_iter):
@@ -588,6 +624,73 @@ def withdraw_vars(withdraw_fn, nodes, branches, compounds, network):
             withdraw_fn(child.model)
     for compound in compounds:
         withdraw_fn(compound.model)
+
+
+def _copy_var_values(src, dst) -> None:
+    """Copy ``Var.value`` from each ``Var`` attribute on *src* to the matching one on *dst*."""
+    for key, val in src.__dict__.items():
+        if isinstance(val, Var):
+            dst_var = dst.__dict__.get(key)
+            if isinstance(dst_var, Var):
+                dst_var.value = val.value
+
+
+def persist_solution(solved_copy: Network, original: Network) -> None:
+    """Propagate solved ``Var.value`` from *solved_copy* back to *original* in-place.
+
+    Called after every solve (successful or partial) so that the next call to
+    :func:`inject_vars` warm-starts from the previous solution rather than the
+    constructor defaults.
+    """
+    for src_node, dst_node in zip(solved_copy.nodes, original.nodes):
+        _copy_var_values(src_node.model, dst_node.model)
+        for src_child, dst_child in zip(
+            solved_copy.childs_by_ids(src_node.child_ids),
+            original.childs_by_ids(dst_node.child_ids),
+        ):
+            _copy_var_values(src_child.model, dst_child.model)
+    for src_branch, dst_branch in zip(solved_copy.branches, original.branches):
+        _copy_var_values(src_branch.model, dst_branch.model)
+    for src_compound, dst_compound in zip(solved_copy.compounds, original.compounds):
+        _copy_var_values(src_compound.model, dst_compound.model)
+
+
+def compute_bound_violations(
+    nodes, branches, compounds, network, tol: float = 1e-6
+) -> dict[str, float]:
+    """Return a dict of bound violations found in the current ``Var.value`` state.
+
+    Keys are ``"<ComponentType>.<id>.<attr>"``; values are the magnitude of the
+    violation (always positive).  Only variables whose ``Var.value`` is a finite
+    number and outside ``[min, max]`` by more than *tol* are reported.
+
+    This is solver-agnostic: it operates on the ``Var`` objects after
+    ``withdraw_vars`` has run (or after ``inject_nans`` for ignored components).
+    """
+    violations: dict[str, float] = {}
+
+    def _check(model, label: str) -> None:
+        for key, val in model.__dict__.items():
+            if not isinstance(val, Var):
+                continue
+            v = val.value
+            if v is None or (isinstance(v, float) and math.isnan(v)):
+                continue
+            if val.min is not None and v < val.min - tol:
+                violations[f"{label}.{key}"] = val.min - v
+            elif val.max is not None and v > val.max + tol:
+                violations[f"{label}.{key}"] = v - val.max
+
+    for branch in branches:
+        _check(branch.model, f"{type(branch.model).__name__}.{branch.id}")
+    for node in nodes:
+        _check(node.model, f"{type(node.model).__name__}.{node.id}")
+        for child in network.childs_by_ids(node.child_ids):
+            _check(child.model, f"{type(child.model).__name__}.{child.id}")
+    for compound in compounds:
+        _check(compound.model, f"{type(compound.model).__name__}.{compound.id}")
+
+    return violations
 
 
 def ignore_branch(branch, network: Network, ignored_nodes):

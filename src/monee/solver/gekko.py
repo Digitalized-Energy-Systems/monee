@@ -20,6 +20,7 @@ from .core import (
     SolverInterface,
     SolverResult,
     as_iter,
+    compute_bound_violations,
     filter_intermediate_eqs,
     find_ignored_nodes,
     generate_real_topology,
@@ -29,6 +30,7 @@ from .core import (
     ignore_node,
     inject_vars,
     mark_ignored_components,
+    persist_solution,
     remove_cps,
     withdraw_vars,
 )
@@ -196,7 +198,14 @@ class GEKKOSolver(SolverInterface):
 
         if step_state is not None:
             self.process_inter_step_equations(
-                m, network, nodes, branches, compounds, ignored_nodes, step_state
+                m,
+                network,
+                nodes,
+                branches,
+                compounds,
+                ignored_nodes,
+                step_state,
+                optimization_problem=optimization_problem,
             )
             # Also collect inter-step equations from NetworkAspect extensions
             # (e.g. LTC thermal-mass constraints that couple T[t] to T[t-1]).
@@ -230,15 +239,31 @@ class GEKKOSolver(SolverInterface):
                     width=0.4,
                 )
                 plt.savefig("debug-network.pdf")
+            # Best-effort: extract partial iterate so the next solve warm-starts
+            # from the last known point rather than constructor defaults.
+            try:
+                withdraw_vars(
+                    GEKKOSolver.withdraw_gekko_vars_attr,
+                    nodes,
+                    branches,
+                    compounds,
+                    network,
+                )
+                persist_solution(network, input_network)
+            except Exception:
+                pass
             raise
         withdraw_vars(
             GEKKOSolver.withdraw_gekko_vars_attr, nodes, branches, compounds, network
         )
+        persist_solution(network, input_network)
+        violations = compute_bound_violations(nodes, branches, compounds, network)
         solver_result = SolverResult(
             network,
             network.as_result_dataframe_dict(),
             m.options.OBJFCNVAL,
             m.options.APPSTATUS == 1,
+            violations,
         )
         return solver_result
 
@@ -255,15 +280,21 @@ class GEKKOSolver(SolverInterface):
             m.Obj(obj)
 
     def process_oxf_components(
-        self, m, network: Network, optimization_problem: OptimizationProblem
+        self,
+        m,
+        network: Network,
+        optimization_problem: OptimizationProblem,
+        period_index=None,
     ):
         if optimization_problem.constraints is not None and (
             not optimization_problem.constraints.empty
         ):
-            m.Equations(optimization_problem.constraints.all(network))
+            m.Equations(
+                optimization_problem.constraints.all(network, period_index=period_index)
+            )
         obj = None
         for objective in (
-            optimization_problem.objectives.all(network)
+            optimization_problem.objectives.all(network, period_index=period_index)
             if optimization_problem.objectives is not None
             else []
         ):

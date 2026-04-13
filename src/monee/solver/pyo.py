@@ -21,6 +21,7 @@ from .core import (
     SolverInterface,
     SolverResult,
     as_iter,
+    compute_bound_violations,
     filter_intermediate_eqs,
     find_ignored_nodes,
     ignore_branch,
@@ -29,6 +30,7 @@ from .core import (
     ignore_node,
     inject_vars,
     mark_ignored_components,
+    persist_solution,
     withdraw_vars,
 )
 
@@ -221,7 +223,14 @@ class PyomoSolver(SolverInterface):
 
         if step_state is not None:
             self.process_inter_step_equations(
-                pm, network, nodes, branches, compounds, ignored_nodes, step_state
+                pm,
+                network,
+                nodes,
+                branches,
+                compounds,
+                ignored_nodes,
+                step_state,
+                optimization_problem=optimization_problem,
             )
             # Also collect inter-step equations from NetworkAspect extensions.
             for ext in network.extensions:
@@ -251,6 +260,8 @@ class PyomoSolver(SolverInterface):
         withdraw_vars(
             PyomoSolver.withdraw_pyomo_vars_attr, nodes, branches, compounds, network
         )
+        persist_solution(network, input_network)
+        violations = compute_bound_violations(nodes, branches, compounds, network)
 
         # objective value
         obj_val = pyo.value(pm.obj)
@@ -260,6 +271,7 @@ class PyomoSolver(SolverInterface):
             network.as_result_dataframe_dict(),
             obj_val,
             result.solver.status == SolverStatus.ok,
+            violations,
         )
 
     # --------- Your original processing rewritten to Pyomo ---------
@@ -275,16 +287,25 @@ class PyomoSolver(SolverInterface):
             pm.obj_exprs.append(obj)
 
     def process_oxf_components(
-        self, pm, network, optimization_problem: OptimizationProblem
+        self,
+        pm,
+        network,
+        optimization_problem: OptimizationProblem,
+        period_index=None,
     ):
         if optimization_problem.constraints is not None and (
             not optimization_problem.constraints.empty
         ):
-            self._add_equations(pm, optimization_problem.constraints.all(network))
+            self._add_equations(
+                pm,
+                optimization_problem.constraints.all(
+                    network, period_index=period_index
+                ),
+            )
 
         obj = None
         for objective in (
-            optimization_problem.objectives.all(network)
+            optimization_problem.objectives.all(network, period_index=period_index)
             if optimization_problem.objectives is not None
             else []
         ):

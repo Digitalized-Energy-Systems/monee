@@ -42,7 +42,7 @@ Quick start
 
 Load and run an energy-flow calculation on the urban district network:
 
-.. code-block:: python
+.. testcode::
 
     from monee import run_energy_flow
     from monee.network import create_urban_district_net
@@ -50,8 +50,14 @@ Load and run an energy-flow calculation on the urban district network:
     net = create_urban_district_net()
     result = run_energy_flow(net)
 
-    print(result.get("Bus")[["vm_pu"]])
-    print(result.get("GasPipe")[["mass_flow"]])
+    print(result.get("Bus")[["vm_pu"]].shape)
+    print(result.get("GasPipe")[["mass_flow"]].shape)
+
+.. testoutput::
+   :options: +SKIP
+
+   (5, 1)
+   (5, 1)
 
 ----
 
@@ -97,19 +103,19 @@ Each external grid connection accepts optional capacity bounds that cap
 the power or mass-flow that can be exchanged with the upstream network.
 These are set at network construction time:
 
-.. code-block:: python
+.. testcode::
 
     import monee.express as mx
 
-    net = mx.create_multi_energy_network()
-    bus = mx.create_bus(net)
+    net_cap = mx.create_multi_energy_network()
+    bus_cap = mx.create_bus(net_cap)
 
     # Limit the electrical connection to 4 MW import, 1 MW export.
-    mx.create_ext_power_grid(net, bus, max_import_mw=4.0, max_export_mw=1.0)
+    mx.create_ext_power_grid(net_cap, bus_cap, max_import_mw=4.0, max_export_mw=1.0)
 
     # Gas connection: unlimited import, no export allowed.
-    junc = mx.create_gas_junction(net)
-    mx.create_ext_hydr_grid(net, junc, max_import_kgs=0.1)
+    junc_cap = mx.create_gas_junction(net_cap)
+    mx.create_ext_hydr_grid(net_cap, junc_cap, max_import_kgs=0.1)
 
 The reference networks use these limits to reflect realistic import
 capacities for each grid type.

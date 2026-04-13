@@ -49,7 +49,7 @@ back-end. Two solver interfaces are provided.
 
       You can also instantiate the solver directly to pass solver options:
 
-      .. code-block:: python
+      .. testcode::
 
           from monee.solver.gekko import GekkoSolver
 

@@ -84,6 +84,37 @@ class TimeseriesData:
         """Register a time-varying attribute for a compound model (by name)."""
         self._add_to(self._compound_name_to_series, compound_name, attribute, series)
 
+    # ------------------------------------------------------------------
+    # Semantic aliases for objective / time-varying data
+    # ------------------------------------------------------------------
+
+    def add_objective_data(self, child_id, attribute: str, series) -> None:
+        """Register time-varying objective data (e.g. prices) for a child component.
+
+        Equivalent to :meth:`add_child_series` but signals intent: the
+        attribute is consumed by an objective function, not used as a
+        physical setpoint.  At each period, ``model.<attribute>`` will hold
+        the series value for that timestep.
+
+        Example — time-of-use electricity pricing::
+
+            td.add_objective_data(gen_id, "price", [40, 80, 60, 30])
+
+            # Then in the objective:
+            obj.select(
+                lambda m: isinstance(m, PowerGenerator)
+            ).calculate(
+                lambda models: sum(m.price * m.p_mw for m in models)
+            )
+        """
+        self.add_child_series(child_id, attribute, series)
+
+    def add_objective_data_by_name(
+        self, child_name: str, attribute: str, series
+    ) -> None:
+        """Like :meth:`add_objective_data` but matches by component name."""
+        self.add_child_series_by_name(child_name, attribute, series)
+
     @classmethod
     def from_dataframe(
         cls,

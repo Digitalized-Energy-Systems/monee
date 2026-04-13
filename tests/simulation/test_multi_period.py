@@ -184,8 +184,8 @@ def test_result_api():
     assert hasattr(sr0, "get")
     assert not sr0.get(mm.Bus).empty
 
-    # per-period objective is 0.0 (only global objective is meaningful)
-    assert sr0.objective == 0.0
+    # per-period objective is None (only global objective is meaningful)
+    assert sr0.objective is None
 
     # repr should not raise
     assert "MultiPeriodResult" in repr(result)
@@ -455,3 +455,394 @@ def test_repr_shows_temporal_evolution():
     assert "MultiPeriodResult" in r
     # With varying loads the SoC changes; temporal evolution section must appear.
     assert "Temporal evolution" in r
+
+
+# ---------------------------------------------------------------------------
+# Test 15 — zero-valued bounds inference emits a warning
+# ---------------------------------------------------------------------------
+
+
+def test_zero_bounds_warning(caplog):
+    """controllable_demands on a load with p_mw=0.0 must emit a warning."""
+    net, b0, b1, load_id = _simple_power_net()
+    # Override load to 0.0 so bounds inference hits [0, 0]
+    for node in net.nodes:
+        for child in net.childs_by_ids(node.child_ids):
+            if isinstance(child.model, PowerLoad):
+                child.model.p_mw = 0.0
+
+    prob = OptimizationProblem()
+    prob.controllable_demands(["p_mw"])
+
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="monee.problem.core"):
+        prob._apply(net)
+
+    zero_warnings = [r for r in caplog.records if "value 0.0" in r.message]
+    assert len(zero_warnings) > 0, (
+        "Expected a warning about zero-valued bounds inference"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 16 — when_period constraint filtering
+# ---------------------------------------------------------------------------
+
+
+def test_when_period_constraint():
+    """A constraint with when_period should only apply at filtered periods."""
+    from monee.problem.core import Constraints
+
+    net, b0, b1, load_id, bat_id = _storage_net()
+
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 1.0, 1.0, 1.0])
+
+    prob = _storage_problem()
+    cons = Constraints()
+    # Force battery to charge at exactly 1.0 MW only at period 2
+    cons.select(lambda c: isinstance(c.model, ElectricStorage)).equation(
+        lambda m: m.p_mw >= 0.99
+    ).equation(lambda m: m.p_mw <= 1.01).when_period(lambda t: t == 2)
+    prob.constraints = cons
+
+    result = run_multi_period(net, td, steps=4, optimization_problem=prob, dt_h=1.0)
+
+    p = result.get_result_for_id(bat_id, "p_mw")
+    # At period 2 the constraint forces p_mw ≈ 1.0 (charging)
+    assert abs(p.iloc[2] - 1.0) < 0.1, (
+        f"Period 2 battery dispatch should be ~1.0 MW, got {p.iloc[2]:.4f}"
+    )
+    # At other periods the battery is free — it should NOT be forced to 1.0
+    # (with a uniform load the optimizer has no reason to charge at exactly 1.0)
+    # We just verify the constraint was respected at t=2; other periods are free.
+
+
+# ---------------------------------------------------------------------------
+# Test 17 — when_period has no effect in single-period solve
+# ---------------------------------------------------------------------------
+
+
+def test_when_period_single_period():
+    """when_period filtering should be harmless with steps=1."""
+    from monee.problem.core import Constraints
+
+    net, b0, b1, load_id, bat_id = _storage_net()
+
+    prob = _storage_problem()
+    cons = Constraints()
+    # This filter says "only at period 5" but we only have 1 period (t=0).
+    # The constraint should simply not fire — solve should succeed.
+    cons.select(lambda c: isinstance(c.model, ElectricStorage)).equation(
+        lambda m: m.p_mw == 999  # impossible if it fires
+    ).when_period({5})
+    prob.constraints = cons
+
+    result = run_multi_period(net, steps=1, optimization_problem=prob)
+    assert result.success
+
+
+# ---------------------------------------------------------------------------
+# Test 18 — _controllable_to_attr does not leak across periods
+# ---------------------------------------------------------------------------
+
+
+def test_controllable_to_attr_no_leak():
+    """_controllable_to_attr must not grow with T."""
+    net, b0, b1, load_id, bat_id = _storage_net()
+
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 2.0, 1.5, 0.8])
+
+    prob = _storage_problem()
+    result = run_multi_period(net, td, steps=4, optimization_problem=prob, dt_h=1.0)
+
+    # After solve, _controllable_to_attr should have entries only from the
+    # last period's _apply call, not accumulated from all 4 periods.
+    n_entries = len(prob._controllable_to_attr)
+    # A single storage component → at most a few entries, not 4x.
+    assert n_entries <= 5, (
+        f"_controllable_to_attr has {n_entries} entries — "
+        f"expected it to be bounded, not growing with T"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 19 — add_objective_data convenience method
+# ---------------------------------------------------------------------------
+
+
+def test_objective_data_via_timeseries():
+    """Time-varying objective data via add_objective_data should influence dispatch."""
+    from monee.problem.core import Objectives
+
+    net, b0, b1, load_id, bat_id = _storage_net()
+
+    # Constant load, varying price: cheap first, expensive later
+    loads = [2.0, 2.0, 2.0, 2.0]
+
+    td_cheap_first = TimeseriesData()
+    td_cheap_first.add_child_series(load_id, "p_mw", loads)
+    # ext grid is child 0 on node b0 — find its id
+    ext_id = None
+    for node in net.nodes:
+        for child in net.childs_by_ids(node.child_ids):
+            if isinstance(child.model, ExtPowerGrid):
+                ext_id = child.id
+                break
+    assert ext_id is not None
+
+    td_cheap_first.add_objective_data(ext_id, "price", [10, 10, 50, 50])
+
+    td_expensive_first = TimeseriesData()
+    td_expensive_first.add_child_series(load_id, "p_mw", loads)
+    td_expensive_first.add_objective_data(ext_id, "price", [50, 50, 10, 10])
+
+    prob = _storage_problem()
+    obj = Objectives()
+    obj.select(lambda m: isinstance(m, ExtPowerGrid)).calculate(
+        lambda models: sum(getattr(m, "price", 1) * m.p_mw for m in models)
+    )
+    prob.objectives = obj
+
+    r1 = run_multi_period(
+        net, td_cheap_first, steps=4, optimization_problem=prob, dt_h=1.0
+    )
+    r2 = run_multi_period(
+        net, td_expensive_first, steps=4, optimization_problem=prob, dt_h=1.0
+    )
+
+    # The objectives should differ — different price schedules yield
+    # different total costs.
+    assert r1.objective != r2.objective, (
+        "Different price schedules should produce different objectives"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 20 — temporal_equation ramp-rate constraint
+# ---------------------------------------------------------------------------
+
+
+def test_temporal_equation_ramp_rate():
+    """A temporal_equation should couple variables across periods.
+
+    We add a ramp-rate constraint to the ext-grid p_mw so the change between
+    consecutive periods is limited.  Without the constraint, the ext-grid
+    freely follows the load.  With it, the ext-grid must ramp gradually,
+    forcing the battery to compensate.
+    """
+    from monee.problem.core import Constraints
+
+    net, b0, b1, load_id, bat_id = _storage_net()
+
+    # Large demand swing: 1 → 4 → 1 → 4
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 4.0, 1.0, 4.0])
+
+    # Find ext-grid id
+    ext_id = None
+    for node in net.nodes:
+        for child in net.childs_by_ids(node.child_ids):
+            if isinstance(child.model, ExtPowerGrid):
+                ext_id = child.id
+                break
+    assert ext_id is not None
+
+    # --- Run WITHOUT ramp constraint ---
+    prob_free = _storage_problem()
+    r_free = run_multi_period(
+        net, td, steps=4, optimization_problem=prob_free, dt_h=1.0
+    )
+
+    # --- Run WITH ramp constraint (max 1.0 MW change per period) ---
+    prob_ramp = _storage_problem()
+    cons = Constraints()
+
+    def ramp_limit(m, cid, ts):
+        prev = ts.get(cid, "p_mw")
+        if prev is None:
+            return []  # no constraint at t=0
+        return [
+            m.p_mw - prev <= 1.0,  # ramp up limit
+            prev - m.p_mw <= 1.0,  # ramp down limit
+        ]
+
+    cons.select_types(ExtPowerGrid).temporal_equation(ramp_limit)
+    prob_ramp.constraints = cons
+
+    r_ramp = run_multi_period(
+        net, td, steps=4, optimization_problem=prob_ramp, dt_h=1.0
+    )
+
+    # The ext-grid power should vary less with the ramp constraint.
+    ext_free = r_free.get_result_for(mm.ExtPowerGrid, "p_mw")[ext_id]
+    ext_ramp = r_ramp.get_result_for(mm.ExtPowerGrid, "p_mw")[ext_id]
+
+    # Compute max absolute period-to-period change
+    max_delta_free = max(abs(ext_free.iloc[t + 1] - ext_free.iloc[t]) for t in range(3))
+    max_delta_ramp = max(abs(ext_ramp.iloc[t + 1] - ext_ramp.iloc[t]) for t in range(3))
+
+    # The ramp-constrained case should have smaller or equal swings
+    assert max_delta_ramp <= max_delta_free + 0.01, (
+        f"Ramp constraint should reduce swings: "
+        f"free={max_delta_free:.3f}, ramp={max_delta_ramp:.3f}"
+    )
+    # The ramp-constrained case should respect the 1.0 MW limit (with tolerance)
+    assert max_delta_ramp <= 1.0 + 0.05, (
+        f"Ramp constraint violated: max_delta={max_delta_ramp:.3f} > 1.0"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 21 — temporal_equation combined with when_period
+# ---------------------------------------------------------------------------
+
+
+def test_temporal_equation_with_when_period():
+    """temporal_equation + when_period should only fire at filtered periods."""
+    from monee.problem.core import Constraints
+
+    net, b0, b1, load_id, bat_id = _storage_net()
+
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 4.0, 1.0, 4.0])
+
+    # Find ext-grid id
+    ext_id = None
+    for node in net.nodes:
+        for child in net.childs_by_ids(node.child_ids):
+            if isinstance(child.model, ExtPowerGrid):
+                ext_id = child.id
+                break
+    assert ext_id is not None
+
+    # Ramp constraint ONLY at period 1 (the first big jump)
+    prob = _storage_problem()
+    cons = Constraints()
+    cons.select_types(ExtPowerGrid).temporal_equation(
+        lambda m, cid, ts: (
+            []
+            if ts.get(cid, "p_mw") is None
+            else [
+                m.p_mw - ts.get(cid, "p_mw") <= 1.0,
+                ts.get(cid, "p_mw") - m.p_mw <= 1.0,
+            ]
+        )
+    ).when_period({1})
+    prob.constraints = cons
+
+    r = run_multi_period(net, td, steps=4, optimization_problem=prob, dt_h=1.0)
+
+    ext_p = r.get_result_for(mm.ExtPowerGrid, "p_mw")[ext_id]
+
+    # Period 0→1 should be ramp-limited (≤ 1.0)
+    delta_01 = abs(ext_p.iloc[1] - ext_p.iloc[0])
+    assert delta_01 <= 1.0 + 0.05, (
+        f"Ramp at period 1 should be limited: delta={delta_01:.3f}"
+    )
+
+    # Period 2→3 should NOT be ramp-limited (constraint not active at period 3)
+    # so the ext-grid can freely jump.  We just verify the solve completed and
+    # the constraint only applied where we asked.
+    assert r.objective is not None, "Solve should succeed"
+
+
+# ---------------------------------------------------------------------------
+# Test 22 — multi-period minimal load shedding
+# ---------------------------------------------------------------------------
+
+
+def test_multi_period_load_shedding():
+    """Multi-period load shedding sheds load when demand exceeds supply capacity.
+
+    A two-bus power network with a capacity-limited ext-grid (bounded to
+    [-3, 3] MW) and a load that exceeds 3 MW at certain periods.  The
+    solver must curtail load via the regulation variable at those periods.
+    """
+    from monee.problem.load_shedding import (
+        create_multi_period_load_shedding_optimization_problem,
+    )
+
+    net, b0, b1, load_id = _simple_power_net()
+
+    # Load profile: periods 1 and 3 exceed the ext-grid capacity of 3 MW
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [2.0, 5.0, 2.0, 4.0])
+
+    prob = create_multi_period_load_shedding_optimization_problem(
+        ext_grid_el_bounds=(-3.0, 3.0),
+        use_ext_grid_objective=False,
+        check_lp=False,  # skip line loading for simplicity
+    )
+
+    result = run_multi_period(net, td, steps=4, optimization_problem=prob, dt_h=1.0)
+    assert result.objective is not None, "Solve should succeed"
+
+    # Check regulation: at periods where load ≤ 3 MW, regulation should be ~1.0
+    # At periods where load > 3 MW, regulation should be < 1.0
+    reg = result.get_result_for(mm.PowerLoad, "regulation")[load_id]
+
+    # Period 0 (load=2.0): no shedding needed
+    assert reg.iloc[0] > 0.95, f"Period 0: expected ~1.0, got {reg.iloc[0]:.3f}"
+    # Period 1 (load=5.0): must shed — regulation < 1.0
+    assert reg.iloc[1] < 0.95, f"Period 1: expected shedding, got {reg.iloc[1]:.3f}"
+    # Period 2 (load=2.0): no shedding needed
+    assert reg.iloc[2] > 0.95, f"Period 2: expected ~1.0, got {reg.iloc[2]:.3f}"
+    # Period 3 (load=4.0): must shed — regulation < 1.0
+    assert reg.iloc[3] < 0.95, f"Period 3: expected shedding, got {reg.iloc[3]:.3f}"
+
+
+# ---------------------------------------------------------------------------
+# Test 23 — multi-period load shedding with ramp constraint
+# ---------------------------------------------------------------------------
+
+
+def test_multi_period_load_shedding_ramp():
+    """Regulation ramp limit prevents abrupt shedding changes between periods."""
+    from monee.problem.load_shedding import (
+        create_multi_period_load_shedding_optimization_problem,
+    )
+
+    net, b0, b1, load_id = _simple_power_net()
+
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [2.0, 5.0, 2.0, 4.0])
+
+    # Without ramp limit
+    prob_free = create_multi_period_load_shedding_optimization_problem(
+        ext_grid_el_bounds=(-3.0, 3.0),
+        use_ext_grid_objective=False,
+        check_lp=False,
+    )
+    r_free = run_multi_period(
+        net, td, steps=4, optimization_problem=prob_free, dt_h=1.0
+    )
+
+    # With tight ramp limit of 0.2 per period
+    prob_ramp = create_multi_period_load_shedding_optimization_problem(
+        ext_grid_el_bounds=(-3.0, 3.0),
+        use_ext_grid_objective=False,
+        check_lp=False,
+        regulation_ramp_limit=0.2,
+    )
+    r_ramp = run_multi_period(
+        net, td, steps=4, optimization_problem=prob_ramp, dt_h=1.0
+    )
+
+    reg_free = result = r_free.get_result_for(mm.PowerLoad, "regulation")[load_id]
+    reg_ramp = r_ramp.get_result_for(mm.PowerLoad, "regulation")[load_id]
+
+    # The ramp-constrained regulation should change more gradually
+    max_delta_free = max(abs(reg_free.iloc[t + 1] - reg_free.iloc[t]) for t in range(3))
+    max_delta_ramp = max(abs(reg_ramp.iloc[t + 1] - reg_ramp.iloc[t]) for t in range(3))
+
+    assert max_delta_ramp <= 0.2 + 0.05, (
+        f"Ramp limit violated: max_delta={max_delta_ramp:.3f} > 0.2"
+    )
+    # Ramp-constrained should be smoother than free
+    assert max_delta_ramp <= max_delta_free + 0.01, (
+        f"Expected ramp to smooth regulation: "
+        f"free={max_delta_free:.3f}, ramp={max_delta_ramp:.3f}"
+    )

@@ -407,7 +407,7 @@ Thermal storage
 ``ThermalStorage`` attaches to a water/heat junction.  An optional
 ``loss_factor_per_h`` models standing heat losses (e.g. tank insulation):
 
-.. code-block:: python
+.. testcode::
 
    import monee.model as mm
    import monee.express as mx

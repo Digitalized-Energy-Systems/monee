@@ -30,6 +30,7 @@ class Objective:
         self._selected_models_link = selected_models_link
         self._data_attacher = None
         self._calculator = lambda _: 0
+        self._period_filter = None
 
     def data(self, data_attacher):
         self._data_attacher = data_attacher
@@ -38,7 +39,28 @@ class Objective:
     def calculate(self, calculator):
         self._calculator = calculator
 
-    def _eval(self, network):
+    def when_period(self, period_filter):
+        """Only activate this objective for periods where *period_filter* is truthy.
+
+        Args:
+            period_filter: A callable ``(t: int) -> bool``, or a collection
+                of period indices (set, list, range).  Has no effect in
+                single-period solves.
+
+        Returns:
+            ``self`` for method chaining.
+        """
+        if callable(period_filter):
+            self._period_filter = period_filter
+        else:
+            allowed = set(period_filter)
+            self._period_filter = lambda t: t in allowed
+        return self
+
+    def _eval(self, network, period_index=None):
+        if self._period_filter is not None and period_index is not None:
+            if not self._period_filter(period_index):
+                return [0]
         model_objectives = []
         if self._data_attacher is not None:
             model_to_data = {}
@@ -72,22 +94,30 @@ class Objectives:
         self._objectives.append(objective)
         return objective
 
-    def all(self, network):
+    def all(self, network, period_index=None):
         if self._objectives:
             return functools.reduce(
                 lambda a, b: a + b,
-                [objective._eval(network) for objective in self._objectives],
+                [
+                    objective._eval(network, period_index)
+                    for objective in self._objectives
+                ],
             )
         return []
 
 
 class Constraint:
-    def __init__(self, selected_models_link) -> None:
+    def __init__(
+        self, selected_models_link, selected_models_with_ids_link=None
+    ) -> None:
         self._selected_models_link = selected_models_link
+        self._selected_models_with_ids_link = selected_models_with_ids_link
         self._data_attacher = None
         self._model_to_data = {}
         self._equations = []
         self._comp_equations = []
+        self._temporal_equations = []
+        self._period_filter = None
 
     def data(self, data_attacher):
         self._data_attacher = data_attacher
@@ -101,7 +131,67 @@ class Constraint:
         self._comp_equations.append(equation_lambda)
         return self
 
-    def _eval(self, network):
+    def temporal_equation(self, equation_lambda):
+        """Add a cross-period constraint that has access to temporal state.
+
+        The lambda receives ``(model, component_id, temporal_state)`` and
+        must return a single equation or a list of equations.
+
+        *temporal_state* is a :class:`~monee.simulation.step_state.PeriodState`
+        (multi-period) or :class:`~monee.simulation.step_state.StepState`
+        (timeseries). Use ``temporal_state.get(component_id, attr)`` to read
+        variables from other periods.
+
+        These constraints are only evaluated when a temporal state is available
+        (multi-period or timeseries mode). They are silently skipped in
+        single-period solves.
+
+        Example — ramp-rate limit on a generator::
+
+            constraints.select_types(PowerGenerator).temporal_equation(
+                lambda m, cid, ts: [
+                    m.p_mw - ts.get(cid, "p_mw") <= 10,   # ramp up
+                    ts.get(cid, "p_mw") - m.p_mw <= 10,   # ramp down
+                ]
+            )
+
+        Example — storage-like coupling (SoC tracks previous value)::
+
+            constraints.select_types(PowerLoad).temporal_equation(
+                lambda m, cid, ts: m.e_mwh == ts.get(cid, "e_mwh") + ts.dt_h * m.p_mw
+            )
+        """
+        self._temporal_equations.append(equation_lambda)
+        return self
+
+    def when_period(self, period_filter):
+        """Only activate this constraint for periods where *period_filter* is truthy.
+
+        Args:
+            period_filter: A callable ``(t: int) -> bool``, or a collection
+                of period indices (set, list, range).  Has no effect in
+                single-period solves.
+
+        Returns:
+            ``self`` for method chaining.
+
+        Example — force generator offline at period 5::
+
+            constraints.select_types(PowerGenerator)
+                .equation(lambda m: m.p_mw == 0)
+                .when_period(lambda t: t == 5)
+        """
+        if callable(period_filter):
+            self._period_filter = period_filter
+        else:
+            allowed = set(period_filter)
+            self._period_filter = lambda t: t in allowed
+        return self
+
+    def _eval(self, network, period_index=None):
+        if self._period_filter is not None and period_index is not None:
+            if not self._period_filter(period_index):
+                return []
         model_equations = []
         selected_models = self._selected_models_link(network)
         for equation in self._equations:
@@ -124,20 +214,54 @@ class Constraint:
                 model_equations.append(comp_equation(selected_models))
         return model_equations
 
+    @property
+    def has_temporal(self):
+        """True if this constraint has any temporal equations."""
+        return len(self._temporal_equations) > 0
+
+    def _eval_temporal(self, network, temporal_state, period_index=None):
+        """Evaluate temporal equations that need access to temporal state."""
+        if not self._temporal_equations:
+            return []
+        if self._period_filter is not None and period_index is not None:
+            if not self._period_filter(period_index):
+                return []
+        if self._selected_models_with_ids_link is None:
+            return []
+        model_equations = []
+        for model, comp_id in self._selected_models_with_ids_link(network):
+            for eq_fn in self._temporal_equations:
+                result = eq_fn(model, comp_id, temporal_state)
+                if hasattr(result, "__iter__") and not isinstance(result, str):
+                    model_equations.extend(result)
+                else:
+                    model_equations.append(result)
+        return model_equations
+
 
 class Constraints:
     def __init__(self) -> None:
         self._constraints = []
 
     def select(self, component_selection_function) -> Constraint:
+        def _filter(component):
+            return (
+                component_selection_function(component)
+                and component.active
+                and (not component.ignored)
+            )
+
         constraint = Constraint(
             lambda network: [
                 component.model
                 for component in network.all_components()
-                if component_selection_function(component)
-                and component.active
-                and (not component.ignored)
-            ]
+                if _filter(component)
+            ],
+            selected_models_with_ids_link=lambda network: [
+                (component.model, component.id)
+                for component in network.all_components()
+                if _filter(component)
+            ],
         )
         self._constraints.append(constraint)
         return constraint
@@ -155,13 +279,34 @@ class Constraints:
         self._constraints.append(constraint)
         return constraint
 
-    def all(self, network):
+    def all(self, network, period_index=None):
         if self._constraints:
             return functools.reduce(
                 lambda a, b: a + b,
-                [constraint._eval(network) for constraint in self._constraints],
+                [
+                    constraint._eval(network, period_index)
+                    for constraint in self._constraints
+                ],
             )
         return []
+
+    def all_temporal(self, network, temporal_state, period_index=None):
+        """Evaluate all temporal constraints that couple across periods.
+
+        Called during inter-step/inter-period equation assembly where
+        *temporal_state* is available.
+        """
+        results = []
+        for constraint in self._constraints:
+            results.extend(
+                constraint._eval_temporal(network, temporal_state, period_index)
+            )
+        return results
+
+    @property
+    def has_temporal(self):
+        """True if any constraint has temporal equations."""
+        return any(c.has_temporal for c in self._constraints)
 
     @property
     def empty(self):
@@ -198,6 +343,46 @@ class OptimizationProblem:
         prob = OptimizationProblem()
         prob.controllable_storages()
         result = run_multi_period(net, td, optimization_problem=prob, dt_h=1.0)
+
+    **Time-varying objectives** — register per-period data (e.g. electricity
+    prices) via :meth:`~monee.simulation.timeseries.TimeseriesData.add_objective_data`
+    and read it inside the objective lambda.  ``TimeseriesData`` applies the
+    correct period's value to the model *before* the objective is evaluated::
+
+        td = TimeseriesData()
+        td.add_objective_data(gen_id, "price", [40, 80, 60, 30])
+
+        prob = OptimizationProblem()
+        prob.controllable_generators(["p_mw"])
+        obj = Objectives()
+        obj.select(
+            lambda m: isinstance(m, PowerGenerator)
+        ).calculate(
+            lambda models: sum(m.price * m.p_mw for m in models)
+        )
+        prob.objectives = obj
+
+    **Per-period constraints** — use :meth:`Constraint.when_period` to
+    restrict a constraint to specific periods::
+
+        cons = Constraints()
+        cons.select_types(PowerGenerator).equation(
+            lambda m: m.p_mw <= 0.5
+        ).when_period(lambda t: t >= 3)  # cap output from period 3 onward
+        prob.constraints = cons
+
+    **Cross-period constraints** — use :meth:`Constraint.temporal_equation`
+    to couple variables across periods (ramp rates, custom storage, etc.)::
+
+        cons = Constraints()
+        cons.select_types(ExtPowerGrid).temporal_equation(
+            lambda m, cid, ts: (
+                [] if ts.get(cid, "p_mw") is None else
+                [m.p_mw - ts.get(cid, "p_mw") <= 1.0,
+                 ts.get(cid, "p_mw") - m.p_mw <= 1.0]
+            )
+        )
+        prob.constraints = cons
     """
 
     def __init__(self, debug=False) -> None:
@@ -209,6 +394,7 @@ class OptimizationProblem:
         self._debug = debug
 
     def _apply(self, network: Network):
+        self._controllable_to_attr.clear()
         for appliable in self._controllable_appliables:
             appliable(network)
         for model, attributes in self._controllable_to_attr.items():
@@ -222,6 +408,16 @@ class OptimizationProblem:
                     val = getattr(model, attribute)
                     if type(val) is not Var:
                         if param is None:
+                            if val == 0.0:
+                                logger.warning(
+                                    "Attribute '%s' on %s has value 0.0 and no "
+                                    "explicit bounds — inferred bounds [0, 0] "
+                                    "will lock this variable. Use an "
+                                    "AttributeParameter or prob.bounds() to "
+                                    "set meaningful bounds.",
+                                    attribute,
+                                    type(model).__name__,
+                                )
                             variable = Var(
                                 val,
                                 max=0 if val <= 0 else val,
@@ -347,6 +543,16 @@ class OptimizationProblem:
         Example — controllable load shedding::
 
             prob.controllable_demands(["p_mw"])
+
+        .. note::
+
+            When an attribute's current value is ``0.0`` and no explicit
+            ``AttributeParameter`` is given, the inferred bounds are
+            ``[0, 0]``, effectively locking the variable.  This commonly
+            happens when the base network uses ``p_mw=0.0`` and real
+            values come from ``TimeseriesData``.  Use ``prob.bounds()``
+            or pass an ``(attr, AttributeParameter)`` tuple to set
+            meaningful bounds.
         """
         self.controllable(
             component_condition=lambda component: (
@@ -385,6 +591,14 @@ class OptimizationProblem:
         Example — dispatchable generator output::
 
             prob.controllable_generators(["p_mw"])
+
+        .. note::
+
+            When an attribute's current value is ``0.0`` and no explicit
+            ``AttributeParameter`` is given, the inferred bounds are
+            ``[0, 0]``, effectively locking the variable.  Use
+            ``prob.bounds()`` or pass an ``(attr, AttributeParameter)``
+            tuple to set meaningful bounds.
         """
         self.controllable(
             component_condition=lambda component: (

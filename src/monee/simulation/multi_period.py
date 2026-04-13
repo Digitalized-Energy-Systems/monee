@@ -172,6 +172,22 @@ def _extract_terminal_state(net_t: Network) -> dict:
     return state
 
 
+def _validate_state_keys(state: dict | None, net: Network, label: str) -> None:
+    """Raise :exc:`ValueError` when any key in *state* does not match a component
+    in *net*.  *label* is ``"initial_state"`` or ``"terminal_state"`` for the
+    error message.
+    """
+    if not state:
+        return
+    for comp_id, attr in state:
+        var = _find_component_var(net, comp_id, attr)
+        if var is None:
+            raise ValueError(
+                f"{label}: component {comp_id!r} attribute {attr!r} not found "
+                f"in the network.  Check the component id and attribute name."
+            )
+
+
 def _slice_timeseries(td: TimeseriesData, start: int, length: int) -> TimeseriesData:
     """Return a new :class:`~monee.simulation.timeseries.TimeseriesData` whose
     series are sliced to ``[start : start + length]``.
@@ -330,15 +346,15 @@ class MultiPeriodResult:
         """Return a :class:`~monee.solver.core.SolverResult` for period *t*.
 
         Useful for inspecting a single period with the same API as a
-        single-step solve.  The ``objective`` on the returned result is set to
-        ``0.0`` because objectives are only meaningful globally across all
-        periods; use ``result.objective`` on the :class:`MultiPeriodResult` for
+        single-step solve.  The ``objective`` on the returned result is
+        ``None`` because per-period objective breakdown is not tracked;
+        use ``result.objective`` on the :class:`MultiPeriodResult` for
         the global value.
         """
         return SolverResult(
             self._net_copies[t],
             self._period_dfs[t],
-            0.0,
+            None,
             self.success,
         )
 
@@ -566,11 +582,14 @@ class GekkoMultiPeriodSolver:
 
         _single = GEKKOSolver(solver=self._solver_int)
 
+        _log.info("Multi-period GEKKO solve: T=%d periods", steps)
+
         # --- Pass 1: prepare all period networks and inject variables ---
         net_copies: list[Network] = []
         ignored_list: list[set] = []
 
         for t in range(steps):
+            _log.debug("Preparing period %d/%d", t + 1, steps)
             net_t, ignored_t = _prepare_period(
                 network, timeseries_data, t, optimization_problem
             )
@@ -593,6 +612,7 @@ class GekkoMultiPeriodSolver:
             ignored_list.append(ignored_t)
 
         # --- Pass 2: build equations for all periods ---
+        _log.debug("Assembling equations for %d periods", steps)
         for t in range(steps):
             net_t = net_copies[t]
             ignored_t = ignored_list[t]
@@ -614,7 +634,9 @@ class GekkoMultiPeriodSolver:
             _single.process_equations_compounds(m, net_t, net_t.compounds, ignored_t)
 
             if optimization_problem is not None:
-                _single.process_oxf_components(m, net_t, optimization_problem)
+                _single.process_oxf_components(
+                    m, net_t, optimization_problem, period_index=t
+                )
             else:
                 _single.process_internal_oxf_components(m, net_t)
 
@@ -629,6 +651,8 @@ class GekkoMultiPeriodSolver:
                 net_t.compounds,
                 ignored_t,
                 period_state,
+                optimization_problem=optimization_problem,
+                period_index=t,
             )
 
             for ext in net_t.extensions:
@@ -644,15 +668,8 @@ class GekkoMultiPeriodSolver:
                     var = _find_component_var(net_t, comp_id, attr)
                     if var is not None:
                         m.Equation(var == target)
-                    else:
-                        _log.warning(
-                            "terminal_state: component %s attr %r not found at "
-                            "t=%d — skipped",
-                            comp_id,
-                            attr,
-                            t,
-                        )
 
+        _log.info("Solving multi-period problem (T=%d) ...", steps)
         try:
             m.solve(disp=False)
         except Exception as exc:
@@ -733,11 +750,14 @@ class PyomoMultiPeriodSolver:
 
         _single = PyomoSolver()
 
+        _log.info("Multi-period Pyomo solve: T=%d periods", steps)
+
         # --- Pass 1: prepare all period networks and inject variables ---
         net_copies: list[Network] = []
         ignored_list: list[set] = []
 
         for t in range(steps):
+            _log.debug("Preparing period %d/%d", t + 1, steps)
             net_t, ignored_t = _prepare_period(
                 network, timeseries_data, t, optimization_problem
             )
@@ -760,6 +780,7 @@ class PyomoMultiPeriodSolver:
             ignored_list.append(ignored_t)
 
         # --- Pass 2: build equations for all periods ---
+        _log.debug("Assembling equations for %d periods", steps)
         for t in range(steps):
             net_t = net_copies[t]
             ignored_t = ignored_list[t]
@@ -777,7 +798,9 @@ class PyomoMultiPeriodSolver:
             _single.process_equations_compounds(pm, net_t, net_t.compounds, ignored_t)
 
             if optimization_problem is not None:
-                _single.process_oxf_components(pm, net_t, optimization_problem)
+                _single.process_oxf_components(
+                    pm, net_t, optimization_problem, period_index=t
+                )
             else:
                 _single.process_internal_oxf_components(pm, net_t)
 
@@ -789,6 +812,8 @@ class PyomoMultiPeriodSolver:
                 net_t.compounds,
                 ignored_t,
                 period_state,
+                optimization_problem=optimization_problem,
+                period_index=t,
             )
 
             for ext in net_t.extensions:
@@ -806,18 +831,11 @@ class PyomoMultiPeriodSolver:
                     var = _find_component_var(net_t, comp_id, attr)
                     if var is not None:
                         pm.cons.add(var == target)
-                    else:
-                        _log.warning(
-                            "terminal_state: component %s attr %r not found at "
-                            "t=%d — skipped",
-                            comp_id,
-                            attr,
-                            t,
-                        )
 
         obj_expr = sum(pm.obj_exprs) if pm.obj_exprs else 0
         pm.obj = pyo.Objective(expr=obj_expr, sense=pyo.minimize)
 
+        _log.info("Solving multi-period problem (T=%d) ...", steps)
         solver = pyo.SolverFactory(self._solver_name)
         solve_result = solver.solve(pm)
 
@@ -892,6 +910,12 @@ def _resolve_dt_h(
 ) -> list[float]:
     """Return a list of per-period timestep durations in hours."""
     if datetime_index is not None:
+        if isinstance(dt_h, (list, tuple)) or dt_h != 1.0:
+            _log.warning(
+                "Both dt_h and datetime_index were provided; dt_h will be "
+                "ignored and step durations will be derived from "
+                "datetime_index."
+            )
         if len(datetime_index) < steps:
             raise ValueError(
                 f"datetime_index length ({len(datetime_index)}) is less than "
@@ -1006,6 +1030,10 @@ def run_multi_period(
     if solver is None:
         solver = GekkoMultiPeriodSolver()
 
+    # Validate user-provided state dicts early, before entering the solver.
+    _validate_state_keys(initial_state, network, "initial_state")
+    _validate_state_keys(terminal_state, network, "terminal_state")
+
     return solver.solve_multi_period(
         network,
         timeseries_data=timeseries_data,
@@ -1100,6 +1128,10 @@ def run_mpc(
     total_steps = _resolve_steps(total_steps, timeseries_data)
     dt_h_list = _resolve_dt_h(dt_h, datetime_index, total_steps)
 
+    # Validate user-provided state dicts early.
+    _validate_state_keys(initial_state, network, "initial_state")
+    _validate_state_keys(terminal_state, network, "terminal_state")
+
     if solver is None:
         solver = GekkoMultiPeriodSolver()
 
@@ -1129,12 +1161,11 @@ def run_mpc(
             else None
         )
 
-        window_result = run_multi_period(
+        window_result = solver.solve_multi_period(
             network,
             timeseries_data=window_td,
             steps=actual_window,
             optimization_problem=optimization_problem,
-            solver=solver,
             dt_h=window_dt,
             datetime_index=window_idx,
             initial_state=current_initial_state,

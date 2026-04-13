@@ -26,6 +26,7 @@ from monee.simulation import (
     PyomoMultiPeriodSolver,
 )
 from monee.solver import GEKKOSolver, PyomoSolver
+from monee.solver.core import persist_solution, compute_bound_violations
 
 
 def enable_islanding(

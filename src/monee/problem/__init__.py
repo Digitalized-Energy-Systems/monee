@@ -1,6 +1,7 @@
 import monee.model as md
 from .load_shedding import (
     create_load_shedding_optimization_problem,
+    create_multi_period_load_shedding_optimization_problem,
 )
 from .metric import GeneralResiliencePerformanceMetric
 from monee.problem.core import (

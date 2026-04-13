@@ -52,6 +52,7 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
         hydraulicsmodel.piecewise_eq_friction(branch, kwargs["pwl_impl"])
 
         return [
+            # note that the dynamic visc not temperature dependent modeled
             hydraulicsmodel.reynolds_equation(
                 branch.reynolds,
                 branch.mass_flow_pos + branch.mass_flow_neg,
@@ -66,6 +67,7 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
             branch.mass_flow_pos <= grid.f_max * branch.on_off,
             branch.mass_flow_neg <= grid.f_max * branch.on_off,
             branch.mass_flow_mag <= grid.f_max,
+            # note that the density is not temperature dependent modeled
             owfmodel.darcy_weisbach_equation(
                 from_node_model.vars["pressure_pu"],
                 to_node_model.vars["pressure_pu"],

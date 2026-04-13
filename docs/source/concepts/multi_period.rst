@@ -113,9 +113,78 @@ To solve with the optimizer choosing when to charge/discharge:
        net, td,
        optimization_problem=prob,
        dt_h=1.0,
-       terminal_state={(bat.id, "e_mwh"): 2.0},  # return to initial SoC
+       terminal_state={(bat, "e_mwh"): 2.0},  # return to initial SoC
    )
    print(result)
+
+.. plot::
+   :caption: Battery optimal dispatch — the solver charges during off-peak hours and discharges during the midday peak
+
+   import monee.model as mm
+   import monee.express as mx
+   from monee.problem.core import OptimizationProblem
+   from monee.simulation import TimeseriesData, run_multi_period
+   import matplotlib.pyplot as plt
+
+   LOAD = [0.4, 0.5, 1.4, 1.8, 1.5, 0.4]
+
+   net = mx.create_multi_energy_network()
+   bus0 = mx.create_bus(net)
+   bus1 = mx.create_bus(net)
+   mx.create_ext_power_grid(net, bus0)
+   mx.create_line(net, bus0, bus1,
+                  length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+   mx.create_power_load(net, bus1, p_mw=0.0, q_mvar=0.0, name="load")
+
+   storage = mm.ElectricStorage(e_mwh_initial=2.0, e_mwh_max=4.0, p_max_mw=1.0)
+   bat = mx.create_el_child(net, storage, node_id=bus1, name="battery")
+
+   td = TimeseriesData()
+   td.add_child_series_by_name("load", "p_mw", LOAD)
+
+   prob = OptimizationProblem()
+   prob.controllable_storages()
+   result = run_multi_period(net, td, optimization_problem=prob, dt_h=1.0,
+                             terminal_state={(bat, "e_mwh"): 2.0})
+
+   soc  = result.get_result_for_id(bat, "e_mwh")
+   disp = result.get_result_for_id(bat, "p_mw")
+   steps = list(range(len(LOAD)))
+
+   fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 6),
+                             gridspec_kw={"hspace": 0.4})
+
+   C_LOAD = "#f4a261"
+   C_CHG  = "#2c7bb6"
+   C_DIS  = "#d7191c"
+   C_SOC  = "#1a9641"
+
+   axes[0].step(steps, LOAD, where="post", lw=2, color=C_LOAD)
+   axes[0].fill_between(steps, 0, LOAD, step="post", color=C_LOAD, alpha=0.15)
+   axes[0].set_ylabel("Load  [MW]")
+   axes[0].set_title("Consumer demand", fontsize=10)
+   axes[0].grid(axis="y", alpha=0.3)
+
+   disp_vals = list(disp.values)
+   bar_colors = [C_CHG if v >= 0 else C_DIS for v in disp_vals]
+   axes[1].bar(steps, disp_vals, color=bar_colors, alpha=0.8, width=0.6)
+   axes[1].axhline(0, color="grey", lw=0.8)
+   axes[1].set_ylabel("Battery  [MW]\n+ charge  /  − discharge")
+   axes[1].set_title("Optimised dispatch", fontsize=10)
+   axes[1].grid(axis="y", alpha=0.3)
+
+   axes[2].plot(steps, soc.values, marker="o", lw=2, color=C_SOC)
+   axes[2].fill_between(steps, 0, soc.values, alpha=0.12, color=C_SOC)
+   axes[2].axhline(4.0, color="grey", ls="--", alpha=0.5, label="capacity (4 MWh)")
+   axes[2].set_ylabel("SoC  [MWh]")
+   axes[2].set_xlabel("Period")
+   axes[2].set_ylim(0, 4.5)
+   axes[2].set_xticks(steps)
+   axes[2].legend(fontsize=8)
+   axes[2].grid(axis="y", alpha=0.3)
+
+   fig.suptitle("Multi-period battery dispatch", fontsize=12, fontweight="bold")
+   plt.tight_layout()
 
 ----
 
@@ -140,15 +209,15 @@ containing one solved network copy per period.
       .. code-block:: python
 
          # Series: one float per period
-         soc  = result.get_result_for_id(bat.id, "e_mwh")
-         disp = result.get_result_for_id(bat.id, "p_mw")
+         soc  = result.get_result_for_id(bat, "e_mwh")
+         disp = result.get_result_for_id(bat, "p_mw")
 
    .. tab-item:: All attributes
 
       .. code-block:: python
 
          # DataFrame: rows = periods, columns = all attributes
-         df = result[bat.id]
+         df = result[bat]
          print(df["e_mwh"])   # SoC trajectory
          print(df["p_mw"])    # dispatch trajectory
 
@@ -169,7 +238,7 @@ containing one solved network copy per period.
          idx = pd.date_range("2024-06-01 00:00", periods=6, freq="h")
          result = run_multi_period(net, td, dt_h=1.0, datetime_index=idx)
 
-         soc = result.get_result_for_id(bat.id, "e_mwh")
+         soc = result.get_result_for_id(bat, "e_mwh")
          print(soc.index)   # DatetimeIndex
 
 ----
@@ -186,7 +255,7 @@ Override the model's built-in initial value with an explicit dict:
 
    result = run_multi_period(
        net, td,
-       initial_state={(bat.id, "e_mwh"): 1.5},
+       initial_state={(bat, "e_mwh"): 1.5},
    )
 
 This is how :func:`~monee.simulation.run_mpc` seeds each horizon window from
@@ -201,8 +270,8 @@ Force the optimizer to reach a target value at the last period:
 
    result = run_multi_period(
        net, td,
-       initial_state ={(bat.id, "e_mwh"): 2.0},
-       terminal_state={(bat.id, "e_mwh"): 2.0},  # cyclic — return to start
+       initial_state ={(bat, "e_mwh"): 2.0},
+       terminal_state={(bat, "e_mwh"): 2.0},  # cyclic — return to start
    )
 
 ----

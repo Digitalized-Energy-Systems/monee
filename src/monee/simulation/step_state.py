@@ -221,13 +221,13 @@ class PeriodState(InterStepState):
         """Total number of periods in the horizon."""
         return len(self._networks)
 
-    def get(self, component_id, attr: str, period: int = -1):
-        """Return the solver variable for *attr* on *component_id* at *period*.
+    def get(self, component_id, attr: str, step: int = -1):
+        """Return the solver variable for *attr* on *component_id* at *step*.
 
         Args:
             component_id: Component id to look up.
             attr: Attribute name on the component's model.
-            period: Negative values are relative to ``current_t``:
+            step: Negative values are relative to ``current_t``:
                 ``-1`` (default) = ``current_t - 1``, ``-2`` = ``current_t - 2``,
                 etc.  Non-negative values are absolute indices ``0..T-1``,
                 giving direct access to any period including future ones.
@@ -239,7 +239,7 @@ class PeriodState(InterStepState):
             Values in *initial_state* take precedence for the virtual t=-1
             case.
         """
-        actual_t = (self.current_t + period) if period < 0 else period
+        actual_t = (self.current_t + step) if step < 0 else step
 
         if actual_t < 0:
             key = (component_id, attr)

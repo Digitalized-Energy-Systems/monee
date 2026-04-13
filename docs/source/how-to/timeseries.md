@@ -121,7 +121,7 @@ For duplicate `(component, attribute)` pairs the **left operand wins**.
 ::::{tab-set}
 
 :::{tab-item} By model class
-```python
+```{testcode}
 # DataFrame: rows = successful steps, columns = component ids
 vm = result.get_result_for(mm.Bus, "vm_pu")
 p  = result.get_result_for(mm.PowerLoad, "p_mw")
@@ -155,13 +155,17 @@ print(vm.index)   # DatetimeIndex
 By default the runner raises immediately on any step failure.  Set
 `on_step_error='skip'` to record failures and continue:
 
-```python
+```{testcode}
 result = run_timeseries(net, td, on_step_error="skip")
 
 print("Failed steps:", result.failed_steps)
 for sr in result.step_results:
     if sr.failed:
         print(f"  step {sr.step}: {sr.error}")
+```
+
+```{testoutput}
+Failed steps: []
 ```
 
 ---
