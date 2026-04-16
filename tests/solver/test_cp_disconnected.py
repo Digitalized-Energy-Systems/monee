@@ -3,10 +3,6 @@ import math
 import monee.model as mm
 from monee.solver import PyomoSolver
 
-# ---------------------------------------------------------------------------
-# Network fragment helpers
-# ---------------------------------------------------------------------------
-
 _LINE = dict(length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, parallel=1)
 _PIPE = dict(diameter_m=0.15, length_m=100)
 _GAS_PIPE = dict(diameter_m=0.3, length_m=100, temperature_ext_k=300, roughness=0.01)
@@ -161,11 +157,6 @@ def _solve(net):
     return PyomoSolver().solve(net, exclude_unconnected_nodes=True)
 
 
-# ===========================================================================
-# P2H – power_node (Bus) isolated  [fix needed: PowerToHeat has set_active]
-# ===========================================================================
-
-
 def _build_p2h_power_isolated(deactivate: bool):
     pn = mm.Network()
     _, _, j_supply, j_return = _heat_grid_full(pn)
@@ -201,11 +192,6 @@ def test_p2h_power_bus_connected_baseline():
     result = _solve(pn)
     _assert_control_node_solved(result, "PowerToHeatControlNode", "P2H baseline")
     _assert_bus_solved(result, p_slack, "p_slack", expected_vm=1.0)
-
-
-# ===========================================================================
-# P2H – heat cluster (Junctions) isolated  [fix needed]
-# ===========================================================================
 
 
 def _build_p2h_heat_isolated(deactivate: bool):
@@ -245,11 +231,6 @@ def test_p2h_heat_junctions_connected_baseline():
     _assert_junction_solved(result, j_heat_a, "j_heat_a")
 
 
-# ===========================================================================
-# CHP – gas_node (Junction) isolated
-# ===========================================================================
-
-
 def _build_chp_gas_isolated(deactivate: bool):
     pn = mm.Network()
     _, _, j_gas_chp = _gas_grid(pn, isolated_junction=deactivate)
@@ -287,11 +268,6 @@ def test_chp_gas_junction_connected_baseline():
     _assert_junction_solved(result, j_gas_chp, "j_gas_chp")
 
 
-# ===========================================================================
-# CHP – power_node (Bus) isolated
-# ===========================================================================
-
-
 def _build_chp_power_isolated(deactivate: bool):
     pn = mm.Network()
     _, _, j_gas_chp = _gas_grid(pn)
@@ -322,11 +298,6 @@ def test_chp_power_bus_isolated():
     _assert_bus_solved(result, p_slack, "p_slack", expected_vm=1.0)
     _assert_junction_solved(result, j_heat_supply, "j_heat_supply")
     _assert_junction_solved(result, j_gas_chp, "j_gas_chp")
-
-
-# ===========================================================================
-# GasToHeat – gas_node (Junction) isolated
-# ===========================================================================
 
 
 def _build_g2h_gas_isolated(deactivate: bool):
@@ -362,11 +333,6 @@ def test_g2h_gas_junction_connected_baseline():
     result = _solve(pn)
     _assert_control_node_solved(result, "GasToHeatControlNode", "GasToHeat baseline")
     _assert_junction_solved(result, j_gas_g2h, "j_gas_g2h")
-
-
-# ===========================================================================
-# GasToHeat – heat cluster (Junctions) isolated
-# ===========================================================================
 
 
 def _build_g2h_heat_isolated(deactivate: bool):

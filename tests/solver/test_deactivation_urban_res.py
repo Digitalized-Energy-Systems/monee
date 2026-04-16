@@ -28,10 +28,6 @@ from monee.model.formulation import MISOCP_NETWORK_FORMULATION
 from monee.network import create_urban_district_net
 from monee.solver import PyomoSolver
 
-# ---------------------------------------------------------------------------
-# Network builder — extracts all component references
-# ---------------------------------------------------------------------------
-
 
 class _Ids:
     pass
@@ -109,11 +105,6 @@ def _build():
     return net, ids
 
 
-# ---------------------------------------------------------------------------
-# Assertion helpers
-# ---------------------------------------------------------------------------
-
-
 def _bus_vm(result, nid):
     df = result.dataframes["Bus"]
     return df.loc[df["id"] == nid, "vm_pu_squared"].iloc[0]
@@ -178,11 +169,6 @@ def _solve(net):
     )
 
 
-# ===========================================================================
-# Power line deactivations
-# ===========================================================================
-
-
 def test_deactivate_line_b0_b1():
     """Line B0–B1 off → B0 (generator bus, leaf) isolated; slack B1 remains solved."""
     net, ids = _build()
@@ -228,11 +214,6 @@ def test_deactivate_line_b2_b4():
     _assert_bus_solved(result, ids.b2, "B2")
 
 
-# ===========================================================================
-# Gas pipe deactivations
-# ===========================================================================
-
-
 def test_deactivate_gas_pipe_g0_g1():
     """Pipe G0–G1 off → whole gas subtree {G1–G4} isolated; G0 ext solved."""
     net, ids = _build()
@@ -274,11 +255,6 @@ def test_deactivate_gas_pipe_g1_g4():
     _assert_converge(result)
     _assert_jct_nan(result, ids.g4, "G4")
     _assert_jct_solved(result, ids.g1, "G1")
-
-
-# ===========================================================================
-# Heat branch deactivations
-# ===========================================================================
 
 
 def test_deactivate_water_pipe_h0_h1():

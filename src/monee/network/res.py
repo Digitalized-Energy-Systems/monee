@@ -40,7 +40,6 @@ def create_urban_district_net() -> mm.Network:
     """
     net = mx.create_multi_energy_network()
 
-    # ── Power (20 kV) ──────────────────────────────────────────────────────
     b0 = mx.create_bus(net, base_kv=20, name="B0_gen")
     b1 = mx.create_bus(net, base_kv=20, name="B1_slack")
     b2 = mx.create_bus(net, base_kv=20, name="B2_load")
@@ -58,7 +57,6 @@ def create_urban_district_net() -> mm.Network:
     _line(net, b2, b3, length_m=300, kv_class="20")
     _line(net, b2, b4, length_m=350, kv_class="20")
 
-    # ── Gas (medium pressure, city distribution) ───────────────────────────
     g0 = mx.create_gas_junction(net, name="G0_ext")
     g1 = mx.create_gas_junction(net, name="G1")
     g2 = mx.create_gas_junction(net, name="G2")
@@ -74,7 +72,6 @@ def create_urban_district_net() -> mm.Network:
     mx.create_gas_pipe(net, g2, g3, diameter_m=0.10, length_m=250)
     mx.create_gas_pipe(net, g1, g4, diameter_m=0.10, length_m=200)
 
-    # ── Heat (district heating, supply ~356 K ≈ 83 °C) ────────────────────
     # HeatExchangerLoad branches enforce fixed heat demand; Sinks handle mass
     # balance at the return nodes (sized for 25 K drop: Q/(cp·ΔT)):
     #   CHP consumer:  176 kW / (4186 J/kg·K × 25 K) ≈ 1.684 kg/s
@@ -99,7 +96,6 @@ def create_urban_district_net() -> mm.Network:
     mx.create_water_pipe(net, h1, h4, diameter_m=0.10, length_m=100)
     # mx.create_heat_exchanger(net, h4, h5, q_mw=0.020, diameter_m=0.10)  # 20 kW consumer
 
-    # ── Coupling points ────────────────────────────────────────────────────
     # CHP: gas at G2 → power at B3, heat injected between H1 and H2.
     # heat_w = 0.40 × 0.008 kg/s × 3.6 × 15.3 kWh/kg × 1e6 = 176 256 W
     mx.create_chp(
@@ -156,7 +152,6 @@ def create_industrial_hub_net() -> mm.Network:
     """
     net = mx.create_multi_energy_network()
 
-    # ── Power (110 kV) ─────────────────────────────────────────────────────
     b0 = mx.create_bus(net, base_kv=110, name="B0_slack")
     b1 = mx.create_bus(net, base_kv=110, name="B1_gen")
     b2 = mx.create_bus(net, base_kv=110, name="B2_load")
@@ -191,7 +186,6 @@ def create_industrial_hub_net() -> mm.Network:
     _line(net, b1, b5, length_m=800, kv_class="110")
     _line(net, b2, b6, length_m=700, kv_class="110")
 
-    # ── Gas (high pressure) ────────────────────────────────────────────────
     g0 = mx.create_gas_junction(net, name="G0_ext")
     g1 = mx.create_gas_junction(net, name="G1")
     g2 = mx.create_gas_junction(net, name="G2_industrial")
@@ -213,7 +207,6 @@ def create_industrial_hub_net() -> mm.Network:
     mx.create_gas_pipe(net, g3, g6, diameter_m=0.30, length_m=350)
     mx.create_gas_pipe(net, g0, g3, diameter_m=0.40, length_m=1200)  # ring closure
 
-    # ── Coupling points ────────────────────────────────────────────────────
     # G2P: gas turbines at mid-load buses — backup / peak-shaving generation
     mx.create_g2p(
         net,
@@ -276,7 +269,6 @@ def create_regional_mes_net() -> mm.Network:
     """
     net = mx.create_multi_energy_network()
 
-    # ── Power (120 kV, ring + 1 cross-tie) ────────────────────────────────
     b0 = mx.create_bus(net, base_kv=120, name="B0_slack")
     b1 = mx.create_bus(net, base_kv=120, name="B1_gen")
     b2 = mx.create_bus(net, base_kv=120, name="B2_load")
@@ -310,7 +302,6 @@ def create_regional_mes_net() -> mm.Network:
     # Cross-tie (alternative path for N-1 security)
     _line(net, b1, b5, length_m=900, kv_class="120")
 
-    # # ── Gas (medium-high pressure, tree) ──────────────────────────────────
     g0 = mx.create_gas_junction(net, name="G0_ext")
     g1 = mx.create_gas_junction(net, name="G1")
     g2 = mx.create_gas_junction(net, name="G2")
@@ -333,7 +324,6 @@ def create_regional_mes_net() -> mm.Network:
     mx.create_gas_pipe(net, g2, g6, diameter_m=0.20, length_m=250)
     mx.create_gas_pipe(net, g3, g7, diameter_m=0.20, length_m=350)
 
-    # ── Heat (district heating, tree) ─────────────────────────────────────
     # HeatExchangerLoad branches enforce fixed heat demand; Sinks handle mass
     # balance at the return nodes (sized for 25 K drop: Q/(cp·ΔT)):
     #   CHP consumer:  176 kW / (4186 × 25) ≈ 1.684 kg/s
@@ -357,7 +347,6 @@ def create_regional_mes_net() -> mm.Network:
     )  # 176 kW consumer
     mx.create_heat_exchanger(net, h4, h5, q_mw=0.020, diameter_m=0.10)  # 20 kW consumer
 
-    # ── Coupling points (all types) ────────────────────────────────────────
     # CHP: gas at G1 → power at B2, heat injected between H1 and H2.
     mx.create_chp(
         net,
@@ -451,7 +440,6 @@ def create_balanced_urban_mes_net() -> mm.Network:
     """
     net = mx.create_multi_energy_network()
 
-    # ── Power (20 kV) ──────────────────────────────────────────────────────
     b0 = mx.create_bus(net, base_kv=20, name="B0_gen")
     b1 = mx.create_bus(net, base_kv=20, name="B1_slack")
     b2 = mx.create_bus(net, base_kv=20, name="B2_load")
@@ -469,7 +457,6 @@ def create_balanced_urban_mes_net() -> mm.Network:
     _line(net, b2, b3, length_m=300, kv_class="20")
     _line(net, b2, b4, length_m=350, kv_class="20")
 
-    # ── Gas (medium pressure, city distribution) ───────────────────────────
     g0 = mx.create_gas_junction(net, name="G0_ext")
     g1 = mx.create_gas_junction(net, name="G1")
     g2 = mx.create_gas_junction(net, name="G2")
@@ -485,7 +472,6 @@ def create_balanced_urban_mes_net() -> mm.Network:
     mx.create_gas_pipe(net, g2, g3, diameter_m=0.10, length_m=250)
     mx.create_gas_pipe(net, g1, g4, diameter_m=0.10, length_m=200)
 
-    # ── Heat (district heating) ────────────────────────────────────────────
     # H0 is the cold-return reference (330 K ≈ 57 °C).  The CHP heats the
     # circulating water from 330 K to ~356 K on the H1→H2 branch; the HE
     # consumer cools it back to ~330 K on H2→H3.  The P2H runs a parallel
@@ -514,7 +500,6 @@ def create_balanced_urban_mes_net() -> mm.Network:
     )  # 550 kW consumer
     mx.create_water_pipe(net, h1, h4, diameter_m=0.15, length_m=100)
 
-    # ── Coupling points ────────────────────────────────────────────────────
     # CHP: gas at G2 → power at B3, heat sourced between H1 and H2.
     # Heats supply water from ~330 K (H1) to ~356 K (H2).
     # heat_w = 0.40 × 0.026 kg/s × 3.6 × 15.3 kWh/kg × 1e6 ≈ 572 kW
@@ -600,7 +585,6 @@ def create_balanced_urban_mes_timeseries(
         :class:`~monee.simulation.timeseries.TimeseriesData` ready to pass
         to :func:`~monee.simulation.timeseries.run`.
     """
-    # ── 24-point unit profiles (fraction of rated, winter weekday) ──────────
     # Hour index:   0     1     2     3     4     5     6     7
     #               8     9    10    11    12    13    14    15
     #              16    17    18    19    20    21    22    23
@@ -702,7 +686,6 @@ def create_balanced_urban_mes_timeseries(
 
     td = TimeseriesData()
 
-    # ── Power loads ─────────────────────────────────────────────────────────
     for child in net.childs_by_type(mm.PowerLoad):
         p_rated = child.model.p_mw
         q_rated = child.model.q_mvar
@@ -715,7 +698,6 @@ def create_balanced_urban_mes_timeseries(
             mf_rated = child.model.mass_flow
             td.add_child_series(child.id, "mass_flow", [mf_rated * f for f in g_series])
 
-    # ── District-heat exchanger loads ────────────────────────────────────────
     # q_w_set is stored in Watts with sign convention: negative = consumer.
     for branch in net.branches_by_type(mm.HeatExchangerLoad):
         q_w_rated = branch.model.q_w_set  # e.g. -800 000 W for 800 kW consumer
@@ -779,7 +761,6 @@ def create_resilient_urban_mes_net() -> mm.Network:
     """
     net = mx.create_multi_energy_network()
 
-    # ── Power (20 kV) ──────────────────────────────────────────────────────
     b0 = mx.create_bus(net, base_kv=20, name="B0_wind")
     b1 = mx.create_bus(net, base_kv=20, name="B1_slack")
     b2 = mx.create_bus(net, base_kv=20, name="B2_load")
@@ -801,7 +782,6 @@ def create_resilient_urban_mes_net() -> mm.Network:
     _line(net, b2, b4, length_m=350, kv_class="20")
     _line(net, b1, b5, length_m=450, kv_class="20")  # second branch from slack
 
-    # ── Gas (medium pressure) ──────────────────────────────────────────────
     # G0_ext1: primary source; G5_ext2: secondary source.
     # G1–G5 inter-connection pipe allows either source to serve both CHPs.
     g0 = mx.create_gas_junction(net, name="G0_ext1")
@@ -824,7 +804,6 @@ def create_resilient_urban_mes_net() -> mm.Network:
     mx.create_gas_pipe(net, g1, g5, diameter_m=0.12, length_m=250)  # inter-connection
     mx.create_gas_pipe(net, g5, g6, diameter_m=0.10, length_m=150)
 
-    # ── Heat (district heating, return reference 330 K) ───────────────────
     # Two independent supply branches share the same cold-return node (H0).
     # CHP1 branch: H0→H1→(CHP1)→H2→HE1→H3
     # P2H  branch: H1→H4→(P2H)→H5
@@ -857,7 +836,6 @@ def create_resilient_urban_mes_net() -> mm.Network:
     mx.create_water_pipe(net, h0, h6, diameter_m=0.20, length_m=120)  # CHP2 branch
     mx.create_heat_exchanger(net, h7, h8, q_mw=0.300, diameter_m=0.15)  # HE2: 300 kW
 
-    # ── Coupling points ────────────────────────────────────────────────────
     # CHP1: G2 → B3 (power) + H1/H2 (heat). Connects gas ↔ power ↔ heat.
     # heat_w ≈ 0.40 × 0.026 × 55.08 × 1e6 = 573 kW
     mx.create_chp(

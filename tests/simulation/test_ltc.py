@@ -16,10 +16,6 @@ from monee.model import LumpedThermalCapacitance
 from monee.model.grid import WaterGrid
 from monee.simulation.timeseries import TimeseriesData, run
 
-# ---------------------------------------------------------------------------
-# helper — proven-to-converge 3-junction water loop
-# ---------------------------------------------------------------------------
-
 PIPE_D = 0.3  # m
 PIPE_L = 100.0  # m
 
@@ -53,11 +49,6 @@ def _water_loop():
     net.branch(mm.WaterPipe(**pipe), n1, n2)
     net.branch(mm.WaterPipe(**pipe), n2, n0)
     return net, n0, n1, n2
-
-
-# ---------------------------------------------------------------------------
-# tests
-# ---------------------------------------------------------------------------
 
 
 def test_ltc_transparent_in_single_step():

@@ -5,9 +5,7 @@ from monee.model.node import Bus, Junction
 from monee.model.storage import ElectricStorage, GasStorage
 from monee.simulation.timeseries import TimeseriesData, run
 
-# ---------------------------------------------------------------------------
 # helpers
-# ---------------------------------------------------------------------------
 
 
 def _el_net_with_storage(p_max_mw=2.0, e_initial=5.0, e_max=10.0):
@@ -65,9 +63,7 @@ def _gas_net_with_storage(flow_max=0.2, m_initial=100.0, m_max=500.0):
     return net, storage_id
 
 
-# ---------------------------------------------------------------------------
 # Plain energy flow — fixed dispatch via TimeseriesData
-# ---------------------------------------------------------------------------
 
 
 def test_electric_storage_inter_step_constraint_holds():
@@ -182,9 +178,7 @@ def test_gas_storage_soc_within_bounds():
     assert (m_series <= m_max + 1e-3).all(), "m_stored_kg exceeded m_max"
 
 
-# ---------------------------------------------------------------------------
 # Optimisation mode — make_controllable / controllable_storages
-# ---------------------------------------------------------------------------
 
 
 def test_make_controllable_converts_p_mw_to_var():

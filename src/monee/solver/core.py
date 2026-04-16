@@ -21,9 +21,7 @@ from monee.model import (
 from monee.model.child import GridFormingMixin
 from monee.problem.core import OptimizationProblem
 
-# ---------------------------------------------------------------------------
 # Display helpers (also imported by simulation.timeseries)
-# ---------------------------------------------------------------------------
 
 #: Internal bookkeeping columns omitted from pretty-printed output.
 _META_COLS: frozenset[str] = frozenset({"active", "independent", "ignored"})
@@ -59,8 +57,6 @@ _TABLE_CSS = (
     ".monee-result tr:nth-child(even) td{background:#f6f6f6}"
     "</style>"
 )
-
-# ---------------------------------------------------------------------------
 
 
 @dataclass

@@ -16,10 +16,6 @@ from monee.model.phys.islanding import (
 
 from .core import GridFormingMixin, IslandingMode
 
-# ---------------------------------------------------------------------------
-# GridFormingGenerator — grid-forming child model for electricity
-# ---------------------------------------------------------------------------
-
 
 @model
 class GridFormingGenerator(NoVarChildModel, GridFormingMixin):
@@ -59,11 +55,6 @@ class GridFormingGenerator(NoVarChildModel, GridFormingMixin):
         node_model.vm_pu = Const(self._vm_pu_setpoint)
         node_model.vm_pu_squared = Const(self._vm_pu_setpoint**2)
         # Angle is NOT pinned here — the islanding formulation does it.
-
-
-# ---------------------------------------------------------------------------
-# ElectricityIslandingMode
-# ---------------------------------------------------------------------------
 
 
 class ElectricityIslandingMode(IslandingMode):

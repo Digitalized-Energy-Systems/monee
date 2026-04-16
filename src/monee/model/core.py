@@ -145,6 +145,11 @@ class Var:
     """
 
     def __init__(self, value, max=None, min=None, integer=False, name=None) -> None:
+
+        if not isinstance(value, float | int):
+            raise ValueError(
+                "The initial guess for the variable need to a numeric value!"
+            )
         self.value = value
         self.max = max
         self.min = min

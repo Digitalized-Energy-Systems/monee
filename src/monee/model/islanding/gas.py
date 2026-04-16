@@ -10,10 +10,6 @@ from monee.model.network import Network
 
 from .core import GridFormingMixin, IslandingMode
 
-# ---------------------------------------------------------------------------
-# GridFormingSource — grid-forming child model for gas (and water)
-# ---------------------------------------------------------------------------
-
 
 @model
 class GridFormingSource(ChildModel, GridFormingMixin):
@@ -57,11 +53,6 @@ class GridFormingSource(ChildModel, GridFormingMixin):
 
     def equations(self, grid, node_model, **kwargs):
         return []
-
-
-# ---------------------------------------------------------------------------
-# GasIslandingMode
-# ---------------------------------------------------------------------------
 
 
 class GasIslandingMode(IslandingMode):

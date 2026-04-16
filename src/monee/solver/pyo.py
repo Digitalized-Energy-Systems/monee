@@ -1,3 +1,4 @@
+import logging
 import types
 
 import pyomo.environ as pyo
@@ -33,6 +34,8 @@ from .core import (
     persist_solution,
     withdraw_vars,
 )
+
+_log = logging.getLogger(__name__)
 
 DEFAULT_SOLVER_OPTIONS = {}
 
@@ -106,12 +109,26 @@ class PyomoSolver(SolverInterface):
     # --------- Constraint helpers ---------
 
     @staticmethod
-    def _add_equation(pm, expr):
-        pm.cons.add(expr)
+    def _add_equation(pm, expr, name=None):
+        if name is not None:
+            setattr(pm, name, pyo.Constraint(expr=expr))
+        else:
+            pm.cons.add(expr)
 
-    def _add_equations(self, pm, exprs):
-        for e in exprs:
-            pm.cons.add(e)
+    @staticmethod
+    def _sanitize_name(name):
+        """Make a string safe for use as a Pyomo component name."""
+        return (
+            name.replace("(", "").replace(")", "").replace(", ", "_").replace(" ", "_")
+        )
+
+    def _add_equations(self, pm, exprs, name_prefix=None):
+        for i, e in enumerate(exprs):
+            if name_prefix is not None:
+                name = self._sanitize_name(f"{name_prefix}_eq_{i}")
+            else:
+                name = None
+            self._add_equation(pm, e, name=name)
 
     @staticmethod
     def _process_intermediate_eqs(pm, model_obj, equations):
@@ -256,6 +273,19 @@ class PyomoSolver(SolverInterface):
 
         result = solver.solve(pm, tee=debug)
 
+        success = result.solver.status == SolverStatus.ok
+        if not success:
+            from monee.solver.infeasibility import diagnose_infeasibility
+
+            report = diagnose_infeasibility(
+                pm, solver_name=solver_name, compute_mis_flag=False, tol=0.001
+            )
+            _log.warning(
+                "Pyomo solve failed (status=%s). Infeasibility report:\n%s",
+                result.solver.status,
+                report.summary(),
+            )
+
         # pull values back into your objects
         withdraw_vars(
             PyomoSolver.withdraw_pyomo_vars_attr, nodes, branches, compounds, network
@@ -266,13 +296,16 @@ class PyomoSolver(SolverInterface):
         # objective value
         obj_val = pyo.value(pm.obj)
 
-        return SolverResult(
+        solver_result = SolverResult(
             network,
             network.as_result_dataframe_dict(),
             obj_val,
-            result.solver.status == SolverStatus.ok,
+            success,
             violations,
         )
+        if not success:
+            solver_result.infeasibility_report = report
+        return solver_result
 
     # --------- Your original processing rewritten to Pyomo ---------
 
@@ -323,7 +356,11 @@ class PyomoSolver(SolverInterface):
             if equations is not None:
                 equations = as_iter(equations)
                 self._process_intermediate_eqs(pm, compound, equations)
-                self._add_equations(pm, filter_intermediate_eqs(equations))
+                self._add_equations(
+                    pm,
+                    filter_intermediate_eqs(equations),
+                    name_prefix=f"compound_{compound.id}",
+                )
 
     def process_equations_nodes_childs(
         self, pm, network: Network, nodes, ignored_nodes
@@ -379,7 +416,9 @@ class PyomoSolver(SolverInterface):
 
             node_eqs = [eq for eq in equations if type(eq) is not bool or not eq]
             self._process_intermediate_eqs(pm, node.model, node_eqs)
-            self._add_equations(pm, filter_intermediate_eqs(node_eqs))
+            self._add_equations(
+                pm, filter_intermediate_eqs(node_eqs), name_prefix=f"node_{node.id}"
+            )
 
             for child in node_childs:
                 if ignore_child(child, ignored_nodes):
@@ -388,7 +427,11 @@ class PyomoSolver(SolverInterface):
                     pm.obj_exprs.append(expr)
                 child_eqs = as_iter(child.equations(grid, node))
                 self._process_intermediate_eqs(pm, child.model, child_eqs)
-                self._add_equations(pm, filter_intermediate_eqs(child_eqs))
+                self._add_equations(
+                    pm,
+                    filter_intermediate_eqs(child_eqs),
+                    name_prefix=f"child_{child.id}",
+                )
 
     def process_equations_branches(self, pm, network, branches, ignored_nodes):
         sin_impl = pyo.sin
@@ -445,4 +488,8 @@ class PyomoSolver(SolverInterface):
                 pm.obj_exprs.append(expr)
 
             self._process_intermediate_eqs(pm, branch.model, branch_eqs)
-            self._add_equations(pm, filter_intermediate_eqs(branch_eqs))
+            self._add_equations(
+                pm,
+                filter_intermediate_eqs(branch_eqs),
+                name_prefix=f"branch_{branch.id}",
+            )

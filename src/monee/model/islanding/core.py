@@ -27,10 +27,6 @@ from monee.model.phys.islanding import (
     connectivity_super_source_supply,
 )
 
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
-
 
 def _collect_islanding_state(network: Network, mode: IslandingMode, ignored_nodes: set):
     """
@@ -156,11 +152,6 @@ def _build_connectivity_equations(
     return eqs
 
 
-# ---------------------------------------------------------------------------
-# IslandingMode — implements NetworkAspect
-# ---------------------------------------------------------------------------
-
-
 class IslandingMode(NetworkAspect, ABC):
     """
     Per-carrier islanding configuration.
@@ -225,11 +216,6 @@ class IslandingMode(NetworkAspect, ABC):
         pressure bounds for gas/water.  The default returns an empty list.
         """
         return []
-
-
-# ---------------------------------------------------------------------------
-# NetworkIslandingConfig — implements NetworkAspect
-# ---------------------------------------------------------------------------
 
 
 class NetworkIslandingConfig(NetworkAspect):

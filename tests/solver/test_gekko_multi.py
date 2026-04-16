@@ -92,16 +92,12 @@ def create_g2h_net():
     )
 
     pn.branch(
-        mm.GasPipe(
-            diameter_m=0.75, length_m=100, temperature_ext_k=300, roughness=0.01
-        ),
+        mm.GasPipe(diameter_m=0.3, length_m=100, temperature_ext_k=300, roughness=0.01),
         g_node_0,
         g_node_1,
     )
     pn.branch(
-        mm.GasPipe(
-            diameter_m=0.75, length_m=150, temperature_ext_k=300, roughness=0.01
-        ),
+        mm.GasPipe(diameter_m=0.3, length_m=150, temperature_ext_k=300, roughness=0.01),
         g_node_0,
         g_node_2,
     )
@@ -112,7 +108,9 @@ def create_g2h_net():
         grid=mm.WATER_KEY,
         child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
     )
-    w_node_1 = pn.node(mm.Junction(), grid=mm.WATER_KEY)
+    w_node_1 = pn.node(
+        mm.Junction(), child_ids=[pn.child(mm.ConsumeHydrGrid(1))], grid=mm.WATER_KEY
+    )
     w_node_2 = pn.node(mm.Junction(), grid=mm.WATER_KEY)
     w_node_3 = pn.node(
         mm.Junction(),
@@ -407,11 +405,15 @@ def test_generic_transfer_heat():
 def test_simple_g2h():
     multi_energy_network = create_g2h_net()
 
-    result = ms.GEKKOSolver().solve(multi_energy_network)
+    from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+
+    multi_energy_network.apply_formulation(MISOCP_NETWORK_FORMULATION)
+
+    result = ms.PyomoSolver().solve(multi_energy_network)
     print(result)
-    assert len(result.dataframes) == 9
+    assert len(result.dataframes) == 10
     assert math.isclose(
-        result.dataframes["Junction"]["t_k"][3], 373.81219485, abs_tol=0.01
+        result.dataframes["Junction"]["t_k"][3], 378.445892, abs_tol=0.01
     )
 
 

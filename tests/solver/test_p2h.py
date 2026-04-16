@@ -7,8 +7,6 @@ import monee.model as mm
 import monee.solver as ms
 from monee.model.formulation import MISOCP_NETWORK_FORMULATION
 
-# ── Shared network builder ────────────────────────────────────────────────────
-
 
 def _build_p2h_network(
     heat_energy_w=20_000,
@@ -18,7 +16,6 @@ def _build_p2h_network(
     """Two-grid (power + heat/water) network with one P2H unit."""
     pn = mm.Network(mm.create_water_grid("heat"))
 
-    # ── Heat (water) grid ─────────────────────────────────────────────
     w0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=0.1))])
     w1 = pn.node(mm.Junction())
     w2 = pn.node(mm.Junction())
@@ -26,7 +23,6 @@ def _build_p2h_network(
     pn.branch(mm.WaterPipe(diameter_m=0.15, length_m=100), w1, w0)
     pn.branch(mm.WaterPipe(diameter_m=0.15, length_m=200), w2, w3)
 
-    # ── Power grid ────────────────────────────────────────────────────
     power_grid = mm.create_power_grid("power")
     p0 = pn.node(
         mm.Bus(base_kv=1),
@@ -54,7 +50,6 @@ def _build_p2h_network(
         p2,
     )
 
-    # ── P2H ───────────────────────────────────────────────────────────
     pn.compound(
         mm.PowerToHeat(heat_energy_w, diameter_m, 300, efficiency),
         power_node_id=p2,
@@ -62,9 +57,6 @@ def _build_p2h_network(
         heat_return_node_id=w1,
     )
     return pn
-
-
-# ── 1. Basic solve: GEKKO ─────────────────────────────────────────────────────
 
 
 def test_p2h_basic_solve():
@@ -76,13 +68,11 @@ def test_p2h_basic_solve():
     jct = result.dataframes["Junction"]
     bus = result.dataframes["Bus"]
 
-    # ── Power direction ───────────────────────────────────────────────
     # P2H consumes power (positive by load-sign convention)
     assert cn["el_mw"].iloc[0] > 0
     # Without CHP to compensate, P2H adds extra load → ExtPowerGrid injects
     assert result.dataframes["ExtPowerGrid"]["p_mw"].iloc[0] < 0
 
-    # ── Thermal direction ─────────────────────────────────────────────
     # P2H delivers heat to the water loop (positive heat_w)
     assert cn["heat_w"].iloc[0] > 0
     # Water temperature at the heated junction must exceed the return junction
@@ -93,16 +83,12 @@ def test_p2h_basic_solve():
     assert 350 < t_heated < 430
     assert 340 < t_return < 400
 
-    # ── Voltages ──────────────────────────────────────────────────────
     # Slack bus fixed at 1.0; others may drop due to P2H + load on 7e-5 Ω/m lines
     slack_vm = bus.loc[
         bus["id"] == result.dataframes["ExtPowerGrid"]["node_id"].iloc[0], "vm_pu"
     ].iloc[0]
     assert math.isclose(slack_vm, 1.0, abs_tol=1e-6)
     assert all(v > 0.85 for v in bus["vm_pu"])
-
-
-# ── 2. Compound structure: 4 subcomponents (1 node + 3 branches) ─────────────
 
 
 def test_p2h_compound_structure():
@@ -116,9 +102,6 @@ def test_p2h_compound_structure():
     assert len(p2hs[0].subcomponents) == 4
 
 
-# ── 3. Energy balance: heat_w = efficiency × el_mw × 10⁶ ────────────────────
-
-
 def test_p2h_energy_balance():
     net = _build_p2h_network(heat_energy_w=20_000, efficiency=0.8)
     result = ms.GEKKOSolver().solve(net)
@@ -128,9 +111,6 @@ def test_p2h_energy_balance():
     )
 
 
-# ── 4. Perfect efficiency (η=1): el_mw = heat_energy_w / 10⁶ ────────────────
-
-
 def test_p2h_perfect_efficiency():
     heat_w = 15_000
     net = _build_p2h_network(heat_energy_w=heat_w, efficiency=1.0)
@@ -138,9 +118,6 @@ def test_p2h_perfect_efficiency():
     cn = result.dataframes["PowerToHeatControlNode"]
     assert math.isclose(cn["el_mw"].iloc[0], heat_w / 1e6, rel_tol=1e-4)
     assert math.isclose(cn["heat_w"].iloc[0], heat_w, rel_tol=1e-4)
-
-
-# ── 5. Efficiency linearity: halving efficiency doubles el_mw ─────────────────
 
 
 def test_p2h_efficiency_linearity():
@@ -154,9 +131,6 @@ def test_p2h_efficiency_linearity():
     assert math.isclose(el_lo, 2.0 * el_hi, rel_tol=1e-4)
 
 
-# ── 6. Heat setpoint linearity: doubling heat_energy_w doubles el_mw ─────────
-
-
 def test_p2h_heat_setpoint_linearity():
     net_lo = _build_p2h_network(heat_energy_w=10_000, efficiency=0.9)
     net_hi = _build_p2h_network(heat_energy_w=20_000, efficiency=0.9)
@@ -165,9 +139,6 @@ def test_p2h_heat_setpoint_linearity():
     el_lo = r_lo.dataframes["PowerToHeatControlNode"]["el_mw"].iloc[0]
     el_hi = r_hi.dataframes["PowerToHeatControlNode"]["el_mw"].iloc[0]
     assert math.isclose(el_hi, 2.0 * el_lo, rel_tol=1e-4)
-
-
-# ── 7. Absolute values match formula ─────────────────────────────────────────
 
 
 def test_p2h_absolute_values():
@@ -186,9 +157,6 @@ def test_p2h_absolute_values():
 
     assert math.isclose(cn["el_mw"].iloc[0], expected_el, rel_tol=1e-4)
     assert math.isclose(cn["heat_w"].iloc[0], heat_w, rel_tol=1e-4)
-
-
-# ── 8. Temperature rise consistent with heat output ───────────────────────────
 
 
 def test_p2h_temperature_rise():
@@ -211,9 +179,6 @@ def test_p2h_temperature_rise():
     t_return = jct["t_k"].iloc[2]
     actual_dt = t_supply - t_return
     assert math.isclose(actual_dt, expected_dt, rel_tol=0.02)
-
-
-# ── 9. MISOCP formulation (Pyomo) ─────────────────────────────────────────────
 
 
 def test_p2h_misocp_formulation():
@@ -240,9 +205,6 @@ def test_p2h_misocp_formulation():
     )
 
 
-# ── 10. MISOCP regression (known reference values) ────────────────────────────
-
-
 def test_p2h_misocp_regression():
     """Regression against values from the existing Pyomo test suite."""
     net = _build_p2h_network(heat_energy_w=20_000, efficiency=1.0)
@@ -253,9 +215,6 @@ def test_p2h_misocp_regression():
     assert math.isclose(
         result.dataframes["Junction"]["t_k"].iloc[0], 394.13290124571745, abs_tol=0.01
     )
-
-
-# ── 11. Express API ───────────────────────────────────────────────────────────
 
 
 def test_p2h_express_api():
@@ -300,9 +259,6 @@ def test_p2h_express_api():
     assert len(net.compounds_by_type(mm.PowerToHeat)) == 1
     cn = result.dataframes["PowerToHeatControlNode"]
     assert math.isclose(cn["heat_w"].iloc[0], 20_000, rel_tol=1e-4)
-
-
-# ── 12. Two P2H units in parallel ─────────────────────────────────────────────
 
 
 def test_p2h_two_units():
@@ -380,9 +336,6 @@ def test_p2h_two_units():
     assert math.isclose(cn_df["heat_w"].sum(), 20_000, rel_tol=1e-4)
 
 
-# ── 13. Partial efficiency — CoP analogy ──────────────────────────────────────
-
-
 def test_p2h_cop_analogy():
     """
     With η < 1 the unit wastes electricity; same heat at η=0.6 needs 1/0.6× el.
@@ -395,9 +348,6 @@ def test_p2h_cop_analogy():
     el_ref = r_ref.dataframes["PowerToHeatControlNode"]["el_mw"].iloc[0]
     el_low = r_low.dataframes["PowerToHeatControlNode"]["el_mw"].iloc[0]
     assert math.isclose(el_low / el_ref, 1.0 / 0.6, rel_tol=1e-4)
-
-
-# ── 14. P2H does not touch the gas grid ───────────────────────────────────────
 
 
 def test_p2h_no_gas_interaction():

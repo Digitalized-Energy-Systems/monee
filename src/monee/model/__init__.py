@@ -44,6 +44,9 @@ from .branch import (
     HeatExchanger,
     HeatExchangerGenerator,
     HeatExchangerLoad,
+    PassiveHeatExchanger,
+    PassiveHeatExchangerGenerator,
+    PassiveHeatExchangerLoad,
     Trafo,
 )
 from .storage import (

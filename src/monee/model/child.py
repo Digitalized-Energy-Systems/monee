@@ -251,7 +251,10 @@ class ConsumeHydrGrid(NoVarChildModel):
 
     def __init__(self, mass_flow=0.1, pressure_pu=1, t_k=293, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = -mass_flow
+        self.mass_flow = Var(
+            mass_flow,
+            name="consume_ext_grid_mass_flow",
+        )
         self.pressure_pu = pressure_pu
         self.t_k = t_k
 

@@ -117,9 +117,7 @@ def _prepare_period(
     return net_t, ignored_nodes
 
 
-# ---------------------------------------------------------------------------
 # Internal helpers for terminal constraints and MPC
-# ---------------------------------------------------------------------------
 
 
 def _find_component_var(net_t: Network, comp_id, attr: str):
@@ -213,11 +211,6 @@ def _slice_timeseries(td: TimeseriesData, start: int, length: int) -> Timeseries
     new_td._compound_name_to_series = _slice_dict(td._compound_name_to_series)
     new_td._length = length
     return new_td
-
-
-# ---------------------------------------------------------------------------
-# Result type
-# ---------------------------------------------------------------------------
 
 
 class MultiPeriodResult:
@@ -358,9 +351,7 @@ class MultiPeriodResult:
             self.success,
         )
 
-    # ------------------------------------------------------------------
     # Repr helpers
-    # ------------------------------------------------------------------
 
     def _temporal_lines(self) -> list[str]:
         """Return compact per-period evolution lines for attributes that vary
@@ -509,9 +500,7 @@ class MultiPeriodResult:
         )
 
 
-# ---------------------------------------------------------------------------
 # GEKKO multi-period solver
-# ---------------------------------------------------------------------------
 
 
 class GekkoMultiPeriodSolver:
@@ -709,9 +698,7 @@ class GekkoMultiPeriodSolver:
         )
 
 
-# ---------------------------------------------------------------------------
 # Pyomo multi-period solver
-# ---------------------------------------------------------------------------
 
 
 class PyomoMultiPeriodSolver:
@@ -737,7 +724,7 @@ class PyomoMultiPeriodSolver:
     ) -> MultiPeriodResult:
         """Build and solve a multi-period optimization in a single Pyomo model."""
         import pyomo.environ as pyo
-        from pyomo.opt import SolverStatus
+        from pyomo.opt import SolverStatus, TerminationCondition
 
         from monee.solver.pyo import PyomoSolver
 
@@ -839,10 +826,34 @@ class PyomoMultiPeriodSolver:
         solver = pyo.SolverFactory(self._solver_name)
         solve_result = solver.solve(pm)
 
-        if solve_result.solver.status not in (
-            SolverStatus.ok,
-            SolverStatus.warning,
-        ):
+        _ok_terminations = {
+            TerminationCondition.optimal,
+            TerminationCondition.locallyOptimal,
+            TerminationCondition.globallyOptimal,
+            TerminationCondition.feasible,
+        }
+        _failed = (
+            solve_result.solver.status
+            not in (
+                SolverStatus.ok,
+                SolverStatus.warning,
+            )
+            or solve_result.solver.termination_condition not in _ok_terminations
+        )
+        if _failed:
+            from monee.solver.infeasibility import diagnose_infeasibility
+
+            report = diagnose_infeasibility(
+                pm,
+                solver_name=self._solver_name,
+                compute_mis_flag=False,
+            )
+            report_str = report.summary()
+            _log.warning(
+                "Multi-period Pyomo solve failed. Infeasibility report:\n%s",
+                report_str,
+            )
+
             terminal_hint = (
                 "  • terminal_state constraints may be infeasible given the "
                 "horizon length or storage capacity.\n"
@@ -857,7 +868,8 @@ class PyomoMultiPeriodSolver:
                 f"insufficient supply).\n"
                 f"{terminal_hint}"
                 f"Tip: set steps=1 and increase incrementally to isolate the "
-                f"first infeasible period."
+                f"first infeasible period.\n\n"
+                f"Infeasibility diagnostics:\n{report_str}"
             )
 
         for net_t in net_copies:
@@ -872,14 +884,9 @@ class PyomoMultiPeriodSolver:
         return MultiPeriodResult(
             net_copies,
             objective=pyo.value(pm.obj),
-            success=solve_result.solver.status == SolverStatus.ok,
+            success=not _failed,
             datetime_index=datetime_index,
         )
-
-
-# ---------------------------------------------------------------------------
-# Internal helpers
-# ---------------------------------------------------------------------------
 
 
 def _resolve_steps(steps: int | None, timeseries_data: TimeseriesData | None) -> int:
@@ -951,9 +958,7 @@ def _resolve_dt_h(
     return [dt_h] * steps
 
 
-# ---------------------------------------------------------------------------
 # Convenience entry point — single-shot multi-period
-# ---------------------------------------------------------------------------
 
 
 def run_multi_period(
@@ -1046,9 +1051,7 @@ def run_multi_period(
     )
 
 
-# ---------------------------------------------------------------------------
 # Rolling-horizon MPC
-# ---------------------------------------------------------------------------
 
 
 def run_mpc(

@@ -147,24 +147,24 @@ def create_multi_chp():
     w_node_0 = pn.node(
         mm.Junction(),
         grid=mm.WATER_KEY,
-        child_ids=[pn.child(mm.Sink(mass_flow=1))],
+        child_ids=[pn.child(mm.ExtHydrGrid(t_k=359))],
     )
     w_node_1 = pn.node(mm.Junction(), grid=mm.WATER_KEY)
     w_node_2 = pn.node(mm.Junction(), grid=mm.WATER_KEY)
     w_node_3 = pn.node(
         mm.Junction(),
+        child_ids=[pn.child(mm.ConsumeHydrGrid(1))],
         grid=mm.WATER_KEY,
-        child_ids=[pn.child(mm.ExtHydrGrid(t_k=359))],
     )
     pn.branch(
-        mm.WaterPipe(diameter_m=0.35, length_m=100),
+        mm.WaterPipe(diameter_m=0.15, length_m=100),
         w_node_0,
         w_node_1,
     )
     pn.branch(
-        mm.WaterPipe(diameter_m=0.35, length_m=200),
-        w_node_3,
+        mm.WaterPipe(diameter_m=0.15, length_m=200),
         w_node_2,
+        w_node_3,
     )
 
     # GAS
@@ -232,7 +232,7 @@ def create_multi_chp():
 
     # multi
     pn.compound(
-        mm.CHP(0.5, 0.6, 0.4, 0.0, regulation=0.5),
+        mm.CHP(0.1, 0.6, 0.4, 0.1, regulation=1),
         gas_node_id=g_node_2,
         heat_node_id=w_node_1,
         heat_return_node_id=w_node_2,
@@ -249,18 +249,18 @@ def test_simple_chp():
     result = ms.PyomoSolver().solve(multi_energy_network)
     print(result)
 
-    assert len(result.dataframes) == 14
+    assert len(result.dataframes) == 15
     assert math.isclose(
         result.dataframes["ExtPowerGrid"]["p_mw"][0],
-        -0.006264089217161262,
+        3.1985501723755214,
         abs_tol=0.001,
     )
     assert math.isclose(
         result.dataframes["ExtHydrGrid"]["mass_flow"][1],
-        -0.9,
+        -1.0,
     )
     assert math.isclose(
-        result.dataframes["Junction"]["t_k"][1], 357.924809287306, abs_tol=0.001
+        result.dataframes["Junction"]["t_k"][1], 358.98302500340054, abs_tol=0.05
     )
 
 

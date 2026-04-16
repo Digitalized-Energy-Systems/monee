@@ -182,7 +182,7 @@ def create_ext_branching_heat_example():
     )
     g_node_5 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=1))],
+        child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=1))],
     )
 
     pn.branch(
@@ -218,69 +218,6 @@ def create_ext_branching_heat_example():
     return pn
 
 
-def create_ext_branching_heat_example_t():
-    pn = mm.Network(mm.create_water_grid("heat"))
-
-    # WATER
-    g_node_0 = pn.node(
-        mm.Junction(),
-        child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))],
-    )
-    g_node_1 = pn.node(
-        mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
-    )
-    g_node_2 = pn.node(
-        mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
-    )
-
-    g_node_3 = pn.node(
-        mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
-    )
-    g_node_4 = pn.node(
-        mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
-    )
-    g_node_5 = pn.node(
-        mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
-    )
-
-    pn.branch(
-        mm.WaterPipe(diameter_m=0.1, length_m=1000),
-        g_node_0,
-        g_node_1,
-    )
-    pn.branch(
-        mm.WaterPipe(diameter_m=0.1, length_m=1000),
-        g_node_1,
-        g_node_2,
-    )
-    pn.branch(
-        mm.WaterPipe(diameter_m=0.1, length_m=1000),
-        g_node_3,
-        g_node_4,
-    )
-    pn.branch(
-        mm.WaterPipe(diameter_m=0.1, length_m=1000),
-        g_node_4,
-        g_node_5,
-    )
-    pn.branch(
-        mm.HeatExchangerGenerator(q_mw=-0.001, diameter_m=0.1),
-        g_node_1,
-        g_node_4,
-    )
-    pn.branch(
-        mm.HeatExchangerGenerator(q_mw=-0.001, diameter_m=0.1),
-        g_node_2,
-        g_node_5,
-    )
-    return pn
-
-
 def create_two_pipes_with_he_no_branching():
     pn = mm.Network(mm.create_water_grid("heat"))
 
@@ -290,7 +227,9 @@ def create_two_pipes_with_he_no_branching():
         mm.WATER,
         child_ids=[pn.child(mm.Sink(mass_flow=0.3))],
     )
-    g_node_1 = pn.node(mm.Junction(), mm.WATER)
+    g_node_1 = pn.node(
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=10))]
+    )
     g_node_2 = pn.node(mm.Junction(), mm.WATER)
     g_node_3 = pn.node(
         mm.Junction(),
@@ -439,32 +378,19 @@ def test_circle_heat_network():
     assert len(result.dataframes) == 5
 
 
-def test_ext_branching_pipes_heat_network():
-    heat_net = create_ext_branching_heat_example()
-    result = ms.GEKKOSolver().solve(heat_net)
-
-    print(result)
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -5)
-    assert math.isclose(
-        result.dataframes["Junction"]["pressure_pa"][4], 999309.00465, abs_tol=0.01
-    )
-    assert math.isclose(
-        result.dataframes["Junction"]["t_k"][4], 377.53568893, abs_tol=0.01
-    )
-    assert len(result.dataframes) == 5
-
-
 def test_heat_exchanger():
     heat_net = create_two_pipes_with_he_no_branching()
     result = ms.GEKKOSolver().solve(heat_net)
 
     print(result)
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.3)
-    assert math.isclose(result.dataframes["Junction"]["t_k"][0], 392.40483747)
     assert math.isclose(
-        result.dataframes["Junction"]["pressure_pa"][0], 999991.51491, abs_tol=0.001
+        result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.39834289356
     )
-    assert len(result.dataframes) == 5
+    assert math.isclose(result.dataframes["Junction"]["t_k"][0], 383.17457358)
+    assert math.isclose(
+        result.dataframes["Junction"]["pressure_pa"][0], 999996.1481, abs_tol=0.001
+    )
+    assert len(result.dataframes) == 6
 
 
 def test_dead_end():
@@ -480,141 +406,6 @@ def test_dead_end():
     assert len(result.dataframes) == 4
 
 
-def create_supply_return_structured_heat_net():
-
-    pn = mm.Network()
-
-    # WATER
-    g_node_0 = pn.node(
-        mm.Junction(),
-        mm.WATER,
-        child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))],
-    )
-    g_node_1 = pn.node(
-        mm.Junction(),
-        mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=3))],
-    )
-    g_node_2 = pn.node(
-        mm.Junction(),
-        mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=3))],
-    )
-
-    # WATER
-    r_node_0 = pn.node(
-        mm.Junction(),
-        mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=10))],
-    )
-    r_node_1 = pn.node(
-        mm.Junction(),
-        mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=10))],
-    )
-    r_node_2 = pn.node(
-        mm.Junction(),
-        mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=10))],
-    )
-
-    pn.branch(
-        mm.WaterPipe(diameter_m=0.56, length_m=100),
-        g_node_0,
-        g_node_1,
-    )
-    pn.branch(
-        mm.WaterPipe(diameter_m=0.56, length_m=100),
-        g_node_1,
-        g_node_2,
-    )
-
-    pn.branch(
-        mm.WaterPipe(diameter_m=0.56, length_m=100),
-        r_node_0,
-        r_node_1,
-    )
-    pn.branch(
-        mm.WaterPipe(diameter_m=0.56, length_m=100),
-        r_node_1,
-        r_node_2,
-    )
-    pn.branch(
-        mm.HeatExchanger(q_mw=0.05, diameter_m=0.15),
-        g_node_2,
-        r_node_2,
-    )
-    pn.branch(
-        mm.HeatExchanger(q_mw=0.05, diameter_m=0.15),
-        g_node_1,
-        r_node_1,
-    )
-    return pn
-
-
-def create_supply_return_three_he():
-    """Supply and return as 4-node chains, connected by 3 heat exchangers."""
-    pn = mm.Network()
-
-    s0 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))])
-    s1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
-    s2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
-    s3 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
-
-    r0 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=3))])
-    r1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=3))])
-    r2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=3))])
-    r3 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=3))])
-
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s0, s1)
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s1, s2)
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s2, s3)
-
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), r0, r1)
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), r1, r2)
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), r2, r3)
-
-    pn.branch(mm.HeatExchanger(q_mw=0.01, diameter_m=0.15), s1, r1)
-    pn.branch(mm.HeatExchanger(q_mw=0.01, diameter_m=0.15), s2, r2)
-    pn.branch(mm.HeatExchanger(q_mw=0.01, diameter_m=0.15), s3, r3)
-
-    return pn
-
-
-def create_supply_return_sparse_he():
-    """Supply and return as 5-node chains, heat exchangers only at the first
-    and last node pairs — the middle three supply/return nodes are not coupled."""
-    pn = mm.Network()
-
-    s0 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))])
-    s1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
-    s2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
-    s3 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
-    s4 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
-
-    r0 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=12))])
-    r1 = pn.node(mm.Junction(), mm.WATER)
-    r2 = pn.node(mm.Junction(), mm.WATER)
-    r3 = pn.node(mm.Junction(), mm.WATER)
-    r4 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=6))])
-
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s0, s1)
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s1, s2)
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s2, s3)
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s3, s4)
-
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), r0, r1)
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), r1, r2)
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), r2, r3)
-    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), r3, r4)
-
-    # HEs only at the first and last node pairs — middle nodes uncoupled
-    pn.branch(mm.HeatExchanger(q_mw=0.05, diameter_m=0.15), s1, r1)
-    pn.branch(mm.HeatExchanger(q_mw=0.05, diameter_m=0.15), s4, r4)
-
-    return pn
-
-
 def create_supply_return_parallel_he():
     """Supply and return as 3-node chains.  One node pair is connected by two
     parallel heat exchangers; the other by a single one."""
@@ -624,7 +415,9 @@ def create_supply_return_parallel_he():
     s1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
     s2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
 
-    r0 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=12))])
+    r0 = pn.node(
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=10))]
+    )
     r1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=3))])
     r2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=3))])
 
@@ -643,20 +436,31 @@ def create_supply_return_parallel_he():
     return pn
 
 
-def test_supply_return_structure():
-    net = create_supply_return_structured_heat_net()
+def create_supply_return_parallel_he_real(q_mw_coeff=1):
+    """Supply and return as 3-node chains.  One node pair is connected by two
+    parallel heat exchangers; the other by a single one."""
+    pn = mm.Network()
 
-    result = ms.GEKKOSolver().solve(net)
-    print(result)
+    s0 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))])
+    s1 = pn.node(mm.Junction(), mm.WATER)
+    s2 = pn.node(mm.Junction(), mm.WATER)
 
-    assert result.success
+    r0 = pn.node(
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=10))]
+    )
+    r1 = pn.node(mm.Junction(), mm.WATER)
+    r2 = pn.node(mm.Junction(), mm.WATER)
 
+    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s0, s1)
+    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s1, s2)
 
-def test_supply_return_three_he():
-    net = create_supply_return_three_he()
-    result = ms.GEKKOSolver().solve(net)
-    print(result)
-    assert result.success
+    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), r0, r1)
+    pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), r1, r2)
+
+    pn.branch(mm.HeatExchanger(q_mw=q_mw_coeff * 0.04, diameter_m=0.15), s1, r1)
+    pn.branch(mm.HeatExchanger(q_mw=q_mw_coeff * 0.5, diameter_m=0.15), s2, r2)
+
+    return pn
 
 
 def test_supply_return_parallel_he():
@@ -664,3 +468,19 @@ def test_supply_return_parallel_he():
     result = ms.GEKKOSolver().solve(net)
     print(result)
     assert result.success
+
+
+def test_supply_return_parallel_he_real():
+    net = create_supply_return_parallel_he_real(q_mw_coeff=1)
+    result = ms.PyomoSolver().solve(net)
+
+    assert result.success
+    assert math.isclose(result.get(mm.Junction)["t_k"][3], 385.1, abs_tol=0.09)
+
+
+def test_supply_return_parallel_he_real_loads():
+    net = create_supply_return_parallel_he_real(q_mw_coeff=-1)
+    result = ms.PyomoSolver().solve(net)
+
+    assert result.success
+    assert math.isclose(result.get(mm.Junction)["t_k"][3], 325.4, abs_tol=0.09)

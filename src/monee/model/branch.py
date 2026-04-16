@@ -194,6 +194,121 @@ class HeatExchanger(BranchModel):
         temperature_ext_k=293,
         regulation=1,
         friction=None,
+        mass_flow_design_kgs=None,
+        T_delta_design_K=30,
+    ) -> None:
+        super().__init__()
+        self._calc_mass_flow = False
+        self._T_delta_design_K = T_delta_design_K
+
+        self.diameter_m = diameter_m
+        self.temperature_ext_k = temperature_ext_k
+        self.roughness = roughness
+        self.length_m = length_m
+        self.limit = 0.1
+        self.active = True
+        self.regulation = regulation
+        self.on_off = 1
+        self.q_w_set = -q_mw * 10**6
+        self.q_w = Var(0, name="q_w")
+
+        if mass_flow_design_kgs is None:
+            if isinstance(q_mw, (int, float)):
+                mass_flow_design_kgs = abs(q_mw * 10**6) / (
+                    ohfmodel.SPECIFIC_HEAT_CAP_WATER * T_delta_design_K
+                )
+            else:
+                mass_flow_design_kgs = Var(0, name="mass_flow_design_kgs")
+                self._calc_mass_flow = True
+
+        self.mass_flow_design_kgs = mass_flow_design_kgs
+        self.mass_flow = Intermediate(0.1)
+        self.mass_flow_pos = Var(0, min=0, name="mass_flow_pos")
+        self.mass_flow_neg = Var(0, min=0, name="mass_flow_neg")
+        self.mass_flow_pos_squared = Var(0, min=0, name="mass_flow_pos_sq")
+        self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
+        self.direction = Var(0, integer=True, min=0, max=1, name="direction")
+        self.velocity = Var(1, name="velocity")
+        self.reynolds = Var(1000, min=0, max=1000000, name="reynolds")
+        self.t_from_pu = Var(1, min=0, max=3, name="t_from_pu")
+        self.t_to_pu = Var(1, min=0, max=3, name="t_to_pu")
+        self.friction = (
+            Var(0.01, min=0, max=1, name="friction") if friction is None else friction
+        )
+
+    def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
+        eqs = [
+            IntermediateEq("mass_flow", self.mass_flow_pos - self.mass_flow_neg),
+        ]
+        if self._calc_mass_flow:
+            eqs.append(
+                self.mass_flow_design_kgs
+                == -self.q_w
+                / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * self._T_delta_design_K)
+            )
+        else:
+            eqs.append(self.q_w == self.q_w_set * self.regulation)
+        return eqs
+
+
+@model
+class HeatExchangerLoad(HeatExchanger):
+    def __init__(
+        self, q_mw, diameter_m, temperature_ext_k=293, mass_flow_design_kgs=None
+    ) -> None:
+        super().__init__(
+            q_mw,
+            diameter_m,
+            temperature_ext_k=temperature_ext_k,
+            mass_flow_design_kgs=mass_flow_design_kgs,
+        )
+
+
+@model
+class HeatExchangerGenerator(HeatExchanger):
+    def __init__(
+        self, q_mw, diameter_m, temperature_ext_k=293, mass_flow_design_kgs=None
+    ) -> None:
+        super().__init__(
+            q_mw,
+            diameter_m,
+            temperature_ext_k=temperature_ext_k,
+            mass_flow_design_kgs=mass_flow_design_kgs,
+        )
+
+
+@model
+class PassiveHeatExchanger(BranchModel):
+    """
+    Passive heat exchanger: injects or extracts a fixed heat power ``q_mw`` into
+    the water flow that passes through it.  The mass flow is *not* prescribed —
+    it is determined by the surrounding network hydraulics.  The formulation then
+    computes the resulting temperature increase (or decrease) from the heat power
+    and the actual mass flow.
+
+    Use :class:`PassiveHeatExchangerLoad` / :class:`PassiveHeatExchangerGenerator`
+    for the load/generator convenience sub-classes.
+
+    Args:
+        q_mw: Heat power in MW.  Positive = heat consumed (load),
+              negative = heat injected (generator).
+        diameter_m: Inner pipe diameter [m].
+        roughness: Pipe wall roughness [m] (default 0.0001).
+        length_m: Equivalent pipe length for pressure-drop calc [m] (default 2.5).
+        temperature_ext_k: Ambient temperature [K] (default 293).
+        regulation: Scaling factor applied to ``q_w_set`` (default 1).
+        friction: Pre-computed friction variable (optional).
+    """
+
+    def __init__(
+        self,
+        q_mw,
+        diameter_m,
+        roughness=0.0001,
+        length_m=2.5,
+        temperature_ext_k=293,
+        regulation=1,
+        friction=None,
     ) -> None:
         super().__init__()
         self.diameter_m = diameter_m
@@ -229,15 +344,19 @@ class HeatExchanger(BranchModel):
 
 
 @model
-class HeatExchangerLoad(HeatExchanger):
+class PassiveHeatExchangerLoad(PassiveHeatExchanger):
+    """Passive heat exchanger that consumes heat (load, ``q_mw > 0``)."""
+
     def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
-        super().__init__(q_mw, diameter_m, temperature_ext_k)
+        super().__init__(q_mw, diameter_m, temperature_ext_k=temperature_ext_k)
 
 
 @model
-class HeatExchangerGenerator(HeatExchanger):
+class PassiveHeatExchangerGenerator(PassiveHeatExchanger):
+    """Passive heat exchanger that injects heat (generator, ``q_mw < 0``)."""
+
     def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
-        super().__init__(q_mw, diameter_m, temperature_ext_k)
+        super().__init__(q_mw, diameter_m, temperature_ext_k=temperature_ext_k)
 
 
 @model

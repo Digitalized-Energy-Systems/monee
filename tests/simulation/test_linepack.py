@@ -18,10 +18,6 @@ from monee import run_energy_flow
 from monee.model.formulation.linepack import GasLinepack
 from monee.simulation.timeseries import TimeseriesData, run
 
-# ---------------------------------------------------------------------------
-# Shared network builder
-# ---------------------------------------------------------------------------
-
 
 def _gas_net():
     """
@@ -40,11 +36,6 @@ def _gas_net():
     pipe_id = net.branch(mm.GasPipe(diameter_m=0.5, length_m=5000), n0, n1)
 
     return net, pipe_id, sink_id
-
-
-# ---------------------------------------------------------------------------
-# Test 1: single-step — definition and no-packing constraint
-# ---------------------------------------------------------------------------
 
 
 def test_linepack_single_step_definition():
@@ -66,11 +57,6 @@ def test_linepack_single_step_definition():
     assert math.isclose(npk, 0.0, abs_tol=1e-6), (
         f"net_pack_kgs should be 0 in single-step, got {npk}"
     )
-
-
-# ---------------------------------------------------------------------------
-# Test 2: auto-computed capacity
-# ---------------------------------------------------------------------------
 
 
 def test_linepack_auto_capacity():
@@ -102,11 +88,6 @@ def test_linepack_auto_capacity():
             )
 
 
-# ---------------------------------------------------------------------------
-# Test 3: per-pipe override
-# ---------------------------------------------------------------------------
-
-
 def test_linepack_override():
     """Per-pipe overrides replace auto-computed initial / max values."""
     net, pipe_id, _ = _gas_net()
@@ -135,11 +116,6 @@ def test_linepack_override():
             )
 
 
-# ---------------------------------------------------------------------------
-# Test 4: timeseries — net_pack_kgs tracks Δlinepack_kg / Δt
-# ---------------------------------------------------------------------------
-
-
 def test_linepack_timeseries_mass_conservation():
     """net_pack_kgs * dt_s equals the change in linepack_kg between steps."""
     net, pipe_id, sink_id = _gas_net()
@@ -162,11 +138,6 @@ def test_linepack_timeseries_mass_conservation():
     assert math.isclose(npk1, expected_npk1, rel_tol=1e-4), (
         f"net_pack_kgs mismatch: {npk1:.6f} vs expected {expected_npk1:.6f}"
     )
-
-
-# ---------------------------------------------------------------------------
-# Test 5: linepack buffers demand — discharges when demand rises
-# ---------------------------------------------------------------------------
 
 
 def test_linepack_source_flow_reduced_by_discharge():

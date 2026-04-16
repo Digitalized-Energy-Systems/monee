@@ -16,26 +16,6 @@ from .phys.core.hydraulics import junction_mass_flow_balance
 from .phys.nonlinear.ac import power_balance_equation
 
 
-class MutableFloat(float):
-    def __init__(self, val):
-        self._val = val
-
-    def __int__(self):
-        return self._val
-
-    def __index__(self):
-        return self._val
-
-    def __str__(self):
-        return str(self._val)
-
-    def __repr__(self):
-        return repr(self._val)
-
-    def set(self, val):
-        self._val = val
-
-
 @model
 class GenericTransferBranch(MultiGridBranchModel):
     def __init__(self, loss=0, **kwargs) -> None:
@@ -106,38 +86,36 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
         heat_to_branches = [
             branch
             for branch in to_branch_models
-            if "t_from_pu" in branch.vars or type(branch) is SubHE
+            if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
         ]
         heat_from_branches = [
             branch
             for branch in from_branch_models
-            if "t_from_pu" in branch.vars or type(branch) is SubHE
+            if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
         ]
         gas_to_branches = [
             branch for branch in to_branch_models if "gas_mass_flow" in branch.vars
         ]
+
+        sub_he = next((b for b in heat_from_branches if isinstance(b, SubHE)), None)
+        if sub_he is None:
+            return []
+
         gas_eqs = self.calc_signed_mass_flow([], gas_to_branches, [Sink(self.gas_kgps)])
         heat_eqs = self.calc_signed_mass_flow(heat_from_branches, heat_to_branches, [])
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
-        # if SubHE is deactive ignore equations
-        if not [branch for branch in heat_from_branches if type(branch) is SubHE]:
-            return []
         return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
             junction_mass_flow_balance(gas_eqs),
-            [branch for branch in heat_from_branches if type(branch) is SubHE][0].q_w
-            / 1000000
+            sub_he.q_w
             == -self.efficiency_heat
             * self.gas_kgps
             * self.regulation
-            * (3.6 * self._hhv),
-            self.heat_w
-            == [branch for branch in heat_from_branches if type(branch) is SubHE][
-                0
-            ].q_w,
+            * (3.6 * self._hhv)
+            * 1000000,
             self.t_pu == self.t_k / grid[0].t_ref,
             self.pressure_pu == self.pressure_pa / grid[0].pressure_ref,
         ]
@@ -165,16 +143,21 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         heat_to_branches = [
             branch
             for branch in to_branch_models
-            if "t_from_pu" in branch.vars or type(branch) is SubHE
+            if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
         ]
         heat_from_branches = [
             branch
             for branch in from_branch_models
-            if "t_from_pu" in branch.vars or type(branch) is SubHE
+            if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
         ]
         power_to_branches = [
             branch for branch in to_branch_models if "p_from_mw" in branch.vars
         ]
+
+        sub_he = next((b for b in heat_to_branches if isinstance(b, SubHE)), None)
+        if sub_he is None:
+            return []
+
         power_eqs = self.calc_signed_power_values(
             [], power_to_branches, [PowerLoad(self.el_mw, self.load_q_mvar)]
         )
@@ -182,14 +165,10 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
-        # if SubHE is deactive ignore equations
-        if not [branch for branch in heat_to_branches if type(branch) is SubHE]:
-            return []
         return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
-            [branch for branch in heat_to_branches if type(branch) is SubHE][0].q_w
-            == -self.heat_w,
+            sub_he.q_w == -self.heat_w,
             sum(power_eqs[0]) == 0,
             sum(power_eqs[1]) == 0,
             self.heat_w == self.efficiency * self.el_mw * 1000000,
@@ -197,18 +176,7 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
 
 
 class SubHE(HeatExchanger):
-    """
-    Represents a subordinate or auxiliary heat exchanger within a multi-energy network model.
-
-    SubHE is a specialized subclass of HeatExchanger used to model secondary or supporting heat exchange processes, such as those found in combined heat and power (CHP), power-to-heat, or gas-to-heat conversion systems. This class is typically used as a building block in compound models where additional heat transfer elements are required to accurately represent energy flows and balances.
-
-    Example:
-        sub_he = SubHE(q_mw=-1000, diameter_m=0.3)
-        # Integrate sub_he into a network branch or compound system
-
-    Attributes:
-        Inherits all attributes from HeatExchanger, such as heat transfer rate, diameter, and temperature settings.
-    """
+    """Subordinate heat exchanger used inside compound models (CHP, G2H, P2H)."""
 
 
 @model
@@ -323,12 +291,12 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         heat_to_branches = [
             branch
             for branch in to_branch_models
-            if "t_from_pu" in branch.vars or type(branch) is SubHE
+            if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
         ]
         heat_from_branches = [
             branch
             for branch in from_branch_models
-            if "t_from_pu" in branch.vars or type(branch) is SubHE
+            if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
         ]
         gas_to_branches = [
             branch for branch in to_branch_models if "gas_mass_flow" in branch.vars
@@ -336,6 +304,11 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         power_from_branches = [
             branch for branch in from_branch_models if "p_to_mw" in branch.vars
         ]
+
+        sub_he = next((b for b in heat_from_branches if isinstance(b, SubHE)), None)
+        if sub_he is None:
+            return []
+
         power_eqs = self.calc_signed_power_values(
             power_from_branches, [], [PowerGenerator(self.el_mw, self.gen_q_mvar)]
         )
@@ -346,16 +319,13 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
-        # if SubHE is deactive ignore equations
-        if not [branch for branch in heat_from_branches if type(branch) is SubHE]:
-            return []
         return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
             junction_mass_flow_balance(gas_eqs),
             power_balance_equation(power_eqs[0]),
             power_balance_equation(power_eqs[1]),
-            [branch for branch in heat_from_branches if type(branch) is SubHE][0].q_w
+            sub_he.q_w
             == -self.efficiency_heat
             * self.gas_kgps
             * self.regulation
@@ -366,10 +336,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
             * self.gas_kgps
             * self.regulation
             * (3.6 * self._hhv),
-            self.heat_w
-            == [branch for branch in heat_from_branches if type(branch) is SubHE][
-                0
-            ].q_w,
+            self.heat_w == sub_he.q_w,
             self.t_k == self.t_pu * grid[1].t_ref,
             self.pressure_pu == self.pressure_pa / grid[1].pressure_ref,
         ]
@@ -393,16 +360,8 @@ class CHP(MultiGridCompoundModel):
         self.efficiency_power = efficiency_power
         self.efficiency_heat = efficiency_heat
         self.mass_flow_setpoint = mass_flow_setpoint
-        self.mass_flow = (
-            mass_flow_setpoint
-            if type(mass_flow_setpoint) is Var
-            else MutableFloat(mass_flow_setpoint)
-        )
-        self.q_mvar = (
-            q_mvar_setpoint
-            if type(q_mvar_setpoint) is Var
-            else MutableFloat(q_mvar_setpoint)
-        )
+        self.mass_flow = mass_flow_setpoint
+        self.q_mvar = q_mvar_setpoint
         self._old_regulation = self.regulation
 
     def set_active(self, activation_flag):
@@ -423,11 +382,12 @@ class CHP(MultiGridCompoundModel):
         power_node: Node,
     ):
         self._gas_grid = gas_node.grid
+        hhv = gas_node.grid.higher_heating_value
         self._control_node = CHPControlNode(
             self.mass_flow,
             self.efficiency_power,
             self.efficiency_heat,
-            gas_node.grid.higher_heating_value,
+            hhv,
             regulation=self.regulation,
         )
         node_id_control = network.node(
@@ -438,7 +398,7 @@ class CHP(MultiGridCompoundModel):
         network.branch(GenericTransferBranch(), gas_node.id, node_id_control)
         network.branch(GenericTransferBranch(), heat_node.id, node_id_control)
         network.branch(
-            SubHE(Var(-1000), self.diameter_m),
+            SubHE(Var(0), self.diameter_m),
             node_id_control,
             heat_return_node.id,
             grid=heat_return_node.grid,
@@ -454,7 +414,7 @@ class GasToHeat(MultiGridCompoundModel):
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
-        self.heat_energy_w = MutableFloat(-heat_energy_w)
+        self.heat_energy_w = -heat_energy_w
 
     def set_active(self, activation_flag):
         if activation_flag:
@@ -477,7 +437,7 @@ class GasToHeat(MultiGridCompoundModel):
         network.branch(GenericTransferBranch(), gas_node.id, node_id_control)
         network.branch(GenericTransferBranch(), heat_node.id, node_id_control)
         network.branch(
-            SubHE(Var(0.1), self.diameter_m),
+            SubHE(-self.heat_energy_w / 1e6, self.diameter_m),
             node_id_control,
             heat_return_node.id,
             grid=heat_return_node.grid,
@@ -497,15 +457,9 @@ class PowerToHeat(MultiGridCompoundModel):
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
-        self.heat_energy_w = (
-            heat_energy_w if type(heat_energy_w) is Var else MutableFloat(heat_energy_w)
-        )
+        self.heat_energy_w = heat_energy_w
         self.load_p_mw = Var(1)
-        self.load_q_mvar = (
-            q_mvar_setpoint
-            if type(q_mvar_setpoint) is Var
-            else MutableFloat(q_mvar_setpoint)
-        )
+        self.load_q_mvar = q_mvar_setpoint
 
     def set_active(self, activation_flag):
         if activation_flag:

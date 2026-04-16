@@ -37,11 +37,6 @@ def _storage_problem():
 _LINE = dict(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1)
 
 
-# ---------------------------------------------------------------------------
-# Shared network builders
-# ---------------------------------------------------------------------------
-
-
 def _simple_power_net():
     """Two-bus power network: ext-grid at b0, load at b1, line between them."""
     net = Network(mm.PowerGrid(name="el", sn_mva=1))
@@ -68,11 +63,6 @@ def _storage_net():
     return net, b0, b1, load_id, bat_id
 
 
-# ---------------------------------------------------------------------------
-# Test 1 — single-period result matches the standard single-step solver
-# ---------------------------------------------------------------------------
-
-
 def test_single_period_matches_single_step():
     """Multi-period with T=1 must give the same result as the single-step solver."""
     from monee.simulation.core import solve as run_energy_flow
@@ -90,11 +80,6 @@ def test_single_period_matches_single_step():
             f"Bus {bus_id}: single={vm_single[bus_id]:.6f}, "
             f"multi={vm_multi[bus_id].iloc[0]:.6f}"
         )
-
-
-# ---------------------------------------------------------------------------
-# Test 2 — storage SoC couples correctly across periods
-# ---------------------------------------------------------------------------
 
 
 def test_storage_soc_initial_condition_pinned():
@@ -127,11 +112,6 @@ def test_storage_soc_initial_condition_pinned():
     )
 
 
-# ---------------------------------------------------------------------------
-# Test 3 — SoC constraint links t to t+1 (continuity check)
-# ---------------------------------------------------------------------------
-
-
 def test_storage_soc_continuity():
     """
     Explicitly verify that e_mwh[t] = e_mwh[t-1] + dt_h * p_mw[t] holds
@@ -160,11 +140,6 @@ def test_storage_soc_continuity():
         )
 
 
-# ---------------------------------------------------------------------------
-# Test 4 — result object API
-# ---------------------------------------------------------------------------
-
-
 def test_result_api():
     """MultiPeriodResult exposes the expected query methods."""
     net, b0, b1, load_id = _simple_power_net()
@@ -191,11 +166,6 @@ def test_result_api():
     assert "MultiPeriodResult" in repr(result)
 
 
-# ---------------------------------------------------------------------------
-# Test 5 — get_result_for_id returns a Series indexed by period
-# ---------------------------------------------------------------------------
-
-
 def test_get_result_for_id():
     """get_result_for_id must return a Series with one entry per period."""
     net, b0, b1, load_id, bat_id = _storage_net()
@@ -209,11 +179,6 @@ def test_get_result_for_id():
     assert isinstance(soc, pandas.Series)
     assert len(soc) == 3
     assert soc.notna().all()
-
-
-# ---------------------------------------------------------------------------
-# Test 6 — result[component_id] returns a DataFrame of all attributes
-# ---------------------------------------------------------------------------
 
 
 def test_getitem_component():
@@ -234,11 +199,6 @@ def test_getitem_component():
         _ = result[99999]
 
 
-# ---------------------------------------------------------------------------
-# Test 7 — datetime_index labels result rows
-# ---------------------------------------------------------------------------
-
-
 def test_datetime_index_labels_rows():
     """When datetime_index is provided, result DataFrames are indexed by it."""
     net, b0, b1, load_id = _simple_power_net()
@@ -254,11 +214,6 @@ def test_datetime_index_labels_rows():
     assert list(vm_df.index) == list(idx)
 
 
-# ---------------------------------------------------------------------------
-# Test 8 — validation: timeseries too short raises ValueError
-# ---------------------------------------------------------------------------
-
-
 def test_timeseries_too_short_raises():
     """Requesting more steps than the timeseries length must raise ValueError."""
     net, b0, b1, load_id = _simple_power_net()
@@ -270,11 +225,6 @@ def test_timeseries_too_short_raises():
         run_multi_period(net, td, steps=5)
 
 
-# ---------------------------------------------------------------------------
-# Test 9 — validation: non-positive dt_h raises ValueError
-# ---------------------------------------------------------------------------
-
-
 def test_nonpositive_dt_h_raises():
     """dt_h <= 0 must raise ValueError."""
     net, b0, b1, load_id = _simple_power_net()
@@ -284,11 +234,6 @@ def test_nonpositive_dt_h_raises():
 
     with pytest.raises(ValueError, match="positive"):
         run_multi_period(net, steps=2, dt_h=-1.0)
-
-
-# ---------------------------------------------------------------------------
-# Test 10 — initial_state overrides the tracked value at t=0
-# ---------------------------------------------------------------------------
 
 
 def test_initial_state_override():
@@ -334,11 +279,6 @@ def test_initial_state_override():
     )
 
 
-# ---------------------------------------------------------------------------
-# Test 11 — terminal_state pins the last-period variable
-# ---------------------------------------------------------------------------
-
-
 def test_terminal_state_constraint():
     """terminal_state must pin e_mwh at t=T-1 to the specified target.
 
@@ -367,11 +307,6 @@ def test_terminal_state_constraint():
     )
 
 
-# ---------------------------------------------------------------------------
-# Test 12 — run_mpc executes total_steps periods
-# ---------------------------------------------------------------------------
-
-
 def test_mpc_executes_total_steps():
     """run_mpc must return a result with exactly total_steps executed periods."""
     net, b0, b1, load_id, bat_id = _storage_net()
@@ -391,11 +326,6 @@ def test_mpc_executes_total_steps():
 
     assert result.T == total, f"Expected {total} periods, got {result.T}"
     assert result.success
-
-
-# ---------------------------------------------------------------------------
-# Test 13 — run_mpc propagates initial state between windows
-# ---------------------------------------------------------------------------
 
 
 def test_mpc_state_propagation():
@@ -435,11 +365,6 @@ def test_mpc_state_propagation():
         )
 
 
-# ---------------------------------------------------------------------------
-# Test 14 — MultiPeriodResult repr shows temporal evolution
-# ---------------------------------------------------------------------------
-
-
 def test_repr_shows_temporal_evolution():
     """__repr__ must include a temporal-evolution section when SoC varies."""
     net, b0, b1, load_id, bat_id = _storage_net()
@@ -455,11 +380,6 @@ def test_repr_shows_temporal_evolution():
     assert "MultiPeriodResult" in r
     # With varying loads the SoC changes; temporal evolution section must appear.
     assert "Temporal evolution" in r
-
-
-# ---------------------------------------------------------------------------
-# Test 15 — zero-valued bounds inference emits a warning
-# ---------------------------------------------------------------------------
 
 
 def test_zero_bounds_warning(caplog):
@@ -483,11 +403,6 @@ def test_zero_bounds_warning(caplog):
     assert len(zero_warnings) > 0, (
         "Expected a warning about zero-valued bounds inference"
     )
-
-
-# ---------------------------------------------------------------------------
-# Test 16 — when_period constraint filtering
-# ---------------------------------------------------------------------------
 
 
 def test_when_period_constraint():
@@ -519,11 +434,6 @@ def test_when_period_constraint():
     # We just verify the constraint was respected at t=2; other periods are free.
 
 
-# ---------------------------------------------------------------------------
-# Test 17 — when_period has no effect in single-period solve
-# ---------------------------------------------------------------------------
-
-
 def test_when_period_single_period():
     """when_period filtering should be harmless with steps=1."""
     from monee.problem.core import Constraints
@@ -541,11 +451,6 @@ def test_when_period_single_period():
 
     result = run_multi_period(net, steps=1, optimization_problem=prob)
     assert result.success
-
-
-# ---------------------------------------------------------------------------
-# Test 18 — _controllable_to_attr does not leak across periods
-# ---------------------------------------------------------------------------
 
 
 def test_controllable_to_attr_no_leak():
@@ -566,11 +471,6 @@ def test_controllable_to_attr_no_leak():
         f"_controllable_to_attr has {n_entries} entries — "
         f"expected it to be bounded, not growing with T"
     )
-
-
-# ---------------------------------------------------------------------------
-# Test 19 — add_objective_data convenience method
-# ---------------------------------------------------------------------------
 
 
 def test_objective_data_via_timeseries():
@@ -618,11 +518,6 @@ def test_objective_data_via_timeseries():
     assert r1.objective != r2.objective, (
         "Different price schedules should produce different objectives"
     )
-
-
-# ---------------------------------------------------------------------------
-# Test 20 — temporal_equation ramp-rate constraint
-# ---------------------------------------------------------------------------
 
 
 def test_temporal_equation_ramp_rate():
@@ -695,11 +590,6 @@ def test_temporal_equation_ramp_rate():
     )
 
 
-# ---------------------------------------------------------------------------
-# Test 21 — temporal_equation combined with when_period
-# ---------------------------------------------------------------------------
-
-
 def test_temporal_equation_with_when_period():
     """temporal_equation + when_period should only fire at filtered periods."""
     from monee.problem.core import Constraints
@@ -749,11 +639,6 @@ def test_temporal_equation_with_when_period():
     assert r.objective is not None, "Solve should succeed"
 
 
-# ---------------------------------------------------------------------------
-# Test 22 — multi-period minimal load shedding
-# ---------------------------------------------------------------------------
-
-
 def test_multi_period_load_shedding():
     """Multi-period load shedding sheds load when demand exceeds supply capacity.
 
@@ -792,11 +677,6 @@ def test_multi_period_load_shedding():
     assert reg.iloc[2] > 0.95, f"Period 2: expected ~1.0, got {reg.iloc[2]:.3f}"
     # Period 3 (load=4.0): must shed — regulation < 1.0
     assert reg.iloc[3] < 0.95, f"Period 3: expected shedding, got {reg.iloc[3]:.3f}"
-
-
-# ---------------------------------------------------------------------------
-# Test 23 — multi-period load shedding with ramp constraint
-# ---------------------------------------------------------------------------
 
 
 def test_multi_period_load_shedding_ramp():

@@ -35,9 +35,7 @@ _SKIP_ATTRS: frozenset[str] = frozenset({"active", "independent", "ignored"})
 _SOLVER_TYPES = (Var, Intermediate, IntermediateEq)
 
 
-# ---------------------------------------------------------------------------
 # Model parameter extraction
-# ---------------------------------------------------------------------------
 
 
 def _model_params(model) -> dict:
@@ -63,9 +61,7 @@ def _model_params(model) -> dict:
     return params
 
 
-# ---------------------------------------------------------------------------
 # Inline labels shown directly on the graph
-# ---------------------------------------------------------------------------
 
 
 def _node_label(int_node) -> str:
@@ -113,9 +109,7 @@ def _branch_label(int_branch) -> str:
     return "  ".join(parts)
 
 
-# ---------------------------------------------------------------------------
 # Rich hover text
-# ---------------------------------------------------------------------------
 
 
 def _node_hover(int_node, children: list) -> str:
@@ -181,9 +175,7 @@ def _branch_hover(int_branch, from_id, to_id) -> str:
     return "<br>".join(lines)
 
 
-# ---------------------------------------------------------------------------
 # Main function
-# ---------------------------------------------------------------------------
 
 
 def plot_network(
@@ -214,9 +206,7 @@ def plot_network(
     graph: nx.Graph = network._network_internal
     pos = _compute_layout(graph, network, use_monee_positions)
 
-    # -----------------------------------------------------------------------
     # Node data – collected per grid type
-    # -----------------------------------------------------------------------
     grid_data: dict[str, dict] = {
         g: {"x": [], "y": [], "hover": [], "labels": []}
         for g in ("power", "water", "gas", "cp")
@@ -282,11 +272,9 @@ def plot_network(
             )
         )
 
-    # -----------------------------------------------------------------------
     # Branch traces
     # Grouped by (color, is_cp) for efficient rendering; one midpoint trace
     # carries per-branch hover text and inline labels.
-    # -----------------------------------------------------------------------
     color_groups: dict[tuple, list] = {}
 
     mid_x: list[float] = []
@@ -360,9 +348,7 @@ def plot_network(
         ),
     )
 
-    # -----------------------------------------------------------------------
     # Legend
-    # -----------------------------------------------------------------------
     legend_entries: list = []
     for gtype, label in _GRID_LABEL.items():
         legend_entries.append(
@@ -389,9 +375,7 @@ def plot_network(
         )
     )
 
-    # -----------------------------------------------------------------------
     # Assemble – render order: edges → midpoints → glow → markers → legend
-    # -----------------------------------------------------------------------
     all_traces = (
         edge_traces + [midpoint_trace] + glow_traces + marker_traces + legend_entries
     )

@@ -99,6 +99,19 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
 
 
 class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
+    """
+    Passive heat-exchanger formulation based on Darcy-Weisbach hydraulics.
+
+    The network hydraulics determine the mass flow freely (no prescribed design
+    flow).  Given the fixed heat-power ``q_w`` stored on the branch model, the
+    formulation computes the resulting temperature increase (or decrease) via
+
+        mass_flow_mag * t_inc = -q_w / (cp * t_ref)
+
+    so that the outlet temperature rises (or falls) proportionally.  Pressure
+    drop is calculated the same way as for a plain water pipe.
+    """
+
     def ensure_var(self, model):
         model.t_in_pu = Var(1, min=0, max=3, name="t_in_pu")
         model.t_out_pu = Var(1, min=0, max=3, name="t_out_pu")
@@ -139,7 +152,7 @@ class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
                 **kwargs,
             ),
             branch.mass_flow_mag == branch.mass_flow_pos + branch.mass_flow_neg,
-            (branch.mass_flow_mag) * branch.t_inc
+            branch.mass_flow_mag * branch.t_inc
             == -branch.q_w / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * grid.t_ref),
             branch.t_out_pu
             == branch.temperature_ext_k / grid.t_ref

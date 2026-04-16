@@ -10,9 +10,7 @@ import plotly.graph_objects as go
 
 from monee.solver.core import SolverResult
 
-# ---------------------------------------------------------------------------
 # Theme  –  clean light mode
-# ---------------------------------------------------------------------------
 _BG = "#ffffff"  # pure white canvas
 _PANEL = "#f6f8fa"  # hover tooltip background
 _BORDER = "#d0d7de"  # subtle border / separator
@@ -54,9 +52,7 @@ _ID_COLS: frozenset[str] = frozenset({"id", "node_id"})
 _SKIP: frozenset[str] = _META_COLS | _ID_COLS | frozenset({"_type"})
 
 
-# ---------------------------------------------------------------------------
 # Value formatting
-# ---------------------------------------------------------------------------
 
 
 def _fmt(v) -> str:
@@ -72,9 +68,7 @@ def _fmt(v) -> str:
         return str(v)
 
 
-# ---------------------------------------------------------------------------
 # Traffic-light helpers
-# ---------------------------------------------------------------------------
 
 
 def _bus_color(vm_pu) -> str:
@@ -105,9 +99,7 @@ def _line_color(loading_pct) -> str:
     return _TL_RED
 
 
-# ---------------------------------------------------------------------------
 # Grid-type detection (mirrors existing visualization.py)
-# ---------------------------------------------------------------------------
 
 
 def _grid_type(grid) -> str:
@@ -121,9 +113,7 @@ def _grid_type(grid) -> str:
     return "cp"
 
 
-# ---------------------------------------------------------------------------
 # Build result lookup maps
-# ---------------------------------------------------------------------------
 
 
 def _node_result_map(result: SolverResult) -> dict:
@@ -176,9 +166,7 @@ def _child_by_node_map(result: SolverResult) -> dict:
     return m
 
 
-# ---------------------------------------------------------------------------
 # Hover text builders
-# ---------------------------------------------------------------------------
 
 
 def _sep(label: str = "") -> str:
@@ -241,9 +229,7 @@ def _branch_hover(row: dict, from_id, to_id, branch_name: str | None) -> str:
     return "<br>".join(lines)
 
 
-# ---------------------------------------------------------------------------
 # Key-metric label + traffic-light color
-# ---------------------------------------------------------------------------
 
 
 def _node_label_and_color(row: dict) -> tuple[str, str]:
@@ -328,9 +314,7 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
     return "", cp_color if is_cp else _TL_GRAY
 
 
-# ---------------------------------------------------------------------------
 # Graph layout  –  spread out nodes for readability
-# ---------------------------------------------------------------------------
 
 
 def _compute_layout(graph: nx.Graph, network, use_monee_positions: bool) -> dict:
@@ -358,9 +342,7 @@ def _compute_layout(graph: nx.Graph, network, use_monee_positions: bool) -> dict
     return pos
 
 
-# ---------------------------------------------------------------------------
 # Main function
-# ---------------------------------------------------------------------------
 
 
 def plot_result(
@@ -409,9 +391,7 @@ def plot_result(
     child_map = _child_by_node_map(result) if show_children else {}
     pos = _compute_layout(graph, network, use_monee_positions)
 
-    # -----------------------------------------------------------------------
     # Node data – collected per grid type
-    # -----------------------------------------------------------------------
     grid_data: dict[str, dict] = {
         g: {"x": [], "y": [], "tl_colors": [], "hover": [], "labels": []}
         for g in ("power", "water", "gas", "cp")
@@ -484,11 +464,9 @@ def plot_result(
             )
         )
 
-    # -----------------------------------------------------------------------
     # Branch traces
     # Lines are grouped by (color, is_cp) – one Scatter per color group.
     # A midpoint-marker trace carries per-branch hover text + inline labels.
-    # -----------------------------------------------------------------------
     color_groups: dict[tuple, list] = {}
 
     mid_x: list[float] = []
@@ -568,9 +546,7 @@ def plot_result(
         ),
     )
 
-    # -----------------------------------------------------------------------
     # Traffic-light legend entries
-    # -----------------------------------------------------------------------
     tl_legend = [
         go.Scatter(
             x=[None],
@@ -602,9 +578,7 @@ def plot_result(
         ),
     ]
 
-    # -----------------------------------------------------------------------
     # Assemble  –  render order: edges → midpoints → glow → markers → legend
-    # -----------------------------------------------------------------------
     all_traces = (
         edge_traces + [midpoint_trace] + glow_traces + marker_traces + tl_legend
     )
