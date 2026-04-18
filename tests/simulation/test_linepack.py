@@ -213,11 +213,6 @@ def test_linepack_buffers_demand_variation():
     assert npk1 < 0, f"net_pack_kgs should be negative when discharging: {npk1:.6f}"
 
 
-# ======================================================================
-# Branching (tree) gas network — non-meshed, multiple pipes and sinks
-# ======================================================================
-
-
 def _branching_gas_net():
     """
     Tree-shaped gas network with 6 junctions, 5 pipes, and 3 sinks::

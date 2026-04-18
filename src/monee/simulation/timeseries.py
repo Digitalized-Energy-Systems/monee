@@ -84,10 +84,6 @@ class TimeseriesData:
         """Register a time-varying attribute for a compound model (by name)."""
         self._add_to(self._compound_name_to_series, compound_name, attribute, series)
 
-    # ------------------------------------------------------------------
-    # Semantic aliases for objective / time-varying data
-    # ------------------------------------------------------------------
-
     def add_objective_data(self, child_id, attribute: str, series) -> None:
         """Register time-varying objective data (e.g. prices) for a child component.
 

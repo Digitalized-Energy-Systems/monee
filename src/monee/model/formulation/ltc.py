@@ -60,10 +60,6 @@ class LumpedThermalCapacitance(NetworkAspect):
         self._ltc_initial_t_pu: dict = {}  # {node_id: initial t_pu value}
         self._ltc_constrained: set = set()
 
-    # ------------------------------------------------------------------
-    # Phase 0: variable preparation (before inject_vars)
-    # ------------------------------------------------------------------
-
     def prepare(self, network) -> None:
         self._ltc_rho_v = {}
         self._ltc_initial_t_pu = {}
@@ -116,10 +112,6 @@ class LumpedThermalCapacitance(NetworkAspect):
                 name="t_pu",
             )
 
-    # ------------------------------------------------------------------
-    # Phase 1a: timeseries activation (between inject_vars and equations)
-    # ------------------------------------------------------------------
-
     def activate_timeseries(self, network, ignored_nodes: set, step_state=None) -> None:
         """
         Called by the solver when a timeseries (non-None step_state) solve is
@@ -154,10 +146,6 @@ class LumpedThermalCapacitance(NetworkAspect):
                     and node.model.t_pu is not None
                 ):
                     node.model.t_pu.value = prev_t
-
-    # ------------------------------------------------------------------
-    # Phase 1b: inter-temporal constraints (timeseries + multi-period)
-    # ------------------------------------------------------------------
 
     def inter_temporal_equations(
         self, network, ignored_nodes: set, temporal_state
@@ -212,20 +200,12 @@ class LumpedThermalCapacitance(NetworkAspect):
         """Delegate to :meth:`inter_temporal_equations` (backward compatibility)."""
         return self.inter_temporal_equations(network, ignored_nodes, step_state)
 
-    # ------------------------------------------------------------------
-    # Phase 2: fallback (single-step or no step_state)
-    # ------------------------------------------------------------------
-
     def equations(self, network, ignored_nodes: set) -> list:
         """
         No extra equations are needed for single-step (non-timeseries) solves.
         The junction temperatures are determined by the existing heat balance.
         """
         return []
-
-    # ------------------------------------------------------------------
-    # Internal helpers
-    # ------------------------------------------------------------------
 
     def _net_convective_heat(self, node, network):
         """

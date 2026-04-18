@@ -42,10 +42,6 @@ from monee.problem.core import (
     nan_to_zero,
 )
 
-# ---------------------------------------------------------------------------
-# Weight defaults
-# ---------------------------------------------------------------------------
-
 WEIGHT_DEMAND = 10
 WEIGHT_GENERATOR = 1
 WEIGHT_EXT_GRID = 5
@@ -78,11 +74,6 @@ _HE_OBJECTIVE_TYPES = (
     PassiveHeatExchangerLoad,
     PassiveHeatExchangerGenerator,
 )
-
-
-# ---------------------------------------------------------------------------
-# Energy-equivalent extraction per component
-# ---------------------------------------------------------------------------
 
 
 def _shedding_mw(model):
@@ -126,11 +117,6 @@ def _shedding_mw(model):
 def _calc_objective(model_to_data):
     """Sum weighted unserved energy across all components."""
     return sum(_shedding_mw(model) * weight for model, weight in model_to_data.items())
-
-
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
 
 
 def create_min_load_shedding_problem(

@@ -115,10 +115,6 @@ class GasLinepack(NetworkAspect):
         self._active_branches: set[int] = set()
         self._timeseries_active: bool = False
 
-    # ------------------------------------------------------------------
-    # Internal: capacity from grid thermodynamics
-    # ------------------------------------------------------------------
-
     @staticmethod
     def _density(grid: GasGrid, pressure_pa: float) -> float:
         """Return gas density [kg/m³] via the ideal-gas EoS."""
@@ -133,10 +129,6 @@ class GasLinepack(NetworkAspect):
     def _max_pressure(grid: GasGrid) -> float:
         """Maximum pressure [Pa] derived from the ``p_squared_pu_max`` grid bound."""
         return grid.pressure_ref * math.sqrt(grid.p_squared_pu_max)
-
-    # ------------------------------------------------------------------
-    # Phase 0: inject Var placeholders before variable injection
-    # ------------------------------------------------------------------
 
     def prepare(self, network) -> None:
         self._pipe_volume = {}
@@ -181,10 +173,6 @@ class GasLinepack(NetworkAspect):
             self._initial_lp[branch.id] = lp_initial
             self._active_branches.add(branch.id)
 
-    # ------------------------------------------------------------------
-    # Phase 1a: timeseries / multi-period activation
-    # ------------------------------------------------------------------
-
     def activate_timeseries(self, network, ignored_nodes: set, step_state=None) -> None:
         """
         Called before node equations are assembled in a timeseries / multi-period
@@ -204,10 +192,6 @@ class GasLinepack(NetworkAspect):
             prev_lp = step_state.get(branch.id, "linepack_kg")
             if prev_lp is not None:
                 branch.model.linepack_kg.value = prev_lp
-
-    # ------------------------------------------------------------------
-    # Phase 1b: static equations (always active)
-    # ------------------------------------------------------------------
 
     def equations(self, network, ignored_nodes: set) -> list:
         """
@@ -233,10 +217,6 @@ class GasLinepack(NetworkAspect):
                 eqs.append(bm.net_pack_kgs == 0)
 
         return eqs
-
-    # ------------------------------------------------------------------
-    # Phase 1c: inter-temporal constraint (timeseries + multi-period)
-    # ------------------------------------------------------------------
 
     def inter_temporal_equations(
         self, network, ignored_nodes: set, temporal_state

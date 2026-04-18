@@ -5,8 +5,6 @@ import pytest
 import monee.express as mx
 import monee.model as mm
 
-# ----------------------- Gas -----------------------
-
 
 def test_gas_line_counts():
     net = mm.Network()
@@ -84,9 +82,6 @@ def test_gas_structure_attach_ext_grid():
     assert len(net.childs_by_type(mm.ExtHydrGrid)) == 1
 
 
-# ----------------------- Water -----------------------
-
-
 def test_water_line_with_heat_loads():
     net = mm.Network()
     w = mx.water_structure(net, diameter_m=0.15, length_m=100)
@@ -96,9 +91,6 @@ def test_water_line_with_heat_loads():
     assert len(seg.nodes) == 4
     assert len(seg.branches) == 3
     assert len(net.childs_by_type(mm.HeatLoad)) == 4
-
-
-# ----------------------- Electricity -----------------------
 
 
 def test_el_line_with_loads_and_ext_grid():
@@ -114,9 +106,6 @@ def test_el_line_with_loads_and_ext_grid():
     assert len(seg.branches) == 2
     assert len(net.childs_by_type(mm.PowerLoad)) == 3
     assert isinstance(ext, int)
-
-
-# ----------------------- DHS -----------------------
 
 
 def test_dhs_line_with_heat_exchangers():
@@ -177,9 +166,6 @@ def test_dhs_ring_counts():
     assert len(seg.supply.branches) == 6
     assert len(seg.return_.branches) == 6
     assert len(seg.heat_exchangers) == 6
-
-
-# ----------------------- Validation -----------------------
 
 
 def test_line_rejects_zero_length():

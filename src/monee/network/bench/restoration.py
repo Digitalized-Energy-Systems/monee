@@ -101,9 +101,6 @@ def create_restoration_benchmark(
     """
     net = mx.create_multi_energy_network()
 
-    # ==================================================================
-    # 1.  ELECTRICITY GRID  (27 buses)
-    # ==================================================================
     # Two 110 kV feeders
     hv1 = mx.create_bus(net, base_kv=110, name="HV_feeder_1")
     hv2 = mx.create_bus(net, base_kv=110, name="HV_feeder_2")
@@ -190,9 +187,6 @@ def create_restoration_benchmark(
         name="Battery_MV1",
     )
 
-    # ==================================================================
-    # 2.  GAS GRID  (30 junctions)
-    # ==================================================================
     # Two HP feeders
     gf1 = mx.create_gas_junction(net, name="Gas_HP_feeder_1")
     gf2 = mx.create_gas_junction(net, name="Gas_HP_feeder_2")
@@ -267,9 +261,6 @@ def create_restoration_benchmark(
         name="GasCavern_B2",
     )
 
-    # ==================================================================
-    # 3.  HEAT / DISTRICT-HEATING GRID  (9 supply + 9 return junctions)
-    # ==================================================================
     n_heat = 9
     hs = [mx.create_water_junction(net, name=f"hs_{i}") for i in range(n_heat)]
     hr = [mx.create_water_junction(net, name=f"hr_{i}") for i in range(n_heat)]
@@ -292,10 +283,6 @@ def create_restoration_benchmark(
         (8, 0.02),
     ]:
         mx.create_heat_exchanger(net, hs[i], hr[i], q_mw, name=f"HE_{i}")
-
-    # ==================================================================
-    # 4.  COUPLING POINTS  (4 heat CPs -- all bridge return -> supply)
-    # ==================================================================
 
     # CHP 1: industrial — gas at A2, power at Ind_1, heat at position 1
     mx.create_chp(
@@ -372,9 +359,6 @@ def create_restoration_benchmark(
         p_mw_setpoint=0.15,
     )
 
-    # ==================================================================
-    # 5.  EXTENSIONS
-    # ==================================================================
     if linepack:
         net.add_extension(GasLinepack())
     if ltc:

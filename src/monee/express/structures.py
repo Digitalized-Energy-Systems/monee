@@ -147,11 +147,6 @@ class _Structure:
         return StarSegment(hub=hub, arms=arm_segments, hub_children=hub_children)
 
 
-# --------------------------------------------------------------------------
-# Gas
-# --------------------------------------------------------------------------
-
-
 class GasStructure(_Structure):
     def __init__(
         self,
@@ -204,11 +199,6 @@ class GasStructure(_Structure):
 
     def attach_ext_grid(self, node_id, **kwargs):
         return _mx.create_gas_ext_grid(self._net, node_id, **kwargs)
-
-
-# --------------------------------------------------------------------------
-# Water
-# --------------------------------------------------------------------------
 
 
 class WaterStructure(_Structure):
@@ -284,11 +274,6 @@ class WaterStructure(_Structure):
         return _mx.create_water_ext_grid(self._net, node_id, **kwargs)
 
 
-# --------------------------------------------------------------------------
-# Electricity
-# --------------------------------------------------------------------------
-
-
 class ElStructure(_Structure):
     def __init__(
         self,
@@ -351,11 +336,6 @@ class ElStructure(_Structure):
 
     def attach_ext_grid(self, node_id, **kwargs):
         return _mx.create_ext_power_grid(self._net, node_id, **kwargs)
-
-
-# --------------------------------------------------------------------------
-# District Heating (paired supply/return)
-# --------------------------------------------------------------------------
 
 
 def _resolve_q_list(q, n):
@@ -486,11 +466,6 @@ class DhsStructure:
         )
         rid = _mx.create_consume_hydr_grid(self._net, return_node, name=return_name)
         return sid, rid
-
-
-# --------------------------------------------------------------------------
-# Factories
-# --------------------------------------------------------------------------
 
 
 def gas_structure(network, **kwargs):
