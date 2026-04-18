@@ -10,9 +10,9 @@ class Bus(NodeModel):
     def __init__(self, base_kv) -> None:
         super().__init__()
         self.base_kv = base_kv
-        self.vm_pu = Var(1, min=0, name="vm_pu")
-        self.vm_pu_squared = Var(1, min=0, name="vm_pu_squared")
-        self.va_radians = Var(0, name="va_radians")
+        self.vm_pu = Var(1, min=0, max=1.5, name="vm_pu")
+        self.vm_pu_squared = Var(1, min=0, max=2.25, name="vm_pu_squared")
+        self.va_radians = Var(0, min=-math.pi, max=math.pi, name="va_radians")
         self.va_degree = Intermediate()
         self.p_mw = Intermediate()
         self.q_mvar = Intermediate()
@@ -163,10 +163,13 @@ class Junction(NodeModel):
     def calc_signed_heat_flow(
         self, from_branch_models, to_branch_models, connected_node_models, grid
     ):
-        # When LTC is active, the degenerate heat balance (T_n × mass_balance = 0)
-        # is suppressed so that only the LTC constraint determines T_n, avoiding
-        # a near-singular Jacobian during IPOPT iteration.
-        if getattr(self, "_ltc_active", False):
+        # When LTC or the Mcc-DHS formulation is active, the degenerate
+        # heat balance (T_n × mass_balance = 0) is suppressed so that the
+        # temperature is determined solely by the replacing constraint
+        # (LTC inter-step equation / Deng-et-al nodal heat balance).
+        if getattr(self, "_ltc_active", False) or getattr(
+            self, "_mccormick_dhs_active", False
+        ):
             return [0]
 
         temp_supported = (
@@ -207,6 +210,18 @@ class Junction(NodeModel):
 
                 m_ext = nm.vars["mass_flow"] * nm.vars.get("regulation", 1)
                 terms.append(m_ext * Tn)
+
+            # Option A — small conduction-style regularizer on T_n so the
+            # Jacobian entry ∂(heat_bal)/∂T_n does not collapse to the
+            # near-zero difference (Σm_out − Σm_in) on the solver path.
+            # Anchor is the variable's initial value so the added term is
+            # exactly zero at the starting point and O(k·|T_n − T_init|)
+            # thereafter — with k ≪ typical mass flows the modelling bias
+            # is negligible (≪ solver tolerance).
+            k_reg = getattr(grid, "node_heat_reg_kgs", 0.0)
+            if k_reg:
+                t_anchor = self.t_pu.value if hasattr(self.t_pu, "value") else 1.0
+                terms.append(k_reg * (self.t_pu - t_anchor))
             return terms
         else:
             return [0]

@@ -15,15 +15,16 @@ Topology
     network via compressors.  Three distribution chains serve gas sinks.
     A gas storage cavern adds flexibility.
 
-**Thermal / District Heating** (~55 junctions -- 32 supply + 23 return):
-    Two heat plants feed a supply-pipe tree.  Heat exchangers at
-    consumer nodes bridge supply to return junctions.  Sinks on return
-    nodes withdraw cooled water.  A thermal storage tank is present.
+**Thermal / District Heating** (~18 junctions -- 9 supply + 9 return):
+    One heat plant feeds a supply-pipe chain.  A mirrored return-pipe
+    chain carries cooled water back.  Heat exchangers bridge supply to
+    return junctions at consumer nodes.  Coupling points bridge
+    return to supply.
 
-**Coupling points** (10 total -- all variants):
-    - 3 x CHP  (gas -> electricity + heat)
-    - 2 x P2H  (electricity -> heat)
-    - 2 x G2H  (gas -> heat)
+**Coupling points** (7 total -- all variants):
+    - 2 x CHP  (gas -> electricity + heat)
+    - 1 x P2H  (electricity -> heat)
+    - 1 x G2H  (gas -> heat)
     - 1 x P2G  (electricity -> gas)
     - 2 x G2P  (gas -> electricity)
 
@@ -80,9 +81,9 @@ def _mf(q_mw):
 
 def create_restoration_benchmark(
     *,
-    linepack: bool = True,
-    ltc: bool = True,
-    misocp: bool = False,
+    linepack: bool = False,
+    ltc: bool = False,
+    misocp: bool = True,
 ) -> mm.Network:
     """
     Build and return the multi-energy restoration benchmark grid.
@@ -267,193 +268,109 @@ def create_restoration_benchmark(
     )
 
     # ==================================================================
-    # 3.  THERMAL / DISTRICT HEATING
+    # 3.  HEAT / DISTRICT-HEATING GRID  (9 supply + 9 return junctions)
     # ==================================================================
-    # Supply chain: 32 junctions in two sub-chains connected by cross-tie
-    hs = []
-    for i in range(32):
-        hs.append(mx.create_water_junction(net, name=f"Heat_S_{i}"))
+    n_heat = 9
+    hs = [mx.create_water_junction(net, name=f"hs_{i}") for i in range(n_heat)]
+    hr = [mx.create_water_junction(net, name=f"hr_{i}") for i in range(n_heat)]
 
-    # Ext-grids (heat plants)
-    mx.create_ext_hydr_grid(net, hs[0], grid_key=mm.WATER_KEY, name="HeatPlant_1")
-    mx.create_ext_hydr_grid(net, hs[16], grid_key=mm.WATER_KEY, name="HeatPlant_2")
+    # Supply and return chains
+    for i in range(n_heat - 1):
+        mx.create_water_pipe(net, hs[i], hs[i + 1], **_DH_TRUNK, name=f"hs_{i}_{i + 1}")
+        mx.create_water_pipe(net, hr[i], hr[i + 1], **_DH_TRUNK, name=f"hr_{i}_{i + 1}")
 
-    # Supply trunk pipes
-    for i in range(15):
-        kw = _DH_TRUNK if i < 3 else _DH_PIPE
-        mx.create_water_pipe(net, hs[i], hs[i + 1], **kw, name=f"HS_{i}_{i + 1}")
-    for i in range(16, 31):
-        kw = _DH_TRUNK if i < 19 else _DH_PIPE
-        mx.create_water_pipe(net, hs[i], hs[i + 1], **kw, name=f"HS_{i}_{i + 1}")
-    mx.create_water_pipe(net, hs[8], hs[24], **_DH_PIPE_LONG, name="HS_tie")
+    # Heat plant: inject hot supply, consume cooled return
+    mx.create_water_ext_grid(net, hs[0], t_k=358, name="HeatPlant_1_supply")
+    mx.create_consume_hydr_grid(net, hr[0], name="HeatPlant_1_return")
 
-    # Heat loads: HX from supply -> return junctions with sinks
-    _heat_loads = [
-        (2, 0.020),
-        (4, 0.030),
-        (6, 0.025),
-        (9, 0.015),
-        (10, 0.028),
-        (11, 0.012),
-        (13, 0.018),
-        (15, 0.014),
-        (18, 0.024),
-        (20, 0.035),
-        (22, 0.020),
-        (24, 0.012),
-        (25, 0.016),
-        (27, 0.026),
-        (29, 0.016),
-        (31, 0.012),
-    ]
-    for si, q_mw in _heat_loads:
-        rj = mx.create_water_junction(net, name=f"Heat_R_{si}")
-        mx.create_heat_exchanger(
-            net, hs[si], rj, q_mw=q_mw, diameter_m=0.12, name=f"HX_load_{si}"
-        )
-        mx.create_water_sink(net, rj, mass_flow=_mf(q_mw))
-
-    # Return junctions for coupling points
-    hr_chp1 = mx.create_water_junction(net, name="Heat_R_CHP1")
-    hr_chp2 = mx.create_water_junction(net, name="Heat_R_CHP2")
-    hr_chp3 = mx.create_water_junction(net, name="Heat_R_CHP3")
-    hr_p2h1 = mx.create_water_junction(net, name="Heat_R_P2H1")
-    hr_p2h2 = mx.create_water_junction(net, name="Heat_R_P2H2")
-    hr_g2h1 = mx.create_water_junction(net, name="Heat_R_G2H1")
-    hr_g2h2 = mx.create_water_junction(net, name="Heat_R_G2H2")
-
-    # Thermal storage
-    net.child_to(
-        mm.ThermalStorage(
-            m_stored_kg_initial=2000.0,
-            m_stored_kg_max=5000.0,
-            flow_max_kgs=1.0,
-        ),
-        hs[1],
-        name="ThermalTank_S1",
-    )
+    # Consumer heat exchangers (bridge supply -> return, extract heat).
+    # Placed at even indices, interleaved with coupling points at odd indices.
+    for i, q_mw in [
+        (2, 0.03),
+        (4, 0.04),
+        (6, 0.03),
+        (8, 0.02),
+    ]:
+        mx.create_heat_exchanger(net, hs[i], hr[i], q_mw, name=f"HE_{i}")
 
     # ==================================================================
-    # 4.  COUPLING POINTS  (10 -- all variants)
+    # 4.  COUPLING POINTS  (4 heat CPs -- all bridge return -> supply)
     # ==================================================================
 
-    # CHP 1: industrial
-    _chp1_mf = 0.008
-    _chp1_q_w = _chp1_mf * _HHV_MJ * 1e6 * 0.40
+    # CHP 1: industrial — gas at A2, power at Ind_1, heat at position 1
     mx.create_chp(
         net,
         power_node_id=ring_a[1],
-        heat_node_id=hs[3],
-        heat_return_node_id=hr_chp1,
+        heat_node_id=hr[1],
+        heat_return_node_id=hs[1],
         gas_node_id=gas_a[2],
         diameter_m=0.10,
         efficiency_power=0.40,
         efficiency_heat=0.40,
-        mass_flow_setpoint=_chp1_mf,
+        mass_flow_setpoint=0.008,
     )
-    mx.create_water_sink(net, hr_chp1, mass_flow=_mf(_chp1_q_w / 1e6))
 
-    # CHP 2: commercial
-    _chp2_mf = 0.006
-    _chp2_q_w = _chp2_mf * _HHV_MJ * 1e6 * 0.42
+    # CHP 2: commercial — gas at B3, power at Com_2, heat at position 3
     mx.create_chp(
         net,
         power_node_id=ring_b[2],
-        heat_node_id=hs[19],
-        heat_return_node_id=hr_chp2,
+        heat_node_id=hr[3],
+        heat_return_node_id=hs[3],
         gas_node_id=gas_b[3],
         diameter_m=0.10,
         efficiency_power=0.38,
         efficiency_heat=0.42,
-        mass_flow_setpoint=_chp2_mf,
+        mass_flow_setpoint=0.006,
     )
-    mx.create_water_sink(net, hr_chp2, mass_flow=_mf(_chp2_q_w / 1e6))
 
-    # CHP 3: residential
-    _chp3_mf = 0.004
-    _chp3_q_w = _chp3_mf * _HHV_MJ * 1e6 * 0.45
-    mx.create_chp(
-        net,
-        power_node_id=ring_c[3],
-        heat_node_id=hs[26],
-        heat_return_node_id=hr_chp3,
-        gas_node_id=gas_c[4],
-        diameter_m=0.10,
-        efficiency_power=0.35,
-        efficiency_heat=0.45,
-        mass_flow_setpoint=_chp3_mf,
-    )
-    mx.create_water_sink(net, hr_chp3, mass_flow=_mf(_chp3_q_w / 1e6))
-
-    # P2H 1: industrial
-    _p2h1_q_w = 20_000
-    mx.create_p2h(
-        net,
-        power_node_id=ring_a[4],
-        heat_node_id=hs[5],
-        heat_return_node_id=hr_p2h1,
-        heat_energy_w=_p2h1_q_w,
-        diameter_m=0.10,
-        efficiency=0.95,
-    )
-    mx.create_water_sink(net, hr_p2h1, mass_flow=_mf(_p2h1_q_w / 1e6))
-
-    # P2H 2: commercial
-    _p2h2_q_w = 15_000
+    # P2H 1: commercial — power at Com_4, heat at position 5
     mx.create_p2h(
         net,
         power_node_id=ring_b[4],
-        heat_node_id=hs[21],
-        heat_return_node_id=hr_p2h2,
-        heat_energy_w=_p2h2_q_w,
+        heat_node_id=hr[5],
+        heat_return_node_id=hs[5],
+        heat_energy_w=15_000,
         diameter_m=0.10,
         efficiency=0.92,
     )
-    mx.create_water_sink(net, hr_p2h2, mass_flow=_mf(_p2h2_q_w / 1e6))
 
-    # G2H 1: industrial gas boiler
-    _g2h1_q_w = 18_000
+    # G2H 1: industrial gas boiler — gas at A4, heat at position 7
     mx.create_g2h(
         net,
         gas_node_id=gas_a[4],
-        heat_node_id=hs[7],
-        heat_return_node_id=hr_g2h1,
-        heat_energy_w=_g2h1_q_w,
+        heat_node_id=hr[7],
+        heat_return_node_id=hs[7],
+        heat_energy_w=18_000,
         diameter_m=0.10,
         efficiency=0.90,
     )
-    mx.create_water_sink(net, hr_g2h1, mass_flow=_mf(_g2h1_q_w / 1e6))
 
-    # G2H 2: residential gas boiler
-    _g2h2_q_w = 12_000
-    mx.create_g2h(
+    # P2G: electrolyser
+    mx.create_p2g(
         net,
-        gas_node_id=gas_c[6],
-        heat_node_id=hs[28],
-        heat_return_node_id=hr_g2h2,
-        heat_energy_w=_g2h2_q_w,
-        diameter_m=0.10,
-        efficiency=0.88,
+        from_node_id=ring_a[4],
+        to_node_id=gas_a[7],
+        efficiency=0.65,
+        mass_flow_setpoint=0.005,
     )
-    mx.create_water_sink(net, hr_g2h2, mass_flow=_mf(_g2h2_q_w / 1e6))
 
-    # # P2G: electrolyser
-    # mx.create_p2g(
-    #     net, from_node_id=ring_a[4], to_node_id=gas_a[7],
-    #     efficiency=0.65, mass_flow_setpoint=0.005,
-    # )
+    # G2P 1: gas turbine (industrial)
+    mx.create_g2p(
+        net,
+        from_node_id=gas_b[6],
+        to_node_id=ring_b[4],
+        efficiency=0.42,
+        p_mw_setpoint=0.3,
+    )
 
-    # # G2P 1: gas turbine (industrial)
-    # mx.create_g2p(
-    #     net, from_node_id=gas_b[6], to_node_id=ring_b[4],
-    #     efficiency=0.42, p_mw_setpoint=0.3,
-    # )
-
-    # # G2P 2: peaker (residential)
-    # mx.create_g2p(
-    #     net, from_node_id=gas_c[2], to_node_id=ring_c[1],
-    #     efficiency=0.38, p_mw_setpoint=0.15,
-    # )
+    # G2P 2: peaker (residential)
+    mx.create_g2p(
+        net,
+        from_node_id=gas_c[2],
+        to_node_id=ring_c[1],
+        efficiency=0.38,
+        p_mw_setpoint=0.15,
+    )
 
     # ==================================================================
     # 5.  EXTENSIONS
@@ -472,7 +389,7 @@ def create_restoration_benchmark(
 
 
 if __name__ == "__main__":
-    res = create_restoration_benchmark(linepack=False, ltc=True, misocp=True)
+    res = create_restoration_benchmark(linepack=True, ltc=True, misocp=True)
     from monee.solver import PyomoSolver
 
-    print(PyomoSolver().solve(res))
+    print(PyomoSolver().solve(res, solver_name="gurobi"))

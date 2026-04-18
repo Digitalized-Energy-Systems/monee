@@ -1,5 +1,3 @@
-import math
-
 from monee.model.branch import (
     GenericPowerBranch,
     HeatExchanger,
@@ -15,51 +13,23 @@ from monee.model.child import (
     Sink,
     Source,
 )
-from monee.model.core import Var
 from monee.model.grid import GasGrid, WaterGrid
 from monee.model.multi import (
     CHPControlNode,
+    GasToHeatControlNode,
+    GasToPower,
     PowerToGas,
     PowerToHeat,
     PowerToHeatControlNode,
 )
 from monee.model.node import Bus, Junction
 from monee.problem.core import (
-    AttributeParameter,
+    REGULATION_ATTR,
     Constraints,
     Objectives,
     OptimizationProblem,
+    nan_to_zero,
 )
-
-CONTROLLABLE_ATTRIBUTES = [
-    (
-        "regulation",
-        AttributeParameter(
-            min=lambda attr, val: 0, max=lambda attr, val: 1, val=lambda attr, val: 1
-        ),
-    )
-]
-CONTROLLABLE_ATTRIBUTES_CP = [
-    (
-        "regulation",
-        AttributeParameter(
-            min=lambda attr, val: 0, max=lambda attr, val: 1, val=lambda attr, val: 1
-        ),
-    )
-]
-
-
-def _or_zero(var):
-    if type(var) is Var and math.isnan(var.value):
-        return 0
-    if (
-        hasattr(var, "value")
-        and hasattr(var.value, "value")
-        and math.isnan(var.value.value)
-    ):
-        return 0
-    return var
-
 
 HHV = 15.3
 
@@ -69,14 +39,14 @@ def retrieve_power_uniform(model):
     if isinstance(model, HeatExchangerLoad | HeatExchangerGenerator | HeatExchanger):
         return (model.q_w_set / 1000000.0 * model.regulation, model.q_w_set / 1000000.0)
     elif isinstance(model, PowerLoad | PowerGenerator):
-        return (_or_zero(model.p_mw) * model.regulation, model.p_mw)
+        return (nan_to_zero(model.p_mw) * model.regulation, model.p_mw)
     elif isinstance(model, ExtPowerGrid):
         return model.p_mw, 0
     elif isinstance(model, ExtHydrGrid):
         return model.mass_flow * 3.6 * HHV, 0
     elif isinstance(model, Sink | Source):
         return (
-            _or_zero(model.mass_flow) * 3.6 * HHV * model.regulation,
+            nan_to_zero(model.mass_flow) * 3.6 * HHV * model.regulation,
             model.mass_flow * 3.6 * HHV,
         )
     elif isinstance(model, CHPControlNode):
@@ -86,6 +56,10 @@ def retrieve_power_uniform(model):
     elif isinstance(model, PowerToHeat):
         return (0, 0)
     elif isinstance(model, PowerToGas):
+        return (0, 0)
+    elif isinstance(model, GasToPower):
+        return (0, 0)
+    elif isinstance(model, GasToHeatControlNode):
         return (0, 0)
     elif isinstance(model, PowerLine):
         if model.backup:
@@ -178,27 +152,12 @@ def create_multi_period_load_shedding_optimization_problem(
         result = run_multi_period(net, td, steps=4, optimization_problem=prob)
     """
     problem = OptimizationProblem(debug=debug)
-    problem.controllable_demands(CONTROLLABLE_ATTRIBUTES)
-    problem.controllable_generators(CONTROLLABLE_ATTRIBUTES)
-    problem.controllable_cps(CONTROLLABLE_ATTRIBUTES_CP)
+    problem.controllable_demands(REGULATION_ATTR)
+    problem.controllable_generators(REGULATION_ATTR)
+    problem.controllable_cps(REGULATION_ATTR)
     if use_ext_grid_objective:
         problem.controllable_ext()
-    problem.controllable(
-        component_condition=lambda component: (
-            "backup" in component.model.vars and component.model.backup
-        ),
-        attributes=[
-            (
-                "on_off",
-                AttributeParameter(
-                    min=lambda attr, val: 0,
-                    max=lambda attr, val: 1,
-                    val=lambda attr, val: 1,
-                    integer=True,
-                ),
-            )
-        ],
-    )
+    problem.controllable_backup_lines()
     if check_vm:
         problem.bounds(bounds_el, lambda m, _: type(m) is Bus, ["vm_pu"])
     if check_t:
@@ -263,29 +222,8 @@ def create_multi_period_load_shedding_optimization_problem(
             lambda model: model.loading_from_percent <= bounds_lp[1]
         ).equation(lambda model: model.loading_to_percent <= bounds_lp[1])
 
-    # --- Ramp constraint on regulation (cross-period coupling) ---
     if regulation_ramp_limit is not None:
-        _ramp = regulation_ramp_limit
-
-        def _regulation_ramp(model, cid, ts):
-            if not hasattr(model, "regulation") or isinstance(
-                model.regulation, (int, float)
-            ):
-                return []
-            prev_reg = ts.get(cid, "regulation")
-            if prev_reg is None:
-                return []
-            return [
-                model.regulation - prev_reg <= _ramp,
-                prev_reg - model.regulation <= _ramp,
-            ]
-
-        # Apply to all demands + generators that have regulation
-        constraints.select(
-            lambda comp: (
-                hasattr(comp.model, "regulation") and comp.active and (not comp.ignored)
-            )
-        ).temporal_equation(_regulation_ramp)
+        constraints.regulation_ramp(regulation_ramp_limit)
 
     problem.constraints = constraints
     problem.objectives = objectives
@@ -309,27 +247,12 @@ def create_load_shedding_optimization_problem(
     debug=False,
 ):
     problem = OptimizationProblem(debug=debug)
-    problem.controllable_demands(CONTROLLABLE_ATTRIBUTES)
-    problem.controllable_generators(CONTROLLABLE_ATTRIBUTES)
-    problem.controllable_cps(CONTROLLABLE_ATTRIBUTES_CP)
+    problem.controllable_demands(REGULATION_ATTR)
+    problem.controllable_generators(REGULATION_ATTR)
+    problem.controllable_cps(REGULATION_ATTR)
     if use_ext_grid_objective:
         problem.controllable_ext()
-    problem.controllable(
-        component_condition=lambda component: (
-            "backup" in component.model.vars and component.model.backup
-        ),
-        attributes=[
-            (
-                "on_off",
-                AttributeParameter(
-                    min=lambda attr, val: 0,
-                    max=lambda attr, val: 1,
-                    val=lambda attr, val: 1,
-                    integer=True,
-                ),
-            )
-        ],
-    )
+    problem.controllable_backup_lines()
     if check_vm:
         problem.bounds(bounds_el, lambda m, _: type(m) is Bus, ["vm_pu"])
     if check_t:

@@ -308,6 +308,7 @@ def create_water_pipe(
     lambda_insulation_w_per_k=0.025,
     insulation_thickness_m=0.2,
     on_off=1,
+    unidirectional=False,
     constraints=None,
     grid=None,
     name=None,
@@ -330,6 +331,10 @@ def create_water_pipe(
             Defaults to 0.025.
         insulation_thickness_m (float, optional): Insulation thickness in metres. Defaults to 0.2.
         on_off (int, optional): ``1`` = active, ``0`` = disconnected. Defaults to 1.
+        unidirectional (bool, optional): If ``True``, pin flow direction to
+            ``from_node → to_node`` (``direction = 0``).  Useful for district-
+            heating trunks where the physical flow direction is known a priori —
+            removes the direction binary from the MIP tree. Defaults to ``False``.
         constraints (list, optional): Constraint callables.
         grid: Grid domain override.
         name (str, optional): Human-readable name.
@@ -346,6 +351,7 @@ def create_water_pipe(
             lambda_insulation_w_per_k=lambda_insulation_w_per_k,
             insulation_thickness_m=insulation_thickness_m,
             on_off=on_off,
+            unidirectional=unidirectional,
         ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
@@ -816,13 +822,89 @@ def create_sink(
     )
 
 
+def create_heat_generator(
+    network: mm.Network,
+    node_id,
+    q_w,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    """
+    Attach a node-based heat generator (``H_G,i``) for the McCormick-DHS
+    formulation.
+
+    Supply a positive magnitude — the constructor negates it internally so
+    the node balance sees an injection (load convention).  Only meaningful
+    when :data:`mm.MCCORMICK_DHS_NETWORK_FORMULATION` has been applied.
+
+    Args:
+        network (mm.Network): Target network.
+        node_id: Water junction node ID.
+        q_w (float): Heat output in Watts (positive = generation).
+        constraints (list, optional): Constraint callables.
+        overwrite_id: Custom identifier.
+        name (str, optional): Human-readable name.
+        **kwargs: Forwarded to :class:`mm.HeatGenerator`.
+
+    Returns:
+        int: The child ID of the created heat generator.
+    """
+    return create_water_child(
+        network,
+        mm.HeatGenerator(q_w=q_w, **kwargs),
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+    )
+
+
+def create_heat_load(
+    network: mm.Network,
+    node_id,
+    q_w,
+    constraints=None,
+    overwrite_id=None,
+    name=None,
+    **kwargs,
+):
+    """
+    Attach a node-based heat load (``H_L,i``) for the McCormick-DHS
+    formulation.
+
+    Load convention: positive values represent consumption.  Only meaningful
+    when :data:`mm.MCCORMICK_DHS_NETWORK_FORMULATION` has been applied.
+
+    Args:
+        network (mm.Network): Target network.
+        node_id: Water junction node ID.
+        q_w (float): Heat demand in Watts (positive = consumption).
+        constraints (list, optional): Constraint callables.
+        overwrite_id: Custom identifier.
+        name (str, optional): Human-readable name.
+        **kwargs: Forwarded to :class:`mm.HeatLoad`.
+
+    Returns:
+        int: The child ID of the created heat load.
+    """
+    return create_water_child(
+        network,
+        mm.HeatLoad(q_w=q_w, **kwargs),
+        node_id=node_id,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+    )
+
+
 def create_heat_exchanger(
     network: mm.Network,
     from_node_id,
     to_node_id,
     q_mw,
-    diameter_m=0.1,
-    temperature_ext_k=293,
+    regulation=1,
     constraints=None,
     grid=None,
     name=None,
@@ -841,8 +923,8 @@ def create_heat_exchanger(
         to_node_id: Downstream junction node ID.
         q_mw (float): Heat exchange power in MW.  Positive = consumption (load),
             negative = generation (injection).
-        diameter_m (float, optional): Equivalent pipe diameter in metres. Defaults to 0.1.
-        temperature_ext_k (float, optional): Ambient temperature in Kelvin. Defaults to 293.
+        regulation (float): Scaling factor in [0, 1] applied to the setpoint.
+            ``1`` = full demand, ``0`` = off.  Default ``1``.
         constraints (list, optional): Constraint callables.
         grid: Grid domain override.
         name (str, optional): Human-readable name.
@@ -851,13 +933,9 @@ def create_heat_exchanger(
         tuple: The branch ID ``(from_node_id, to_node_id, edge_key)``.
     """
     return network.branch(
-        mm.HeatExchangerLoad(
-            q_mw=-q_mw, diameter_m=diameter_m, temperature_ext_k=temperature_ext_k
-        )
+        mm.HeatExchangerLoad(q_mw=-q_mw, regulation=regulation)
         if q_mw > 0
-        else mm.HeatExchangerGenerator(
-            q_mw=-q_mw, diameter_m=diameter_m, temperature_ext_k=temperature_ext_k
-        ),
+        else mm.HeatExchangerGenerator(q_mw=-q_mw, regulation=regulation),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
         constraints=constraints,
@@ -1536,3 +1614,18 @@ def create_multi_energy_network():
         create_ext_power_grid(net, bus)
     """
     return mm.Network()
+
+
+from monee.express.structures import (  # noqa: E402
+    DhsSegment,
+    DhsStructure,
+    ElStructure,
+    GasStructure,
+    Segment,
+    StarSegment,
+    WaterStructure,
+    dhs_structure,
+    el_structure,
+    gas_structure,
+    water_structure,
+)

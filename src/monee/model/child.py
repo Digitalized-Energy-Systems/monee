@@ -265,6 +265,48 @@ class ConsumeHydrGrid(NoVarChildModel):
 
 
 @model
+class HeatGenerator(NoVarChildModel):
+    """Node-based heat injection for the McCormick-DHS formulation (``H_G,i``).
+
+    Used with :class:`~monee.model.formulation.mccormick.water.MccDHSNodeFormulation`
+    to supply heat at a junction without routing it through a heat-exchanger
+    branch.  Follows monee's load convention: the user-visible magnitude is
+    positive, but the internal ``q_w_heat`` is negated so the node balance
+    treats this child as an injection.
+
+    Args:
+        q_w (float): Heat output in Watts (positive = generation).
+    """
+
+    def __init__(self, q_w, **kwargs) -> None:
+        if isinstance(q_w, (int, float)) and q_w < 0:
+            raise ValueError(
+                f"HeatGenerator expects a positive heat-generation magnitude; "
+                f"got q_w={q_w}.  Pass the absolute value — the sign is "
+                f"handled internally (load convention)."
+            )
+        super().__init__(**kwargs)
+        self.q_w_heat = -q_w
+
+
+@model
+class HeatLoad(NoVarChildModel):
+    """Node-based heat withdrawal for the McCormick-DHS formulation (``H_L,i``).
+
+    Used with :class:`~monee.model.formulation.mccormick.water.MccDHSNodeFormulation`
+    to draw heat at a junction without routing it through a heat-exchanger
+    branch.  Load convention: positive ``q_w_heat`` represents consumption.
+
+    Args:
+        q_w (float): Heat demand in Watts (positive = consumption).
+    """
+
+    def __init__(self, q_w, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.q_w_heat = q_w
+
+
+@model
 class Sink(NoVarChildModel):
     """
     Fixed-setpoint mass-flow sink (withdrawal) for gas or water networks.

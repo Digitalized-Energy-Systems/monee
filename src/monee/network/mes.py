@@ -61,7 +61,6 @@ def create_heat_net_for_power(
                 target_net,
                 from_node_id=bus_index_to_junction_index[node.id],
                 to_node_id=bus_index_to_end_junction_index[node.id],
-                diameter_m=0.2,
                 q_mw=(-1 if random.random() > 0.8 else 1)
                 * -0.1
                 * random.random()
@@ -400,7 +399,6 @@ def create_monee_benchmark_net():
         new_mes,
         from_node_id=new_water_junc,
         to_node_id=new_water_junc_2,
-        diameter_m=0.20,
         q_mw=0.03,
     )
     new_water_junc_3 = mx.create_water_junction(new_mes)
@@ -413,7 +411,6 @@ def create_monee_benchmark_net():
         new_mes,
         from_node_id=new_water_junc_2,
         to_node_id=new_water_junc_3,
-        diameter_m=0.20,
         q_mw=0.03,
     )
     mx.create_p2g(

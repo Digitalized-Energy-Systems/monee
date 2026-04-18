@@ -78,7 +78,7 @@ class Network:
             for component in self.all_components():
                 # formulation for type tc, and if no grid type is provided or grid type of the component == tg
                 if isinstance(component.model, tc) and (
-                    tg is None or component.grid is tg
+                    tg is None or type(component.grid) is tg
                 ):
                     component.formulation = formulation
 

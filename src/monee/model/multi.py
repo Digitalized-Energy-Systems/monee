@@ -23,10 +23,10 @@ class GenericTransferBranch(MultiGridBranchModel):
         self._mass_flow_pos = Var(1, min=0, name="mass_flow_pos")
         self._mass_flow_neg = Var(1, min=0, name="mass_flow_neg")
         self.on_off = 1
-        self._p_mw = Var(1)
-        self._q_mvar = Var(1)
-        self._t_from_pu = Var(350)
-        self._t_to_pu = Var(350)
+        self._p_mw = Var(1, name="transfer_p_mw")
+        self._q_mvar = Var(1, name="transfer_q_mvar")
+        self._t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
+        self._t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
         self._loss = loss
 
     def loss_percent(self):
@@ -74,13 +74,13 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
         self._hhv = hhv
         self.regulation = regulation
 
-        self.gas_kgps = Var(1)
+        self.gas_kgps = Var(1, min=0, name="gas_kgps")
         self.heat_w = heat_gen_w
 
-        self.t_k = Var(350)
-        self.t_pu = Var(1)
-        self.pressure_pa = Var(1000000)
-        self.pressure_pu = Var(1)
+        self.t_k = Var(350, min=200, max=800, name="t_k")
+        self.t_pu = Var(1, min=0, max=2, name="t_pu")
+        self.pressure_pa = Var(1000000, min=0, name="pressure_pa")
+        self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
         heat_to_branches = [
@@ -246,14 +246,14 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         self._hhv = hhv
         self.regulation = regulation
 
-        self.el_mw = Var(-1)
+        self.el_mw = Var(-1, max=0, name="chp_el_mw")
         self.gas_kgps = mass_flow_capacity
-        self.heat_w = Var(-1000)
+        self.heat_w = Var(-1000, max=0, name="chp_heat_w")
 
-        self.t_k = Var(350)
-        self.t_pu = Var(1)
-        self.pressure_pa = Var(1000000)
-        self.pressure_pu = Var(1)
+        self.t_k = Var(350, min=200, max=800, name="t_k")
+        self.t_pu = Var(1, min=0, max=2, name="t_pu")
+        self.pressure_pa = Var(1000000, min=0, name="pressure_pa")
+        self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
         """
@@ -398,7 +398,7 @@ class CHP(MultiGridCompoundModel):
         network.branch(GenericTransferBranch(), gas_node.id, node_id_control)
         network.branch(GenericTransferBranch(), heat_node.id, node_id_control)
         network.branch(
-            SubHE(Var(0), self.diameter_m),
+            SubHE(Var(0)),
             node_id_control,
             heat_return_node.id,
             grid=heat_return_node.grid,
@@ -437,7 +437,7 @@ class GasToHeat(MultiGridCompoundModel):
         network.branch(GenericTransferBranch(), gas_node.id, node_id_control)
         network.branch(GenericTransferBranch(), heat_node.id, node_id_control)
         network.branch(
-            SubHE(-self.heat_energy_w / 1e6, self.diameter_m),
+            SubHE(-self.heat_energy_w / 1e6),
             node_id_control,
             heat_return_node.id,
             grid=heat_return_node.grid,
@@ -458,7 +458,7 @@ class PowerToHeat(MultiGridCompoundModel):
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
         self.heat_energy_w = heat_energy_w
-        self.load_p_mw = Var(1)
+        self.load_p_mw = Var(1, min=0, name="p2h_load_p_mw")
         self.load_q_mvar = q_mvar_setpoint
 
     def set_active(self, activation_flag):
@@ -485,7 +485,7 @@ class PowerToHeat(MultiGridCompoundModel):
         network.branch(GenericTransferBranch(), power_node.id, node_id_control)
         network.branch(GenericTransferBranch(), node_id_control, heat_return_node.id)
         network.branch(
-            SubHE(Var(0.1), self.diameter_m),
+            SubHE(Var(0.1)),
             heat_node.id,
             node_id_control,
             grid=heat_node.grid,
@@ -500,12 +500,12 @@ class GasToPower(MultiGridBranchModel):
         super().__init__()
         self.efficiency = efficiency
         self.el_mw = -p_mw_setpoint
-        self.gas_kgps = Var(1)
+        self.gas_kgps = Var(1, min=0, name="g2p_gas_kgps")
 
         self.on_off = 1
-        self.p_to_mw = Var(-p_mw_setpoint)
+        self.p_to_mw = Var(-p_mw_setpoint, max=0, name="g2p_p_to_mw")
         self.q_to_mvar = -q_mvar_setpoint
-        self.from_mass_flow = Var(1)
+        self.from_mass_flow = Var(1, min=0, name="g2p_from_mass_flow")
         self.regulation = regulation
 
     def loss_percent(self):
@@ -530,12 +530,12 @@ class PowerToGas(MultiGridBranchModel):
         super().__init__()
         self.efficiency = efficiency
         self.gas_kgps = -mass_flow_setpoint
-        self.el_mw = Var(1.1)
+        self.el_mw = Var(1.1, min=0, name="p2g_el_mw")
 
         self.on_off = 1
-        self.p_from_mw = Var(1)
+        self.p_from_mw = Var(1, min=0, name="p2g_p_from_mw")
         self.q_from_mvar = consume_q_mvar_setpoint
-        self.to_mass_flow = Var(self.gas_kgps)
+        self.to_mass_flow = Var(self.gas_kgps, max=0, name="p2g_to_mass_flow")
         self.regulation = regulation
 
     def loss_percent(self):

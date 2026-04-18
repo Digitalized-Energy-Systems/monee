@@ -37,14 +37,14 @@ class GenericPowerBranch(BranchModel):
         self.max_i_ka = max_i_ka
         self.backup = backup
         self.on_off = on_off
-        self.p_from_mw = Var(1)
-        self.q_from_mvar = Var(1)
-        self.i_from_ka = Var(1)
-        self.loading_from_percent = Var(1)
-        self.p_to_mw = Var(1)
-        self.q_to_mvar = Var(1)
-        self.i_to_ka = Var(1)
-        self.loading_to_percent = Var(1)
+        self.p_from_mw = Var(1, name="p_from_mw")
+        self.q_from_mvar = Var(1, name="q_from_mvar")
+        self.i_from_ka = Var(1, min=0, name="i_from_ka")
+        self.loading_from_percent = Var(1, min=0, name="loading_from_percent")
+        self.p_to_mw = Var(1, name="p_to_mw")
+        self.q_to_mvar = Var(1, name="q_to_mvar")
+        self.i_to_ka = Var(1, min=0, name="i_to_ka")
+        self.loading_to_percent = Var(1, min=0, name="loading_to_percent")
 
     @property
     def loading_percent(self):
@@ -68,10 +68,10 @@ class PowerBranch(GenericPowerBranch, ABC):
         )
         self.tap = tap
         self.shift = shift
-        self.p_from_mw = Var(1)
-        self.q_from_mvar = Var(1)
-        self.p_to_mw = Var(1)
-        self.q_to_mvar = Var(1)
+        self.p_from_mw = Var(1, name="p_from_mw")
+        self.q_from_mvar = Var(1, name="q_from_mvar")
+        self.p_to_mw = Var(1, name="p_to_mw")
+        self.q_to_mvar = Var(1, name="q_to_mvar")
 
     @abstractmethod
     def calc_r_x(self, grid, from_node_model, to_node_model):
@@ -146,6 +146,7 @@ class WaterPipe(BranchModel):
         insulation_thickness_m=0.12,
         on_off=1,
         friction=None,
+        unidirectional=False,
     ) -> None:
         super().__init__()
         self.diameter_m = diameter_m
@@ -155,21 +156,20 @@ class WaterPipe(BranchModel):
         self.lambda_insulation_w_per_k = lambda_insulation_w_per_k
         self.insulation_thickness_m = insulation_thickness_m
         self.on_off = on_off
+        self.unidirectional = unidirectional
         self.mass_flow = Intermediate(0.1)
         self.mass_flow_pos = Var(0.1, min=0, name="mass_flow_pos")
         self.mass_flow_neg = Var(0.1, min=0, name="mass_flow_neg")
         self.mass_flow_pos_squared = Var(0, min=0, name="mass_flow_pos_sq")
         self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
         self.direction = Var(1, integer=True, min=0, max=1, name="direction")
-        self.velocity = Var(1, name="velocity")
+        self.velocity = Var(1, min=-50, max=50, name="velocity")
         self.q_w = Var(1, name="q_w")
         self.reynolds = Var(1000, min=0, max=1000000, name="reynolds")
-        self.t_from_pu = Var(1, min=0, max=3, name="t_from_pu")
-        self.t_to_pu = Var(1, min=0, max=3, name="t_to_pu")
+        self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
+        self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
         self.friction = (
-            Var(0.2, min=0, max=640000, name="friction")
-            if friction is None
-            else friction
+            Var(0.02, min=0, max=1, name="friction") if friction is None else friction
         )
 
     def loss_percent(self):
@@ -188,27 +188,16 @@ class HeatExchanger(BranchModel):
     def __init__(
         self,
         q_mw,
-        diameter_m,
-        roughness=0.0001,
-        length_m=2.5,
-        temperature_ext_k=293,
-        regulation=1,
-        friction=None,
         mass_flow_design_kgs=None,
         T_delta_design_K=30,
+        regulation=1,
     ) -> None:
         super().__init__()
         self._calc_mass_flow = False
         self._T_delta_design_K = T_delta_design_K
 
-        self.diameter_m = diameter_m
-        self.temperature_ext_k = temperature_ext_k
-        self.roughness = roughness
-        self.length_m = length_m
-        self.limit = 0.1
-        self.active = True
-        self.regulation = regulation
         self.on_off = 1
+        self.regulation = regulation
         self.q_w_set = -q_mw * 10**6
         self.q_w = Var(0, name="q_w")
 
@@ -225,16 +214,9 @@ class HeatExchanger(BranchModel):
         self.mass_flow = Intermediate(0.1)
         self.mass_flow_pos = Var(0, min=0, name="mass_flow_pos")
         self.mass_flow_neg = Var(0, min=0, name="mass_flow_neg")
-        self.mass_flow_pos_squared = Var(0, min=0, name="mass_flow_pos_sq")
-        self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
         self.direction = Var(0, integer=True, min=0, max=1, name="direction")
-        self.velocity = Var(1, name="velocity")
-        self.reynolds = Var(1000, min=0, max=1000000, name="reynolds")
-        self.t_from_pu = Var(1, min=0, max=3, name="t_from_pu")
-        self.t_to_pu = Var(1, min=0, max=3, name="t_to_pu")
-        self.friction = (
-            Var(0.01, min=0, max=1, name="friction") if friction is None else friction
-        )
+        self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
+        self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         eqs = [
@@ -253,27 +235,17 @@ class HeatExchanger(BranchModel):
 
 @model
 class HeatExchangerLoad(HeatExchanger):
-    def __init__(
-        self, q_mw, diameter_m, temperature_ext_k=293, mass_flow_design_kgs=None
-    ) -> None:
+    def __init__(self, q_mw, mass_flow_design_kgs=None, regulation=1) -> None:
         super().__init__(
-            q_mw,
-            diameter_m,
-            temperature_ext_k=temperature_ext_k,
-            mass_flow_design_kgs=mass_flow_design_kgs,
+            q_mw, mass_flow_design_kgs=mass_flow_design_kgs, regulation=regulation
         )
 
 
 @model
 class HeatExchangerGenerator(HeatExchanger):
-    def __init__(
-        self, q_mw, diameter_m, temperature_ext_k=293, mass_flow_design_kgs=None
-    ) -> None:
+    def __init__(self, q_mw, mass_flow_design_kgs=None, regulation=1) -> None:
         super().__init__(
-            q_mw,
-            diameter_m,
-            temperature_ext_k=temperature_ext_k,
-            mass_flow_design_kgs=mass_flow_design_kgs,
+            q_mw, mass_flow_design_kgs=mass_flow_design_kgs, regulation=regulation
         )
 
 
@@ -328,10 +300,10 @@ class PassiveHeatExchanger(BranchModel):
         self.mass_flow_pos_squared = Var(0, min=0, name="mass_flow_pos_sq")
         self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
         self.direction = Var(0, integer=True, min=0, max=1, name="direction")
-        self.velocity = Var(1, name="velocity")
+        self.velocity = Var(1, min=-50, max=50, name="velocity")
         self.reynolds = Var(1000, min=0, max=1000000, name="reynolds")
-        self.t_from_pu = Var(1, min=0, max=3, name="t_from_pu")
-        self.t_to_pu = Var(1, min=0, max=3, name="t_to_pu")
+        self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
+        self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
         self.friction = (
             Var(0.01, min=0, max=1, name="friction") if friction is None else friction
         )
@@ -382,10 +354,12 @@ class GasPipe(BranchModel):
         self.mass_flow_pos_squared = Var(0, min=0, name="mass_flow_pos_sq")
         self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
         self.direction = Var(0, integer=True, min=0, max=1)
-        self.velocity = Var(1)
-        self.reynolds = Var(1000, min=0, max=1000000)
-        self.gas_density = Var(1)
-        self.friction = Var(1) if friction is None else friction
+        self.velocity = Var(1, min=-100, max=100, name="velocity")
+        self.reynolds = Var(1000, min=0, max=1000000, name="reynolds")
+        self.gas_density = Var(1, min=0, max=100, name="gas_density")
+        self.friction = (
+            Var(0.02, min=0, max=7, name="friction") if friction is None else friction
+        )
         self.q_w = 0
 
     def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):

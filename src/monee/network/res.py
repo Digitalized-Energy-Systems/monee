@@ -72,37 +72,31 @@ def create_urban_district_net() -> mm.Network:
     mx.create_gas_pipe(net, g2, g3, diameter_m=0.10, length_m=250)
     mx.create_gas_pipe(net, g1, g4, diameter_m=0.10, length_m=200)
 
-    # HeatExchangerLoad branches enforce fixed heat demand; Sinks handle mass
-    # balance at the return nodes (sized for 25 K drop: Q/(cp·ΔT)):
-    #   CHP consumer:  176 kW / (4186 J/kg·K × 25 K) ≈ 1.684 kg/s
-    #   P2H consumer:   20 kW / (4186 J/kg·K × 25 K) ≈ 0.191 kg/s
-    h0 = mx.create_water_junction(net, name="H0_ext")
-    h1 = mx.create_water_junction(net, name="H1")
-    h2 = mx.create_water_junction(net, name="H2")  # CHP heat_return_node
-    h3 = mx.create_water_junction(net, name="H3_sink")
-    h4 = mx.create_water_junction(net, name="H4")
-    h5 = mx.create_water_junction(net, name="H5_sink")  # P2H heat_return_node
+    # Supply side (hot, ~356 K): CP hot outlets + distribution + HE consumers.
+    # CHP and P2H bridge return→supply, just as HEs bridge supply→return.
+    s1 = mx.create_water_junction(net, name="s1")
+    s2 = mx.create_water_junction(net, name="s2")
+    s3 = mx.create_water_junction(net, name="s3")
+    mx.create_water_pipe(net, s1, s2, diameter_m=0.10, length_m=100)
+    mx.create_water_pipe(net, s2, s3, diameter_m=0.10, length_m=100)
+    mx.create_ext_hydr_grid(net, s1, max_import_kgs=0.1)
 
-    mx.create_ext_hydr_grid(net, h0)
-    mx.create_sink(net, h2, mass_flow=0.091)  # return-side mass withdrawal
-    mx.create_sink(net, h3, mass_flow=1.684)  # return-side mass withdrawal
-    mx.create_sink(net, h5, mass_flow=0.191)  # return-side mass withdrawal
+    r1 = mx.create_water_junction(net, name="r1")
+    r2 = mx.create_water_junction(net, name="r2")
+    r3 = mx.create_water_junction(net, name="r3")
+    mx.create_water_pipe(net, r1, r2, diameter_m=0.10, length_m=100)
+    mx.create_water_pipe(net, r2, r3, diameter_m=0.10, length_m=100)
+    mx.create_consume_hydr_grid(net, r1)
 
-    mx.create_water_pipe(net, h0, h1, diameter_m=0.15, length_m=150)
-    # mx.create_water_pipe(net, h1, h2, diameter_m=0.15, length_m=200)
-    mx.create_heat_exchanger(
-        net, h2, h3, q_mw=0.176, diameter_m=0.15
-    )  # 176 kW consumer
-    mx.create_water_pipe(net, h1, h4, diameter_m=0.10, length_m=100)
-    # mx.create_heat_exchanger(net, h4, h5, q_mw=0.020, diameter_m=0.10)  # 20 kW consumer
+    mx.create_heat_exchanger(net, s3, r3, 0.2)
 
     # CHP: gas at G2 → power at B3, heat injected between H1 and H2.
     # heat_w = 0.40 × 0.008 kg/s × 3.6 × 15.3 kWh/kg × 1e6 = 176 256 W
     mx.create_chp(
         net,
         power_node_id=b3,
-        heat_node_id=h1,
-        heat_return_node_id=h2,
+        heat_node_id=r1,
+        heat_return_node_id=s1,
         gas_node_id=g2,
         diameter_m=0.10,
         efficiency_power=0.40,
@@ -115,8 +109,8 @@ def create_urban_district_net() -> mm.Network:
     mx.create_p2h(
         net,
         power_node_id=b4,
-        heat_node_id=h4,
-        heat_return_node_id=h5,
+        heat_node_id=r2,
+        heat_return_node_id=s2,
         heat_energy_w=20_000,
         diameter_m=0.10,
         efficiency=0.95,
@@ -255,17 +249,16 @@ def create_industrial_hub_net() -> mm.Network:
 
 def create_regional_mes_net() -> mm.Network:
     """
-    Regional integrated MES: 120 kV ring power, gas tree, district heating tree.
+    Regional integrated MES: 120 kV ring power, gas tree, district heating.
 
-    8 buses · 8 gas junctions · 5 heat junctions · 5 CPs.
+    8 buses · 8 gas junctions · 6 heat junctions (3 supply + 3 return) · 5 CPs.
     All coupling point types (CHP, G2P, P2G, P2H) — broadest carrier diversity.
     Single cross-tie in power ring for N-1 security.
     Suitable for: comprehensive CP criticality analysis, all-carrier failure scenarios.
 
-    Heat consumers are modelled as ``HeatExchangerLoad`` branches (fixed heat
-    demand in kW), paired with a return-side ``Sink`` for mass balance.  CHP
-    supplies 176 kW and P2H 20 kW; the corresponding heat exchangers enforce
-    those demands explicitly at a nominal 25 K temperature drop.
+    The heat grid uses a supply-return two-pipe structure: CHP and P2H inject
+    heat on the return→supply side, HE consumers extract on the supply→return
+    side.  CHP supplies ~176 kW and P2H 20 kW.
     """
     net = mx.create_multi_energy_network()
 
@@ -324,35 +317,32 @@ def create_regional_mes_net() -> mm.Network:
     mx.create_gas_pipe(net, g2, g6, diameter_m=0.20, length_m=250)
     mx.create_gas_pipe(net, g3, g7, diameter_m=0.20, length_m=350)
 
-    # HeatExchangerLoad branches enforce fixed heat demand; Sinks handle mass
-    # balance at the return nodes (sized for 25 K drop: Q/(cp·ΔT)):
-    #   CHP consumer:  176 kW / (4186 × 25) ≈ 1.684 kg/s
-    #   P2H consumer:   20 kW / (4186 × 25) ≈ 0.191 kg/s
-    h0 = mx.create_water_junction(net, name="H0_ext")
-    h1 = mx.create_water_junction(net, name="H1")
-    h2 = mx.create_water_junction(net, name="H2")  # CHP heat_return_node
-    h3 = mx.create_water_junction(net, name="H3_sink")
-    h4 = mx.create_water_junction(net, name="H4_sink")  # P2H heat_return_node
-    h5 = mx.create_water_junction(net, name="H5")
+    # Supply side (hot, ~356 K)
+    s1 = mx.create_water_junction(net, name="s1")
+    s2 = mx.create_water_junction(net, name="s2")
+    s3 = mx.create_water_junction(net, name="s3")
+    mx.create_water_pipe(net, s1, s2, diameter_m=0.12, length_m=200)
+    mx.create_water_pipe(net, s2, s3, diameter_m=0.10, length_m=150)
+    mx.create_ext_hydr_grid(net, s1, max_import_kgs=0.1)
 
-    mx.create_ext_hydr_grid(net, h0)
-    mx.create_sink(net, h3, mass_flow=1.684)  # return-side mass withdrawal
-    mx.create_sink(net, h5, mass_flow=0.191)  # return-side mass withdrawal
+    # Return side (cold, ~330 K)
+    r1 = mx.create_water_junction(net, name="r1")
+    r2 = mx.create_water_junction(net, name="r2")
+    r3 = mx.create_water_junction(net, name="r3")
+    mx.create_water_pipe(net, r1, r2, diameter_m=0.12, length_m=200)
+    mx.create_water_pipe(net, r2, r3, diameter_m=0.10, length_m=150)
+    mx.create_consume_hydr_grid(net, r1)
 
-    mx.create_water_pipe(net, h0, h1, diameter_m=0.20, length_m=200)
-    mx.create_water_pipe(net, h1, h2, diameter_m=0.20, length_m=200)
-    mx.create_water_pipe(net, h3, h4, diameter_m=0.20, length_m=250)
-    mx.create_heat_exchanger(
-        net, h2, h3, q_mw=0.176, diameter_m=0.15
-    )  # 176 kW consumer
-    mx.create_heat_exchanger(net, h4, h5, q_mw=0.020, diameter_m=0.10)  # 20 kW consumer
+    # HEs bridge supply→return
+    mx.create_heat_exchanger(net, s2, r2, 0.176)  # 176 kW CHP consumer
+    mx.create_heat_exchanger(net, s3, r3, 0.020)  # 20 kW P2H consumer
 
-    # CHP: gas at G1 → power at B2, heat injected between H1 and H2.
+    # CHP: gas at G1 → power at B2, heat from r1→s1.
     mx.create_chp(
         net,
         power_node_id=b2,
-        heat_node_id=h1,
-        heat_return_node_id=h2,
+        heat_node_id=r1,
+        heat_return_node_id=s1,
         gas_node_id=g1,
         diameter_m=0.12,
         efficiency_power=0.40,
@@ -387,12 +377,12 @@ def create_regional_mes_net() -> mm.Network:
         mass_flow_setpoint=0.03,
         regulation=1,
     )
-    # P2H: electric booster at B5, heat injected between H1 and H4 (20 kW).
+    # P2H: electric booster at B5, heat from r2→s2 (20 kW).
     mx.create_p2h(
         net,
         power_node_id=b5,
-        heat_node_id=h1,
-        heat_return_node_id=h4,
+        heat_node_id=r2,
+        heat_return_node_id=s2,
         heat_energy_w=20_000,
         diameter_m=0.12,
         efficiency=0.95,
@@ -402,41 +392,26 @@ def create_regional_mes_net() -> mm.Network:
 
 def create_balanced_urban_mes_net() -> mm.Network:
     """
-    Balanced urban MES: same 5-bus · 5-gas · 6-heat topology as
-    ``create_urban_district_net``, but with carrier energy flows scaled to a
-    similar magnitude so that single-carrier failures cause comparable amounts
-    of load shedding.
+    Balanced urban MES: 5 buses · 5 gas junctions · 8 heat junctions
+    (4 supply + 4 return) · 4 CPs.
+
+    Carrier energy flows are scaled so that single-carrier failures cause
+    comparable amounts of load shedding.
 
     Carrier direct-load targets (shed-able demand):
         Power  : B2 0.5 MW + B3 0.7 MW + B4 0.5 MW            = 1.7 MW
         Gas    : G3 0.015 kg/s + G4 0.010 kg/s                  ≈ 1.4 MW
-                 (using gas LHV 15.3 kWh/kg → 55.08 MJ/kg)
-        Heat   : HE consumer H2–H3  q_mw = 0.550 MW             = 0.55 MW
+        Heat   : HE1 0.550 MW + HE2 0.300 MW                    = 0.85 MW
 
-    vs. urban district reference:
-        Power ~12 MW · Gas direct ~1.4 MW · Heat direct ~0.2 MW.
+    The heat grid uses a supply-return two-pipe structure: CHP and P2H inject
+    heat on the return→supply side, HE consumers extract on the supply→return
+    side.  CHP supplies ~572 kW (0.026 kg/s gas) and P2H supplies 300 kW.
 
-    Heat generation is entirely internal (CHP + P2H); the ExtHydrGrid at H0
-    acts as the cold-return reference (330 K ≈ 57 °C) for pressure and
-    temperature, NOT as a heat source.  At rated output the heat network is
-    thermally self-consistent with a 25 K supply-to-return temperature swing:
-
-        CHP  (0.026 kg/s gas → 572 kW heat) heats 5.35 kg/s from 330 K to
-        ~356 K; HE consumer (550 kW) cools it back to ~330 K.           [✓]
-        P2H  (300 kW) heats 2.87 kg/s on a parallel branch from 330 K to
-        ~355 K; the return Sink at H5 represents the consumer.          [✓]
-
-    Coupling points (same types as urban district):
-        CHP  : G2 → B3 (0.57 MW power) + H1→H2 (0.57 MW heat),
-               gas mass-flow 0.026 kg/s
-        P2H  : B4 → H4→H5, 300 kW heat (0.316 MW electric consumption)
+    Coupling points:
+        CHP  : G2 → B3 (0.57 MW power) + r1→s1 (0.57 MW heat)
+        P2H  : B4 → r2→s2, 300 kW heat (0.316 MW electric consumption)
         P2G  : B0 → G4, 0.003 kg/s hydrogen
         G2P  : G3 → B2, 0.5 MW electric backup
-
-    Heat network mass-balance sinks (25 K supply-to-return ΔT):
-        H2  : 0.10 kg/s  – small bypass consumer at CHP supply node
-        H3  : 5.25 kg/s  – 550 kW HE consumer return  (550 000/(4186×25))
-        H5  : 2.87 kg/s  – 300 kW P2H return           (300 000/(4186×25))
     """
     net = mx.create_multi_energy_network()
 
@@ -472,42 +447,37 @@ def create_balanced_urban_mes_net() -> mm.Network:
     mx.create_gas_pipe(net, g2, g3, diameter_m=0.10, length_m=250)
     mx.create_gas_pipe(net, g1, g4, diameter_m=0.10, length_m=200)
 
-    # H0 is the cold-return reference (330 K ≈ 57 °C).  The CHP heats the
-    # circulating water from 330 K to ~356 K on the H1→H2 branch; the HE
-    # consumer cools it back to ~330 K on H2→H3.  The P2H runs a parallel
-    # branch H4→H5 and covers its own consumer via the H5 return Sink.
-    #
-    # Sinks represent the simplified return pipe (Q / (cp × ΔT), ΔT = 25 K):
-    #   CHP bypass     :   25 kW → H2 sink  0.10 kg/s  (25 000/(4186×25) ≈ 0.24, rounded)
-    #   HE consumer    :  550 kW → H3 sink  5.25 kg/s  (550 000/(4186×25))
-    #   P2H            :  300 kW → H5 sink  2.87 kg/s  (300 000/(4186×25))
-    h0 = mx.create_water_junction(net, name="H0_ext")
-    h1 = mx.create_water_junction(net, name="H1")
-    h2 = mx.create_water_junction(net, name="H2")  # CHP heat_return_node
-    h3 = mx.create_water_junction(net, name="H3_sink")
-    h4 = mx.create_water_junction(net, name="H4")
-    h5 = mx.create_water_junction(net, name="H5_sink")  # P2H heat_return_node
+    # Supply side (hot, ~356 K)
+    s1 = mx.create_water_junction(net, name="s1")
+    s2 = mx.create_water_junction(net, name="s2")
+    s3 = mx.create_water_junction(net, name="s3")
+    s4 = mx.create_water_junction(net, name="s4")
+    mx.create_water_pipe(net, s1, s2, diameter_m=0.20, length_m=100)
+    mx.create_water_pipe(net, s2, s3, diameter_m=0.15, length_m=150)
+    mx.create_water_pipe(net, s3, s4, diameter_m=0.15, length_m=100)
+    mx.create_ext_hydr_grid(net, s1, max_import_kgs=0.1)
 
-    # Cold-return reference: 330 K ≈ 57 °C (NOT the heat source).
-    mx.create_water_ext_grid(net, h0, t_k=330)
-    mx.create_sink(net, h2, mass_flow=0.10)  # small bypass at CHP supply node
-    mx.create_sink(net, h3, mass_flow=5.25)  # HE consumer return
-    mx.create_sink(net, h5, mass_flow=2.87)  # P2H return
+    # Return side (cold, ~330 K)
+    r1 = mx.create_water_junction(net, name="r1")
+    r2 = mx.create_water_junction(net, name="r2")
+    r3 = mx.create_water_junction(net, name="r3")
+    r4 = mx.create_water_junction(net, name="r4")
+    mx.create_water_pipe(net, r1, r2, diameter_m=0.20, length_m=100)
+    mx.create_water_pipe(net, r2, r3, diameter_m=0.15, length_m=150)
+    mx.create_water_pipe(net, r3, r4, diameter_m=0.15, length_m=100)
+    mx.create_consume_hydr_grid(net, r1)
 
-    mx.create_water_pipe(net, h0, h1, diameter_m=0.25, length_m=150)
-    mx.create_heat_exchanger(
-        net, h2, h3, q_mw=0.550, diameter_m=0.25
-    )  # 550 kW consumer
-    mx.create_water_pipe(net, h1, h4, diameter_m=0.15, length_m=100)
+    # HEs bridge supply→return
+    mx.create_heat_exchanger(net, s3, r3, 0.550)  # 550 kW CHP consumer
+    mx.create_heat_exchanger(net, s4, r4, 0.300)  # 300 kW P2H consumer
 
-    # CHP: gas at G2 → power at B3, heat sourced between H1 and H2.
-    # Heats supply water from ~330 K (H1) to ~356 K (H2).
+    # CHP: gas at G2 → power at B3, heat from r1→s1.
     # heat_w = 0.40 × 0.026 kg/s × 3.6 × 15.3 kWh/kg × 1e6 ≈ 572 kW
     mx.create_chp(
         net,
         power_node_id=b3,
-        heat_node_id=h1,
-        heat_return_node_id=h2,
+        heat_node_id=r1,
+        heat_return_node_id=s1,
         gas_node_id=g2,
         diameter_m=0.15,
         efficiency_power=0.40,
@@ -515,13 +485,13 @@ def create_balanced_urban_mes_net() -> mm.Network:
         mass_flow_setpoint=0.026,
         regulation=1,
     )
-    # P2H: power at B4 → 300 kW heat injected between H4 and H5.
+    # P2H: power at B4 → 300 kW heat from r2→s2.
     # el_mw = 300 000 / (0.95 × 1e6) ≈ 0.316 MW consumed from B4.
     mx.create_p2h(
         net,
         power_node_id=b4,
-        heat_node_id=h4,
-        heat_return_node_id=h5,
+        heat_node_id=r2,
+        heat_return_node_id=s2,
         heat_energy_w=300_000,
         diameter_m=0.15,
         efficiency=0.95,
@@ -708,56 +678,27 @@ def create_balanced_urban_mes_timeseries(
 
 def create_resilient_urban_mes_net() -> mm.Network:
     """
-    Resilient urban MES: 6 buses · 7 gas junctions · 9 heat junctions · 6 CPs.
+    Resilient urban MES: 6 buses · 7 gas junctions · 12 heat junctions
+    (6 supply + 6 return) · 6 CPs.
 
-    Extends ``create_balanced_urban_mes_net`` with a second gas source, a second
-    CHP, a solar generator, and a second district-heat consumer branch.  The
-    richer topology makes two phenomena directly observable:
+    Extends the balanced urban MES with a second gas source, a second CHP,
+    a solar generator, and a third HE consumer.  The richer topology makes
+    carrier dependence and redundancy directly observable.
 
     **Carrier dependence via coupling points**
-        Each CHP converts gas → power AND heat simultaneously.  Losing the
-        primary gas source (G0_ext1) curtails CHP1 and simultaneously reduces
-        power generation at B3 and heat supply at H1/H2.  If the secondary
-        source (G5_ext2) also fails, CHP2 at B5/H6 is also lost, cascading
-        through two carriers at once.  P2H couples electricity → heat: a
-        power-side fault that isolates B4 also kills heat supply on H4/H5.
+        Each CHP converts gas → power AND heat simultaneously.  Losing
+        G0_ext1 curtails CHP1 (B3 + heat s1).  P2H couples electricity → heat.
 
     **Resilience from redundancy**
-        * Two gas sources (G0_ext1, G5_ext2): losing one leaves the other to
-          serve both CHPs via the G1–G5 inter-connection pipe.
-        * Two CHPs in independent sub-trees: CHP1 failure leaves CHP2 + solar
-          + wind fully operational.
-        * Solar generator at B5 is independent of gas and heat — it keeps the
-          power grid alive even if both CHPs and G2P are off.
-        * Two HE consumers (HE1 at H2→H3, HE2 at H7→H8) in separate heat
-          branches: failure of the CHP1 branch does not affect HE2.
-        * G2P at G3→B2 provides gas-backed power regardless of wind/solar.
+        * Two gas sources (G0_ext1, G5_ext2) via G1–G5 inter-connection.
+        * Two CHPs in independent sub-trees.
+        * Solar at B5 is independent of gas and heat.
+        * Three HE consumers on separate supply-return pairs.
+        * G2P at G3→B2 provides gas-backed power.
 
-    Topology summary::
-
-        Power (20 kV):
-            B0(wind 1.5 MW)─B1(slack ≤1 MW)─B2(0.5 MW, G2P output)
-                                            ─B3(0.3 MW, CHP1 ~0.57 MW)
-                                            ─B4(0.5 MW, P2H consumer)
-            B1─B5(0.4 MW, CHP2 ~0.38 MW, solar 0.8 MW)
-
-        Gas (medium pressure):
-            G0_ext1─G1─G2(CHP1)─G3(G2P + sink 0.015 kg/s)
-                      ─G4(P2G + sink 0.010 kg/s)
-                      ─G5─G6(CHP2)
-            G5_ext2─G5
-
-        Heat (district heating, return ref 330 K):
-            H0_ret─H1(CHP1 inlet)─[CHP1]─H2(hot ~356 K)─HE1(550 kW)─H3(sink)
-                  ─H4(P2H inlet)─[P2H]─H5(sink 300 kW)
-                  ─H6(CHP2 inlet)─[CHP2]─H7(hot ~356 K)─HE2(300 kW)─H8(sink)
-
-    Heat mass-balance sinks (25 K ΔT, Q/(cp·ΔT)):
-        H2 : 0.10 kg/s – CHP1 bypass
-        H3 : 5.25 kg/s – HE1 consumer (550 kW)
-        H5 : 2.87 kg/s – P2H consumer (300 kW)
-        H7 : 0.95 kg/s – CHP2 bypass  (~100 kW)
-        H8 : 2.87 kg/s – HE2 consumer (300 kW)
+    The heat grid uses a supply-return two-pipe structure with 6+6 junctions.
+    CHP1, CHP2 and P2H inject heat on the return→supply side; three HE
+    consumers extract on the supply→return side.
     """
     net = mx.create_multi_energy_network()
 
@@ -804,45 +745,46 @@ def create_resilient_urban_mes_net() -> mm.Network:
     mx.create_gas_pipe(net, g1, g5, diameter_m=0.12, length_m=250)  # inter-connection
     mx.create_gas_pipe(net, g5, g6, diameter_m=0.10, length_m=150)
 
-    # Two independent supply branches share the same cold-return node (H0).
-    # CHP1 branch: H0→H1→(CHP1)→H2→HE1→H3
-    # P2H  branch: H1→H4→(P2H)→H5
-    # CHP2 branch: H0→H6→(CHP2)→H7→HE2→H8
-    #
-    # Sink mass flows (Q / (cp × ΔT), ΔT = 25 K, cp = 4186 J/kg·K):
-    #   H2 bypass :  10 kW → 0.10 kg/s   H3 (HE1) : 550 kW → 5.25 kg/s
-    #   H5 (P2H)  : 300 kW → 2.87 kg/s
-    #   H7 bypass : 100 kW → 0.95 kg/s   H8 (HE2) : 300 kW → 2.87 kg/s
-    h0 = mx.create_water_junction(net, name="H0_ret")
-    h1 = mx.create_water_junction(net, name="H1_chp1_in")
-    h2 = mx.create_water_junction(net, name="H2_chp1_hot")
-    h3 = mx.create_water_junction(net, name="H3_he1_ret")
-    h4 = mx.create_water_junction(net, name="H4_p2h_in")
-    h5 = mx.create_water_junction(net, name="H5_p2h_ret")
-    h6 = mx.create_water_junction(net, name="H6_chp2_in")
-    h7 = mx.create_water_junction(net, name="H7_chp2_hot")
-    h8 = mx.create_water_junction(net, name="H8_he2_ret")
+    # Supply side (hot, ~356 K)
+    s1 = mx.create_water_junction(net, name="s1")
+    s2 = mx.create_water_junction(net, name="s2")
+    s3 = mx.create_water_junction(net, name="s3")
+    s4 = mx.create_water_junction(net, name="s4")
+    s5 = mx.create_water_junction(net, name="s5")
+    s6 = mx.create_water_junction(net, name="s6")
+    mx.create_water_pipe(net, s1, s2, diameter_m=0.25, length_m=100)
+    mx.create_water_pipe(net, s2, s3, diameter_m=0.20, length_m=100)
+    mx.create_water_pipe(net, s3, s4, diameter_m=0.20, length_m=100)
+    mx.create_water_pipe(net, s4, s5, diameter_m=0.15, length_m=100)
+    mx.create_water_pipe(net, s5, s6, diameter_m=0.15, length_m=100)
+    mx.create_ext_hydr_grid(net, s1, max_import_kgs=0.1)
 
-    mx.create_water_ext_grid(net, h0, t_k=330)  # cold-return pressure/temp reference
-    mx.create_sink(net, h2, mass_flow=0.10)  # CHP1 bypass
-    mx.create_sink(net, h3, mass_flow=5.25)  # HE1 consumer return (550 kW)
-    mx.create_sink(net, h5, mass_flow=2.87)  # P2H consumer return (300 kW)
-    mx.create_sink(net, h7, mass_flow=0.95)  # CHP2 bypass (~100 kW)
-    mx.create_sink(net, h8, mass_flow=2.87)  # HE2 consumer return (300 kW)
+    # Return side (cold, ~330 K)
+    r1 = mx.create_water_junction(net, name="r1")
+    r2 = mx.create_water_junction(net, name="r2")
+    r3 = mx.create_water_junction(net, name="r3")
+    r4 = mx.create_water_junction(net, name="r4")
+    r5 = mx.create_water_junction(net, name="r5")
+    r6 = mx.create_water_junction(net, name="r6")
+    mx.create_water_pipe(net, r1, r2, diameter_m=0.25, length_m=100)
+    mx.create_water_pipe(net, r2, r3, diameter_m=0.20, length_m=100)
+    mx.create_water_pipe(net, r3, r4, diameter_m=0.20, length_m=100)
+    mx.create_water_pipe(net, r4, r5, diameter_m=0.15, length_m=100)
+    mx.create_water_pipe(net, r5, r6, diameter_m=0.15, length_m=100)
+    mx.create_consume_hydr_grid(net, r1)
 
-    mx.create_water_pipe(net, h0, h1, diameter_m=0.25, length_m=150)
-    mx.create_heat_exchanger(net, h2, h3, q_mw=0.550, diameter_m=0.25)  # HE1: 550 kW
-    mx.create_water_pipe(net, h1, h4, diameter_m=0.15, length_m=100)
-    mx.create_water_pipe(net, h0, h6, diameter_m=0.20, length_m=120)  # CHP2 branch
-    mx.create_heat_exchanger(net, h7, h8, q_mw=0.300, diameter_m=0.15)  # HE2: 300 kW
+    # HEs bridge supply→return
+    mx.create_heat_exchanger(net, s4, r4, 0.550)  # 550 kW CHP1 consumer
+    mx.create_heat_exchanger(net, s5, r5, 0.300)  # 300 kW P2H consumer
+    mx.create_heat_exchanger(net, s6, r6, 0.300)  # 300 kW CHP2 consumer
 
-    # CHP1: G2 → B3 (power) + H1/H2 (heat). Connects gas ↔ power ↔ heat.
+    # CHP1: G2 → B3 (power), heat from r1→s1.
     # heat_w ≈ 0.40 × 0.026 × 55.08 × 1e6 = 573 kW
     mx.create_chp(
         net,
         power_node_id=b3,
-        heat_node_id=h1,
-        heat_return_node_id=h2,
+        heat_node_id=r1,
+        heat_return_node_id=s1,
         gas_node_id=g2,
         diameter_m=0.15,
         efficiency_power=0.40,
@@ -850,13 +792,13 @@ def create_resilient_urban_mes_net() -> mm.Network:
         mass_flow_setpoint=0.026,
         regulation=1,
     )
-    # CHP2: G6 → B5 (power) + H6/H7 (heat). Second independent CP.
-    # heat_w ≈ 0.40 × 0.018 × 55.08 × 1e6 = 397 kW;  power ≈ 376 kW
+    # CHP2: G6 → B5 (power), heat from r2→s2.
+    # heat_w ≈ 0.40 × 0.018 × 55.08 × 1e6 = 397 kW
     mx.create_chp(
         net,
         power_node_id=b5,
-        heat_node_id=h6,
-        heat_return_node_id=h7,
+        heat_node_id=r2,
+        heat_return_node_id=s2,
         gas_node_id=g6,
         diameter_m=0.12,
         efficiency_power=0.38,
@@ -864,13 +806,13 @@ def create_resilient_urban_mes_net() -> mm.Network:
         mass_flow_setpoint=0.018,
         regulation=1,
     )
-    # P2H: B4 (power) → H4/H5 (heat). Couples electricity → heat.
+    # P2H: B4 (power) → heat from r3→s3 (300 kW).
     # el_mw = 300 000 / (0.95 × 1e6) ≈ 0.316 MW consumed from B4.
     mx.create_p2h(
         net,
         power_node_id=b4,
-        heat_node_id=h4,
-        heat_return_node_id=h5,
+        heat_node_id=r3,
+        heat_return_node_id=s3,
         heat_energy_w=300_000,
         diameter_m=0.15,
         efficiency=0.95,
@@ -900,6 +842,6 @@ if __name__ == "__main__":
     from monee import PyomoSolver, run_energy_flow
     from monee.model.formulation import MISOCP_NETWORK_FORMULATION
 
-    net = create_resilient_urban_mes_net()
+    net = create_urban_district_net()
     net.apply_formulation(MISOCP_NETWORK_FORMULATION)
     print(run_energy_flow(net, solver=PyomoSolver()))

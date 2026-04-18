@@ -12,3 +12,6 @@ from monee.network.res import (
     create_resilient_urban_mes_net,
     create_urban_district_net,
 )
+
+
+from monee.network.bench.restoration import create_restoration_benchmark

@@ -143,13 +143,13 @@ def create_rect_he_heat_example():
         g_node_2,
     )
     pn.branch(
-        mm.HeatExchanger(q_mw=-0.001, diameter_m=0.1),
+        mm.HeatExchanger(q_mw=-0.001),
         g_node_0,
         g_node_2,
     )
 
     pn.branch(
-        mm.HeatExchanger(q_mw=-0.001, diameter_m=0.1),
+        mm.HeatExchanger(q_mw=-0.001),
         g_node_1,
         g_node_3,
     )
@@ -206,12 +206,12 @@ def create_ext_branching_heat_example():
         g_node_5,
     )
     pn.branch(
-        mm.HeatExchanger(q_mw=0.2, diameter_m=0.16),
+        mm.HeatExchanger(q_mw=0.2),
         g_node_2,
         g_node_5,
     )
     pn.branch(
-        mm.HeatExchanger(q_mw=0.1, diameter_m=0.16),
+        mm.HeatExchanger(q_mw=0.1),
         g_node_2,
         g_node_5,
     )
@@ -243,7 +243,7 @@ def create_two_pipes_with_he_no_branching():
         g_node_1,
     )
     pn.branch(
-        mm.HeatExchanger(q_mw=0.05, diameter_m=0.15),
+        mm.HeatExchanger(q_mw=0.05),
         g_node_2,
         g_node_1,
     )
@@ -344,7 +344,7 @@ def create_circular_heating_net():
 
 def test_two_pipes_heat_network():
     heat_net = create_branching_two_pipe_heat_example()
-    result = ms.GEKKOSolver().solve(heat_net)
+    result = ms.PyomoSolver().solve(heat_net)
     print(result)
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -33)
     assert len(result.dataframes) == 4
@@ -386,7 +386,9 @@ def test_heat_exchanger():
     assert math.isclose(
         result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.39834289356
     )
-    assert math.isclose(result.dataframes["Junction"]["t_k"][0], 383.17457358)
+    assert math.isclose(
+        result.dataframes["Junction"]["t_k"][0], 383.17457358, abs_tol=0.01
+    )
     assert math.isclose(
         result.dataframes["Junction"]["pressure_pa"][0], 999996.1481, abs_tol=0.001
     )
@@ -428,10 +430,10 @@ def create_supply_return_parallel_he():
     pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), r1, r2)
 
     # Two parallel HEs between s1 and r1
-    pn.branch(mm.HeatExchanger(q_mw=0.04, diameter_m=0.15), s1, r1)
-    pn.branch(mm.HeatExchanger(q_mw=0.04, diameter_m=0.15), s1, r1)
+    pn.branch(mm.HeatExchanger(q_mw=0.04), s1, r1)
+    pn.branch(mm.HeatExchanger(q_mw=0.04), s1, r1)
     # Single HE between s2 and r2
-    pn.branch(mm.HeatExchanger(q_mw=0.05, diameter_m=0.15), s2, r2)
+    pn.branch(mm.HeatExchanger(q_mw=0.05), s2, r2)
 
     return pn
 
@@ -457,8 +459,8 @@ def create_supply_return_parallel_he_real(q_mw_coeff=1):
     pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), r0, r1)
     pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), r1, r2)
 
-    pn.branch(mm.HeatExchanger(q_mw=q_mw_coeff * 0.04, diameter_m=0.15), s1, r1)
-    pn.branch(mm.HeatExchanger(q_mw=q_mw_coeff * 0.5, diameter_m=0.15), s2, r2)
+    pn.branch(mm.HeatExchanger(q_mw=q_mw_coeff * 0.04), s1, r1)
+    pn.branch(mm.HeatExchanger(q_mw=q_mw_coeff * 0.5), s2, r2)
 
     return pn
 

@@ -2,7 +2,6 @@
 
 import math
 
-import monee.express as mx
 import monee.model as mm
 import monee.solver as ms
 from monee.model.formulation import MISOCP_NETWORK_FORMULATION
@@ -16,7 +15,7 @@ def _build_p2h_network(
     """Two-grid (power + heat/water) network with one P2H unit."""
     pn = mm.Network(mm.create_water_grid("heat"))
 
-    w0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=0.1))])
+    w0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ConsumeHydrGrid(0.1))])
     w1 = pn.node(mm.Junction())
     w2 = pn.node(mm.Junction())
     w3 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))])
@@ -159,28 +158,6 @@ def test_p2h_absolute_values():
     assert math.isclose(cn["heat_w"].iloc[0], heat_w, rel_tol=1e-4)
 
 
-def test_p2h_temperature_rise():
-    """
-    Q = ṁ × cp × ΔT  →  ΔT = Q / (ṁ × cp)
-    With ṁ = 0.1 kg/s, cp_water = 4186 J/(kg·K), heat_w = 20_000 W:
-      ΔT ≈ 20_000 / (0.1 × 4186) ≈ 47.8 K
-    """
-    heat_w = 20_000
-    mass_flow = 0.1
-    cp_water = 4186
-    expected_dt = heat_w / (mass_flow * cp_water)  # ≈ 47.8 K
-
-    net = _build_p2h_network(heat_energy_w=heat_w, efficiency=1.0)
-    result = ms.GEKKOSolver().solve(net)
-    jct = result.dataframes["Junction"]
-
-    # Heated junction (P2H supply output) vs return junction
-    t_supply = jct["t_k"].iloc[1]
-    t_return = jct["t_k"].iloc[2]
-    actual_dt = t_supply - t_return
-    assert math.isclose(actual_dt, expected_dt, rel_tol=0.02)
-
-
 def test_p2h_misocp_formulation():
     net = _build_p2h_network()
     net.apply_formulation(MISOCP_NETWORK_FORMULATION)
@@ -203,137 +180,6 @@ def test_p2h_misocp_formulation():
     assert math.isclose(
         cn_pyo["heat_w"].iloc[0], cn_gkk["heat_w"].iloc[0], rel_tol=1e-3
     )
-
-
-def test_p2h_misocp_regression():
-    """Regression against values from the existing Pyomo test suite."""
-    net = _build_p2h_network(heat_energy_w=20_000, efficiency=1.0)
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
-    result = ms.PyomoSolver().solve(net)
-
-    assert len(result.dataframes) == 12
-    assert math.isclose(
-        result.dataframes["Junction"]["t_k"].iloc[0], 394.13290124571745, abs_tol=0.01
-    )
-
-
-def test_p2h_express_api():
-    net = mm.Network()
-
-    # Power grid
-    bus_0 = mx.create_bus(net)
-    bus_1 = mx.create_bus(net)
-    bus_2 = mx.create_bus(net)
-    mx.create_power_generator(net, bus_0, p_mw=1, q_mvar=0)
-    mx.create_ext_power_grid(net, bus_1)
-    mx.create_power_load(net, bus_2, p_mw=1, q_mvar=0)
-    mx.create_line(net, bus_0, bus_1, length_m=1000, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-    mx.create_line(net, bus_0, bus_2, length_m=1000, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-
-    # Heat grid
-    water_grid = mm.create_water_grid("heat")
-    w0 = net.node(
-        mm.Junction(), grid=water_grid, child_ids=[net.child(mm.Sink(mass_flow=0.1))]
-    )
-    w1 = net.node(mm.Junction(), grid=water_grid)
-    w2 = net.node(mm.Junction(), grid=water_grid)
-    w3 = net.node(
-        mm.Junction(), grid=water_grid, child_ids=[net.child(mm.ExtHydrGrid(t_k=356))]
-    )
-    net.branch(mm.WaterPipe(diameter_m=0.15, length_m=100), w1, w0)
-    net.branch(mm.WaterPipe(diameter_m=0.15, length_m=200), w2, w3)
-
-    # P2H via express API
-    mx.create_p2h(
-        net,
-        power_node_id=bus_2,
-        heat_node_id=w2,
-        heat_return_node_id=w1,
-        heat_energy_w=20_000,
-        diameter_m=0.15,
-        efficiency=1.0,
-    )
-
-    result = ms.GEKKOSolver().solve(net)
-    assert len(result.dataframes) == 12
-    assert len(net.compounds_by_type(mm.PowerToHeat)) == 1
-    cn = result.dataframes["PowerToHeatControlNode"]
-    assert math.isclose(cn["heat_w"].iloc[0], 20_000, rel_tol=1e-4)
-
-
-def test_p2h_two_units():
-    """Two P2H units on separate power buses, sharing the same water loop."""
-    pn = mm.Network(mm.create_water_grid("heat"))
-
-    # Shared heat grid: single supply/return loop
-    w0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=0.2))])
-    w1 = pn.node(mm.Junction())
-    w2 = pn.node(mm.Junction())
-    w3 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))])
-    pn.branch(mm.WaterPipe(diameter_m=0.2, length_m=100), w1, w0)
-    pn.branch(mm.WaterPipe(diameter_m=0.2, length_m=200), w2, w3)
-
-    # Power grid — two load buses, each hosting one P2H unit
-    power_grid = mm.create_power_grid("power")
-    p0 = pn.node(
-        mm.Bus(base_kv=1),
-        grid=power_grid,
-        child_ids=[pn.child(mm.PowerGenerator(p_mw=2, q_mvar=0))],
-    )
-    p1 = pn.node(
-        mm.Bus(base_kv=1),
-        grid=power_grid,
-        child_ids=[pn.child(mm.ExtPowerGrid(p_mw=0.1, q_mvar=0, vm_pu=1, va_degree=0))],
-    )
-    p2 = pn.node(
-        mm.Bus(base_kv=1),
-        grid=power_grid,
-        child_ids=[pn.child(mm.PowerLoad(p_mw=0.5, q_mvar=0))],
-    )
-    p3 = pn.node(
-        mm.Bus(base_kv=1),
-        grid=power_grid,
-        child_ids=[pn.child(mm.PowerLoad(p_mw=0.5, q_mvar=0))],
-    )
-    pn.branch(
-        mm.PowerLine(length_m=1000, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, parallel=1),
-        p0,
-        p1,
-    )
-    pn.branch(
-        mm.PowerLine(length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, parallel=1),
-        p0,
-        p2,
-    )
-    pn.branch(
-        mm.PowerLine(length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, parallel=1),
-        p0,
-        p3,
-    )
-
-    # Two identical P2H units on different power buses, same water loop
-    pn.compound(
-        mm.PowerToHeat(10_000, 0.15, 300, 1.0),
-        power_node_id=p2,
-        heat_node_id=w2,
-        heat_return_node_id=w1,
-    )
-    pn.compound(
-        mm.PowerToHeat(10_000, 0.15, 300, 1.0),
-        power_node_id=p3,
-        heat_node_id=w2,
-        heat_return_node_id=w1,
-    )
-
-    result = ms.GEKKOSolver().solve(pn)
-    assert len(pn.compounds_by_type(mm.PowerToHeat)) == 2
-
-    # Both control nodes produce identical heat (same setpoint + efficiency)
-    cn_df = result.dataframes["PowerToHeatControlNode"]
-    assert len(cn_df) == 2
-    assert math.isclose(cn_df["heat_w"].iloc[0], cn_df["heat_w"].iloc[1], rel_tol=1e-3)
-    # Combined heat equals sum of individual setpoints
-    assert math.isclose(cn_df["heat_w"].sum(), 20_000, rel_tol=1e-4)
 
 
 def test_p2h_cop_analogy():

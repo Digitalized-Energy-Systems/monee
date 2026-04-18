@@ -166,12 +166,16 @@ class GasLinepack(NetworkAspect):
             lp_max = overrides.get("linepack_kg_max", auto_max)
             # Guard: max must always be >= initial.
             lp_max = max(lp_max, lp_initial * 1.05)
-
             # State: stored gas mass in the pipe [kg].
-            bm.linepack_kg = Var(lp_initial, min=0, max=lp_max, name="linepack_kg")
+            bm.linepack_kg = Var(
+                lp_initial, min=0, max=lp_max * 1.5, name="linepack_kg"
+            )
             # Rate: net mass flow rate into the pipe storage [kg/s].
             # Positive = pipe absorbing gas (charging), negative = releasing (discharging).
-            bm.net_pack_kgs = Var(0, name="net_pack_kgs")
+            # Bounded by the grid's maximum flow capacity.
+            bm.net_pack_kgs = Var(
+                0, min=-grid.f_max, max=grid.f_max, name="net_pack_kgs"
+            )
 
             self._pipe_volume[branch.id] = v_pipe
             self._initial_lp[branch.id] = lp_initial

@@ -1,5 +1,6 @@
 import functools
 import logging
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -8,11 +9,16 @@ from monee.model import (
     ExtHydrGrid,
     ExtPowerGrid,
     GasGrid,
+    GasToHeatControlNode,
+    GasToPower,
     GenericModel,
     HeatExchanger,
     HeatExchangerGenerator,
     HeatExchangerLoad,
     Network,
+    PassiveHeatExchanger,
+    PassiveHeatExchangerGenerator,
+    PassiveHeatExchangerLoad,
     PowerGenerator,
     PowerLoad,
     PowerToGas,
@@ -23,6 +29,27 @@ from monee.model import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def nan_to_zero(v):
+    """Return *v* unchanged unless it is (or wraps) ``NaN``, in which case return ``0``.
+
+    Works with plain floats, :class:`~monee.model.core.Var` objects, and
+    anything with a ``.value`` attribute.  Useful inside objective
+    functions where ``NaN`` initial values should not propagate into the
+    solver expression.
+    """
+    if isinstance(v, (int, float)):
+        return 0 if math.isnan(v) else v
+    if isinstance(v, Var):
+        if isinstance(v.value, (int, float)) and math.isnan(v.value):
+            return 0
+        return v
+    if hasattr(v, "value"):
+        val = v.value
+        if isinstance(val, (int, float)) and math.isnan(val):
+            return 0
+    return v
 
 
 class Objective:
@@ -308,6 +335,44 @@ class Constraints:
         """True if any constraint has temporal equations."""
         return any(c.has_temporal for c in self._constraints)
 
+    def regulation_ramp(self, limit):
+        """Add a ramp-rate constraint on ``regulation`` across periods.
+
+        Limits how fast the ``regulation`` variable can change between
+        consecutive periods.  Components without a ``regulation`` attribute
+        (or where it is a plain float) are silently skipped.
+
+        Args:
+            limit: Maximum change of ``regulation`` per period (e.g. 0.3).
+
+        Returns:
+            ``self`` for method chaining.
+
+        Example::
+
+            constraints.regulation_ramp(0.3)
+        """
+
+        def _regulation_ramp(model, cid, ts):
+            if not hasattr(model, "regulation") or isinstance(
+                model.regulation, (int, float)
+            ):
+                return []
+            prev_reg = ts.get(cid, "regulation")
+            if prev_reg is None:
+                return []
+            return [
+                model.regulation - prev_reg <= limit,
+                prev_reg - model.regulation <= limit,
+            ]
+
+        self.select(
+            lambda comp: (
+                hasattr(comp.model, "regulation") and comp.active and not comp.ignored
+            )
+        ).temporal_equation(_regulation_ramp)
+        return self
+
     @property
     def empty(self):
         return len(self._constraints) == 0
@@ -319,6 +384,19 @@ class AttributeParameter:
     max: Callable[[str, float], float]
     val: Callable[[str, float], float]
     integer: bool = False
+
+
+# Regulation attribute parameter (0–1) used across load-shedding formulations.
+REGULATION_ATTR = [
+    (
+        "regulation",
+        AttributeParameter(
+            min=lambda attr, val: 0,
+            max=lambda attr, val: 1,
+            val=lambda attr, val: 1,
+        ),
+    )
+]
 
 
 class OptimizationProblem:
@@ -557,13 +635,18 @@ class OptimizationProblem:
         self.controllable(
             component_condition=lambda component: (
                 (
-                    isinstance(component.model, HeatExchangerLoad | PowerLoad)
+                    isinstance(
+                        component.model,
+                        HeatExchangerLoad | PassiveHeatExchangerLoad | PowerLoad,
+                    )
                     or (
                         type(component.model) is Sink
                         and type(component.grid) is GasGrid
                     )
                     or (
-                        type(component.model) is HeatExchanger
+                        isinstance(
+                            component.model, HeatExchanger | PassiveHeatExchanger
+                        )
                         and type(component.model.q_w) is not Var
                         and (component.model.q_w > 0)
                     )
@@ -603,7 +686,11 @@ class OptimizationProblem:
         self.controllable(
             component_condition=lambda component: (
                 isinstance(
-                    component.model, HeatExchangerGenerator | PowerGenerator | Source
+                    component.model,
+                    HeatExchangerGenerator
+                    | PassiveHeatExchangerGenerator
+                    | PowerGenerator
+                    | Source,
                 )
                 and component.active
                 and (not component.ignored)
@@ -613,15 +700,14 @@ class OptimizationProblem:
         return self
 
     def controllable_ext(self):
+        """Make external grid connections controllable.
+
+        Targets :class:`~monee.model.ExtPowerGrid` and
+        :class:`~monee.model.ExtHydrGrid` (both gas and water/heat grids).
+        """
         self.controllable(
             component_condition=lambda component: (
-                (
-                    isinstance(component.model, ExtPowerGrid)
-                    or (
-                        type(component.model) is ExtHydrGrid
-                        and type(component.grid) is GasGrid
-                    )
-                )
+                isinstance(component.model, ExtPowerGrid | ExtHydrGrid)
                 and component.active
                 and (not component.ignored)
             ),
@@ -630,11 +716,13 @@ class OptimizationProblem:
         return self
 
     def controllable_cps(self, attributes):
-        """Make coupling-point (CHP, P2H, P2G) components controllable.
+        """Make coupling-point components controllable.
 
         Targets :class:`~monee.model.CHPControlNode`,
-        :class:`~monee.model.PowerToHeatControlNode`, and
-        :class:`~monee.model.PowerToGas` instances.
+        :class:`~monee.model.PowerToHeatControlNode`,
+        :class:`~monee.model.GasToHeatControlNode`,
+        :class:`~monee.model.PowerToGas`, and
+        :class:`~monee.model.GasToPower` instances.
 
         Args:
             attributes: Attribute names to promote to ``Var``
@@ -651,7 +739,11 @@ class OptimizationProblem:
             component_condition=lambda component: (
                 isinstance(
                     component.model,
-                    CHPControlNode | PowerToHeatControlNode | PowerToGas,
+                    CHPControlNode
+                    | PowerToHeatControlNode
+                    | GasToHeatControlNode
+                    | PowerToGas
+                    | GasToPower,
                 )
                 and component.active
                 and (not component.ignored)
@@ -694,6 +786,34 @@ class OptimizationProblem:
                     component.model.make_controllable()
 
         self._controllable_appliables.append(_apply_storages)
+        return self
+
+    def controllable_backup_lines(self):
+        """Make backup lines switchable (on/off) during optimisation.
+
+        Targets branch components that have ``backup=True``.  Adds an
+        integer ``on_off`` variable in {0, 1} so the solver can decide
+        whether to activate each backup line.
+
+        Returns:
+            ``self`` for method chaining.
+        """
+        self.controllable(
+            component_condition=lambda component: (
+                "backup" in component.model.vars and component.model.backup
+            ),
+            attributes=[
+                (
+                    "on_off",
+                    AttributeParameter(
+                        min=lambda attr, val: 0,
+                        max=lambda attr, val: 1,
+                        val=lambda attr, val: 1,
+                        integer=True,
+                    ),
+                )
+            ],
+        )
         return self
 
     @property

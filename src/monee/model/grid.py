@@ -72,6 +72,13 @@ class WaterGrid(Grid):
     t_ref: float = 356
     pressure_ref: float = 1000000
     f_max: float = 200
+    # Velocity cap used to derive per-pipe mass-flow bounds from diameter.
+    # 5 m/s is a generous physical upper limit for district-heating water
+    # (typical design velocities are 1–3 m/s); choose lower to tighten
+    # further, higher to loosen.  The per-pipe bound ``π/4·D²·ρ·v_max`` is
+    # combined with ``f_max`` as ``min(...)`` so this setting can only
+    # tighten, never exceed, the grid-wide cap.
+    v_max_mps: float = 5.0
 
 
 GAS_GRID_ATTRS = {

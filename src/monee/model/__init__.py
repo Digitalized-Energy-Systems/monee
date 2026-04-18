@@ -57,6 +57,8 @@ from .storage import (
 from .child import (
     ExtHydrGrid,
     ExtPowerGrid,
+    HeatGenerator,
+    HeatLoad,
     PowerGenerator,
     PowerLoad,
     Sink,
@@ -85,6 +87,10 @@ from .grid import (
 )
 from .formulation.ltc import LumpedThermalCapacitance
 from .formulation.linepack import GasLinepack
+from .formulation.mccormick.water import (
+    MCCORMICK_DHS_NETWORK_FORMULATION,
+    make_mccormick_dhs_formulation,
+)
 from .islanding import (
     GridFormingMixin,
     IslandingMode,

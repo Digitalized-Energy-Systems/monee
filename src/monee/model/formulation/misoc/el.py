@@ -10,7 +10,7 @@ from monee.model.phys.misoc.pf import (
 
 class MISOCPElectricityNodeFormulation(NodeFormulation):
     def ensure_var(self, node):
-        node.vm_pu_squared = Var(1, min=0, max=3)
+        node.vm_pu_squared = Var(1, min=0, max=2.25)
         node.vm_pu = Intermediate(1)
 
     def equations(

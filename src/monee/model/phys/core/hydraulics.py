@@ -44,6 +44,18 @@ def calc_pipe_area(diameter_m):
     return math.pi * diameter_m**2 / 4
 
 
+def calc_max_mass_flow(diameter_m, fluid_density, v_max_mps):
+    """Physical upper bound on pipe mass flow [kg/s] from a velocity cap.
+
+    ``v_max_mps`` is the maximum fluid velocity allowed in the pipe; for
+    district-heating water 3–5 m/s is typical (noise/erosion limit).  The
+    resulting bound is used for per-pipe big-M tightening so Gurobi's LP
+    relaxation and presolve see the actual physical capacity of each pipe
+    rather than a grid-wide worst-case.
+    """
+    return calc_pipe_area(diameter_m) * fluid_density * v_max_mps
+
+
 def calc_nikurdse(internal_diameter_m, roughness):
     return 1 / (2 * np.log10(3.71 * internal_diameter_m / roughness)) ** 2
 
@@ -123,13 +135,13 @@ def piecewise_eq_friction(model, pwl):
     xs = []
 
     # intentionally coarse below 2000
-    xs += logspace(10.0, 2000.0, 8)
+    xs += logspace(10.0, 2000.0, 4)
 
     # modest resolution in transition
-    xs += logspace(2000.0, 4000.0, 8)[1:]
+    xs += logspace(2000.0, 4000.0, 4)[1:]
 
     # more detail in turbulent regime
-    xs += logspace(4000.0, 1e7, 8)[1:]
+    xs += logspace(4000.0, 1e7, 4)[1:]
 
     ys = [friction_value(x, D, eps) for x in xs]
 

@@ -34,7 +34,7 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
         model.t_out_pu = Var(1, min=0.3, max=2, name="t_out_pu")
         model.mass_flow_mag = Var(1, min=0, name="mass_flow_mag")
         model.alpha = Var(0.01, min=0, max=1, name="alpha")
-        model.t_inc = Var(1, name="temperature_increase")
+        model.t_inc = Var(1, min=-2, max=2, name="temperature_increase")
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         branch._pipe_area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
@@ -51,7 +51,22 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
 
         hydraulicsmodel.piecewise_eq_friction(branch, kwargs["pwl_impl"])
 
-        return [
+        # Per-pipe big-M tightening: the physical max flow is bounded by the
+        # pipe cross-section times the velocity cap, which is typically far
+        # below the grid-wide ``f_max``.  Using the tighter value shrinks
+        # Gurobi's LP relaxation gap and speeds up the direction/on_off B&B.
+        f_max_local = min(
+            grid.f_max,
+            hydraulicsmodel.calc_max_mass_flow(
+                branch.diameter_m, grid.fluid_density, grid.v_max_mps
+            ),
+        )
+
+        # Unidirectional pipes pin direction = 0 (forward flow from_node →
+        # to_node).  This eliminates the direction binary from the MIP tree
+        # and collapses the temperature routing to the from-node as the inlet,
+        # which is the common case for district-heating supply/return pipes.
+        eqs = [
             # note that the dynamic visc not temperature dependent modeled
             hydraulicsmodel.reynolds_equation(
                 branch.reynolds,
@@ -62,11 +77,13 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
             ),
             branch.mass_flow_pos_squared == branch.mass_flow_pos * branch.mass_flow_pos,
             branch.mass_flow_neg_squared == branch.mass_flow_neg * branch.mass_flow_neg,
-            branch.mass_flow_pos <= grid.f_max * branch.direction,
-            branch.mass_flow_neg <= grid.f_max * (1 - branch.direction),
-            branch.mass_flow_pos <= grid.f_max * branch.on_off,
-            branch.mass_flow_neg <= grid.f_max * branch.on_off,
-            branch.mass_flow_mag <= grid.f_max,
+            branch.mass_flow_pos <= f_max_local * branch.direction,
+            branch.mass_flow_neg <= f_max_local * (1 - branch.direction),
+            branch.mass_flow_pos <= f_max_local * branch.on_off,
+            branch.mass_flow_neg <= f_max_local * branch.on_off,
+            branch.mass_flow_mag <= f_max_local,
+            branch.mass_flow_pos_squared <= f_max_local**2 * branch.on_off,
+            branch.mass_flow_neg_squared <= f_max_local**2 * branch.on_off,
             # note that the density is not temperature dependent modeled
             owfmodel.darcy_weisbach_equation(
                 from_node_model.vars["pressure_pu"],
@@ -96,6 +113,10 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
             == branch.direction * branch.t_out_pu
             + (1 - branch.direction) * from_node_model.vars["t_pu"],
         ]
+        if getattr(branch, "unidirectional", False):
+            eqs.append(branch.direction == 0)
+            eqs.append(branch.mass_flow_pos == 0)
+        return eqs
 
 
 class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
@@ -113,16 +134,23 @@ class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
     """
 
     def ensure_var(self, model):
-        model.t_in_pu = Var(1, min=0, max=3, name="t_in_pu")
-        model.t_out_pu = Var(1, min=0, max=3, name="t_out_pu")
+        model.t_in_pu = Var(1, min=0, max=2, name="t_in_pu")
+        model.t_out_pu = Var(1, min=0, max=2, name="t_out_pu")
         model.mass_flow_mag = Var(1, min=0, name="mass_flow_mag")
         model.alpha = Var(0.01, min=0, max=1, name="alpha")
-        model.t_inc = Var(1, name="temperature_increase")
+        model.t_inc = Var(1, min=-2, max=2, name="temperature_increase")
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         branch._pipe_area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
 
         hydraulicsmodel.piecewise_eq_friction(branch, kwargs["pwl_impl"])
+
+        f_max_local = min(
+            grid.f_max,
+            hydraulicsmodel.calc_max_mass_flow(
+                branch.diameter_m, grid.fluid_density, grid.v_max_mps
+            ),
+        )
 
         return [
             hydraulicsmodel.reynolds_equation(
@@ -134,11 +162,13 @@ class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
             ),
             branch.mass_flow_pos_squared == branch.mass_flow_pos * branch.mass_flow_pos,
             branch.mass_flow_neg_squared == branch.mass_flow_neg * branch.mass_flow_neg,
-            branch.mass_flow_pos <= grid.f_max * branch.direction,
-            branch.mass_flow_neg <= grid.f_max * (1 - branch.direction),
-            branch.mass_flow_pos <= grid.f_max * branch.on_off,
-            branch.mass_flow_neg <= grid.f_max * branch.on_off,
-            branch.mass_flow_mag <= grid.f_max,
+            branch.mass_flow_pos <= f_max_local * branch.direction,
+            branch.mass_flow_neg <= f_max_local * (1 - branch.direction),
+            branch.mass_flow_pos <= f_max_local * branch.on_off,
+            branch.mass_flow_neg <= f_max_local * branch.on_off,
+            branch.mass_flow_mag <= f_max_local,
+            branch.mass_flow_pos_squared <= f_max_local**2 * branch.on_off,
+            branch.mass_flow_neg_squared <= f_max_local**2 * branch.on_off,
             owfmodel.darcy_weisbach_equation(
                 from_node_model.vars["pressure_pu"],
                 to_node_model.vars["pressure_pu"],
