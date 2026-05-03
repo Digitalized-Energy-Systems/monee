@@ -145,6 +145,14 @@ def piecewise_eq_friction(model, pwl):
 
     ys = [friction_value(x, D, eps) for x in xs]
 
+    # Anchor a breakpoint at Re = 0 so a branch with no flow remains feasible.
+    # The Weymouth term is friction * mass_flow^2 ≡ 0 when mass_flow = 0, so the
+    # interpolated friction at Re = 0 has no physical effect — we just need the
+    # PWL domain to include 0.  Re-use the smallest tabulated friction to keep
+    # the slope between (0, friction(10)) finite and well-behaved.
+    xs = [0.0] + xs
+    ys = [ys[0]] + ys
+
     xs, ys = filter_near_linear(xs, ys, rtol=1e-7)
 
     pwl.piecewise_eq(

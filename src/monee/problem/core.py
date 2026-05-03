@@ -6,10 +6,12 @@ from dataclasses import dataclass
 
 from monee.model import (
     CHPControlNode,
+    CHPHGControlNode,
     ExtHydrGrid,
     ExtPowerGrid,
     GasGrid,
     GasToHeatControlNode,
+    GasToHeatHG,
     GasToPower,
     GenericModel,
     HeatExchanger,
@@ -23,6 +25,7 @@ from monee.model import (
     PowerLoad,
     PowerToGas,
     PowerToHeatControlNode,
+    PowerToHeatHG,
     Sink,
     Source,
     Var,
@@ -721,8 +724,10 @@ class OptimizationProblem:
         Targets :class:`~monee.model.CHPControlNode`,
         :class:`~monee.model.PowerToHeatControlNode`,
         :class:`~monee.model.GasToHeatControlNode`,
-        :class:`~monee.model.PowerToGas`, and
-        :class:`~monee.model.GasToPower` instances.
+        :class:`~monee.model.PowerToGas`,
+        :class:`~monee.model.GasToPower`,
+        :class:`~monee.model.PowerToHeatHG`, and
+        :class:`~monee.model.GasToHeatHG` instances.
 
         Args:
             attributes: Attribute names to promote to ``Var``
@@ -740,10 +745,13 @@ class OptimizationProblem:
                 isinstance(
                     component.model,
                     CHPControlNode
+                    | CHPHGControlNode
                     | PowerToHeatControlNode
                     | GasToHeatControlNode
                     | PowerToGas
-                    | GasToPower,
+                    | GasToPower
+                    | PowerToHeatHG
+                    | GasToHeatHG,
                 )
                 and component.active
                 and (not component.ignored)

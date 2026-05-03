@@ -266,13 +266,16 @@ class ConsumeHydrGrid(NoVarChildModel):
 
 @model
 class HeatGenerator(NoVarChildModel):
-    """Node-based heat injection for the McCormick-DHS formulation (``H_G,i``).
+    """Node-based heat injection (``H_G,i``) for district-heating formulations.
 
-    Used with :class:`~monee.model.formulation.mccormick.water.MccDHSNodeFormulation`
-    to supply heat at a junction without routing it through a heat-exchanger
-    branch.  Follows monee's load convention: the user-visible magnitude is
-    positive, but the internal ``q_w_heat`` is negated so the node balance
-    treats this child as an injection.
+    Supplies heat at a junction without routing it through a heat-exchanger
+    branch.  Integrated into both the default mass-weighted nodal heat balance
+    (:meth:`~monee.model.node.Junction.calc_signed_heat_flow`) and the
+    McCormick-DHS nodal balance
+    (:class:`~monee.model.formulation.mccormick.water.MccDHSNodeFormulation`).
+    Follows monee's load convention: the user-visible magnitude is positive,
+    but the internal ``q_w_heat`` is negated so the node balance treats this
+    child as an injection.
 
     Args:
         q_w (float): Heat output in Watts (positive = generation).
@@ -291,11 +294,14 @@ class HeatGenerator(NoVarChildModel):
 
 @model
 class HeatLoad(NoVarChildModel):
-    """Node-based heat withdrawal for the McCormick-DHS formulation (``H_L,i``).
+    """Node-based heat withdrawal (``H_L,i``) for district-heating formulations.
 
-    Used with :class:`~monee.model.formulation.mccormick.water.MccDHSNodeFormulation`
-    to draw heat at a junction without routing it through a heat-exchanger
-    branch.  Load convention: positive ``q_w_heat`` represents consumption.
+    Draws heat at a junction without routing it through a heat-exchanger
+    branch.  Integrated into both the default mass-weighted nodal heat balance
+    (:meth:`~monee.model.node.Junction.calc_signed_heat_flow`) and the
+    McCormick-DHS nodal balance
+    (:class:`~monee.model.formulation.mccormick.water.MccDHSNodeFormulation`).
+    Load convention: positive ``q_w_heat`` represents consumption.
 
     Args:
         q_w (float): Heat demand in Watts (positive = consumption).

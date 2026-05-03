@@ -67,14 +67,19 @@ from .child import (
 )
 from .multi import (
     CHP,
+    CHPHG,
     GasToPower,
     PowerToGas,
     PowerToHeat,
+    PowerToHeatHG,
     GenericTransferBranch,
     GasToHeat,
+    GasToHeatHG,
     CHPControlNode,
+    CHPHGControlNode,
     GasToHeatControlNode,
     PowerToHeatControlNode,
+    SubHG,
 )
 from .grid import (
     create_gas_grid,

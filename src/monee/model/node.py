@@ -3,6 +3,7 @@ import math
 from .core import Intermediate, IntermediateEq, NodeModel, Var, model
 from .phys.core.hydraulics import junction_mass_flow_balance
 from .phys.nonlinear.ac import power_balance_equation
+from .phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
 
 
 @model
@@ -211,13 +212,29 @@ class Junction(NodeModel):
                 m_ext = nm.vars["mass_flow"] * nm.vars.get("regulation", 1)
                 terms.append(m_ext * Tn)
 
-            # Option A — small conduction-style regularizer on T_n so the
+            # Node-based heat injection / withdrawal (HeatGenerator, HeatLoad).
+            # q_w_heat is in Watts with load convention (positive = consumption,
+            # negative = generation).  Dividing by c·t_ref converts to the
+            # kg/s·t_pu units used by the mass-weighted temperature balance.
+            for nm in connected_node_models:
+                if "q_w_heat" not in nm.vars:
+                    continue
+                q = nm.vars["q_w_heat"] * nm.vars.get("regulation", 1)
+                terms.append(q / (SPECIFIC_HEAT_CAP_WATER * grid.t_ref))
+
+            # Branch-level heat injection at this node.  A multi-grid branch
+            # (e.g. GasToHeatHG) may carry a q_w_heat Var in load convention
+            # that is absorbed at the TO end — same sign handling as the
+            # connected-child case above.
+            for bm in to_branch_models:
+                if "q_w_heat" not in bm.vars:
+                    continue
+                q = bm.vars["q_w_heat"] * bm.vars.get("on_off", 1)
+                terms.append(q / (SPECIFIC_HEAT_CAP_WATER * grid.t_ref))
+
+            # Small conduction-style regularizer on T_n so the
             # Jacobian entry ∂(heat_bal)/∂T_n does not collapse to the
             # near-zero difference (Σm_out − Σm_in) on the solver path.
-            # Anchor is the variable's initial value so the added term is
-            # exactly zero at the starting point and O(k·|T_n − T_init|)
-            # thereafter — with k ≪ typical mass flows the modelling bias
-            # is negligible (≪ solver tolerance).
             k_reg = getattr(grid, "node_heat_reg_kgs", 0.0)
             if k_reg:
                 t_anchor = self.t_pu.value if hasattr(self.t_pu, "value") else 1.0

@@ -180,13 +180,6 @@ def create_restoration_benchmark(
         mx.create_power_load(net, ring_c[i], p_mw=p, q_mvar=q, name=f"Load_Res_{i}")
     mx.create_power_generator(net, ring_c[4], p_mw=0.08, q_mvar=0.0, name="DG_Res_wind")
 
-    # Battery storage
-    net.child_to(
-        mm.ElectricStorage(e_mwh_initial=2.0, e_mwh_max=5.0, p_max_mw=1.0),
-        mv_sub[1],
-        name="Battery_MV1",
-    )
-
     # Two HP feeders
     gf1 = mx.create_gas_junction(net, name="Gas_HP_feeder_1")
     gf2 = mx.create_gas_junction(net, name="Gas_HP_feeder_2")
@@ -250,29 +243,17 @@ def create_restoration_benchmark(
     ]:
         mx.create_gas_sink(net, node, mass_flow=mf)
 
-    # Gas storage cavern
-    net.child_to(
-        mm.GasStorage(
-            m_stored_kg_initial=500.0,
-            m_stored_kg_max=1200.0,
-            flow_max_kgs=0.5,
-        ),
-        gas_b[2],
-        name="GasCavern_B2",
-    )
-
-    n_heat = 9
+    n_heat = 120
     hs = [mx.create_water_junction(net, name=f"hs_{i}") for i in range(n_heat)]
-    hr = [mx.create_water_junction(net, name=f"hr_{i}") for i in range(n_heat)]
+    hr = mx.create_water_junction(net, name="hr_heat")
 
     # Supply and return chains
     for i in range(n_heat - 1):
         mx.create_water_pipe(net, hs[i], hs[i + 1], **_DH_TRUNK, name=f"hs_{i}_{i + 1}")
-        mx.create_water_pipe(net, hr[i], hr[i + 1], **_DH_TRUNK, name=f"hr_{i}_{i + 1}")
 
     # Heat plant: inject hot supply, consume cooled return
     mx.create_water_ext_grid(net, hs[0], t_k=358, name="HeatPlant_1_supply")
-    mx.create_consume_hydr_grid(net, hr[0], name="HeatPlant_1_return")
+    mx.create_consume_hydr_grid(net, hr, name="HeatPlant_1_return")
 
     # Consumer heat exchangers (bridge supply -> return, extract heat).
     # Placed at even indices, interleaved with coupling points at odd indices.
@@ -280,57 +261,45 @@ def create_restoration_benchmark(
         (2, 0.03),
         (4, 0.04),
         (6, 0.03),
-        (8, 0.02),
+        (8, 0.03),
+        # (9, 0.03),
+        # (3, -0.03),
+        # (44, -0.03),
+        # (55, -0.03),
+        # (99, -0.03),
+        (119, 0.02),
     ]:
-        mx.create_heat_exchanger(net, hs[i], hr[i], q_mw, name=f"HE_{i}")
+        mx.create_heat_exchanger(net, hs[i], hr, q_mw, name=f"HE_{i}")
 
     # CHP 1: industrial — gas at A2, power at Ind_1, heat at position 1
-    mx.create_chp(
+    mx.create_chp_hg(
         net,
         power_node_id=ring_a[1],
-        heat_node_id=hr[1],
-        heat_return_node_id=hs[1],
+        heat_node_id=hs[1],
         gas_node_id=gas_a[2],
-        diameter_m=0.10,
         efficiency_power=0.40,
         efficiency_heat=0.40,
         mass_flow_setpoint=0.008,
     )
-
-    # CHP 2: commercial — gas at B3, power at Com_2, heat at position 3
-    mx.create_chp(
+    # # CHP 2: commercial — gas at B3, power at Com_2, heat at position 3
+    mx.create_chp_hg(
         net,
         power_node_id=ring_b[2],
-        heat_node_id=hr[3],
-        heat_return_node_id=hs[3],
+        heat_node_id=hs[3],
         gas_node_id=gas_b[3],
-        diameter_m=0.10,
         efficiency_power=0.38,
         efficiency_heat=0.42,
         mass_flow_setpoint=0.006,
     )
-
-    # P2H 1: commercial — power at Com_4, heat at position 5
-    mx.create_p2h(
-        net,
-        power_node_id=ring_b[4],
-        heat_node_id=hr[5],
-        heat_return_node_id=hs[5],
-        heat_energy_w=15_000,
-        diameter_m=0.10,
-        efficiency=0.92,
-    )
-
-    # G2H 1: industrial gas boiler — gas at A4, heat at position 7
-    mx.create_g2h(
-        net,
-        gas_node_id=gas_a[4],
-        heat_node_id=hr[7],
-        heat_return_node_id=hs[7],
-        heat_energy_w=18_000,
-        diameter_m=0.10,
-        efficiency=0.90,
-    )
+    # mx.create_p2h(
+    #     net,
+    #     power_node_id=ring_b[4],
+    #     heat_node_id=hr,
+    #     heat_return_node_id=hs[5],
+    #     heat_energy_w=100_000,
+    #     diameter_m=0.10,
+    #     efficiency=0.92,
+    # )
 
     # P2G: electrolyser
     mx.create_p2g(
@@ -339,15 +308,6 @@ def create_restoration_benchmark(
         to_node_id=gas_a[7],
         efficiency=0.65,
         mass_flow_setpoint=0.005,
-    )
-
-    # G2P 1: gas turbine (industrial)
-    mx.create_g2p(
-        net,
-        from_node_id=gas_b[6],
-        to_node_id=ring_b[4],
-        efficiency=0.42,
-        p_mw_setpoint=0.3,
     )
 
     # G2P 2: peaker (residential)

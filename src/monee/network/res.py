@@ -46,7 +46,7 @@ def create_urban_district_net() -> mm.Network:
     b3 = mx.create_bus(net, base_kv=20, name="B3_load")
     b4 = mx.create_bus(net, base_kv=20, name="B4_load")
 
-    mx.create_ext_power_grid(net, b1, p_mw=0, q_mvar=0, vm_pu=1.0, max_import_mw=4.0)
+    mx.create_ext_power_grid(net, b1, p_mw=0, q_mvar=0, vm_pu=1.0)
     mx.create_power_generator(net, b0, p_mw=8, q_mvar=0)
     mx.create_power_load(net, b2, p_mw=3, q_mvar=0.5)
     mx.create_power_load(net, b3, p_mw=5, q_mvar=0.5)
@@ -63,7 +63,7 @@ def create_urban_district_net() -> mm.Network:
     g3 = mx.create_gas_junction(net, name="G3_sink")
     g4 = mx.create_gas_junction(net, name="G4_sink")
 
-    mx.create_ext_hydr_grid(net, g0, max_import_kgs=0.1)
+    mx.create_ext_hydr_grid(net, g0)
     mx.create_sink(net, g3, mass_flow=0.04)  # direct gas consumer
     mx.create_sink(net, g4, mass_flow=0.02)  # P2G injection node + consumer
 
@@ -79,16 +79,12 @@ def create_urban_district_net() -> mm.Network:
     s3 = mx.create_water_junction(net, name="s3")
     mx.create_water_pipe(net, s1, s2, diameter_m=0.10, length_m=100)
     mx.create_water_pipe(net, s2, s3, diameter_m=0.10, length_m=100)
-    mx.create_ext_hydr_grid(net, s1, max_import_kgs=0.1)
+    mx.create_ext_hydr_grid(net, s1)
 
     r1 = mx.create_water_junction(net, name="r1")
-    r2 = mx.create_water_junction(net, name="r2")
-    r3 = mx.create_water_junction(net, name="r3")
-    mx.create_water_pipe(net, r1, r2, diameter_m=0.10, length_m=100)
-    mx.create_water_pipe(net, r2, r3, diameter_m=0.10, length_m=100)
     mx.create_consume_hydr_grid(net, r1)
 
-    mx.create_heat_exchanger(net, s3, r3, 0.2)
+    mx.create_heat_exchanger(net, s3, r1, 0.2)
 
     # CHP: gas at G2 → power at B3, heat injected between H1 and H2.
     # heat_w = 0.40 × 0.008 kg/s × 3.6 × 15.3 kWh/kg × 1e6 = 176 256 W
@@ -101,20 +97,20 @@ def create_urban_district_net() -> mm.Network:
         diameter_m=0.10,
         efficiency_power=0.40,
         efficiency_heat=0.40,
-        mass_flow_setpoint=0.008,
+        mass_flow_setpoint=0.006,
         regulation=1,
     )
     # P2H: power at B4 → heat injected between H4 and H5 (20 kW).
     # el_mw = 20 000 W / (0.95 × 1e6) ≈ 0.021 MW consumed from B4.
-    mx.create_p2h(
-        net,
-        power_node_id=b4,
-        heat_node_id=r2,
-        heat_return_node_id=s2,
-        heat_energy_w=20_000,
-        diameter_m=0.10,
-        efficiency=0.95,
-    )
+    # mx.create_p2h(
+    #     net,
+    #     power_node_id=b4,
+    #     heat_node_id=r1,
+    #     heat_return_node_id=s2,
+    #     heat_energy_w=10_000,
+    #     diameter_m=0.10,
+    #     efficiency=0.95,
+    # )
     # P2G: surplus power at B0 → hydrogen injection at G4
     mx.create_p2g(
         net,
@@ -133,6 +129,329 @@ def create_urban_district_net() -> mm.Network:
         p_mw_setpoint=1.5,
         regulation=1,
     )
+    return net
+
+
+def create_urban_district_net_with_ties() -> mm.Network:
+    """
+    Urban district variant with normally-open tie switches and a second
+    heat consumer, designed for meaningful restoration evaluation.
+
+    Same primary topology as :func:`create_urban_district_net`, plus:
+
+    * **Power tie** ``b3↔b4`` — alternative path between the two large loads
+      so a failure on ``b2-b3`` or ``b2-b4`` is recoverable by closing it.
+    * **Gas tie** ``g0↔g2`` — bypass around ``g1`` for failures on
+      ``g0-g1`` or ``g1-g2``.
+    * **Gas tie** ``g3↔g4`` — meshes the two sink junctions.
+    * **Heat supply tie** ``s1↔s3`` — bypass around ``s2`` on the supply
+      chain.
+    * **Second heat consumer** at ``r2`` (fed by an HE off ``s2``) so the
+      heat sector has more than one load and a single HE failure does not
+      collapse all heat demand.
+
+    All ties are created with ``on_off=0`` (open).  The ``GridReconfigurator``
+    role detects them via ``obs.on_off == 0`` and closes them when a path
+    search through them succeeds.
+    """
+    net = mx.create_multi_energy_network()
+
+    b0 = mx.create_bus(net, base_kv=20, name="B0_gen")
+    b1 = mx.create_bus(net, base_kv=20, name="B1_slack")
+    b2 = mx.create_bus(net, base_kv=20, name="B2_load")
+    b3 = mx.create_bus(net, base_kv=20, name="B3_load")
+    b4 = mx.create_bus(net, base_kv=20, name="B4_load")
+
+    mx.create_ext_power_grid(net, b1, p_mw=0, q_mvar=0, vm_pu=1.0)
+    mx.create_power_generator(net, b0, p_mw=8, q_mvar=0)
+    mx.create_power_load(net, b2, p_mw=3, q_mvar=0.5)
+    mx.create_power_load(net, b3, p_mw=5, q_mvar=0.5)
+    mx.create_power_load(net, b4, p_mw=4, q_mvar=0.5)
+
+    _line(net, b0, b1, length_m=500, kv_class="20")
+    _line(net, b1, b2, length_m=400, kv_class="20")
+    _line(net, b2, b3, length_m=300, kv_class="20")
+    _line(net, b2, b4, length_m=350, kv_class="20")
+
+    mx.create_line(
+        net,
+        b3,
+        b4,
+        length_m=400,
+        r_ohm_per_m=3e-4,
+        x_ohm_per_m=3e-4,
+        parallel=1,
+        on_off=0,
+        name="tie_b3_b4",
+    )
+
+    g0 = mx.create_gas_junction(net, name="G0_ext")
+    g1 = mx.create_gas_junction(net, name="G1")
+    g2 = mx.create_gas_junction(net, name="G2")
+    g3 = mx.create_gas_junction(net, name="G3_sink")
+    g4 = mx.create_gas_junction(net, name="G4_sink")
+
+    mx.create_ext_hydr_grid(net, g0)
+    mx.create_sink(net, g3, mass_flow=0.04)
+    mx.create_sink(net, g4, mass_flow=0.02)
+
+    mx.create_gas_pipe(net, g0, g1, diameter_m=0.15, length_m=400)
+    mx.create_gas_pipe(net, g1, g2, diameter_m=0.12, length_m=300)
+    mx.create_gas_pipe(net, g2, g3, diameter_m=0.10, length_m=250)
+    mx.create_gas_pipe(net, g1, g4, diameter_m=0.10, length_m=200)
+
+    mx.create_gas_pipe(
+        net,
+        g0,
+        g2,
+        diameter_m=0.12,
+        length_m=600,
+        on_off=0,
+        name="tie_g0_g2",
+    )
+    mx.create_gas_pipe(
+        net,
+        g3,
+        g4,
+        diameter_m=0.10,
+        length_m=350,
+        on_off=0,
+        name="tie_g3_g4",
+    )
+
+    s1 = mx.create_water_junction(net, name="s1")
+    s2 = mx.create_water_junction(net, name="s2")
+    s3 = mx.create_water_junction(net, name="s3")
+    mx.create_water_pipe(net, s1, s2, diameter_m=0.10, length_m=100)
+    mx.create_water_pipe(net, s2, s3, diameter_m=0.10, length_m=100)
+    mx.create_water_pipe(
+        net,
+        s1,
+        s3,
+        diameter_m=0.10,
+        length_m=200,
+        on_off=0,
+        name="tie_s1_s3",
+    )
+    mx.create_ext_hydr_grid(net, s1)
+
+    r1 = mx.create_water_junction(net, name="r1")
+    mx.create_consume_hydr_grid(net, r1)
+    mx.create_heat_exchanger(net, s3, r1, 0.2)
+
+    r2 = mx.create_water_junction(net, name="r2")
+    mx.create_consume_hydr_grid(net, r2)
+    mx.create_heat_exchanger(net, s2, r2, 0.1)
+
+    mx.create_chp(
+        net,
+        power_node_id=b3,
+        heat_node_id=r1,
+        heat_return_node_id=s1,
+        gas_node_id=g2,
+        diameter_m=0.10,
+        efficiency_power=0.40,
+        efficiency_heat=0.40,
+        mass_flow_setpoint=0.006,
+        regulation=1,
+    )
+    mx.create_p2g(
+        net,
+        from_node_id=b0,
+        to_node_id=g4,
+        efficiency=0.70,
+        mass_flow_setpoint=0.010,
+        regulation=1,
+    )
+    mx.create_g2p(
+        net,
+        from_node_id=g3,
+        to_node_id=b2,
+        efficiency=0.85,
+        p_mw_setpoint=1.5,
+        regulation=1,
+    )
+    return net
+
+
+def _add_urban_district(net, idx: int, slack_bus, ext_gas_junction):
+    """Add a single urban-district sub-grid attached to shared external feeders.
+
+    Returns ``(district_slack_bus, district_gas_head)`` so the caller can wire
+    inter-district trunks.
+    """
+    suffix = f"_d{idx}"
+
+    b0 = mx.create_bus(net, base_kv=20, name=f"B0_gen{suffix}")
+    b1 = mx.create_bus(net, base_kv=20, name=f"B1_local{suffix}")
+    b2 = mx.create_bus(net, base_kv=20, name=f"B2_load{suffix}")
+    b3 = mx.create_bus(net, base_kv=20, name=f"B3_load{suffix}")
+    b4 = mx.create_bus(net, base_kv=20, name=f"B4_load{suffix}")
+
+    mx.create_power_generator(net, b0, p_mw=4, q_mvar=0)
+    mx.create_power_load(net, b2, p_mw=2, q_mvar=0.3)
+    mx.create_power_load(net, b3, p_mw=3, q_mvar=0.3)
+    mx.create_power_load(net, b4, p_mw=2, q_mvar=0.3)
+
+    _line(net, slack_bus, b1, length_m=600, kv_class="20")
+    _line(net, b0, b1, length_m=400, kv_class="20")
+    _line(net, b1, b2, length_m=300, kv_class="20")
+    _line(net, b2, b3, length_m=250, kv_class="20")
+    _line(net, b2, b4, length_m=300, kv_class="20")
+
+    mx.create_line(
+        net,
+        b3,
+        b4,
+        length_m=350,
+        r_ohm_per_m=3e-4,
+        x_ohm_per_m=3e-4,
+        parallel=1,
+        on_off=0,
+        name=f"tie_b3_b4{suffix}",
+    )
+
+    g1 = mx.create_gas_junction(net, name=f"G1{suffix}")
+    g2 = mx.create_gas_junction(net, name=f"G2{suffix}")
+    g3 = mx.create_gas_junction(net, name=f"G3_sink{suffix}")
+    g4 = mx.create_gas_junction(net, name=f"G4_sink{suffix}")
+
+    mx.create_sink(net, g3, mass_flow=0.03)
+    mx.create_sink(net, g4, mass_flow=0.015)
+
+    mx.create_gas_pipe(net, ext_gas_junction, g1, diameter_m=0.15, length_m=400)
+    mx.create_gas_pipe(net, g1, g2, diameter_m=0.12, length_m=250)
+    mx.create_gas_pipe(net, g2, g3, diameter_m=0.10, length_m=200)
+    mx.create_gas_pipe(net, g1, g4, diameter_m=0.10, length_m=180)
+    mx.create_gas_pipe(
+        net,
+        ext_gas_junction,
+        g2,
+        diameter_m=0.12,
+        length_m=550,
+        on_off=0,
+        name=f"tie_g0_g2{suffix}",
+    )
+
+    s1 = mx.create_water_junction(net, name=f"s1{suffix}")
+    s2 = mx.create_water_junction(net, name=f"s2{suffix}")
+    s3 = mx.create_water_junction(net, name=f"s3{suffix}")
+    mx.create_water_pipe(net, s1, s2, diameter_m=0.10, length_m=100)
+    mx.create_water_pipe(net, s2, s3, diameter_m=0.10, length_m=100)
+    mx.create_water_pipe(
+        net,
+        s1,
+        s3,
+        diameter_m=0.10,
+        length_m=200,
+        on_off=0,
+        name=f"tie_s1_s3{suffix}",
+    )
+    mx.create_ext_hydr_grid(net, s1)
+
+    r1 = mx.create_water_junction(net, name=f"r1{suffix}")
+    mx.create_consume_hydr_grid(net, r1)
+    mx.create_heat_exchanger(net, s3, r1, 0.15)
+
+    r2 = mx.create_water_junction(net, name=f"r2{suffix}")
+    mx.create_consume_hydr_grid(net, r2)
+    mx.create_heat_exchanger(net, s2, r2, 0.08)
+
+    mx.create_chp(
+        net,
+        power_node_id=b3,
+        heat_node_id=r1,
+        heat_return_node_id=s1,
+        gas_node_id=g2,
+        diameter_m=0.10,
+        efficiency_power=0.40,
+        efficiency_heat=0.40,
+        mass_flow_setpoint=0.005,
+        regulation=1,
+    )
+    mx.create_p2g(
+        net,
+        from_node_id=b0,
+        to_node_id=g4,
+        efficiency=0.70,
+        mass_flow_setpoint=0.008,
+        regulation=1,
+    )
+    mx.create_g2p(
+        net,
+        from_node_id=g3,
+        to_node_id=b2,
+        efficiency=0.85,
+        p_mw_setpoint=1.0,
+        regulation=1,
+    )
+    return b1, g1
+
+
+def create_large_urban_mes_net(n_districts: int = 6) -> mm.Network:
+    """
+    Scaled multi-district urban MES for large-grid restoration evaluation.
+
+    Replicates the urban-district pattern ``n_districts`` times under a
+    shared HV slack and a shared external gas feeder, linking adjacent
+    districts with normally-open MV power ties and live gas trunks.
+    Heat is intentionally local-only (one return-side consumer pair per
+    district), so the heat sector decomposes into one connected
+    component per district while electricity and gas remain
+    single-component.
+
+    Sizing (per district): 5 power buses, 4 gas junctions, 4 water
+    junctions, 2 heat consumers, 3 CPs (CHP/P2G/G2P), 4 internal ties.
+
+    Defaults (``n_districts=6``) yield ~96 nodes / ~30 children.  Set
+    ``n_districts=20`` for a ~320-node / ~100-child stress test that
+    actually exercises gossip scaling and meaningful holon formation
+    in the heat sector (one group per district).
+
+    Args:
+        n_districts: Number of urban districts to replicate.  Must be ≥1.
+    """
+    if n_districts < 1:
+        raise ValueError("n_districts must be >= 1")
+
+    net = mx.create_multi_energy_network()
+
+    slack = mx.create_bus(net, base_kv=20, name="HV_slack")
+    mx.create_ext_power_grid(net, slack, p_mw=0, q_mvar=0, vm_pu=1.0)
+
+    ext_gas = mx.create_gas_junction(net, name="G_ext")
+    mx.create_ext_hydr_grid(net, ext_gas)
+
+    district_heads_power: list = []
+    district_heads_gas: list = []
+    for i in range(n_districts):
+        bp, gh = _add_urban_district(net, i, slack, ext_gas)
+        district_heads_power.append(bp)
+        district_heads_gas.append(gh)
+
+    for i in range(n_districts - 1):
+        a, b = district_heads_power[i], district_heads_power[i + 1]
+        mx.create_line(
+            net,
+            a,
+            b,
+            length_m=2000,
+            r_ohm_per_m=3e-4,
+            x_ohm_per_m=3e-4,
+            parallel=1,
+            on_off=0,
+            name=f"inter_district_power_{i}",
+        )
+        ga, gb = district_heads_gas[i], district_heads_gas[i + 1]
+        mx.create_gas_pipe(
+            net,
+            ga,
+            gb,
+            diameter_m=0.20,
+            length_m=1500,
+            name=f"inter_district_gas_{i}",
+        )
+
     return net
 
 
@@ -844,4 +1163,4 @@ if __name__ == "__main__":
 
     net = create_urban_district_net()
     net.apply_formulation(MISOCP_NETWORK_FORMULATION)
-    print(run_energy_flow(net, solver=PyomoSolver()))
+    print(run_energy_flow(net, solver=PyomoSolver(), solver_name="gurobi"))

@@ -10,6 +10,7 @@ from monee.model import (
     ExtHydrGrid,
     ExtPowerGrid,
     GenericModel,
+    Intermediate,
     IntermediateEq,
     MultiGridBranchModel,
     MultiGridCompoundModel,
@@ -623,12 +624,19 @@ def withdraw_vars(withdraw_fn, nodes, branches, compounds, network):
 
 
 def _copy_var_values(src, dst) -> None:
-    """Copy ``Var.value`` from each ``Var`` attribute on *src* to the matching one on *dst*."""
+    """Copy solved values from *src* to *dst* in place.
+
+    Both ``Var`` and ``Intermediate`` carry a ``.value`` slot that the solver
+    fills in.  Intermediates (e.g. ``Bus.vm_pu`` recovered from
+    ``vm_pu_squared``) must be propagated too, otherwise the user-facing
+    network keeps the constructor default and the solved value is silently
+    lost when the solver works on a deepcopy.
+    """
     for key, val in src.__dict__.items():
-        if isinstance(val, Var):
-            dst_var = dst.__dict__.get(key)
-            if isinstance(dst_var, Var):
-                dst_var.value = val.value
+        if isinstance(val, (Var, Intermediate)):
+            dst_attr = dst.__dict__.get(key)
+            if isinstance(dst_attr, (Var, Intermediate)):
+                dst_attr.value = val.value
 
 
 def persist_solution(solved_copy: Network, original: Network) -> None:
@@ -743,9 +751,12 @@ def remove_cps(network: Network):
     ]
     for comp in relevant_compounds:
         network.remove_compound(comp.id)
-        heat_return_node = network.node_by_id(comp.connected_to["heat_return_node_id"])
-        heat_node = network.node_by_id(comp.connected_to["heat_node_id"])
-        network.branch(WaterPipe(0, 0), heat_return_node.id, heat_node.id)
+        if "heat_return_node_id" in comp.connected_to:
+            heat_return_node = network.node_by_id(
+                comp.connected_to["heat_return_node_id"]
+            )
+            heat_node = network.node_by_id(comp.connected_to["heat_node_id"])
+            network.branch(WaterPipe(0, 0), heat_return_node.id, heat_node.id)
 
     for branch in network.branches:
         if isinstance(branch.model, MultiGridBranchModel):

@@ -168,8 +168,11 @@ class WaterPipe(BranchModel):
         self.reynolds = Var(1000, min=0, max=1000000, name="reynolds")
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
+        # Upper bound 7 covers the PWL's leftmost breakpoint at Re=10
+        # (laminar friction 64/10 = 6.4); anything lower silently makes the
+        # zero/low-flow regime infeasible.  Matches GasPipe.
         self.friction = (
-            Var(0.02, min=0, max=1, name="friction") if friction is None else friction
+            Var(0.02, min=0, max=7, name="friction") if friction is None else friction
         )
 
     def loss_percent(self):
@@ -304,8 +307,10 @@ class PassiveHeatExchanger(BranchModel):
         self.reynolds = Var(1000, min=0, max=1000000, name="reynolds")
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
+        # Upper bound 7 covers the PWL's leftmost breakpoint at Re=10
+        # (laminar friction 64/10 = 6.4).  Matches WaterPipe / GasPipe.
         self.friction = (
-            Var(0.01, min=0, max=1, name="friction") if friction is None else friction
+            Var(0.01, min=0, max=7, name="friction") if friction is None else friction
         )
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):

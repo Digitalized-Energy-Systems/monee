@@ -10,29 +10,32 @@ class PersistenceException(Exception):
 
 
 def init_model(model_type, preprocessed_dict):
-    model = None
     model_type_dict = {
         component_cls.__name__: component_cls for component_cls in component_list
     }
-    if model_type in model_type_dict:
-        model_cls = model_type_dict[model_type]
-        model = model_cls(
-            **dict.fromkeys(
-                [
-                    argname
-                    for argname, _ in list(
-                        inspect.signature(model_cls.__init__).parameters.items()
-                    )[1:]
-                ],
-                0,
-            )
-        )
-        for key, value in preprocessed_dict.items():
-            setattr(model, key, value)
-    else:
+    if model_type not in model_type_dict:
         raise PersistenceException(
             f"The type {model_type} is not known! Maybe you forgot to decorate your model class with @model?"
         )
+    model_cls = model_type_dict[model_type]
+
+    # Build the constructor kwargs.  Required parameters (no default) get a
+    # neutral 0 so the constructor can run; parameters that carry a default
+    # keep that default so model-level defaults (e.g. PowerGrid.vm_pu_max)
+    # are preserved when the importer omits them.  Final attribute values
+    # then come from preprocessed_dict via setattr — this bypasses the
+    # constructor's transformations (sign negation, Var wrapping) so the
+    # serialized internal state round-trips exactly.
+    init_kwargs = {}
+    for argname, param in list(
+        inspect.signature(model_cls.__init__).parameters.items()
+    )[1:]:
+        init_kwargs[argname] = (
+            0 if param.default is inspect.Parameter.empty else param.default
+        )
+    model = model_cls(**init_kwargs)
+    for key, value in preprocessed_dict.items():
+        setattr(model, key, value)
     return model
 
 

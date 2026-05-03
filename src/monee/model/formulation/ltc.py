@@ -28,6 +28,7 @@ import math
 from monee.model.core import Var
 from monee.model.grid import WaterGrid
 from monee.model.node import Junction
+from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
 
 from .core import NetworkAspect
 
@@ -264,12 +265,32 @@ class LumpedThermalCapacitance(NetworkAspect):
         for child in network.childs_by_ids(node.child_ids):
             cm = child.model
             cvars = cm.vars
-            if "mass_flow" not in cvars:
+            if "mass_flow" in cvars:
+                m_ext = cvars["mass_flow"] * cvars.get("regulation", 1)
+                # Children inject/withdraw at junction temperature (well-mixed model).
+                # Sign: stored mass_flow is negative for injection (source convention),
+                # so heat added = -m_ext * T_n (injection adds heat, withdrawal removes it).
+                terms.append(-m_ext * T_n)
+            if "q_w_heat" in cvars:
+                # Node-based heat injection / withdrawal (HeatGenerator, HeatLoad).
+                # q_w_heat [W] → kg/s·t_pu via division by c·t_ref.  Load
+                # convention: positive = consumption (heat OUT), negative = generation
+                # (heat IN) — we want net heat IN, so negate.
+                q = cvars["q_w_heat"] * cvars.get("regulation", 1)
+                t_ref = node.grid.t_ref
+                terms.append(-q / (SPECIFIC_HEAT_CAP_WATER * t_ref))
+
+        # Branch-level q_w_heat (e.g. GasToHeatHG): absorbed at the branch's
+        # TO-node.  Same sign handling as the child-based q_w_heat above.
+        for branch in network.branches:
+            bm = branch.model
+            bvars = bm.vars
+            if "q_w_heat" not in bvars:
                 continue
-            m_ext = cvars["mass_flow"] * cvars.get("regulation", 1)
-            # Children inject/withdraw at junction temperature (well-mixed model).
-            # Sign: stored mass_flow is negative for injection (source convention),
-            # so heat added = -m_ext * T_n (injection adds heat, withdrawal removes it).
-            terms.append(-m_ext * T_n)
+            if branch.to_node_id != node.id:
+                continue
+            q = bvars["q_w_heat"] * bvars.get("on_off", 1)
+            t_ref = node.grid.t_ref
+            terms.append(-q / (SPECIFIC_HEAT_CAP_WATER * t_ref))
 
         return sum(terms) if terms else 0

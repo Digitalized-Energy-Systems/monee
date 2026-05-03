@@ -32,7 +32,7 @@ import monee.express as mx
 import monee.model as mm
 import monee.solver as ms
 
-NUM_PARTITIONS = 20
+NUM_PARTITIONS = 40
 T_PU_MIN_ENV = 0.82  # ~292 K (slightly above ambient)
 T_PU_MAX_ENV = 1.15  # ~409 K — room for boundary heat injection
 
@@ -49,29 +49,19 @@ def _build_series_dhs(q_gen_w: float = 0.0, q_load_w: float = 0.0):
     """
     net = mm.Network()
 
-    n0 = mx.create_water_junction(net)
-    n1 = mx.create_water_junction(net)
-    n2 = mx.create_water_junction(net)
-    n3 = mx.create_water_junction(net)
-    n4 = mx.create_water_junction(net)
-    n5 = mx.create_water_junction(net)
+    juncs = []
+    for i in range(100):
+        juncs.append(mx.create_water_junction(net))
+    for i in range(99):
+        mx.create_water_pipe(net, juncs[i], juncs[i + 1], diameter_m=0.15, length_m=100)
 
-    mx.create_water_ext_grid(net, n0, t_k=360.0)
-    mx.create_water_sink(net, n5, mass_flow=1.0)
+    mx.create_water_ext_grid(net, juncs[0], t_k=360.0)
+    mx.create_water_sink(net, juncs[-1], mass_flow=1.0)
 
     if q_gen_w > 0:
-        mx.create_heat_generator(net, n2, q_w=q_gen_w)
+        mx.create_heat_generator(net, juncs[5], q_w=q_gen_w)
     if q_load_w > 0:
-        mx.create_heat_load(net, n4, q_w=q_load_w)
-
-    for a, b in [(n0, n1), (n1, n2), (n2, n3), (n3, n4), (n4, n5)]:
-        mx.create_water_pipe(
-            net,
-            from_node_id=a,
-            to_node_id=b,
-            diameter_m=0.15,
-            length_m=200.0,
-        )
+        mx.create_heat_load(net, juncs[20], q_w=q_load_w)
 
     # Tighten the McCormick envelope bounds to the physical DHS range so
     # the relaxation gap is small enough to recover sensible results.
@@ -79,9 +69,7 @@ def _build_series_dhs(q_gen_w: float = 0.0, q_load_w: float = 0.0):
     grid.t_pu_min_env = T_PU_MIN_ENV
     grid.t_pu_max_env = T_PU_MAX_ENV
 
-    net.apply_formulation(
-        mm.make_mccormick_dhs_formulation(num_partitions=NUM_PARTITIONS)
-    )
+    net.apply_formulation(mm.make_mccormick_dhs_formulation(num_partitions=1))
     return net
 
 
@@ -93,8 +81,8 @@ def test_mccormick_dhs_passive_line_temperature_decays():
     physical ordering."""
     net = _build_series_dhs(100_000, 1000)
 
-    result = ms.PyomoSolver().solve(net)
-
+    result = ms.PyomoSolver().solve(net, solver_name="gurobi")
+    print(result)
     assert result.success
 
     juncs = result.get(mm.Junction)

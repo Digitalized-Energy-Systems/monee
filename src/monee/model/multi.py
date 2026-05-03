@@ -1,5 +1,5 @@
 from .branch import HeatExchanger
-from .child import PowerGenerator, PowerLoad, Sink
+from .child import NoVarChildModel, PowerGenerator, PowerLoad, Sink
 from .core import (
     Intermediate,
     MultiGridBranchModel,
@@ -18,7 +18,7 @@ from .phys.nonlinear.ac import power_balance_equation
 
 @model
 class GenericTransferBranch(MultiGridBranchModel):
-    def __init__(self, loss=0, **kwargs) -> None:
+    def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
         self._mass_flow_pos = Var(1, min=0, name="mass_flow_pos")
         self._mass_flow_neg = Var(1, min=0, name="mass_flow_neg")
@@ -27,10 +27,6 @@ class GenericTransferBranch(MultiGridBranchModel):
         self._q_mvar = Var(1, name="transfer_q_mvar")
         self._t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self._t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
-        self._loss = loss
-
-    def loss_percent(self):
-        return self._loss
 
     def is_cp(self):
         return False
@@ -66,16 +62,14 @@ class GenericTransferBranch(MultiGridBranchModel):
 
 @model
 class GasToHeatControlNode(MultiGridNodeModel, Junction):
-    def __init__(
-        self, heat_gen_w, efficiency_heat, hhv, regulation=1, **kwargs
-    ) -> None:
+    def __init__(self, gas_kgps, efficiency_heat, hhv, regulation=1, **kwargs) -> None:
         super().__init__(**kwargs)
         self.efficiency_heat = efficiency_heat
         self._hhv = hhv
         self.regulation = regulation
 
-        self.gas_kgps = Var(1, min=0, name="gas_kgps")
-        self.heat_w = heat_gen_w
+        self.gas_kgps = gas_kgps
+        self.heat_w = Var(-1000, max=0, name="g2h_heat_w")
 
         self.t_k = Var(350, min=200, max=800, name="t_k")
         self.t_pu = Var(1, min=0, max=2, name="t_pu")
@@ -99,9 +93,14 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
 
         sub_he = next((b for b in heat_from_branches if isinstance(b, SubHE)), None)
         if sub_he is None:
-            return []
+            raise ValueError(
+                "GasToHeatControlNode requires a SubHE heat-exchanger branch on the "
+                "heat-return side. Build via GasToHeat.create(...) so the SubHE is wired up."
+            )
 
-        gas_eqs = self.calc_signed_mass_flow([], gas_to_branches, [Sink(self.gas_kgps)])
+        gas_eqs = self.calc_signed_mass_flow(
+            [], gas_to_branches, [Sink(self.gas_kgps * self.regulation)]
+        )
         heat_eqs = self.calc_signed_mass_flow(heat_from_branches, heat_to_branches, [])
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
@@ -116,6 +115,7 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
             * self.regulation
             * (3.6 * self._hhv)
             * 1000000,
+            self.heat_w == sub_he.q_w,
             self.t_pu == self.t_k / grid[0].t_ref,
             self.pressure_pu == self.pressure_pa / grid[0].pressure_ref,
         ]
@@ -124,15 +124,16 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
 @model
 class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
     def __init__(
-        self, load_p_mw, load_q_mvar, heat_energy_w, efficiency, **kwargs
+        self, load_p_mw, load_q_mvar, efficiency, regulation=1, **kwargs
     ) -> None:
         super().__init__(**kwargs)
 
         self.load_q_mvar = load_q_mvar
         self.efficiency = efficiency
+        self.regulation = regulation
 
         self.el_mw = load_p_mw
-        self.heat_w = heat_energy_w
+        self.heat_w = Var(-1000, max=0, name="p2h_heat_w")
 
         self.t_k = Intermediate(1)
         self.t_pu = Var(1, min=0, max=2, name="t_pu")
@@ -156,10 +157,15 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
 
         sub_he = next((b for b in heat_to_branches if isinstance(b, SubHE)), None)
         if sub_he is None:
-            return []
+            raise ValueError(
+                "PowerToHeatControlNode requires a SubHE heat-exchanger branch on the "
+                "heat-supply side. Build via PowerToHeat.create(...) so the SubHE is wired up."
+            )
 
         power_eqs = self.calc_signed_power_values(
-            [], power_to_branches, [PowerLoad(self.el_mw, self.load_q_mvar)]
+            [],
+            power_to_branches,
+            [PowerLoad(self.el_mw, self.load_q_mvar, regulation=self.regulation)],
         )
         heat_eqs = self.calc_signed_mass_flow(heat_from_branches, heat_to_branches, [])
         heat_energy_eqs = self.calc_signed_heat_flow(
@@ -168,10 +174,10 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
-            sub_he.q_w == -self.heat_w,
+            sub_he.q_w == -self.efficiency * self.el_mw * self.regulation * 1000000,
+            self.heat_w == sub_he.q_w,
             sum(power_eqs[0]) == 0,
             sum(power_eqs[1]) == 0,
-            self.heat_w == self.efficiency * self.el_mw * 1000000,
         ]
 
 
@@ -307,7 +313,10 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
 
         sub_he = next((b for b in heat_from_branches if isinstance(b, SubHE)), None)
         if sub_he is None:
-            return []
+            raise ValueError(
+                "CHPControlNode requires a SubHE heat-exchanger branch on the "
+                "heat-return side. Build via CHP.create(...) so the SubHE is wired up."
+            )
 
         power_eqs = self.calc_signed_power_values(
             power_from_branches, [], [PowerGenerator(self.el_mw, self.gen_q_mvar)]
@@ -409,25 +418,34 @@ class CHP(MultiGridCompoundModel):
 @model
 class GasToHeat(MultiGridCompoundModel):
     def __init__(
-        self, heat_energy_w, diameter_m, temperature_ext_k, efficiency
+        self, heat_energy_w, diameter_m, temperature_ext_k, efficiency, regulation=1
     ) -> None:
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
         self.heat_energy_w = -heat_energy_w
+        self.regulation = regulation
+        self._old_regulation = self.regulation
 
     def set_active(self, activation_flag):
         if activation_flag:
-            self._control_node.heat_w = self.heat_energy_w
+            self._control_node.regulation = self._old_regulation
         else:
-            self._control_node.heat_w = 0
+            self._old_regulation = self._control_node.regulation
+            self._control_node.regulation = 0
 
     def create(
         self, network: Network, gas_node: Node, heat_node: Node, heat_return_node: Node
     ):
         self._gas_grid = gas_node.grid
+        hhv = gas_node.grid.higher_heating_value
+        # q_w [W] = eff · m [kg/s] · 3.6 · hhv [kWh/kg] · 1e6  →  m = |q_w| / (eff · 3.6 · hhv · 1e6)
+        self.gas_kgps = abs(self.heat_energy_w) / (self.efficiency * 3.6 * hhv * 1e6)
         self._control_node = GasToHeatControlNode(
-            self.heat_energy_w, self.efficiency, gas_node.grid.higher_heating_value
+            self.gas_kgps,
+            self.efficiency,
+            hhv,
+            regulation=self.regulation,
         )
         node_id_control = network.node(
             self._control_node,
@@ -437,7 +455,7 @@ class GasToHeat(MultiGridCompoundModel):
         network.branch(GenericTransferBranch(), gas_node.id, node_id_control)
         network.branch(GenericTransferBranch(), heat_node.id, node_id_control)
         network.branch(
-            SubHE(-self.heat_energy_w / 1e6),
+            SubHE(Var(0)),
             node_id_control,
             heat_return_node.id,
             grid=heat_return_node.grid,
@@ -453,19 +471,24 @@ class PowerToHeat(MultiGridCompoundModel):
         temperature_ext_k,
         efficiency,
         q_mvar_setpoint=0,
+        regulation=1,
     ) -> None:
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
         self.heat_energy_w = heat_energy_w
-        self.load_p_mw = Var(1, min=0, name="p2h_load_p_mw")
+        # p_load [MW] = q_w [W] / (eff · 1e6)
+        self.load_p_mw = heat_energy_w / (efficiency * 1e6)
         self.load_q_mvar = q_mvar_setpoint
+        self.regulation = regulation
+        self._old_regulation = self.regulation
 
     def set_active(self, activation_flag):
         if activation_flag:
-            self._control_node.heat_w = self.heat_energy_w
+            self._control_node.regulation = self._old_regulation
         else:
-            self._control_node.heat_w = 0
+            self._old_regulation = self._control_node.regulation
+            self._control_node.regulation = 0
 
     def create(
         self,
@@ -475,7 +498,10 @@ class PowerToHeat(MultiGridCompoundModel):
         heat_return_node: Node,
     ):
         self._control_node = PowerToHeatControlNode(
-            self.load_p_mw, self.load_q_mvar, self.heat_energy_w, self.efficiency
+            self.load_p_mw,
+            self.load_q_mvar,
+            self.efficiency,
+            regulation=self.regulation,
         )
         node_id_control = network.node(
             self._control_node,
@@ -485,7 +511,7 @@ class PowerToHeat(MultiGridCompoundModel):
         network.branch(GenericTransferBranch(), power_node.id, node_id_control)
         network.branch(GenericTransferBranch(), node_id_control, heat_return_node.id)
         network.branch(
-            SubHE(Var(0.1)),
+            SubHE(Var(0)),
             heat_node.id,
             node_id_control,
             grid=heat_node.grid,
@@ -548,9 +574,258 @@ class PowerToGas(MultiGridBranchModel):
             * self.p_from_mw
             * (1 / (grids[GasGrid].higher_heating_value * 3.6)),
             self.p_from_mw >= 0,
-            self.p_from_mw == self.el_mw * self.regulation,
-            self.gas_kgps
+            self.p_from_mw == self.el_mw,
+            self.gas_kgps * self.regulation
             == -self.efficiency
             * self.el_mw
             * (1 / (grids[GasGrid].higher_heating_value * 3.6)),
+        ]
+
+
+@model
+class SubHG(NoVarChildModel):
+    """Subordinate node-based heat generator used inside :class:`CHPHG`.
+
+    Acts like :class:`~monee.model.child.HeatGenerator`: its ``q_w_heat`` is
+    picked up by :meth:`~monee.model.node.Junction.calc_signed_heat_flow` and
+    by the McCormick-DHS nodal balance, following the load convention
+    (negative = injection).  Unlike ``HeatGenerator`` the value is a :class:`Var`
+    constrained at solve time by the parent compound's control-node equations.
+
+    The 2-endpoint HG variants (:class:`GasToHeatHG`, :class:`PowerToHeatHG`)
+    no longer use this child — they carry ``q_w_heat`` directly on the branch
+    and let :meth:`Junction.calc_signed_heat_flow` absorb it at the TO-node.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.q_w_heat = Var(-1000, name="sub_hg_q_w_heat")
+
+
+def _gas_grid_of(grid):
+    if isinstance(grid, list):
+        return next(g for g in grid if isinstance(g, GasGrid))
+    return grid
+
+
+@model
+class CHPHGControlNode(MultiGridNodeModel, Junction, Bus):
+    """CHP control node using a node-based HeatGenerator (no heat-exchanger branch).
+
+    Variant of :class:`CHPControlNode` that participates only in the power and
+    gas grids.  Heat output is delivered via a :class:`SubHG` child attached to
+    the heat-supply node by :class:`CHPHG`.
+    """
+
+    def __init__(
+        self,
+        mass_flow_capacity,
+        efficiency_power,
+        efficiency_heat,
+        hhv,
+        sub_hg,
+        q_mvar=0,
+        regulation=1,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.efficiency_heat = efficiency_heat
+        self.efficiency_power = efficiency_power
+        self.gen_q_mvar = q_mvar
+        self._hhv = hhv
+        self._sub_hg = sub_hg
+        self.regulation = regulation
+
+        self.el_mw = Var(-1, max=0, name="chp_hg_el_mw")
+        self.gas_kgps = mass_flow_capacity
+        self.heat_w = Var(-1000, max=0, name="chp_hg_heat_w")
+
+        self.t_k = Var(350, min=200, max=800, name="t_k")
+        self.t_pu = Var(1, min=0, max=2, name="t_pu")
+        self.pressure_pa = Var(1000000, min=0, name="pressure_pa")
+        self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
+
+    def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
+        gas_to_branches = [
+            branch for branch in to_branch_models if "gas_mass_flow" in branch.vars
+        ]
+        power_from_branches = [
+            branch for branch in from_branch_models if "p_to_mw" in branch.vars
+        ]
+
+        power_eqs = self.calc_signed_power_values(
+            power_from_branches, [], [PowerGenerator(self.el_mw, self.gen_q_mvar)]
+        )
+        gas_eqs = self.calc_signed_mass_flow(
+            [], gas_to_branches, [Sink(self.gas_kgps * self.regulation)]
+        )
+        gas_grid = _gas_grid_of(grid)
+        return [
+            junction_mass_flow_balance(gas_eqs),
+            power_balance_equation(power_eqs[0]),
+            power_balance_equation(power_eqs[1]),
+            self._sub_hg.q_w_heat
+            == -self.efficiency_heat
+            * self.gas_kgps
+            * self.regulation
+            * 1000000
+            * (3.6 * self._hhv),
+            self.el_mw
+            == -self.efficiency_power
+            * self.gas_kgps
+            * self.regulation
+            * (3.6 * self._hhv),
+            self.heat_w == self._sub_hg.q_w_heat,
+            self.pressure_pu == self.pressure_pa / gas_grid.pressure_ref,
+        ]
+
+
+@model
+class CHPHG(MultiGridCompoundModel):
+    """HeatGenerator-based CHP variant.
+
+    Drop-in alternative to :class:`CHP`: instead of routing a water-side mass
+    flow through a heat-exchanger branch between a supply and a return node,
+    the thermal output is injected directly at ``heat_node`` via a
+    :class:`SubHG` child.  The gas and electrical interfaces (and the
+    mass_flow_setpoint / efficiency / regulation semantics) are identical to
+    :class:`CHP`.  Because there is no ``heat_return_node`` and no internal
+    heat-exchanger branch, ``diameter_m`` is not required.
+    """
+
+    def __init__(
+        self,
+        efficiency_power: float,
+        efficiency_heat: float,
+        mass_flow_setpoint: float,
+        q_mvar_setpoint: float = 0,
+        regulation=1,
+    ) -> None:
+        self.regulation = regulation
+        self.efficiency_power = efficiency_power
+        self.efficiency_heat = efficiency_heat
+        self.mass_flow_setpoint = mass_flow_setpoint
+        self.mass_flow = mass_flow_setpoint
+        self.q_mvar = q_mvar_setpoint
+        self._old_regulation = self.regulation
+
+    def set_active(self, activation_flag):
+        if activation_flag:
+            self._control_node.gas_kgps = self.mass_flow_setpoint
+            self._control_node.regulation = self._old_regulation
+        else:
+            self._old_regulation = self._control_node.regulation
+            self._control_node.gas_kgps = 0
+            self._control_node.regulation = 0
+
+    def create(
+        self,
+        network: Network,
+        gas_node: Node,
+        heat_node: Node,
+        power_node: Node,
+    ):
+        self._gas_grid = gas_node.grid
+        hhv = gas_node.grid.higher_heating_value
+        self._sub_hg = SubHG()
+        self._control_node = CHPHGControlNode(
+            self.mass_flow,
+            self.efficiency_power,
+            self.efficiency_heat,
+            hhv,
+            self._sub_hg,
+            q_mvar=self.q_mvar,
+            regulation=self.regulation,
+        )
+        node_id_control = network.node(
+            self._control_node,
+            grid=[power_node.grid, gas_node.grid],
+            position=power_node.position,
+        )
+        network.branch(GenericTransferBranch(), gas_node.id, node_id_control)
+        network.branch(GenericTransferBranch(), node_id_control, power_node.id)
+        network.child(self._sub_hg, attach_to_node_id=heat_node.id)
+
+
+@model
+class GasToHeatHG(MultiGridBranchModel):
+    """HeatGenerator-based Gas-to-Heat coupling point.
+
+    Two-endpoint branch from ``gas_node`` (from-end) to ``heat_node``
+    (to-end).  Gas is withdrawn at the from-end via ``from_mass_flow`` and
+    heat is injected at the to-end via ``q_w_heat``, both in load convention.
+    The heat balance on the water junction picks up ``q_w_heat`` through
+    :meth:`~monee.model.node.Junction.calc_signed_heat_flow` (and through
+    the LTC and McCormick-DHS formulations), so no :class:`SubHG` child or
+    control node is needed.
+    """
+
+    def __init__(self, heat_energy_w, efficiency, regulation=1) -> None:
+        super().__init__()
+        self.efficiency = efficiency
+        self.heat_energy_w = -heat_energy_w  # load convention: negative = injection
+
+        self.on_off = 1
+        self.regulation = regulation
+        self.q_w_heat = Var(self.heat_energy_w, max=0, name="g2h_hg_q_w_heat")
+        self.from_mass_flow = Var(1, min=0, name="g2h_hg_from_mass_flow")
+        self.gas_kgps = 0  # overwritten in init() once hhv is known
+
+    def init(self, grids):
+        hhv = grids[GasGrid].higher_heating_value
+        self.gas_kgps = abs(self.heat_energy_w) / (self.efficiency * 3.6 * hhv * 1e6)
+
+    def loss_percent(self):
+        return 1 - self.efficiency
+
+    def equations(self, grids, from_node_model, to_node_model, **kwargs):
+        hhv = grids[GasGrid].higher_heating_value
+        return [
+            self.q_w_heat
+            == -self.efficiency
+            * self.gas_kgps
+            * self.regulation
+            * (3.6 * hhv)
+            * 1_000_000,
+            self.from_mass_flow == self.gas_kgps * self.regulation,
+        ]
+
+
+@model
+class PowerToHeatHG(MultiGridBranchModel):
+    """HeatGenerator-based Power-to-Heat coupling point.
+
+    Two-endpoint branch from ``power_node`` (from-end) to ``heat_node``
+    (to-end).  Active power is drawn at the from-end via ``p_from_mw`` and
+    heat is injected at the to-end via ``q_w_heat``, both in load convention.
+    The heat balance on the water junction picks up ``q_w_heat`` through
+    :meth:`~monee.model.node.Junction.calc_signed_heat_flow` (and through
+    the LTC and McCormick-DHS formulations), so no :class:`SubHG` child or
+    control node is needed.
+    """
+
+    def __init__(
+        self, heat_energy_w, efficiency, q_mvar_setpoint=0, regulation=1
+    ) -> None:
+        super().__init__()
+        self.efficiency = efficiency
+        self.heat_energy_w = heat_energy_w
+        # p_load [MW] = q_w [W] / (eff · 1e6)
+        self.load_p_mw = heat_energy_w / (efficiency * 1e6)
+        self.load_q_mvar = q_mvar_setpoint
+
+        self.on_off = 1
+        self.regulation = regulation
+        self.q_w_heat = Var(-heat_energy_w, max=0, name="p2h_hg_q_w_heat")
+        self.p_from_mw = Var(self.load_p_mw, min=0, name="p2h_hg_p_from_mw")
+        self.q_from_mvar = q_mvar_setpoint
+
+    def loss_percent(self):
+        return 1 - self.efficiency
+
+    def equations(self, grids, from_node_model, to_node_model, **kwargs):
+        return [
+            self.q_w_heat
+            == -self.efficiency * self.load_p_mw * self.regulation * 1_000_000,
+            self.p_from_mw == self.load_p_mw * self.regulation,
         ]

@@ -41,12 +41,9 @@ class LinearHeatExchangerFormulation(BranchFormulation):
             # mass balance stays feasible when generators are curtailed.
             # In plain solves regulation=1 (float) -> identical to original.
             # In optimization regulation is a Var(0..1) -> mass flow adapts.
-            mf_eq = (
-                branch.mass_flow_mag == branch.mass_flow_design_kgs * branch.regulation
-            )
+            mf_eq = branch.mass_flow_mag == branch.mass_flow_design_kgs
             mf_neg_eq = (
-                branch.mass_flow_neg
-                == branch.mass_flow_design_kgs * branch.regulation * branch.on_off
+                branch.mass_flow_neg == branch.mass_flow_design_kgs * branch.on_off
             )
 
         eqs = [

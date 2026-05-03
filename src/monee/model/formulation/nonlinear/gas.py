@@ -43,6 +43,28 @@ class NLWeymouthBranchFormulation(BranchFormulation):
 
         hydraulicsmodel.piecewise_eq_friction(branch, kwargs["pwl_impl"])
 
+        # Per-pipe big-M tightening: physical max flow is bounded by the
+        # pipe cross-section times the velocity cap.  ``grid.f_max`` is a
+        # grid-wide ceiling that is typically far above this physical limit,
+        # which loosens Gurobi's LP relaxation on the direction / on_off
+        # binaries.  Mirrors what ``NLDarcyWeisbachBranchFormulation`` does
+        # for water pipes.  Gas density is computed from the ideal-gas law at
+        # the grid's reference conditions; ``v_max_mps`` defaults to 20 m/s
+        # (physical erosional-velocity ceiling for gas pipelines).
+        gas_density = (
+            grid.pressure_ref
+            * grid.molar_mass
+            / (grid.universal_gas_constant * grid.t_k)
+        )
+        f_max_local = min(
+            grid.f_max,
+            hydraulicsmodel.calc_max_mass_flow(
+                branch.diameter_m,
+                gas_density,
+                getattr(grid, "v_max_mps", 20.0),
+            ),
+        )
+
         return [
             hydraulicsmodel.reynolds_equation(
                 branch.reynolds,
@@ -53,10 +75,10 @@ class NLWeymouthBranchFormulation(BranchFormulation):
             ),
             branch.mass_flow_pos_squared == branch.mass_flow_pos * branch.mass_flow_pos,
             branch.mass_flow_neg_squared == branch.mass_flow_neg * branch.mass_flow_neg,
-            branch.mass_flow_pos_squared <= grid.f_max**2 * branch.direction,
-            branch.mass_flow_neg_squared <= grid.f_max**2 * (1 - branch.direction),
-            branch.mass_flow_pos_squared <= grid.f_max**2 * branch.on_off,
-            branch.mass_flow_neg_squared <= grid.f_max**2 * branch.on_off,
+            branch.mass_flow_pos_squared <= f_max_local**2 * branch.direction,
+            branch.mass_flow_neg_squared <= f_max_local**2 * (1 - branch.direction),
+            branch.mass_flow_pos_squared <= f_max_local**2 * branch.on_off,
+            branch.mass_flow_neg_squared <= f_max_local**2 * branch.on_off,
             ogfmodel.pipe_weymouth(
                 p_squared_i=from_node_model.vars["pressure_squared_pu"]
                 * grid.pressure_ref**2,

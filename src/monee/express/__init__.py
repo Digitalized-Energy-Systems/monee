@@ -832,12 +832,11 @@ def create_heat_generator(
     **kwargs,
 ):
     """
-    Attach a node-based heat generator (``H_G,i``) for the McCormick-DHS
-    formulation.
+    Attach a node-based heat generator (``H_G,i``) to a water junction.
 
     Supply a positive magnitude — the constructor negates it internally so
-    the node balance sees an injection (load convention).  Only meaningful
-    when :data:`mm.MCCORMICK_DHS_NETWORK_FORMULATION` has been applied.
+    the node balance sees an injection (load convention).  Works with both
+    the default nodal heat balance and the McCormick-DHS formulation.
 
     Args:
         network (mm.Network): Target network.
@@ -871,11 +870,10 @@ def create_heat_load(
     **kwargs,
 ):
     """
-    Attach a node-based heat load (``H_L,i``) for the McCormick-DHS
-    formulation.
+    Attach a node-based heat load (``H_L,i``) to a water junction.
 
-    Load convention: positive values represent consumption.  Only meaningful
-    when :data:`mm.MCCORMICK_DHS_NETWORK_FORMULATION` has been applied.
+    Load convention: positive values represent consumption.  Works with both
+    the default nodal heat balance and the McCormick-DHS formulation.
 
     Args:
         network (mm.Network): Target network.
@@ -1117,6 +1115,7 @@ def create_p2h(
     efficiency,
     temperature_ext_k=293,
     q_mvar_setpoint=0,
+    regulation=1,
     constraints=None,
 ):
     """
@@ -1148,6 +1147,7 @@ def create_p2h(
             temperature_ext_k=temperature_ext_k,
             efficiency=efficiency,
             q_mvar_setpoint=q_mvar_setpoint,
+            regulation=regulation,
         ),
         constraints=constraints,
         power_node_id=power_node_id,
@@ -1197,6 +1197,146 @@ def create_g2h(
         gas_node_id=gas_node_id,
         heat_node_id=heat_node_id,
         heat_return_node_id=heat_return_node_id,
+    )
+
+
+def create_chp_hg(
+    network: mm.Network,
+    power_node_id,
+    heat_node_id,
+    gas_node_id,
+    efficiency_power,
+    efficiency_heat,
+    mass_flow_setpoint,
+    regulation=1,
+    constraints=None,
+):
+    """
+    Add a HeatGenerator-based CHP compound to the network.
+
+    Drop-in alternative to :func:`create_chp` that delivers heat as a node-based
+    injection (:class:`mm.HeatGenerator`-style) at ``heat_node_id`` instead of
+    routing it through an internal heat-exchanger branch to a heat-return node.
+    Because there is no water-side branch, no ``heat_return_node_id`` and no
+    ``diameter_m`` are required.
+
+    Args:
+        network (mm.Network): Target network.
+        power_node_id: Electrical bus node ID (electrical output side).
+        heat_node_id: Water junction node ID (heat injection point).
+        gas_node_id: Gas junction node ID (fuel supply side).
+        efficiency_power (float): Electrical efficiency in ``(0, 1]``.
+        efficiency_heat (float): Thermal efficiency in ``(0, 1]``.
+        mass_flow_setpoint (float): Fuel mass flow setpoint in kg/s.
+        regulation (float, optional): Dispatch fraction in ``[0.0, 1.0]``.
+            ``1.0`` = full setpoint, ``0.0`` = off. Defaults to 1.
+        constraints (list, optional): Constraint callables.
+
+    Returns:
+        int: The compound ID of the created CHP unit.
+    """
+    return network.compound(
+        mm.CHPHG(
+            efficiency_power=efficiency_power,
+            efficiency_heat=efficiency_heat,
+            mass_flow_setpoint=mass_flow_setpoint,
+            q_mvar_setpoint=0,
+            regulation=regulation,
+        ),
+        constraints=constraints,
+        power_node_id=power_node_id,
+        heat_node_id=heat_node_id,
+        gas_node_id=gas_node_id,
+    )
+
+
+def create_p2h_hg(
+    network: mm.Network,
+    power_node_id,
+    heat_node_id,
+    heat_energy_w,
+    efficiency,
+    q_mvar_setpoint=0,
+    constraints=None,
+):
+    """
+    Add a HeatGenerator-based Power-to-Heat branch to the network.
+
+    Drop-in alternative to :func:`create_p2h` that delivers heat as a node-based
+    injection at ``heat_node_id`` instead of routing it through an internal
+    heat-exchanger branch.  No ``heat_return_node_id`` / ``diameter_m`` needed.
+
+    Unlike :func:`create_p2h` (which creates a compound with a control node
+    and an internal SubHE branch), this couples the two domains with a single
+    :class:`~monee.model.PowerToHeatHG` multi-grid branch: the branch's
+    ``p_from_mw`` is absorbed by the power-bus balance and its ``q_w_heat`` is
+    absorbed by the water-junction heat balance.
+
+    Args:
+        network (mm.Network): Target network.
+        power_node_id: Electrical bus node ID (power consumption side).
+        heat_node_id: Water junction node ID (heat injection point).
+        heat_energy_w (float): Heat output setpoint in watts.
+        efficiency (float): Electrical-to-heat conversion efficiency in ``(0, 1]``.
+        q_mvar_setpoint (float, optional): Reactive power consumed from the
+            electrical bus in Mvar. Defaults to 0.
+        constraints (list, optional): Constraint callables.
+
+    Returns:
+        The branch ID of the created P2H-HG unit.
+    """
+    return network.branch(
+        mm.PowerToHeatHG(
+            heat_energy_w=heat_energy_w,
+            efficiency=efficiency,
+            q_mvar_setpoint=q_mvar_setpoint,
+        ),
+        from_node_id=power_node_id,
+        to_node_id=heat_node_id,
+        constraints=constraints,
+    )
+
+
+def create_g2h_hg(
+    network: mm.Network,
+    gas_node_id,
+    heat_node_id,
+    heat_energy_w,
+    efficiency,
+    constraints=None,
+):
+    """
+    Add a HeatGenerator-based Gas-to-Heat branch to the network.
+
+    Drop-in alternative to :func:`create_g2h` that delivers heat as a node-based
+    injection at ``heat_node_id`` instead of routing it through an internal
+    heat-exchanger branch.  No ``heat_return_node_id`` / ``diameter_m`` needed.
+
+    Unlike :func:`create_g2h` (which creates a compound with a control node
+    and an internal SubHE branch), this couples the two domains with a single
+    :class:`~monee.model.GasToHeatHG` multi-grid branch: the branch's
+    ``from_mass_flow`` is absorbed by the gas-junction mass balance and its
+    ``q_w_heat`` is absorbed by the water-junction heat balance.
+
+    Args:
+        network (mm.Network): Target network.
+        gas_node_id: Gas junction node ID (fuel supply side).
+        heat_node_id: Water junction node ID (heat injection point).
+        heat_energy_w (float): Heat output setpoint in watts.
+        efficiency (float): Gas-to-heat conversion efficiency in ``(0, 1]``.
+        constraints (list, optional): Constraint callables.
+
+    Returns:
+        The branch ID of the created G2H-HG unit.
+    """
+    return network.branch(
+        mm.GasToHeatHG(
+            heat_energy_w=heat_energy_w,
+            efficiency=efficiency,
+        ),
+        from_node_id=gas_node_id,
+        to_node_id=heat_node_id,
+        constraints=constraints,
     )
 
 

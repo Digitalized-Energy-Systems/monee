@@ -27,11 +27,24 @@ class MISOCPElectricityNodeFormulation(NodeFormulation):
         ]
 
 
+def _branch_tap(branch) -> float:
+    """Off-nominal turns ratio for a power branch (1.0 if absent or zero)."""
+    tap = getattr(branch, "tap", 1.0) or 1.0
+    return float(tap)
+
+
 def _ell_physics_max(branch, w_max: float) -> float:
     """Upper bound on per-unit squared current derived from voltage bounds alone.
 
-    From |I_ij| = |V_i - V_j| / |Z_ij| and |V_i|, |V_j| <= sqrt(W_max):
-        ell_ij <= (2*sqrt(W_max))^2 / |Z_ij|^2 = 4*W_max / (r^2 + x^2).
+    With an ideal a:1 transformer in series with Z, the from-side voltage
+    seen by the impedance is V_i' = V_i / a.  From |I_ij| = |V_i' - V_j| / |Z|
+    and |V_i'|, |V_j| <= sqrt(W_max):
+        ell_ij <= (2*sqrt(W_max))^2 / |Z|^2 = 4*W_max / (r^2 + x^2).
+
+    The tap drops out because both endpoints are bounded by sqrt(W_max) on
+    their own per-unit base, so the tap-adjusted from-side voltage is also
+    bounded by sqrt(W_max) (the branch tap is normalised relative to the
+    base ratio).
     """
     return 4 * w_max / (branch.br_r**2 + branch.br_x**2)
 
@@ -41,7 +54,7 @@ def _big_m(w_max: float) -> float:
 
     Substituting the physics-based current bound ell_max = 4*W_max/|Z|^2 into
     the Cauchy-Schwarz result M = (sqrt(W_max) + |Z|*sqrt(ell_max))^2, the
-    impedance cancels and M = 9*W_max, independent of branch impedance.
+    impedance cancels and M = 9*W_max, independent of branch impedance and tap.
     """
     return 9 * w_max
 
@@ -57,6 +70,7 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         w_max = grid.vm_pu_max**2
         big_m = _big_m(w_max)
         ell_phys = _ell_physics_max(branch, w_max)
+        tap = _branch_tap(branch)
         return [
             branch.current_pu <= ell_phys * branch.on_off,
             voltage_drop(
@@ -67,6 +81,7 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
                 branch.current_pu,
                 branch.br_r,
                 branch.br_x,
+                tap=tap,
             )
             <= big_m * (1 - branch.on_off),
             voltage_drop(
@@ -77,6 +92,7 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
                 branch.current_pu,
                 branch.br_r,
                 branch.br_x,
+                tap=tap,
             )
             >= -big_m * (1 - branch.on_off),
             soc_rel(
@@ -84,6 +100,7 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
                 branch.vars["p_from_mw"] / grid.sn_mva,
                 branch.vars["q_from_mvar"] / grid.sn_mva,
                 branch.current_pu,
+                tap=tap,
             ),
             active_power_loss(
                 branch.vars["p_from_mw"] / grid.sn_mva,

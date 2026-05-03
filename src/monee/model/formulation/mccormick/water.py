@@ -146,6 +146,15 @@ class MccDHSNodeFormulation(NodeFormulation):
             if "q_w_heat" in cm.vars
         ]
 
+        # Branch-level H_G / H_L.  A multi-grid branch (e.g. GasToHeatHG) may
+        # carry a q_w_heat Var absorbed at its TO end, in the same load
+        # convention as the child-based injection above.
+        q_branch_terms = [
+            bm.vars["q_w_heat"] * bm.vars.get("on_off", 1)
+            for bm in to_branch_models
+            if "q_w_heat" in bm.vars
+        ]
+
         # Boundary enthalpy from mass-transporting children.  Using the
         # node's own τ (not a child-local t_k) is mandatory for outflow
         # boundaries — withdrawn water leaves at the node's temperature.
@@ -161,15 +170,21 @@ class MccDHSNodeFormulation(NodeFormulation):
             if "mass_flow" in cm.vars and "q_w_heat" not in cm.vars
         ]
 
-        if not (h_out_terms or h_in_terms or q_child_terms or boundary_enthalpy_in):
+        if not (
+            h_out_terms
+            or h_in_terms
+            or q_child_terms
+            or q_branch_terms
+            or boundary_enthalpy_in
+        ):
             print("Warning: you are ignoring enthalpy equation.")
             return []
 
         # Paper eq. (9a), rearranged for load convention:
-        #   Σ H_in_pipes + Σ H_boundary_in − Σ H_out_pipes = Σ q_child
+        #   Σ H_in_pipes + Σ H_boundary_in − Σ H_out_pipes = Σ q_child + Σ q_branch
         eqs = [
             sum(h_in_terms) + sum(boundary_enthalpy_in) - sum(h_out_terms)
-            == sum(q_child_terms)
+            == sum(q_child_terms) + sum(q_branch_terms)
         ]
 
         # Piecewise disaggregation (paper eq. 18c/18e/18g).  For |S|=1 the
@@ -321,6 +336,65 @@ class MccDHSBranchFormulation(BranchFormulation):
             ]
 
         return eqs
+
+
+def mccormick_dhs_gap_bound_w(branch, grid, num_partitions: int = 1) -> float:
+    """Worst-case relaxation gap of ``H_out_w`` for one pipe under the
+    piecewise McCormick-DHS formulation, in Watts.
+
+    For the bilinear ``H_out = c·m·τ`` over the box
+    ``[m_L, m_U] × [τ_L, τ_U]`` (with ``m_L = 0``), the maximum gap of the
+    plain McCormick envelope is ``c·t_ref·(m_U−m_L)(τ_U−τ_L)/4``, attained
+    at the box center.  Partitioning τ into ``S`` equal pieces shrinks the
+    active piece's τ-width to ``(τ_U−τ_L)/S``, so the bound becomes:
+
+        gap ≤ c · t_ref · (m_U − m_L)(τ_U − τ_L) / (4·S)
+
+    The envelope ``[τ_L, τ_U]`` is read from ``grid.t_pu_min_env`` /
+    ``grid.t_pu_max_env`` (defaults: 0.3, 2.0).  ``m_U`` is the per-pipe
+    cap ``min(grid.f_max, π/4·D²·ρ·v_max)``.
+
+    This is a worst-case bound; the realized gap is typically much smaller
+    once an objective drives the solver toward the bilinear surface.
+    """
+    tpu_L, tpu_U = _t_pu_env_bounds(grid)
+    m_U = min(
+        grid.f_max,
+        calc_max_mass_flow(branch.diameter_m, grid.fluid_density, grid.v_max_mps),
+    )
+    return C_WATER * grid.t_ref * m_U * (tpu_U - tpu_L) / (4 * num_partitions)
+
+
+def mccormick_dhs_gap_bound_k(
+    grid, num_partitions: int = 1, branch=None, mass_flow_kgs=None
+) -> float:
+    """Worst-case relaxation gap expressed as an equivalent temperature
+    error [K] on the sender temperature ``τ_send``.
+
+    Since ``H_out = c·m·τ_pu·t_ref``, the Watts gap maps to a τ-error via
+    ``ΔT_K = gap_W / (c·m)``.  At the upper mass-flow bound ``m_U`` the
+    pipe-specific ``m_U`` factor cancels and the bound reduces to a
+    branch-independent quantity:
+
+        ΔT_K(m_U) = t_ref · (τ_U − τ_L) / (4·S)
+
+    For ``m < m_U`` the equivalent error grows as ``m_U/m`` — at low flow
+    the relaxation has more slack on τ, but the absolute heat error is
+    bounded by ``mccormick_dhs_gap_bound_w``.  Pass *branch* together with
+    a specific ``mass_flow_kgs`` to evaluate the bound at an operating
+    point below the cap.
+    """
+    tpu_L, tpu_U = _t_pu_env_bounds(grid)
+    base_k = grid.t_ref * (tpu_U - tpu_L) / (4 * num_partitions)
+    if mass_flow_kgs is None:
+        return base_k
+    if branch is None:
+        raise ValueError("branch is required when mass_flow_kgs is provided")
+    m_U = min(
+        grid.f_max,
+        calc_max_mass_flow(branch.diameter_m, grid.fluid_density, grid.v_max_mps),
+    )
+    return base_k * m_U / mass_flow_kgs
 
 
 def make_mccormick_dhs_formulation(num_partitions: int = 1) -> NetworkFormulation:

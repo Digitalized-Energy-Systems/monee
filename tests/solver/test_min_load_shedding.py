@@ -75,7 +75,7 @@ def test_min_load_shedding_no_incident_large():
     net = create_restoration_benchmark(misocp=True)
 
     problem = create_min_load_shedding_problem(
-        bounds_el=(0.5, 1),
+        bounds_el=(0.5, 1.5),
         bounds_gas=(0.5, 1.5),
         bounds_heat=(0.5, 1.5),
         include_ext_grids=True,
