@@ -835,4 +835,41 @@ def find_ignored_nodes(network: Network, islanding_config=None):
                 break
         if not component_leading:
             ignored_nodes.update(component)
+
+    # Leaf-stub pruning.  After deactivating a pipe in a tree-shaped carrier
+    # (e.g. supply DHS), the connected-components pass correctly removes the
+    # downstream subtree (no path back to the leading source) but leaves the
+    # *upstream* dead-end junction in place — it can still reach the source via
+    # its remaining branch, but has no consumer past it.  The supply pump then
+    # has nowhere to send flow, and the LP becomes infeasible despite the
+    # load-shedding objective (which can only shed via a child's ``regulation``
+    # variable, and stub junctions have none).
+    #
+    # Rule: a node is a dangling stub iff it has *no active children* and
+    # degree ≤ 1 in the remaining (non-ignored) active topology.  Removing one
+    # stub can expose its parent as a new stub, so iterate to fixed point.
+    #
+    # Skipped under islanding because ``topology`` there includes inactive
+    # backup branches, so degree-in-topology overstates active connectivity
+    # and pruning would be too aggressive.
+    if islanding_config is None:
+        while True:
+            new_stubs = set()
+            for node_id in topology.nodes:
+                if node_id in ignored_nodes:
+                    continue
+                int_node: Node = topology.nodes[node_id]["internal_node"]
+                if any(
+                    without_cps.child_by_id(cid).active for cid in int_node.child_ids
+                ):
+                    continue
+                active_degree = sum(
+                    1 for nb in topology.neighbors(node_id) if nb not in ignored_nodes
+                )
+                if active_degree <= 1:
+                    new_stubs.add(node_id)
+            if not new_stubs:
+                break
+            ignored_nodes.update(new_stubs)
+
     return ignored_nodes

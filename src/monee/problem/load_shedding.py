@@ -37,7 +37,7 @@ HHV = 15.3
 def retrieve_power_uniform(model):
 
     if isinstance(model, HeatExchangerLoad | HeatExchangerGenerator | HeatExchanger):
-        return (model.q_w_set / 1000000.0 * model.regulation, model.q_w_set / 1000000.0)
+        return (model.q_mw_set * model.regulation, model.q_mw_set)
     elif isinstance(model, PowerLoad | PowerGenerator):
         return (nan_to_zero(model.p_mw) * model.regulation, model.p_mw)
     elif isinstance(model, ExtPowerGrid):

@@ -79,9 +79,28 @@ _HE_OBJECTIVE_TYPES = (
 def _shedding_mw(model):
     """Return the unserved-energy expression for *model* in MW-equivalent.
 
-    The returned value is ``|setpoint| * (1 - regulation)`` — always
-    non-negative when ``regulation`` drops below 1, regardless of the
-    load-convention sign of the underlying attribute.
+    For "hard" load / generator components (``PowerLoad``,
+    ``PowerGenerator``, ``Sink``, ``Source``) the entire setpoint is fed
+    into the node balance through ``setpoint · regulation``, so the only
+    way to under-serve is to drop ``regulation`` below 1.  The shed is
+    therefore ``|setpoint| · (1 − regulation)``.
+
+    For ``HeatExchanger`` branches the LinearHeatExchanger formulation
+    pins ``mass_flow_design_kgs`` and only requires
+    ``|q_mw_delivered| ≤ |q_mw_set · regulation|``, *not* equality.  The
+    actual heat reaching the consumer can therefore fall short of the
+    design rating even at ``regulation = 1`` whenever the hydraulic
+    temperature spread on the network is too small.  Penalising
+    ``(1 − regulation)`` alone misses this physical under-delivery and
+    the optimiser has no incentive to push the supply-return ΔT wider.
+    Use the *gap* between the design and the actually delivered heat:
+
+        load (q_mw_set > 0):  shed = q_mw_set − q_mw_delivered
+        gen  (q_mw_set < 0):  shed = q_mw_delivered − q_mw_set
+
+    When ``regulation = 1`` the gap captures pure physical shortfall;
+    when ``regulation < 1`` the gap automatically grows because
+    ``|q_mw_delivered| ≤ |q_mw_set · regulation|`` shrinks the upper bound.
 
     External grids and unknown types return ``0`` (their deviation is
     captured through constraints, not the objective).
@@ -98,11 +117,22 @@ def _shedding_mw(model):
         return (-p) * (1 - reg)
 
     if isinstance(model, _HE_OBJECTIVE_TYPES) or type(model) is HeatExchanger:
-        q_mw = getattr(model, "q_w_set", 0) / 1e6
-        # q_w_set > 0 for loads, < 0 for generators
-        if isinstance(q_mw, (int, float)):
-            return abs(q_mw) * (1 - reg)
-        return q_mw * (1 - reg)  # fallback for Var
+        q_mw_set = getattr(model, "q_mw_set", 0)
+        q_mw_delivered = getattr(model, "q_mw_delivered", None)
+        if q_mw_delivered is not None and isinstance(q_mw_set, (int, float)):
+            # Use the q_mw_delivered gap to capture both regulation cuts and
+            # physical under-delivery from limited supply-return ΔT.
+            if q_mw_set > 0:
+                # Load: q_mw_delivered ∈ [0, q_mw_set · reg]; gap ≥ 0.
+                return q_mw_set - q_mw_delivered
+            if q_mw_set < 0:
+                # Generator: q_mw_delivered ∈ [q_mw_set · reg, 0]; gap ≥ 0.
+                return q_mw_delivered - q_mw_set
+        # Fallback (q_mw_set is a Var or q_mw_delivered missing):
+        # use the regulation-only proxy.
+        if isinstance(q_mw_set, (int, float)):
+            return abs(q_mw_set) * (1 - reg)
+        return q_mw_set * (1 - reg)
 
     if isinstance(model, (Sink, Source)):
         mf = nan_to_zero(model.mass_flow)
@@ -132,12 +162,12 @@ def create_min_load_shedding_problem(
     ext_grid_gas_bounds=(-10, 10),
     ext_grid_heat_bounds=(-10, 10),
     regulation_ramp_limit=None,
-    include_storages=True,
+    include_storages=False,
     include_ext_grids=True,
-    check_vm=False,
-    check_pressure=False,
-    check_temperature=False,
-    check_line_loading=False,
+    check_vm=True,
+    check_pressure=True,
+    check_temperature=True,
+    check_line_loading=True,
     debug=False,
 ):
     """Create a minimal load shedding optimisation problem for multi-energy grids.
@@ -218,7 +248,7 @@ def create_min_load_shedding_problem(
         if isinstance(model, _DEMAND_TYPES):
             return demand_weight
         if isinstance(model, HeatExchanger):
-            q = getattr(model, "q_w_set", 0)
+            q = getattr(model, "q_mw_set", 0)
             if isinstance(q, (int, float)):
                 return demand_weight if q > 0 else generator_weight
             return demand_weight

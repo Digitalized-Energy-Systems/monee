@@ -67,7 +67,7 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                         * component.grid.higher_heating_value
                     )
                 if isinstance(model, md.HeatExchangerLoad):
-                    heat_load_curtailed += md.upper(model.q_w) / 10**6
+                    heat_load_curtailed += md.upper(model.q_mw)
                 continue
             if isinstance(model, md.ExtHydrGrid) and include_ext_grid:
                 if md.value(model.mass_flow) < 0:
@@ -95,10 +95,9 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                     * component.grid.higher_heating_value
                 )
             if isinstance(model, md.HeatExchangerLoad):
-                heat_load_curtailed += (
-                    md.upper(model.q_w)
-                    - md.value(model.q_w) * md.value(model.regulation)
-                ) / 10**6
+                heat_load_curtailed += md.upper(model.q_mw) - md.value(
+                    model.q_mw
+                ) * md.value(model.regulation)
         if inv:
             return (-power_load_curtailed, -heat_load_curtailed, -gas_load_curtailed)
         else:

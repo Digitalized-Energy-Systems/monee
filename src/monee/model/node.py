@@ -213,24 +213,30 @@ class Junction(NodeModel):
                 terms.append(m_ext * Tn)
 
             # Node-based heat injection / withdrawal (HeatGenerator, HeatLoad).
-            # q_w_heat is in Watts with load convention (positive = consumption,
-            # negative = generation).  Dividing by c·t_ref converts to the
-            # kg/s·t_pu units used by the mass-weighted temperature balance.
+            # q_mw_heat is in MW with load convention (positive = consumption,
+            # negative = generation).  Dividing by (c·t_ref / 1e6) converts to
+            # the kg/s·t_pu units used by the mass-weighted temperature balance.
+            # ``grid`` may be None when called from a compound's heat balance
+            # (no domain context) — in that path the loops below are no-ops
+            # so we only compute the scale lazily.
+            scale_mw_per_kgs = (
+                SPECIFIC_HEAT_CAP_WATER * grid.t_ref / 1e6 if grid is not None else None
+            )
             for nm in connected_node_models:
-                if "q_w_heat" not in nm.vars:
+                if "q_mw_heat" not in nm.vars:
                     continue
-                q = nm.vars["q_w_heat"] * nm.vars.get("regulation", 1)
-                terms.append(q / (SPECIFIC_HEAT_CAP_WATER * grid.t_ref))
+                q = nm.vars["q_mw_heat"] * nm.vars.get("regulation", 1)
+                terms.append(q / scale_mw_per_kgs)
 
             # Branch-level heat injection at this node.  A multi-grid branch
-            # (e.g. GasToHeatHG) may carry a q_w_heat Var in load convention
+            # (e.g. GasToHeatHG) may carry a q_mw_heat Var in load convention
             # that is absorbed at the TO end — same sign handling as the
             # connected-child case above.
             for bm in to_branch_models:
-                if "q_w_heat" not in bm.vars:
+                if "q_mw_heat" not in bm.vars:
                     continue
-                q = bm.vars["q_w_heat"] * bm.vars.get("on_off", 1)
-                terms.append(q / (SPECIFIC_HEAT_CAP_WATER * grid.t_ref))
+                q = bm.vars["q_mw_heat"] * bm.vars.get("on_off", 1)
+                terms.append(q / scale_mw_per_kgs)
 
             # Small conduction-style regularizer on T_n so the
             # Jacobian entry ∂(heat_bal)/∂T_n does not collapse to the

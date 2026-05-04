@@ -262,8 +262,8 @@ class Network:
     def has_branch(self, branch_id):
         return branch_id in self._network_internal.edges
 
-    def get_branch_between(self, node_id_one, node_id_two):
-        return self._network_internal.get_edge_data(node_id_one, node_id_two)[0][
+    def get_branch_between(self, node_id_one, node_id_two, bid=0):
+        return self._network_internal.get_edge_data(node_id_one, node_id_two)[bid][
             "internal_branch"
         ]
 
@@ -674,6 +674,47 @@ class Network:
 
     def copy(self):
         return copy.deepcopy(self)
+
+    def __deepcopy__(self, memo):
+        new = Network.__new__(Network)
+        memo[id(self)] = new
+
+        new._default_grid_models = copy.deepcopy(self._default_grid_models, memo)
+        new._child_dict = {
+            k: copy.deepcopy(v, memo) for k, v in self._child_dict.items()
+        }
+        new._compound_dict = {
+            k: copy.deepcopy(v, memo) for k, v in self._compound_dict.items()
+        }
+        # Constraints/objectives are stateless lambdas — share by reference.
+        new._constraints = list(self._constraints)
+        new._objectives = list(self._objectives)
+        new._extensions = copy.deepcopy(self._extensions, memo)
+        # Compound-construction transients — proper deepcopy keeps internal
+        # references consistent in the unlikely case the copy lands mid-build.
+        new._Network__blacklist = copy.deepcopy(self._Network__blacklist, memo)
+        new._Network__collected_components = copy.deepcopy(
+            self._Network__collected_components, memo
+        )
+        new._Network__force_blacklist = self._Network__force_blacklist
+        new._Network__collect_components = self._Network__collect_components
+        new._Network__current_grid = copy.deepcopy(self._Network__current_grid, memo)
+        # Default formulations are module-level singletons — share by reference.
+        new._Network__default_formulation = dict(self._Network__default_formulation)
+
+        # Manually rebuild the MultiGraph: networkx generic deepcopy walks
+        # nested adjacency dicts and is dramatically slower than add_node /
+        # add_edge.
+        g = nx.MultiGraph()
+        new._network_internal = g
+        for node_id, data in self._network_internal.nodes(data=True):
+            new_data = {k: copy.deepcopy(v, memo) for k, v in data.items()}
+            g.add_node(node_id, **new_data)
+        for u, v, key, data in self._network_internal.edges(keys=True, data=True):
+            new_data = {dk: copy.deepcopy(dv, memo) for dk, dv in data.items()}
+            g.add_edge(u, v, key=key, **new_data)
+
+        return new
 
     def clear_childs(self):
         self._child_dict = {}

@@ -55,10 +55,53 @@ def soc_rel(
     var_im_ij_pu,
     tap=1.0,
 ):
+    """Branch-flow rotated SOC: ``P² + Q² ≤ (W/tap²) · ell``.
+
+    Pyomo writes this as a single quadratic constraint with the bilinear
+    ``W·ell``.  Gurobi *can* auto-detect the rotated cone (W, ell ≥ 0), but
+    in our multi-energy model the presence of unrelated quadratic
+    equalities (Weymouth ``m² == m_squared``) flips the whole problem to
+    non-convex MIQCP, and once in that mode Gurobi spatial-branches on
+    every bilinear — including this one.
+
+    See :func:`soc_rel_lorentz` for an explicit Lorentz-cone reformulation
+    that avoids the W·ell bilinear via the auxiliary ``s = (W/tap² + ell)/2``
+    and ``d = (W/tap² − ell)/2``: ``P² + Q² + d² ≤ s²``, which Gurobi
+    handles as a convex cone in barrier/SOCP even alongside non-convex
+    bilinears in the rest of the model.
+    """
     return (
         var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2
         <= (var_voltage_pu_i / (tap * tap)) * var_im_ij_pu
     )
+
+
+def soc_rel_lorentz(
+    var_voltage_pu_i,
+    var_active_power_ij_pu,
+    var_reactive_power_ij_pu,
+    var_im_ij_pu,
+    var_s,
+    var_d,
+    tap=1.0,
+):
+    """Lorentz-cone form of :func:`soc_rel`.
+
+    Returns three constraints:
+
+    * ``s ==  (W/tap² + ell)/2``  (linear)
+    * ``d ==  (W/tap² − ell)/2``  (linear)
+    * ``P² + Q² + d² ≤ s²``       (convex Lorentz cone)
+
+    The original rotated cone ``P² + Q² ≤ (W/tap²) · ell`` is recovered
+    because ``s² − d² = (W/tap²) · ell``.
+    """
+    Wp = var_voltage_pu_i / (tap * tap)
+    return [
+        var_s == 0.5 * (Wp + var_im_ij_pu),
+        var_d == 0.5 * (Wp - var_im_ij_pu),
+        var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2 + var_d**2 <= var_s**2,
+    ]
 
 
 def gap_expr(

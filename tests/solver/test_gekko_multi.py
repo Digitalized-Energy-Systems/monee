@@ -134,7 +134,7 @@ def create_g2h_net():
         gas_node_id=g_node_2,
         heat_node_id=w_node_2,
         heat_return_node_id=w_node_1,
-        heat_energy_w=10000,
+        heat_energy_mw=0.010,
         diameter_m=0.4,
         efficiency=0.9,
     )

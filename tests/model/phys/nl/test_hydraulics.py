@@ -28,7 +28,10 @@ def test_balance_equation():
 
 
 def test_reynolds_equation():
-    reynolds_correct = ml.reynolds_equation(321, 321, 2, 0.1, 20)
+    # The Reynolds Var is stored in millions (Re / 1e6), so the equation
+    # divides the physical Re by REYNOLDS_SCALE = 1e6 — pick scaled values
+    # that still satisfy m·D/(μ·A·1e6) = rey_var.
+    reynolds_correct = ml.reynolds_equation(3.21e-4, 321, 2, 0.1, 20)
 
     assert reynolds_correct
 

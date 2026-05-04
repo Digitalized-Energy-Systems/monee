@@ -80,7 +80,7 @@ def test_api_example_index():
         bus_1,
         junc_1,
         junc_2,
-        heat_energy_w=100_000,
+        heat_energy_mw=0.100,
         diameter_m=0.1,
         efficiency=0.9,
     )

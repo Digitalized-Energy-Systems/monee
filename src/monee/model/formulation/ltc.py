@@ -271,26 +271,26 @@ class LumpedThermalCapacitance(NetworkAspect):
                 # Sign: stored mass_flow is negative for injection (source convention),
                 # so heat added = -m_ext * T_n (injection adds heat, withdrawal removes it).
                 terms.append(-m_ext * T_n)
-            if "q_w_heat" in cvars:
+            if "q_mw_heat" in cvars:
                 # Node-based heat injection / withdrawal (HeatGenerator, HeatLoad).
-                # q_w_heat [W] → kg/s·t_pu via division by c·t_ref.  Load
+                # q_mw_heat [MW] → kg/s·t_pu via division by (c·t_ref/1e6).  Load
                 # convention: positive = consumption (heat OUT), negative = generation
                 # (heat IN) — we want net heat IN, so negate.
-                q = cvars["q_w_heat"] * cvars.get("regulation", 1)
-                t_ref = node.grid.t_ref
-                terms.append(-q / (SPECIFIC_HEAT_CAP_WATER * t_ref))
+                q = cvars["q_mw_heat"] * cvars.get("regulation", 1)
+                scale_mw_per_kgs = SPECIFIC_HEAT_CAP_WATER * node.grid.t_ref / 1e6
+                terms.append(-q / scale_mw_per_kgs)
 
-        # Branch-level q_w_heat (e.g. GasToHeatHG): absorbed at the branch's
-        # TO-node.  Same sign handling as the child-based q_w_heat above.
+        # Branch-level q_mw_heat (e.g. GasToHeatHG): absorbed at the branch's
+        # TO-node.  Same sign handling as the child-based q_mw_heat above.
         for branch in network.branches:
             bm = branch.model
             bvars = bm.vars
-            if "q_w_heat" not in bvars:
+            if "q_mw_heat" not in bvars:
                 continue
             if branch.to_node_id != node.id:
                 continue
-            q = bvars["q_w_heat"] * bvars.get("on_off", 1)
-            t_ref = node.grid.t_ref
-            terms.append(-q / (SPECIFIC_HEAT_CAP_WATER * t_ref))
+            q = bvars["q_mw_heat"] * bvars.get("on_off", 1)
+            scale_mw_per_kgs = SPECIFIC_HEAT_CAP_WATER * node.grid.t_ref / 1e6
+            terms.append(-q / scale_mw_per_kgs)
 
         return sum(terms) if terms else 0

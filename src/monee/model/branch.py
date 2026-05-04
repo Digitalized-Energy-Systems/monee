@@ -164,8 +164,11 @@ class WaterPipe(BranchModel):
         self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
         self.direction = Var(1, integer=True, min=0, max=1, name="direction")
         self.velocity = Var(1, min=-50, max=50, name="velocity")
-        self.q_w = Var(1, name="q_w")
-        self.reynolds = Var(1000, min=0, max=1000000, name="reynolds")
+        self.q_mw = Var(1e-6, name="q_mw")
+        # ``reynolds`` is stored in millions (Re / 1e6) — see
+        # ``phys.core.hydraulics.REYNOLDS_SCALE``.  Initial 1e-3 corresponds
+        # to Re ≈ 1000 (low-Reynolds laminar floor).
+        self.reynolds = Var(1e-3, min=0, max=10, name="reynolds")
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
         # Upper bound 7 covers the PWL's leftmost breakpoint at Re=10
@@ -176,10 +179,14 @@ class WaterPipe(BranchModel):
         )
 
     def loss_percent(self):
-        return abs(self.q_w.value) / (
-            abs(self.mass_flow.value)
-            * ohfmodel.SPECIFIC_HEAT_CAP_WATER
-            * self.t_average_k.value
+        return (
+            abs(self.q_mw.value)
+            * 1e6
+            / (
+                abs(self.mass_flow.value)
+                * ohfmodel.SPECIFIC_HEAT_CAP_WATER
+                * self.t_average_k.value
+            )
         )
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
@@ -201,12 +208,12 @@ class HeatExchanger(BranchModel):
 
         self.on_off = 1
         self.regulation = regulation
-        self.q_w_set = -q_mw * 10**6
-        self.q_w = Var(0, name="q_w")
+        self.q_mw_set = -q_mw
+        self.q_mw = Var(0, name="q_mw")
 
         if mass_flow_design_kgs is None:
             if isinstance(q_mw, (int, float)):
-                mass_flow_design_kgs = abs(q_mw * 10**6) / (
+                mass_flow_design_kgs = abs(q_mw * 1e6) / (
                     ohfmodel.SPECIFIC_HEAT_CAP_WATER * T_delta_design_K
                 )
             else:
@@ -228,11 +235,12 @@ class HeatExchanger(BranchModel):
         if self._calc_mass_flow:
             eqs.append(
                 self.mass_flow_design_kgs
-                == -self.q_w
+                == -self.q_mw
+                * 1e6
                 / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * self._T_delta_design_K)
             )
         else:
-            eqs.append(self.q_w == self.q_w_set * self.regulation)
+            eqs.append(self.q_mw == self.q_mw_set * self.regulation)
         return eqs
 
 
@@ -271,7 +279,7 @@ class PassiveHeatExchanger(BranchModel):
         roughness: Pipe wall roughness [m] (default 0.0001).
         length_m: Equivalent pipe length for pressure-drop calc [m] (default 2.5).
         temperature_ext_k: Ambient temperature [K] (default 293).
-        regulation: Scaling factor applied to ``q_w_set`` (default 1).
+        regulation: Scaling factor applied to ``q_mw_set`` (default 1).
         friction: Pre-computed friction variable (optional).
     """
 
@@ -294,8 +302,8 @@ class PassiveHeatExchanger(BranchModel):
         self.active = True
         self.regulation = regulation
         self.on_off = 1
-        self.q_w_set = -q_mw * 10**6
-        self.q_w = Var(-1000, name="q_w")
+        self.q_mw_set = -q_mw
+        self.q_mw = Var(-1e-3, name="q_mw")
 
         self.mass_flow = Intermediate(0.1)
         self.mass_flow_pos = Var(0, min=0, name="mass_flow_pos")
@@ -304,7 +312,10 @@ class PassiveHeatExchanger(BranchModel):
         self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
         self.direction = Var(0, integer=True, min=0, max=1, name="direction")
         self.velocity = Var(1, min=-50, max=50, name="velocity")
-        self.reynolds = Var(1000, min=0, max=1000000, name="reynolds")
+        # ``reynolds`` is stored in millions (Re / 1e6) — see
+        # ``phys.core.hydraulics.REYNOLDS_SCALE``.  Initial 1e-3 corresponds
+        # to Re ≈ 1000 (low-Reynolds laminar floor).
+        self.reynolds = Var(1e-3, min=0, max=10, name="reynolds")
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
         # Upper bound 7 covers the PWL's leftmost breakpoint at Re=10
@@ -316,7 +327,7 @@ class PassiveHeatExchanger(BranchModel):
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         return [
             IntermediateEq("mass_flow", self.mass_flow_pos - self.mass_flow_neg),
-            self.q_w == self.q_w_set * self.regulation,
+            self.q_mw == self.q_mw_set * self.regulation,
         ]
 
 
@@ -360,12 +371,15 @@ class GasPipe(BranchModel):
         self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
         self.direction = Var(0, integer=True, min=0, max=1)
         self.velocity = Var(1, min=-100, max=100, name="velocity")
-        self.reynolds = Var(1000, min=0, max=1000000, name="reynolds")
+        # ``reynolds`` is stored in millions (Re / 1e6) — see
+        # ``phys.core.hydraulics.REYNOLDS_SCALE``.  Initial 1e-3 corresponds
+        # to Re ≈ 1000 (low-Reynolds laminar floor).
+        self.reynolds = Var(1e-3, min=0, max=10, name="reynolds")
         self.gas_density = Var(1, min=0, max=100, name="gas_density")
         self.friction = (
             Var(0.02, min=0, max=7, name="friction") if friction is None else friction
         )
-        self.q_w = 0
+        self.q_mw = 0
 
     def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):
         return [IntermediateEq("mass_flow", self.mass_flow_pos - self.mass_flow_neg)]

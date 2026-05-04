@@ -86,7 +86,7 @@ def test_water_line_with_heat_loads():
     net = mm.Network()
     w = mx.water_structure(net, diameter_m=0.15, length_m=100)
 
-    seg = w.line(4, heat_load_q_w=1000.0)
+    seg = w.line(4, heat_load_q_mw=0.001)
 
     assert len(seg.nodes) == 4
     assert len(seg.branches) == 3

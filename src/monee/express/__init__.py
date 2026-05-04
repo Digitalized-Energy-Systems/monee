@@ -616,6 +616,7 @@ def create_ext_hydr_grid(
     grid_key=mm.GAS_KEY,
     max_import_kgs=None,
     max_export_kgs=None,
+    pin_temperature=True,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -679,6 +680,7 @@ def create_ext_hydr_grid(
             t_k=t_k,
             max_import_kgs=max_import_kgs,
             max_export_kgs=max_export_kgs,
+            pin_temperature=pin_temperature,
             **kwargs,
         ),
         node_id=node_id,
@@ -825,7 +827,7 @@ def create_sink(
 def create_heat_generator(
     network: mm.Network,
     node_id,
-    q_w,
+    q_mw,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -841,7 +843,7 @@ def create_heat_generator(
     Args:
         network (mm.Network): Target network.
         node_id: Water junction node ID.
-        q_w (float): Heat output in Watts (positive = generation).
+        q_mw (float): Heat output in MW (positive = generation).
         constraints (list, optional): Constraint callables.
         overwrite_id: Custom identifier.
         name (str, optional): Human-readable name.
@@ -852,7 +854,7 @@ def create_heat_generator(
     """
     return create_water_child(
         network,
-        mm.HeatGenerator(q_w=q_w, **kwargs),
+        mm.HeatGenerator(q_mw=q_mw, **kwargs),
         node_id=node_id,
         constraints=constraints,
         overwrite_id=overwrite_id,
@@ -863,7 +865,7 @@ def create_heat_generator(
 def create_heat_load(
     network: mm.Network,
     node_id,
-    q_w,
+    q_mw,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -878,7 +880,7 @@ def create_heat_load(
     Args:
         network (mm.Network): Target network.
         node_id: Water junction node ID.
-        q_w (float): Heat demand in Watts (positive = consumption).
+        q_mw (float): Heat demand in MW (positive = consumption).
         constraints (list, optional): Constraint callables.
         overwrite_id: Custom identifier.
         name (str, optional): Human-readable name.
@@ -889,7 +891,7 @@ def create_heat_load(
     """
     return create_water_child(
         network,
-        mm.HeatLoad(q_w=q_w, **kwargs),
+        mm.HeatLoad(q_mw=q_mw, **kwargs),
         node_id=node_id,
         constraints=constraints,
         overwrite_id=overwrite_id,
@@ -1110,7 +1112,7 @@ def create_p2h(
     power_node_id,
     heat_node_id,
     heat_return_node_id,
-    heat_energy_w,
+    heat_energy_mw,
     diameter_m,
     efficiency,
     temperature_ext_k=293,
@@ -1129,7 +1131,7 @@ def create_p2h(
         power_node_id: Electrical bus node ID (power consumption side).
         heat_node_id: Water junction node ID (heat supply side).
         heat_return_node_id: Water junction node ID (heat return side).
-        heat_energy_w (float): Heat output setpoint in **watts**.
+        heat_energy_mw (float): Heat output setpoint in **MW**.
         diameter_m (float): Inner diameter of the internal water-side branch in metres.
         efficiency (float): Electrical-to-heat conversion efficiency in ``(0, 1]``.
         temperature_ext_k (float, optional): Ambient temperature in Kelvin. Defaults to 293.
@@ -1142,7 +1144,7 @@ def create_p2h(
     """
     return network.compound(
         mm.PowerToHeat(
-            heat_energy_w=heat_energy_w,
+            heat_energy_mw=heat_energy_mw,
             diameter_m=diameter_m,
             temperature_ext_k=temperature_ext_k,
             efficiency=efficiency,
@@ -1161,7 +1163,7 @@ def create_g2h(
     gas_node_id,
     heat_node_id,
     heat_return_node_id,
-    heat_energy_w,
+    heat_energy_mw,
     diameter_m,
     efficiency,
     temperature_ext_k=293,
@@ -1177,7 +1179,7 @@ def create_g2h(
         gas_node_id: Gas junction node ID (fuel supply side).
         heat_node_id: Water junction node ID (heat supply side).
         heat_return_node_id: Water junction node ID (heat return side).
-        heat_energy_w (float): Heat output setpoint in **watts**.
+        heat_energy_mw (float): Heat output setpoint in **MW**.
         diameter_m (float): Inner diameter of the internal water-side branch in metres.
         efficiency (float): Gas-to-heat conversion efficiency in ``(0, 1]``.
         temperature_ext_k (float, optional): Ambient temperature in Kelvin. Defaults to 293.
@@ -1188,7 +1190,7 @@ def create_g2h(
     """
     return network.compound(
         mm.GasToHeat(
-            heat_energy_w=heat_energy_w,
+            heat_energy_mw=heat_energy_mw,
             diameter_m=diameter_m,
             temperature_ext_k=temperature_ext_k,
             efficiency=efficiency,
@@ -1254,7 +1256,7 @@ def create_p2h_hg(
     network: mm.Network,
     power_node_id,
     heat_node_id,
-    heat_energy_w,
+    heat_energy_mw,
     efficiency,
     q_mvar_setpoint=0,
     constraints=None,
@@ -1269,14 +1271,14 @@ def create_p2h_hg(
     Unlike :func:`create_p2h` (which creates a compound with a control node
     and an internal SubHE branch), this couples the two domains with a single
     :class:`~monee.model.PowerToHeatHG` multi-grid branch: the branch's
-    ``p_from_mw`` is absorbed by the power-bus balance and its ``q_w_heat`` is
+    ``p_from_mw`` is absorbed by the power-bus balance and its ``q_mw_heat`` is
     absorbed by the water-junction heat balance.
 
     Args:
         network (mm.Network): Target network.
         power_node_id: Electrical bus node ID (power consumption side).
         heat_node_id: Water junction node ID (heat injection point).
-        heat_energy_w (float): Heat output setpoint in watts.
+        heat_energy_mw (float): Heat output setpoint in MW.
         efficiency (float): Electrical-to-heat conversion efficiency in ``(0, 1]``.
         q_mvar_setpoint (float, optional): Reactive power consumed from the
             electrical bus in Mvar. Defaults to 0.
@@ -1287,7 +1289,7 @@ def create_p2h_hg(
     """
     return network.branch(
         mm.PowerToHeatHG(
-            heat_energy_w=heat_energy_w,
+            heat_energy_mw=heat_energy_mw,
             efficiency=efficiency,
             q_mvar_setpoint=q_mvar_setpoint,
         ),
@@ -1301,7 +1303,7 @@ def create_g2h_hg(
     network: mm.Network,
     gas_node_id,
     heat_node_id,
-    heat_energy_w,
+    heat_energy_mw,
     efficiency,
     constraints=None,
 ):
@@ -1316,13 +1318,13 @@ def create_g2h_hg(
     and an internal SubHE branch), this couples the two domains with a single
     :class:`~monee.model.GasToHeatHG` multi-grid branch: the branch's
     ``from_mass_flow`` is absorbed by the gas-junction mass balance and its
-    ``q_w_heat`` is absorbed by the water-junction heat balance.
+    ``q_mw_heat`` is absorbed by the water-junction heat balance.
 
     Args:
         network (mm.Network): Target network.
         gas_node_id: Gas junction node ID (fuel supply side).
         heat_node_id: Water junction node ID (heat injection point).
-        heat_energy_w (float): Heat output setpoint in watts.
+        heat_energy_mw (float): Heat output setpoint in MW.
         efficiency (float): Gas-to-heat conversion efficiency in ``(0, 1]``.
         constraints (list, optional): Constraint callables.
 
@@ -1331,7 +1333,7 @@ def create_g2h_hg(
     """
     return network.branch(
         mm.GasToHeatHG(
-            heat_energy_w=heat_energy_w,
+            heat_energy_mw=heat_energy_mw,
             efficiency=efficiency,
         ),
         from_node_id=gas_node_id,

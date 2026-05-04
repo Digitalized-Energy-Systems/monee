@@ -258,14 +258,14 @@ class WaterStructure(_Structure):
                     self._net, node_id, mass_flow=kwargs["source_mass_flow"]
                 )
             )
-        if kwargs.get("heat_load_q_w") is not None:
+        if kwargs.get("heat_load_q_mw") is not None:
             out.append(
-                _mx.create_heat_load(self._net, node_id, q_w=kwargs["heat_load_q_w"])
+                _mx.create_heat_load(self._net, node_id, q_mw=kwargs["heat_load_q_mw"])
             )
-        if kwargs.get("heat_generator_q_w") is not None:
+        if kwargs.get("heat_generator_q_mw") is not None:
             out.append(
                 _mx.create_heat_generator(
-                    self._net, node_id, q_w=kwargs["heat_generator_q_w"]
+                    self._net, node_id, q_mw=kwargs["heat_generator_q_mw"]
                 )
             )
         return out

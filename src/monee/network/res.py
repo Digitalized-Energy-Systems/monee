@@ -702,7 +702,7 @@ def create_regional_mes_net() -> mm.Network:
         power_node_id=b5,
         heat_node_id=r2,
         heat_return_node_id=s2,
-        heat_energy_w=20_000,
+        heat_energy_mw=0.020,
         diameter_m=0.12,
         efficiency=0.95,
     )
@@ -811,7 +811,7 @@ def create_balanced_urban_mes_net() -> mm.Network:
         power_node_id=b4,
         heat_node_id=r2,
         heat_return_node_id=s2,
-        heat_energy_w=300_000,
+        heat_energy_mw=0.300,
         diameter_m=0.15,
         efficiency=0.95,
     )
@@ -987,10 +987,10 @@ def create_balanced_urban_mes_timeseries(
             mf_rated = child.model.mass_flow
             td.add_child_series(child.id, "mass_flow", [mf_rated * f for f in g_series])
 
-    # q_w_set is stored in Watts with sign convention: negative = consumer.
+    # q_mw_set is stored in MW with sign convention: negative = consumer.
     for branch in net.branches_by_type(mm.HeatExchangerLoad):
-        q_w_rated = branch.model.q_w_set  # e.g. -800 000 W for 800 kW consumer
-        td.add_branch_series(branch.id, "q_w_set", [q_w_rated * f for f in h_series])
+        q_mw_rated = branch.model.q_mw_set  # e.g. -0.8 for an 800 kW consumer
+        td.add_branch_series(branch.id, "q_mw_set", [q_mw_rated * f for f in h_series])
 
     return td
 
@@ -1132,7 +1132,7 @@ def create_resilient_urban_mes_net() -> mm.Network:
         power_node_id=b4,
         heat_node_id=r3,
         heat_return_node_id=s3,
-        heat_energy_w=300_000,
+        heat_energy_mw=0.300,
         diameter_m=0.15,
         efficiency=0.95,
     )

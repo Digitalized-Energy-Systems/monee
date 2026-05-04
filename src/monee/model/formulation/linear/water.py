@@ -13,20 +13,20 @@ class LinearHeatExchangerFormulation(BranchFormulation):
         else:
             model.mass_flow_mag = Var(0, min=0, max=model.mass_flow_design_kgs)
 
-        if model.q_w_set <= 0 or isinstance(model.q_w_set, Var):
+        if model.q_mw_set <= 0 or isinstance(model.q_mw_set, Var):
             model._he_is_generator = True
-            model.q_delivered = Var(0, max=0, name="q_delivered")
-        elif model.q_w_set > 0:
+            model.q_mw_delivered = Var(0, max=0, name="q_mw_delivered")
+        elif model.q_mw_set > 0:
             model._he_is_generator = False
-            model.q_delivered = Var(0, min=0, name="q_delivered")
+            model.q_mw_delivered = Var(0, min=0, name="q_mw_delivered")
 
     def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
         if branch._he_is_generator:
-            return [branch.q_delivered]
-        return [-branch.q_delivered]
+            return [branch.q_mw_delivered]
+        return [-branch.q_mw_delivered]
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
-        cp = ohfmodel.SPECIFIC_HEAT_CAP_WATER
+        cp_mw_per_kgs_K = ohfmodel.SPECIFIC_HEAT_CAP_WATER / 1e6
         is_dynamic_mf = isinstance(branch.mass_flow_design_kgs, Var)
 
         if is_dynamic_mf:
@@ -55,12 +55,15 @@ class LinearHeatExchangerFormulation(BranchFormulation):
             branch.t_in_pu == from_node_model.vars["t_pu"],
             branch.t_from_pu == from_node_model.vars["t_pu"],
             branch.t_to_pu == branch.t_out_pu,
-            branch.t_out_pu * (branch.mass_flow_design_kgs * cp * grid.t_ref)
-            == branch.t_in_pu * (branch.mass_flow_design_kgs * cp * grid.t_ref)
-            - branch.q_delivered,
+            # Energy balance in MW (cp/1e6 converts J/(kg·K) → MJ/(kg·K) = MW·s/(kg·K)).
+            branch.t_out_pu
+            * (branch.mass_flow_design_kgs * cp_mw_per_kgs_K * grid.t_ref)
+            == branch.t_in_pu
+            * (branch.mass_flow_design_kgs * cp_mw_per_kgs_K * grid.t_ref)
+            - branch.q_mw_delivered,
         ]
         if branch._he_is_generator:
-            eqs.append(branch.q_delivered >= branch.q_w * branch.on_off)
+            eqs.append(branch.q_mw_delivered >= branch.q_mw * branch.on_off)
         else:
-            eqs.append(branch.q_delivered <= branch.q_w * branch.on_off)
+            eqs.append(branch.q_mw_delivered <= branch.q_mw * branch.on_off)
         return eqs

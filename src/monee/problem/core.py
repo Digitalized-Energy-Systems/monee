@@ -650,8 +650,8 @@ class OptimizationProblem:
                         isinstance(
                             component.model, HeatExchanger | PassiveHeatExchanger
                         )
-                        and type(component.model.q_w) is not Var
-                        and (component.model.q_w > 0)
+                        and type(component.model.q_mw) is not Var
+                        and (component.model.q_mw > 0)
                     )
                 )
                 and component.active

@@ -301,13 +301,13 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
                 pass
 
     # multi-grid: heat
-    for col in ("heat_w", "q_w"):
+    for col in ("heat_mw", "q_mw"):
         v = row.get(col)
         if v is not None:
             try:
                 f = float(v)
                 if not math.isnan(f):
-                    return f"{f:.3g} W", cp_color
+                    return f"{f:.3g} MW", cp_color
             except (TypeError, ValueError):
                 pass
 

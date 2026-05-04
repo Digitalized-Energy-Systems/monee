@@ -39,6 +39,35 @@ _log = logging.getLogger(__name__)
 
 DEFAULT_SOLVER_OPTIONS = {}
 
+# Per-solver defaults applied on top of ``DEFAULT_SOLVER_OPTIONS``.  Tuned
+# for the McCormick-DHS + MISOCP electrical formulation:
+#   ``ScaleFlag=2``  — most aggressive geometric scaling, useful even with a
+#                      well-conditioned matrix because the SOC and bilinear
+#                      blocks still benefit.
+#   ``MIPFocus=2``   — focus on proving optimality, not finding incumbents.
+#                      For the multi-energy load-shedding problem the LP
+#                      root bound is already at the optimum (gap ~0.001 %),
+#                      so the solver's job is to *close the gap*, not to
+#                      discover an incumbent.
+#   ``MIPGap=1e-3``  — 0.1 % relative gap.  At MW objective scale this is
+#                      ~kW precision, which already exceeds the model's
+#                      physical accuracy.  The default 1e-4 spends most of
+#                      B&B proving an extra digit nobody can use.
+#
+# ``NumericFocus`` is intentionally left at default (0).  It was useful while
+# the matrix range spanned 1e-6…1e+7 (Reynolds PWL breakpoints + pressure_pa
+# coefficients), but once those were rescaled the matrix range collapsed to
+# ~1e-6…4e+2 and the extra numerical conservatism became net-negative
+# (Linear-HX measured ~3× slower with NumericFocus=2 once the matrix was
+# fixed).
+PER_SOLVER_OPTIONS = {
+    "gurobi": {
+        "ScaleFlag": 2,
+        "MIPFocus": 2,
+        "MIPGap": 1e-3,
+    },
+}
+
 
 class PyomoPWLImpl:
     def __init__(self, pm: pyo.ConcreteModel, pw_repn: str = "SOS2"):
@@ -82,34 +111,92 @@ class PyomoSolver(SolverInterface):
     def inject_pyomo_vars_attr(
         pm: pyo.ConcreteModel, target: GenericModel, prefix: str
     ):
-        """Replace Var/Const fields on `target` with Pyomo Var / numeric constants."""
+        """Replace Var/Const fields on `target` with Pyomo Var / numeric constants.
+
+        ``initialize`` is clamped to the current ``[min, max]`` bounds before
+        being handed to Pyomo.  The previous solve's stored value can fall
+        outside the *current* bounds when an :class:`OptimizationProblem`
+        applies a tighter range (e.g. ``bounds_heat=(0.8, 1.15)`` after a
+        prior call solved with the intrinsic ``[0, 2]`` Var range).  Clamping
+        keeps the initial guess feasible and suppresses W1002.
+        """
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
+                init = value.value
+                if init is not None:
+                    if value.min is not None and init < value.min:
+                        init = value.min
+                    if value.max is not None and init > value.max:
+                        init = value.max
                 v = pyo.Var(
                     domain=pyo.Integers if value.integer else pyo.Reals,
                     bounds=(value.min, value.max),
-                    initialize=value.value,
+                    initialize=init,
                 )
                 setattr(pm, f"{prefix}__{key}", v)
                 setattr(target, key, v)
             elif type(value) is Const:
                 setattr(target, key, float(value.value))
 
+    # Tolerance for snapping near-bound values back into bounds during
+    # withdrawal.  Solver outputs commonly carry sub-epsilon noise (e.g.
+    # ``-1.4e-16`` for a Var with bound ``[0, None]``).  Re-injecting that
+    # noise as ``initialize`` for the next solve triggers W1002 even though
+    # the value is numerically zero.
+    _BOUND_SNAP_TOL = 1e-9
+
     @staticmethod
     def withdraw_pyomo_vars_attr(target: GenericModel):
-        """Convert Pyomo Var values back into Var objects."""
+        """Convert Pyomo Var values back into Var objects.
+
+        Sanitises three kinds of noise the next ``inject_pyomo_vars_attr``
+        would otherwise pass to Pyomo as ``initialize``:
+
+        - **Integer flag lost** → preserves ``integer=value.is_integer()`` and
+          snaps near-integer floats to ``int(round(val))``.  Without this,
+          relaxed values like ``1.14e-6`` re-enter as the initial guess for a
+          fresh ``pyo.Var(domain=Integers)`` and trigger W1001
+          (``not in domain Integers``).
+        - **Bound noise** → snaps continuous values within
+          ``_BOUND_SNAP_TOL`` of a bound to the bound itself, suppressing
+          W1002 (``outside the bounds``) caused by sub-machine-epsilon drift.
+        - **Missing value** → falls back to ``0`` when the solver failed and
+          ``pyo.value`` is unavailable, so withdrawal cannot raise.
+        """
         for key, value in target.__dict__.items():
             if isinstance(value, pyo.Var):
                 lb, ub = value.bounds if value.bounds is not None else (None, None)
-                val = pyo.value(value)
-                setattr(target, key, Var(value=val, min=lb, max=ub))
+                is_integer = value.is_integer()
+                val = pyo.value(value, exception=False)
+                if val is None:
+                    val = 0
+                if is_integer:
+                    val = int(round(val))
+                else:
+                    tol = PyomoSolver._BOUND_SNAP_TOL
+                    if lb is not None and lb - tol <= val < lb:
+                        val = lb
+                    if ub is not None and ub < val <= ub + tol:
+                        val = ub
+                setattr(target, key, Var(value=val, min=lb, max=ub, integer=is_integer))
             elif isinstance(value, pyo.Expression):
-                setattr(target, key, Intermediate(value=pyo.value(value)))
+                expr_val = pyo.value(value, exception=False)
+                setattr(
+                    target,
+                    key,
+                    Intermediate(value=expr_val if expr_val is not None else 0),
+                )
 
     # --------- Constraint helpers ---------
 
     @staticmethod
     def _add_equation(pm, expr, name=None):
+        # Trivial bool equations are not valid Pyomo Constraint expressions:
+        # True = tautology (no-op); False = structural infeasibility from an
+        # over-deactivated node/branch.  Skip both so the load-shedding
+        # objective can drive the solution instead of crashing construction.
+        if isinstance(expr, bool):
+            return
         if name is not None:
             setattr(pm, name, pyo.Constraint(expr=expr))
         else:
@@ -270,8 +357,13 @@ class PyomoSolver(SolverInterface):
 
         for k, v in DEFAULT_SOLVER_OPTIONS.items():
             solver.options[k] = v
+        for k, v in PER_SOLVER_OPTIONS.get(solver_name, {}).items():
+            solver.options[k] = v
 
-        result = solver.solve(pm, tee=debug)
+        solve_kwargs = {"tee": debug}
+        if getattr(solver, "warm_start_capable", lambda: False)():
+            solve_kwargs["warmstart"] = True
+        result = solver.solve(pm, **solve_kwargs)
 
         success = result.solver.status == SolverStatus.ok
         if not success:
@@ -414,7 +506,7 @@ class PyomoSolver(SolverInterface):
             ):
                 pm.obj_exprs.append(expr)
 
-            node_eqs = [eq for eq in equations if type(eq) is not bool or not eq]
+            node_eqs = [eq for eq in equations if not isinstance(eq, bool)]
             self._process_intermediate_eqs(pm, node.model, node_eqs)
             self._add_equations(
                 pm, filter_intermediate_eqs(node_eqs), name_prefix=f"node_{node.id}"

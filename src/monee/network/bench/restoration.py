@@ -333,7 +333,7 @@ def create_restoration_benchmark(
 
 
 if __name__ == "__main__":
-    res = create_restoration_benchmark(linepack=True, ltc=True, misocp=True)
+    res = create_restoration_benchmark(linepack=False, ltc=False, misocp=True)
     from monee.solver import PyomoSolver
 
     print(PyomoSolver().solve(res, solver_name="gurobi"))

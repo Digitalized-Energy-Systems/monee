@@ -1,3 +1,4 @@
+import copy
 from abc import ABC, abstractmethod
 
 EL_KEY = "electricity"
@@ -8,6 +9,8 @@ EL = EL_KEY
 GAS = GAS_KEY
 
 component_list = []
+
+_IMMUTABLE_PRIMITIVES = frozenset({int, float, bool, str, bytes, complex, type(None)})
 
 
 def model(cls):
@@ -214,6 +217,16 @@ class Var:
     def __str__(self):
         return f"{self.value} ({self.min}, {self.max}), is int: {self.integer}"
 
+    def __deepcopy__(self, memo):
+        new = type(self).__new__(type(self))
+        memo[id(self)] = new
+        new.value = self.value
+        new.max = self.max
+        new.min = self.min
+        new.integer = self.integer
+        new.name = self.name
+        return new
+
 
 # Backward-compatibility alias — tracked is now identical to Var.
 tracked = Var
@@ -240,6 +253,12 @@ class Const:
     def __repr__(self):
         return f"Const({self.value!r})"
 
+    def __deepcopy__(self, memo):
+        new = Const.__new__(Const)
+        memo[id(self)] = new
+        new.value = self.value
+        return new
+
 
 class Intermediate:
     """
@@ -260,6 +279,12 @@ class Intermediate:
 
     def __repr__(self):
         return f"Intermediate({self.value!r})"
+
+    def __deepcopy__(self, memo):
+        new = Intermediate.__new__(Intermediate)
+        memo[id(self)] = new
+        new.value = self.value
+        return new
 
 
 class IntermediateEq:
@@ -326,6 +351,16 @@ class GenericModel(ABC):
     def is_cp(self):
         """Return ``True`` if this model acts as a multi-grid control point.  Default: ``False``."""
         return False
+
+    def __deepcopy__(self, memo):
+        new = self.__class__.__new__(self.__class__)
+        memo[id(self)] = new
+        for k, v in self.__dict__.items():
+            if v is None or v.__class__ in _IMMUTABLE_PRIMITIVES:
+                new.__dict__[k] = v
+            else:
+                new.__dict__[k] = copy.deepcopy(v, memo)
+        return new
 
 
 class NodeModel(GenericModel):
@@ -747,6 +782,16 @@ class Component(ABC):
 
         if self._formulation is not None:
             self._formulation.ensure_var(self.model)
+
+    def __deepcopy__(self, memo):
+        new = self.__class__.__new__(self.__class__)
+        memo[id(self)] = new
+        for k, v in self.__dict__.items():
+            if v is None or v.__class__ in _IMMUTABLE_PRIMITIVES:
+                new.__dict__[k] = v
+            else:
+                new.__dict__[k] = copy.deepcopy(v, memo)
+        return new
 
 
 class Child(Component):

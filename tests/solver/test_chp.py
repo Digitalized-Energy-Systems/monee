@@ -126,8 +126,8 @@ def test_chp_basic_solve():
     # ExtPowerGrid absorbs the CHP surplus
     assert result.dataframes["ExtPowerGrid"]["p_mw"].iloc[0] > 0
 
-    # heat_w is negative (heat leaves the CHP)
-    assert cn_df["heat_w"].iloc[0] < 0
+    # heat_mw is negative (heat leaves the CHP)
+    assert cn_df["heat_mw"].iloc[0] < 0
     # w1 (supply tap, index 1) is cooler than w2 (return tap, index 2)
     # because the CHP heats water flowing through its SubHE from w1 to w2
     t_supply = jct_df["t_k"].iloc[1]
@@ -148,7 +148,7 @@ def test_chp_compound_structure():
 
 
 def test_chp_energy_balance_invariant():
-    """el_mw / eff_p == heat_w / (eff_h * 1e6) since both are driven by the same gas input."""
+    """el_mw / eff_p == heat_mw / eff_h since both are driven by the same gas input."""
     eff_p, eff_h = 0.6, 0.4
     net = _build_chp_network(
         efficiency_power=eff_p, efficiency_heat=eff_h, mass_flow_setpoint=0.001
@@ -156,8 +156,8 @@ def test_chp_energy_balance_invariant():
     result = ms.GEKKOSolver().solve(net)
     cn = result.dataframes["CHPControlNode"]
     el_mw = cn["el_mw"].iloc[0]
-    heat_w = cn["heat_w"].iloc[0]
-    assert math.isclose(el_mw / eff_p, heat_w / (eff_h * 1e6), rel_tol=1e-4)
+    heat_mw = cn["heat_mw"].iloc[0]
+    assert math.isclose(el_mw / eff_p, heat_mw / eff_h, rel_tol=1e-4)
 
 
 def test_chp_regulation_linear_scaling():
@@ -172,7 +172,7 @@ def test_chp_regulation_linear_scaling():
 
 
 def test_chp_efficiency_ratio():
-    """el_mw scales with efficiency_power; heat_w scales with efficiency_heat."""
+    """el_mw scales with efficiency_power; heat_mw scales with efficiency_heat."""
     net_a = _build_chp_network(
         efficiency_power=0.7, efficiency_heat=0.2, mass_flow_setpoint=0.001
     )
@@ -183,8 +183,8 @@ def test_chp_efficiency_ratio():
     rb = ms.GEKKOSolver().solve(net_b)
     el_a = ra.dataframes["CHPControlNode"]["el_mw"].iloc[0]
     el_b = rb.dataframes["CHPControlNode"]["el_mw"].iloc[0]
-    heat_a = ra.dataframes["CHPControlNode"]["heat_w"].iloc[0]
-    heat_b = rb.dataframes["CHPControlNode"]["heat_w"].iloc[0]
+    heat_a = ra.dataframes["CHPControlNode"]["heat_mw"].iloc[0]
+    heat_b = rb.dataframes["CHPControlNode"]["heat_mw"].iloc[0]
     assert math.isclose(el_a / el_b, 0.7 / 0.3, rel_tol=1e-4)
     assert math.isclose(heat_a / heat_b, 0.2 / 0.6, rel_tol=1e-4)
 
@@ -201,16 +201,16 @@ def test_chp_mass_flow_linearity():
 
 
 def test_chp_absolute_values():
-    """Verify el_mw and heat_w against the analytical formula.
+    """Verify el_mw and heat_mw against the analytical formula.
 
     For lgas (HHV = 15.3 kWh/kg), regulation=1, mass_flow=0.001 kg/s:
       el_mw  = -eff_p * mass * 3.6 * HHV = -0.033048 MW
-      heat_w = -eff_h * mass * 3.6 * HHV * 1e6 = -22032 W
+      heat_mw = -eff_h * mass * 3.6 * HHV = -0.022032 MW
     """
     HHV = 15.3
     eff_p, eff_h, mf = 0.6, 0.4, 0.001
     expected_el = -eff_p * mf * 3.6 * HHV
-    expected_heat = -eff_h * mf * 3.6 * HHV * 1e6
+    expected_heat = -eff_h * mf * 3.6 * HHV
 
     net = _build_chp_network(
         efficiency_power=eff_p,
@@ -221,7 +221,7 @@ def test_chp_absolute_values():
     result = ms.GEKKOSolver().solve(net)
     cn = result.dataframes["CHPControlNode"]
     assert math.isclose(cn["el_mw"].iloc[0], expected_el, rel_tol=1e-4)
-    assert math.isclose(cn["heat_w"].iloc[0], expected_heat, rel_tol=1e-4)
+    assert math.isclose(cn["heat_mw"].iloc[0], expected_heat, rel_tol=1e-4)
 
 
 def test_chp_misocp_formulation():
@@ -242,8 +242,8 @@ def test_chp_misocp_formulation():
     cn = result.dataframes["CHPControlNode"]
     eff_p, eff_h = 0.6, 0.4
     el_mw = cn["el_mw"].iloc[0]
-    heat_w = cn["heat_w"].iloc[0]
-    assert math.isclose(el_mw / eff_p, heat_w / (eff_h * 1e6), rel_tol=1e-3)
+    heat_mw = cn["heat_mw"].iloc[0]
+    assert math.isclose(el_mw / eff_p, heat_mw / eff_h, rel_tol=1e-3)
 
     # MISOCP and GEKKO should give the same voltage profile
     gekko_net = _build_chp_network(mass_flow_setpoint=0.001)
@@ -263,8 +263,8 @@ def test_chp_heat_dominated():
     result = ms.GEKKOSolver().solve(net)
     cn = result.dataframes["CHPControlNode"]
     el_mw = cn["el_mw"].iloc[0]
-    heat_w = cn["heat_w"].iloc[0]
-    assert math.isclose(abs(heat_w) / 1e6, abs(el_mw) * (eff_h / eff_p), rel_tol=1e-4)
+    heat_mw = cn["heat_mw"].iloc[0]
+    assert math.isclose(abs(heat_mw), abs(el_mw) * (eff_h / eff_p), rel_tol=1e-4)
 
 
 def test_chp_power_dominated():
@@ -276,5 +276,5 @@ def test_chp_power_dominated():
     result = ms.GEKKOSolver().solve(net)
     cn = result.dataframes["CHPControlNode"]
     el_mw = cn["el_mw"].iloc[0]
-    heat_w = cn["heat_w"].iloc[0]
-    assert math.isclose(abs(heat_w) / 1e6, abs(el_mw) * (eff_h / eff_p), rel_tol=1e-4)
+    heat_mw = cn["heat_mw"].iloc[0]
+    assert math.isclose(abs(heat_mw), abs(el_mw) * (eff_h / eff_p), rel_tol=1e-4)

@@ -37,14 +37,14 @@ T_PU_MIN_ENV = 0.82  # ~292 K (slightly above ambient)
 T_PU_MAX_ENV = 1.15  # ~409 K — room for boundary heat injection
 
 
-def _build_series_dhs(q_gen_w: float = 0.0, q_load_w: float = 0.0):
+def _build_series_dhs(q_gen_mw: float = 0.0, q_load_mw: float = 0.0):
     """Six-node unidirectional supply line.
 
     ``n0`` is the hydraulic + thermal reference (``ExtHydrGrid``,
     ``t_k=360 K``).  ``n5`` pins the mass flow via a fixed ``Sink`` so
     the bilinear ``H_out = c·m·τ`` surface is approached deterministically
     by the McCormick relaxation.  ``HeatGenerator`` at ``n2`` and
-    ``HeatLoad`` at ``n4`` (when ``q_gen_w`` / ``q_load_w`` are non-zero)
+    ``HeatLoad`` at ``n4`` (when ``q_gen_mw`` / ``q_load_mw`` are non-zero)
     introduce node-based heat injection / withdrawal per paper eq. 9a.
     """
     net = mm.Network()
@@ -58,10 +58,10 @@ def _build_series_dhs(q_gen_w: float = 0.0, q_load_w: float = 0.0):
     mx.create_water_ext_grid(net, juncs[0], t_k=360.0)
     mx.create_water_sink(net, juncs[-1], mass_flow=1.0)
 
-    if q_gen_w > 0:
-        mx.create_heat_generator(net, juncs[5], q_w=q_gen_w)
-    if q_load_w > 0:
-        mx.create_heat_load(net, juncs[20], q_w=q_load_w)
+    if q_gen_mw > 0:
+        mx.create_heat_generator(net, juncs[5], q_mw=q_gen_mw)
+    if q_load_mw > 0:
+        mx.create_heat_load(net, juncs[20], q_mw=q_load_mw)
 
     # Tighten the McCormick envelope bounds to the physical DHS range so
     # the relaxation gap is small enough to recover sensible results.
@@ -69,7 +69,12 @@ def _build_series_dhs(q_gen_w: float = 0.0, q_load_w: float = 0.0):
     grid.t_pu_min_env = T_PU_MIN_ENV
     grid.t_pu_max_env = T_PU_MAX_ENV
 
-    net.apply_formulation(mm.make_mccormick_dhs_formulation(num_partitions=1))
+    # ``num_partitions=4`` is enough for the envelope to enforce a
+    # monotonically-decaying temperature profile under heat losses; with the
+    # plain LP envelope (S=1) the LP corner can park adjacent junctions at
+    # opposite envelope extremes and the "supply >= sink" assertion below
+    # depends on the solver's pivot order rather than on physics.
+    net.apply_formulation(mm.make_mccormick_dhs_formulation(num_partitions=4))
     return net
 
 
@@ -79,7 +84,9 @@ def test_mccormick_dhs_passive_line_temperature_decays():
     sink.  The partition granularity allows small non-monotonic wiggles
     inside one piece, so we only require the end-points to respect the
     physical ordering."""
-    net = _build_series_dhs(100_000, 1000)
+    # Tiny heat injection — pipe losses dominate so the supply end stays hotter
+    # than the sink end (the assertion below checks physical decay).
+    net = _build_series_dhs(0.001, 0.001)
 
     result = ms.PyomoSolver().solve(net, solver_name="gurobi")
     print(result)
@@ -96,51 +103,53 @@ def test_mccormick_dhs_passive_line_temperature_decays():
     assert t_k[-1] > 296.1
 
     pipes = result.get(mm.WaterPipe)
-    for h in pipes["H_out_w"]:
+    for h in pipes["H_out_mw"]:
         assert h > 0
-    for h in pipes["H_in_w"]:
+    for h in pipes["H_in_mw"]:
         assert h > 0
 
 
 def test_mccormick_dhs_heat_generator_raises_temperature():
-    """HeatGenerator at n2 injects 100 kW — downstream enthalpy must
-    increase at that node and the linear nodal balance (eq. 9a) must
-    hold exactly."""
-    q_gen = 1.0e5
-    net = _build_series_dhs(q_gen_w=q_gen)
+    """HeatGenerator at junc[5] injects 0.1 MW — the linear nodal balance
+    (paper eq. 9a) must hold exactly at that junction."""
+    q_gen_mw = 0.1
+    net = _build_series_dhs(q_gen_mw=q_gen_mw)
 
     result = ms.PyomoSolver().solve(net)
     assert result.success
 
     pipes = result.get(mm.WaterPipe)
-    h_in_at_n2 = pipes["H_in_w"][1]  # pipe 1→2
-    h_out_of_n2 = pipes["H_out_w"][2]  # pipe 2→3
-    # Paper eq. (9a) at n2 with q_w_heat = −q_gen (injection):
-    #   H_in(1→2) − H_out(2→3) == −q_gen
-    # i.e. H_out(2→3) = H_in(1→2) + q_gen.
-    residual = h_out_of_n2 - h_in_at_n2 - q_gen
-    assert math.isclose(residual, 0.0, rel_tol=1e-4, abs_tol=1.0), (
-        f"Node eq. 9a balance violated at n2, residual={residual}"
+    # _build_series_dhs places the generator at juncs[5]; pipes are
+    # ordered by their (from, to, key) tuple, so pipe row index i
+    # corresponds to (i, i+1).  Pipe 4→5 feeds junc[5]; pipe 5→6 leaves it.
+    h_in_at_n5 = pipes["H_in_mw"][4]
+    h_out_of_n5 = pipes["H_out_mw"][5]
+    # Paper eq. (9a) at the junction with q_mw_heat = −q_gen (injection):
+    #   H_in − H_out == −q_gen ⇒ H_out − H_in == q_gen.
+    residual = h_out_of_n5 - h_in_at_n5 - q_gen_mw
+    assert math.isclose(residual, 0.0, rel_tol=1e-4, abs_tol=1e-6), (
+        f"Node eq. 9a balance violated at junc[5], residual={residual}"
     )
 
 
 def test_mccormick_dhs_balanced_gen_and_load():
-    """HeatGenerator (n2, +100 kW) and HeatLoad (n4, +100 kW) balance —
-    the linear nodal balance (eq. 9a) must still hold exactly at n4."""
-    q = 1.0e5
-    net = _build_series_dhs(q_gen_w=q, q_load_w=q)
+    """HeatGenerator at junc[5] (+0.1 MW) and HeatLoad at junc[20] (+0.1 MW)
+    balance — the nodal balance (paper eq. 9a) must hold exactly at the
+    HeatLoad node."""
+    q_mw = 0.1
+    net = _build_series_dhs(q_gen_mw=q_mw, q_load_mw=q_mw)
 
     result = ms.PyomoSolver().solve(net)
     assert result.success
 
     pipes = result.get(mm.WaterPipe)
-    h_in_at_n4 = pipes["H_in_w"][3]  # pipe 3→4
-    h_out_of_n4 = pipes["H_out_w"][4]  # pipe 4→5
-    # Paper eq. (9a) at n4 with q_w_heat = +q (load):
-    #   H_in(3→4) − H_out(4→5) == +q
-    residual = h_in_at_n4 - h_out_of_n4 - q
-    assert math.isclose(residual, 0.0, rel_tol=1e-4, abs_tol=1.0), (
-        f"Node eq. 9a balance violated at n4, residual={residual}"
+    # HeatLoad is at juncs[20]; pipe 19→20 feeds it, pipe 20→21 leaves.
+    h_in_at_n20 = pipes["H_in_mw"][19]
+    h_out_of_n20 = pipes["H_out_mw"][20]
+    # Paper eq. (9a) at the load junction:  H_in − H_out == +q.
+    residual = h_in_at_n20 - h_out_of_n20 - q_mw
+    assert math.isclose(residual, 0.0, rel_tol=1e-4, abs_tol=1e-6), (
+        f"Node eq. 9a balance violated at junc[20], residual={residual}"
     )
 
 

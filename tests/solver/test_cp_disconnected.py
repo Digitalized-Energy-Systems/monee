@@ -172,7 +172,7 @@ def _build_p2h_power_isolated(deactivate: bool):
 
 
 def test_p2h_power_bus_isolated():
-    """P2H: power_node (Bus) disconnected → compound deactivated (heat_w=0), heat grid intact.
+    """P2H: power_node (Bus) disconnected → compound deactivated (heat_mw=0), heat grid intact.
 
     The control node stays active as a thermal junction (set_active zeroes the
     heat contribution without removing the node from the thermal grid).

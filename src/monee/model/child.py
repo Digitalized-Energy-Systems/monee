@@ -207,6 +207,7 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
         t_k=356,
         max_import_kgs=None,
         max_export_kgs=None,
+        pin_temperature=True,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -218,13 +219,23 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
         )
         self.pressure_pu = pressure_pu
         self.t_k = t_k
+        self.pin_temperature = pin_temperature
 
     def overwrite(self, node_model, grid):
-        """Pin the junction pressure and temperature to the configured setpoints."""
+        """Pin the junction pressure (always) and — when ``pin_temperature``
+        is True (default) — the junction temperature to the configured
+        setpoints.  Setting ``pin_temperature=False`` leaves the junction
+        temperature as a free Var, useful for return-side slacks that
+        anchor pressure but should let the return temperature emerge from
+        the upstream heat balance (otherwise pinning T forces every
+        consumer's HX outlet to match the slack T setpoint, which is
+        infeasible whenever pipe losses or partial HX regulation make the
+        true outlet mix differ)."""
         node_model.pressure_pu = Const(self.pressure_pu)
         node_model.pressure_squared_pu = Const(self.pressure_pu**2)
-        node_model.t_pu = Const(self.t_k / grid.t_ref)
-        node_model.t_k = Const(self.t_k)
+        if self.pin_temperature:
+            node_model.t_pu = Const(self.t_k / grid.t_ref)
+            node_model.t_k = Const(self.t_k)
 
 
 @model
@@ -258,11 +269,6 @@ class ConsumeHydrGrid(NoVarChildModel):
         self.pressure_pu = pressure_pu
         self.t_k = t_k
 
-    def overwrite(self, node_model, grid):
-        """Pin the junction pressure to the configured setpoint."""
-        node_model.pressure_pu = Const(self.pressure_pu)
-        node_model.pressure_squared_pu = Const(self.pressure_pu**2)
-
 
 @model
 class HeatGenerator(NoVarChildModel):
@@ -274,22 +280,22 @@ class HeatGenerator(NoVarChildModel):
     McCormick-DHS nodal balance
     (:class:`~monee.model.formulation.mccormick.water.MccDHSNodeFormulation`).
     Follows monee's load convention: the user-visible magnitude is positive,
-    but the internal ``q_w_heat`` is negated so the node balance treats this
+    but the internal ``q_mw_heat`` is negated so the node balance treats this
     child as an injection.
 
     Args:
-        q_w (float): Heat output in Watts (positive = generation).
+        q_mw (float): Heat output in MW (positive = generation).
     """
 
-    def __init__(self, q_w, **kwargs) -> None:
-        if isinstance(q_w, (int, float)) and q_w < 0:
+    def __init__(self, q_mw, **kwargs) -> None:
+        if isinstance(q_mw, (int, float)) and q_mw < 0:
             raise ValueError(
                 f"HeatGenerator expects a positive heat-generation magnitude; "
-                f"got q_w={q_w}.  Pass the absolute value — the sign is "
+                f"got q_mw={q_mw}.  Pass the absolute value — the sign is "
                 f"handled internally (load convention)."
             )
         super().__init__(**kwargs)
-        self.q_w_heat = -q_w
+        self.q_mw_heat = -q_mw
 
 
 @model
@@ -301,15 +307,15 @@ class HeatLoad(NoVarChildModel):
     (:meth:`~monee.model.node.Junction.calc_signed_heat_flow`) and the
     McCormick-DHS nodal balance
     (:class:`~monee.model.formulation.mccormick.water.MccDHSNodeFormulation`).
-    Load convention: positive ``q_w_heat`` represents consumption.
+    Load convention: positive ``q_mw_heat`` represents consumption.
 
     Args:
-        q_w (float): Heat demand in Watts (positive = consumption).
+        q_mw (float): Heat demand in MW (positive = consumption).
     """
 
-    def __init__(self, q_w, **kwargs) -> None:
+    def __init__(self, q_mw, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.q_w_heat = q_w
+        self.q_mw_heat = q_mw
 
 
 @model
