@@ -6,6 +6,7 @@ import networkx as nx
 import pandas
 
 from monee.model import (
+    Child,
     Const,
     ExtHydrGrid,
     ExtPowerGrid,
@@ -853,15 +854,39 @@ def find_ignored_nodes(network: Network, islanding_config=None):
     # backup branches, so degree-in-topology overstates active connectivity
     # and pruning would be too aggressive.
     if islanding_config is None:
+        # Compound *port* children (e.g. ``SubHG`` attached to the heat-supply
+        # node by ``CHPHG``) carry no consumer demand of their own — their
+        # variables are driven by the parent compound's control-node equations.
+        # They must NOT keep an otherwise-isolated junction alive: when the
+        # only outlet pipe of such a junction dies, the compound's heat
+        # injection equations end up writing into a degree-1 leaf that the
+        # McCormick-DHS balance cannot satisfy (LP infeasible).
+        # NB: ``without_cps`` has had its compound objects removed by
+        # ``remove_cps`` but the *port children* (e.g. SubHG) live on as
+        # regular ``Child`` entries — read the compound list from the
+        # original ``network`` so we can still identify them.
+        compound_port_child_ids = {
+            sub.id
+            for compound in network.compounds
+            for sub in compound.subcomponents
+            if isinstance(sub, Child)
+        }
+
+        def _has_real_active_child(int_node):
+            for cid in int_node.child_ids:
+                if cid in compound_port_child_ids:
+                    continue
+                if without_cps.child_by_id(cid).active:
+                    return True
+            return False
+
         while True:
             new_stubs = set()
             for node_id in topology.nodes:
                 if node_id in ignored_nodes:
                     continue
                 int_node: Node = topology.nodes[node_id]["internal_node"]
-                if any(
-                    without_cps.child_by_id(cid).active for cid in int_node.child_ids
-                ):
+                if _has_real_active_child(int_node):
                     continue
                 active_degree = sum(
                     1 for nb in topology.neighbors(node_id) if nb not in ignored_nodes

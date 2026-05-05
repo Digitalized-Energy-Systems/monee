@@ -1161,6 +1161,6 @@ if __name__ == "__main__":
     from monee import PyomoSolver, run_energy_flow
     from monee.model.formulation import MISOCP_NETWORK_FORMULATION
 
-    net = create_urban_district_net()
+    net = create_resilient_urban_mes_net()
     net.apply_formulation(MISOCP_NETWORK_FORMULATION)
     print(run_energy_flow(net, solver=PyomoSolver(), solver_name="gurobi"))

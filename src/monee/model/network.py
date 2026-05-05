@@ -107,12 +107,17 @@ class Network:
                 branch.active = active
         elif cls == Compound:
             compound: Compound = self.compound_by_id(id)
+            # Always propagate to subcomponents and the compound's own ``active``
+            # flag so ``ignore_compound``/``ignore_child``/``inject_vars`` see a
+            # fully deactivated compound.  ``set_active`` (when available) is
+            # *additional* state on the model — useful for compounds that need
+            # to zero out internal setpoints — but on its own it leaves
+            # subcomponent children injected with live Vars.
+            for component in compound.subcomponents:
+                self._set_active(type(component), component.id, active)
+            compound.active = active
             if hasattr(compound.model, "set_active"):
                 compound.model.set_active(active)
-            else:
-                for component in compound.subcomponents:
-                    self._set_active(type(component), component.id, active)
-                self.compound_by_id(id).active = active
         elif cls == Child:
             self.child_by_id(id).active = active
 
