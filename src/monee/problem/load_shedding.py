@@ -3,11 +3,16 @@ from monee.model.branch import (
     HeatExchanger,
     HeatExchangerGenerator,
     HeatExchangerLoad,
+    PassiveHeatExchanger,
+    PassiveHeatExchangerGenerator,
+    PassiveHeatExchangerLoad,
     PowerLine,
 )
 from monee.model.child import (
     ExtHydrGrid,
     ExtPowerGrid,
+    HeatGenerator,
+    HeatLoad,
     PowerGenerator,
     PowerLoad,
     Sink,
@@ -16,11 +21,14 @@ from monee.model.child import (
 from monee.model.grid import GasGrid, WaterGrid
 from monee.model.multi import (
     CHPControlNode,
+    CHPHGControlNode,
     GasToHeatControlNode,
+    GasToHeatHG,
     GasToPower,
     PowerToGas,
     PowerToHeat,
     PowerToHeatControlNode,
+    PowerToHeatHG,
 )
 from monee.model.node import Bus, Junction
 from monee.problem.core import (
@@ -34,10 +42,32 @@ from monee.problem.core import (
 HHV = 15.3
 
 
-def retrieve_power_uniform(model):
+_CP_ZERO_TYPES = (
+    CHPControlNode,
+    CHPHGControlNode,
+    PowerToHeatControlNode,
+    PowerToHeat,
+    PowerToHeatHG,
+    PowerToGas,
+    GasToPower,
+    GasToHeatControlNode,
+    GasToHeatHG,
+)
 
-    if isinstance(model, HeatExchangerLoad | HeatExchangerGenerator | HeatExchanger):
+
+def retrieve_power_uniform(model):
+    if isinstance(
+        model,
+        HeatExchangerLoad
+        | HeatExchangerGenerator
+        | HeatExchanger
+        | PassiveHeatExchangerLoad
+        | PassiveHeatExchangerGenerator
+        | PassiveHeatExchanger,
+    ):
         return (model.q_mw_set * model.regulation, model.q_mw_set)
+    elif isinstance(model, HeatLoad | HeatGenerator):
+        return (nan_to_zero(model.q_mw_heat) * model.regulation, model.q_mw_heat)
     elif isinstance(model, PowerLoad | PowerGenerator):
         return (nan_to_zero(model.p_mw) * model.regulation, model.p_mw)
     elif isinstance(model, ExtPowerGrid):
@@ -49,17 +79,7 @@ def retrieve_power_uniform(model):
             nan_to_zero(model.mass_flow) * 3.6 * HHV * model.regulation,
             model.mass_flow * 3.6 * HHV,
         )
-    elif isinstance(model, CHPControlNode):
-        return (0, 0)
-    elif isinstance(model, PowerToHeatControlNode):
-        return (0, 0)
-    elif isinstance(model, PowerToHeat):
-        return (0, 0)
-    elif isinstance(model, PowerToGas):
-        return (0, 0)
-    elif isinstance(model, GasToPower):
-        return (0, 0)
-    elif isinstance(model, GasToHeatControlNode):
+    elif isinstance(model, _CP_ZERO_TYPES):
         return (0, 0)
     elif isinstance(model, PowerLine):
         if model.backup:
@@ -178,24 +198,53 @@ def create_multi_period_load_shedding_optimization_problem(
 
     _controllable_types = (
         PowerLoad,
+        HeatLoad,
         HeatExchangerLoad,
+        PassiveHeatExchangerLoad,
         Sink,
         HeatExchanger,
+        PassiveHeatExchanger,
         PowerGenerator,
+        HeatGenerator,
         HeatExchangerGenerator,
+        PassiveHeatExchangerGenerator,
         Source,
         CHPControlNode,
+        CHPHGControlNode,
         PowerToHeatControlNode,
+        PowerToHeatHG,
         PowerToGas,
+        GasToPower,
+        GasToHeatControlNode,
+        GasToHeatHG,
     )
     if use_ext_grid_objective:
         _controllable_types = _controllable_types + (ExtPowerGrid, ExtHydrGrid)
 
+    _DEMAND_WEIGHT_TYPES = (
+        HeatExchangerLoad,
+        PassiveHeatExchangerLoad,
+        Sink,
+        PowerLoad,
+        HeatLoad,
+    )
+    _CP_WEIGHT_TYPES = (
+        CHPControlNode,
+        CHPHGControlNode,
+        PowerToHeatControlNode,
+        PowerToHeatHG,
+        GasToHeatControlNode,
+        GasToHeatHG,
+        PowerToGas,
+        GasToPower,
+        PowerToHeat,
+    )
+
     def calc_weight(model):
         weight = 1
-        if isinstance(model, HeatExchangerLoad | Sink | PowerLoad):
+        if isinstance(model, _DEMAND_WEIGHT_TYPES):
             weight = load_weight
-        elif isinstance(model, CHPControlNode | PowerToGas | PowerToHeat):
+        elif isinstance(model, _CP_WEIGHT_TYPES):
             weight = load_weight - 1
         elif isinstance(model, ExtPowerGrid | ExtHydrGrid):
             weight = 5
@@ -266,11 +315,30 @@ def create_load_shedding_optimization_problem(
 
     objectives = Objectives()
 
+    _DEMAND_WEIGHT_TYPES = (
+        HeatExchangerLoad,
+        PassiveHeatExchangerLoad,
+        Sink,
+        PowerLoad,
+        HeatLoad,
+    )
+    _CP_WEIGHT_TYPES = (
+        CHPControlNode,
+        CHPHGControlNode,
+        PowerToHeatControlNode,
+        PowerToHeatHG,
+        GasToHeatControlNode,
+        GasToHeatHG,
+        PowerToGas,
+        GasToPower,
+        PowerToHeat,
+    )
+
     def calc_weight(model):
         weight = 1
-        if isinstance(model, HeatExchangerLoad | Sink | PowerLoad):
+        if isinstance(model, _DEMAND_WEIGHT_TYPES):
             weight = load_weight
-        elif isinstance(model, CHPControlNode | PowerToGas | PowerToHeat):
+        elif isinstance(model, _CP_WEIGHT_TYPES):
             weight = load_weight - 1
         elif isinstance(model, ExtPowerGrid | ExtHydrGrid):
             weight = 5

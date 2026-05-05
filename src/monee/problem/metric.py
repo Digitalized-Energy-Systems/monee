@@ -33,12 +33,11 @@ def is_load(component):
     model = component.model
     grid = component.grid
     return (
-        isinstance(model, md.PowerLoad)
+        isinstance(model, (md.PowerLoad, md.HeatLoad))
         or (isinstance(model, md.Sink) and isinstance(grid, md.GasGrid))
-        or isinstance(model, md.HeatExchangerLoad)
+        or isinstance(model, (md.HeatExchangerLoad, md.PassiveHeatExchangerLoad))
         or isinstance(model, md.ExtPowerGrid)
-        or isinstance(model, md.ExtHydrGrid)
-        and isinstance(grid, md.GasGrid)
+        or (isinstance(model, md.ExtHydrGrid) and isinstance(grid, md.GasGrid))
     )
 
 
@@ -66,8 +65,12 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                         * 3.6
                         * component.grid.higher_heating_value
                     )
-                if isinstance(model, md.HeatExchangerLoad):
+                if isinstance(
+                    model, (md.HeatExchangerLoad, md.PassiveHeatExchangerLoad)
+                ):
                     heat_load_curtailed += md.upper(model.q_mw)
+                if isinstance(model, md.HeatLoad):
+                    heat_load_curtailed += md.upper(model.q_mw_heat)
                 continue
             if isinstance(model, md.ExtHydrGrid) and include_ext_grid:
                 if md.value(model.mass_flow) < 0:
@@ -94,9 +97,13 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                     * 3.6
                     * component.grid.higher_heating_value
                 )
-            if isinstance(model, md.HeatExchangerLoad):
+            if isinstance(model, (md.HeatExchangerLoad, md.PassiveHeatExchangerLoad)):
                 heat_load_curtailed += md.upper(model.q_mw) - md.value(
                     model.q_mw
+                ) * md.value(model.regulation)
+            if isinstance(model, md.HeatLoad):
+                heat_load_curtailed += md.upper(model.q_mw_heat) - md.value(
+                    model.q_mw_heat
                 ) * md.value(model.regulation)
         if inv:
             return (-power_load_curtailed, -heat_load_curtailed, -gas_load_curtailed)

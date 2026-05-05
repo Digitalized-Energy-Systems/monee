@@ -587,13 +587,13 @@ def create_mv_multi_cigre():
 def create_gas_tree_net_for_power(
     power_net: mm.Network,
     target_net: mm.Network,
-    gas_load_share=0.4,
-    gas_gen_share=0.3,
+    gas_load_share=3.0,
+    gas_gen_share=1.0,
     default_diameter_m=0.3,
     length_scale=1,
     default_length=DEFAULT_LENGTH,
-    min_load_kgs=0.01,
-    min_source_kgs=0.01,
+    min_load_kgs=1.8e-4,
+    min_source_kgs=1.8e-4,
     slack_node_id=None,
 ):
     """Create an acyclic gas grid mirroring the spanning tree of ``power_net``.
@@ -607,15 +607,23 @@ def create_gas_tree_net_for_power(
     Capacity sizing
     ---------------
     For each power node we sum its ``PowerLoad`` magnitudes (in MW) and treat
-    ``gas_load_share`` of that as gas demand to be covered chemically.  The
-    equivalent mass flow is::
+    ``gas_load_share`` × p_mw as the chemical thermal demand (in MW) to be
+    covered by gas.  ``gas_load_share`` is a thermal-to-electrical multiplier:
+    the default of 3.0 reflects the typical ~3× ratio of peak gas thermal
+    demand to peak electric demand on a residential LV feeder (gas heating +
+    DHW vs lights/appliances).  The equivalent mass flow is::
 
-        kg/s = MW * gas_load_share / HHV[MJ/kg]
+        kg/s = (MW * gas_load_share) / HHV[MJ/kg]
 
     Generation magnitudes (``PowerGenerator`` / ``GridFormingGenerator`` /
     ``ExtPowerGrid``) are mirrored as gas sources scaled by ``gas_gen_share``.
     The slack ``ExtHydrGrid`` is attached at ``slack_node_id`` (or the
     network's first node) so that any residual imbalance is absorbed.
+
+    The per-bus floors ``min_load_kgs`` / ``min_source_kgs`` correspond to
+    ~10 kW thermal at the gas HHV, matching the heat-grid floor; they are
+    *not* a fraction-of-1.0 design parameter — interpreting them as such
+    inflates per-bus gas demand by ~50× the realistic per-dwelling peak.
 
     Returns
     -------
@@ -692,15 +700,15 @@ def create_gas_tree_net_for_power(
 def create_heat_supply_return_net_for_power(
     power_net: mm.Network,
     target_net: mm.Network,
-    heat_load_share=0.5,
-    heat_gen_share=0.3,
+    heat_load_share=1.0,
+    heat_gen_share=0.5,
     default_diameter_m=0.12,
     return_diameter_m=None,
     length_scale=1,
     default_length=DEFAULT_LENGTH,
     return_length_m=None,
-    min_load_mw=0.01,
-    min_gen_mw=0.01,
+    min_load_mw=0.005,
+    min_gen_mw=0.005,
     slack_node_id=None,
     node_based_heat_loads=False,
     balance_gen_to_load=True,
@@ -752,10 +760,13 @@ def create_heat_supply_return_net_for_power(
     Capacity sizing
     ---------------
     Heat capacities are derived from the power network: every power load
-    contributes ``heat_load_share`` of its ``p_mw`` as a thermal demand,
-    every power generator contributes ``heat_gen_share`` of its rated power
-    as thermal generation.  This keeps the heat and gas grids dimensionally
-    coherent with the underlying power grid.
+    contributes ``heat_load_share`` × ``p_mw`` as thermal demand, every
+    power generator contributes ``heat_gen_share`` × rated power as thermal
+    generation.  ``heat_load_share`` is a thermal-to-electrical multiplier
+    (default 1.0): on a residential distribution feeder peak space-heating
+    demand is roughly comparable to peak electric demand, so a 1:1 ratio is
+    a reasonable starting point.  ``balance_gen_to_load`` rescales the
+    generator side so total HX-Gen capacity matches total HX-Load demand.
 
     Returns
     -------

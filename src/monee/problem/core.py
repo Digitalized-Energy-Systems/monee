@@ -17,6 +17,8 @@ from monee.model import (
     HeatExchanger,
     HeatExchangerGenerator,
     HeatExchangerLoad,
+    HeatGenerator,
+    HeatLoad,
     Network,
     PassiveHeatExchanger,
     PassiveHeatExchangerGenerator,
@@ -611,9 +613,12 @@ class OptimizationProblem:
     ):
         """Make demand-side components (loads, gas sinks, heat exchangers as loads) controllable.
 
-        Targets :class:`~monee.model.PowerLoad`, :class:`~monee.model.HeatExchangerLoad`,
-        gas :class:`~monee.model.Sink`, and :class:`~monee.model.HeatExchanger` instances
-        that are currently consuming (positive ``q_w``).
+        Targets :class:`~monee.model.PowerLoad`, :class:`~monee.model.HeatLoad`,
+        :class:`~monee.model.HeatExchangerLoad`,
+        :class:`~monee.model.PassiveHeatExchangerLoad`, gas
+        :class:`~monee.model.Sink`, and :class:`~monee.model.HeatExchanger` /
+        :class:`~monee.model.PassiveHeatExchanger` instances currently
+        consuming (positive ``q_mw``).
 
         Args:
             attributes: Attribute names to promote to ``Var`` (e.g. ``["p_mw"]``).
@@ -640,7 +645,10 @@ class OptimizationProblem:
                 (
                     isinstance(
                         component.model,
-                        HeatExchangerLoad | PassiveHeatExchangerLoad | PowerLoad,
+                        HeatExchangerLoad
+                        | PassiveHeatExchangerLoad
+                        | PowerLoad
+                        | HeatLoad,
                     )
                     or (
                         type(component.model) is Sink
@@ -665,7 +673,9 @@ class OptimizationProblem:
         """Make generation-side components controllable.
 
         Targets :class:`~monee.model.PowerGenerator`,
-        :class:`~monee.model.HeatExchangerGenerator`, and gas
+        :class:`~monee.model.HeatGenerator`,
+        :class:`~monee.model.HeatExchangerGenerator`,
+        :class:`~monee.model.PassiveHeatExchangerGenerator`, and gas
         :class:`~monee.model.Source` instances.
 
         Args:
@@ -693,6 +703,7 @@ class OptimizationProblem:
                     HeatExchangerGenerator
                     | PassiveHeatExchangerGenerator
                     | PowerGenerator
+                    | HeatGenerator
                     | Source,
                 )
                 and component.active

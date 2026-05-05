@@ -27,6 +27,8 @@ from monee.model.branch import (
 from monee.model.child import (
     ExtHydrGrid,
     ExtPowerGrid,
+    HeatGenerator,
+    HeatLoad,
     PowerGenerator,
     PowerLoad,
     Sink,
@@ -53,12 +55,14 @@ _GAS_MW_FACTOR = 3.6 * _HHV_DEFAULT  # mass_flow [kg/s] * factor ≈ MW
 # Types that participate in the load-shedding objective.
 _DEMAND_TYPES = (
     PowerLoad,
+    HeatLoad,
     HeatExchangerLoad,
     PassiveHeatExchangerLoad,
     Sink,
 )
 _GENERATOR_TYPES = (
     PowerGenerator,
+    HeatGenerator,
     HeatExchangerGenerator,
     PassiveHeatExchangerGenerator,
     Source,
@@ -115,6 +119,14 @@ def _shedding_mw(model):
             return p * (1 - reg)
         # PowerGenerator: p_mw is negative, so -p_mw is the magnitude
         return (-p) * (1 - reg)
+
+    if isinstance(model, (HeatLoad, HeatGenerator)):
+        # HeatLoad.q_mw_heat ≥ 0 (consumption); HeatGenerator.q_mw_heat ≤ 0
+        # (load convention — constructor negates the user magnitude).
+        q = nan_to_zero(model.q_mw_heat)
+        if isinstance(model, HeatLoad):
+            return q * (1 - reg)
+        return (-q) * (1 - reg)
 
     if isinstance(model, _HE_OBJECTIVE_TYPES) or type(model) is HeatExchanger:
         q_mw_set = getattr(model, "q_mw_set", 0)
@@ -181,9 +193,10 @@ def create_min_load_shedding_problem(
 
     * **Electrical**: PowerLoad, PowerGenerator, ExtPowerGrid, PowerLine (backup)
     * **Gas**: Sink, Source, ExtHydrGrid
-    * **Thermal**: HeatExchanger variants, PassiveHeatExchanger variants,
-      ExtHydrGrid (water)
-    * **Coupling**: CHP, PowerToHeat, GasToHeat, PowerToGas, GasToPower
+    * **Thermal**: HeatLoad, HeatGenerator, HeatExchanger variants,
+      PassiveHeatExchanger variants, ExtHydrGrid (water)
+    * **Coupling**: CHP, CHPHG, PowerToHeat, PowerToHeatHG, GasToHeat,
+      GasToHeatHG, PowerToGas, GasToPower
     * **Storage**: ElectricStorage, GasStorage, ThermalStorage
 
     Args:
