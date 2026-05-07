@@ -6,13 +6,10 @@ and multi-period solves.
 
 Typical usage::
 
-    from monee.problem.min_load_shedding import (
-        create_min_load_shedding_problem,
-    )
-    import monee.simulation as sim
+    import monee
 
-    prob = create_min_load_shedding_problem()
-    result = sim.run(net, optimization_problem=prob)
+    prob = monee.create_min_load_shedding_problem()
+    result = monee.run_energy_flow_optimization(net, optimization_problem=prob)
 """
 
 from monee.model.branch import (

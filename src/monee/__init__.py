@@ -3,7 +3,10 @@ import monee.solver as ms
 import monee.problem as mp
 import monee.express as mx
 from monee.model import Network
-from monee.model.islanding import (
+from monee.model.extension import (
+    NetworkAspect,
+    LumpedThermalCapacitance,
+    GasLinepack,
     GridFormingMixin,
     IslandingMode,
     NetworkIslandingConfig,
@@ -12,6 +15,21 @@ from monee.model.islanding import (
     GasIslandingMode,
     GridFormingSource,
     WaterIslandingMode,
+)
+from monee.model.formulation import (
+    AC_NETWORK_FORMULATION,
+    MISOCP_NETWORK_FORMULATION,
+    MCCORMICK_DHS_NETWORK_FORMULATION,
+    NL_DARCY_WEISBACH_NETWORK_FORMULATION,
+    NL_WEYMOUTH_NETWORK_FORMULATION,
+    make_mccormick_dhs_formulation,
+    make_nl_darcy_weisbach_pwl_network_formulation,
+    make_nl_weymouth_pwl_network_formulation,
+)
+from monee.problem import (
+    OptimizationProblem,
+    create_load_shedding_optimization_problem,
+    create_min_load_shedding_problem,
 )
 from monee.simulation import (
     solve,

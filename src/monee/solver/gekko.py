@@ -140,7 +140,7 @@ class GEKKOSolver(SolverInterface):
             ext.prepare(network)
 
         # detect islanding config for topology-aware pre-filtering
-        from monee.model.islanding.core import NetworkIslandingConfig
+        from monee.model.extension.islanding.core import NetworkIslandingConfig
 
         islanding_config = next(
             (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),

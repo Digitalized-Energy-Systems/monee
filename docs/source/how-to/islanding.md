@@ -64,12 +64,12 @@ mn.enable_islanding(net, electricity=True, gas=True, water=True)
 You can mix custom modes with defaults:
 
 ```python
-from monee.model.islanding import ElectricityIslandingMode, GasIslandingMode
+import monee as mn
 
 mn.enable_islanding(
     net,
-    electricity=ElectricityIslandingMode(angle_bound=3.15, big_m_conn=50),
-    gas=GasIslandingMode(big_m_conn=50),
+    electricity=mn.ElectricityIslandingMode(angle_bound=3.15, big_m_conn=50),
+    gas=mn.GasIslandingMode(big_m_conn=50),
 )
 ```
 

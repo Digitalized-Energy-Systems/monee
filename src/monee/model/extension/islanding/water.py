@@ -22,7 +22,7 @@ class WaterIslandingMode(IslandingMode):
     Structurally identical to ``GasIslandingMode``; pressure bounds are applied to
     de-energised junctions so that ``pressure_pu = 0`` when ``e_i = 0``.
 
-    Use ``GridFormingSource`` (from ``monee.model.islanding.gas``) as the grid-forming
+    Use ``GridFormingSource`` (from ``monee.model.extension.islanding.gas``) as the grid-forming
     child for water junctions.
 
     Parameters

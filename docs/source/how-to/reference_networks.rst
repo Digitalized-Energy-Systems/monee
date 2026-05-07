@@ -69,25 +69,23 @@ experiments because it exercises all coupling types simultaneously:
 
 .. code-block:: python
 
-    from monee import run_energy_flow_optimization, PyomoSolver
+    import monee
     from monee.network import create_regional_mes_net
-    from monee.model.formulation import MISOCP_NETWORK_FORMULATION
-    from monee.problem import create_load_shedding_optimization_problem
 
     net = create_regional_mes_net()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)
 
-    problem = create_load_shedding_optimization_problem(
+    problem = monee.create_load_shedding_optimization_problem(
         bounds_el=(0.9, 1.1),
         bounds_heat=(0.9, 1.1),
         bounds_gas=(0.9, 1.1),
         use_ext_grid_bounds=False,
     )
 
-    result = run_energy_flow_optimization(
+    result = monee.run_energy_flow_optimization(
         net,
         problem,
-        solver=PyomoSolver(),
+        solver=monee.PyomoSolver(),
         solver_name="gurobi",
         exclude_unconnected_nodes=True,
     )

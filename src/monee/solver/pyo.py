@@ -14,7 +14,7 @@ from monee.model import (
 )
 
 # detect islanding config for topology-aware pre-filtering
-from monee.model.islanding.core import NetworkIslandingConfig
+from monee.model.extension.islanding.core import NetworkIslandingConfig
 from monee.problem.core import OptimizationProblem
 from monee.simulation.step_state import StepState
 

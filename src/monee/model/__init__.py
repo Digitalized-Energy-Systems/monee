@@ -90,13 +90,10 @@ from .grid import (
     PowerGrid,
     Grid,
 )
-from .formulation.ltc import LumpedThermalCapacitance
-from .formulation.linepack import GasLinepack
-from .formulation.mccormick.water import (
-    MCCORMICK_DHS_NETWORK_FORMULATION,
-    make_mccormick_dhs_formulation,
-)
-from .islanding import (
+from .extension import (
+    NetworkAspect,
+    LumpedThermalCapacitance,
+    GasLinepack,
     GridFormingMixin,
     IslandingMode,
     NetworkIslandingConfig,
@@ -105,4 +102,8 @@ from .islanding import (
     GasIslandingMode,
     GridFormingSource,
     WaterIslandingMode,
+)
+from .formulation.mccormick.water import (
+    MCCORMICK_DHS_NETWORK_FORMULATION,
+    make_mccormick_dhs_formulation,
 )

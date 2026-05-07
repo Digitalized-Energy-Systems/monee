@@ -55,7 +55,7 @@ import logging
 import pandas
 
 from monee.model import Network
-from monee.model.islanding.core import NetworkIslandingConfig
+from monee.model.extension.islanding.core import NetworkIslandingConfig
 from monee.simulation.step_state import PeriodState
 from monee.simulation.timeseries import TimeseriesData
 from monee.solver.core import (

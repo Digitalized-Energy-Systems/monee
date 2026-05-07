@@ -156,20 +156,19 @@ def create_multi_period_load_shedding_optimization_problem(
 
     Example::
 
+        import monee
         from monee.problem.load_shedding import (
             create_multi_period_load_shedding_optimization_problem,
         )
-        from monee.simulation.multi_period import run_multi_period
-        from monee.simulation.timeseries import TimeseriesData
 
-        td = TimeseriesData()
+        td = monee.TimeseriesData()
         td.add_child_series(load_id, "p_mw", [2.0, 5.0, 3.0, 1.0])
 
         prob = create_multi_period_load_shedding_optimization_problem(
             regulation_ramp_limit=0.3,
             ext_grid_el_bounds=(-3.0, 3.0),
         )
-        result = run_multi_period(net, td, steps=4, optimization_problem=prob)
+        result = monee.run_multi_period(net, td, steps=4, optimization_problem=prob)
     """
     problem = OptimizationProblem(debug=debug)
     problem.controllable_demands(REGULATION_ATTR)

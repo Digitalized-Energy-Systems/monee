@@ -53,13 +53,93 @@ class LumpedThermalCapacitance(NetworkAspect):
       temperature is accessible via :class:`~monee.simulation.step_state.StepState`.
     * **inter_step_equations** — for each active junction, adds the discrete
       thermal-mass equation using the previous-step temperature from
-      ``StepState`` (or the initial ``t_pu`` value for the very first step).
+      ``StepState``.
+
+    First-step / first-period heat balance
+    --------------------------------------
+    The very first step has no previous-state ``T(t−1)``.  Two modes
+    control what LTC emits at that step:
+
+    * **Anchored mode** (default; required for NLP / Newton-path solvers
+      such as GEKKO/IPOPT).  The dynamic equation
+      ``ρ·V·(T(0) − t_init)/Δt == net_heat`` is emitted with an explicit
+      starting value ``t_init`` resolved through three layers,
+      most-specific first:
+
+      1. ``t_init_overrides[node_id]`` — per-junction explicit value.
+      2. ``default_t_init`` (constructor) — a single value applied to all
+         LTC junctions that don't have a specific override.
+      3. The junction's own ``t_pu`` ``Var`` initialiser at the time the
+         extension is attached (the legacy default — typically ``1.0``
+         inherited from :class:`~monee.model.node.Junction`).
+
+      For an *operational* timeseries study, the legacy default forces
+      an artificial "warm-up transient" because ``1.0 = supply
+      temperature`` rarely matches the network's true operating
+      equilibrium.  Pass ``default_t_init`` (e.g. an estimate of the
+      steady-state mean junction temperature) to skip that transient.
+
+    * **Steady-state mode** (``first_step_steady_state=True``).  The
+      inertia term is dropped at the first step and the LTC equation
+      degenerates to ``net_convective_heat_in == 0`` — i.e. the
+      network's regular steady-state heat balance.  ``T(0)`` then
+      emerges from the surrounding equations rather than being pulled
+      toward a fixed anchor.  Step 1 onward uses the standard dynamic
+      equation with the solved ``T(0)`` as ``T(t−1)``.  This produces
+      cleaner physics (no warm-up artefact at all) but **only converges
+      reliably with MIP / LP-relaxation solvers** (Pyomo + Gurobi /
+      SCIP); on NLP / Newton solvers the unanchored balance can leave
+      the junction temperature locally underdetermined and the solve
+      may fail.  Opt in only when you're using a MIP backend.
+
+    Args:
+        default_t_init: Optional global default for ``T(t−1)`` at the
+            very first step in anchored mode.  ``None`` (default) means
+            fall back to each junction's own ``t_pu`` ``Var``
+            initialiser.  Ignored when
+            ``first_step_steady_state=True``.
+        t_init_overrides: Optional ``{node_id: value}`` map — per-junction
+            explicit anchor in anchored mode, overriding both
+            *default_t_init* and the ``Var`` initialiser.  Ignored when
+            ``first_step_steady_state=True``.
+        first_step_steady_state: If ``True``, emit
+            ``net_convective_heat_in == 0`` at the first step instead of
+            the anchored dynamic equation.  Recommended only for MIP
+            solvers (Gurobi / SCIP via Pyomo).  Default ``False``.
+
+    Examples
+    --------
+    Skip the supply-temperature warm-up by anchoring every LTC junction
+    near the network's expected operating mean::
+
+        net.add_extension(LumpedThermalCapacitance(default_t_init=0.93))
+
+    Drop the anchor entirely (MIP backend only)::
+
+        net.add_extension(LumpedThermalCapacitance(first_step_steady_state=True))
+
+    Cold-start study with a few hot-water tanks initialised separately::
+
+        net.add_extension(LumpedThermalCapacitance(
+            default_t_init=0.4,                 # network mostly cold
+            t_init_overrides={tank_id: 1.0},    # tanks pre-heated
+        ))
     """
 
-    def __init__(self):
+    def __init__(
+        self,
+        default_t_init: float | None = None,
+        t_init_overrides: dict | None = None,
+        first_step_steady_state: bool = False,
+    ):
         self._ltc_rho_v: dict = {}  # {node_id: ρ·V_lumped  [kg]}
         self._ltc_initial_t_pu: dict = {}  # {node_id: initial t_pu value}
         self._ltc_constrained: set = set()
+        self._default_t_init: float | None = (
+            None if default_t_init is None else float(default_t_init)
+        )
+        self._t_init_overrides: dict = dict(t_init_overrides or {})
+        self._first_step_steady_state: bool = bool(first_step_steady_state)
 
     def prepare(self, network) -> None:
         self._ltc_rho_v = {}
@@ -97,14 +177,22 @@ class LumpedThermalCapacitance(NetworkAspect):
                     rho = network.node_by_id(node_id).grid.fluid_density
                     self._ltc_rho_v[node_id] += rho * v_pipe / 2
 
-        # 3. Patch each LTC junction: store initial t_pu value and make it
-        #    tracked so its solved value is persisted to StepState.
+        # 3. Patch each LTC junction: resolve its first-step anchor (with
+        #    precedence: t_init_overrides → default_t_init → existing Var
+        #    initialiser) and replace t_pu with a fresh tracked Var so its
+        #    solved value is persisted to StepState.
         for node in network.nodes:
             if node.id not in self._ltc_rho_v:
                 continue
             junc = node.model
             t_var = junc.t_pu
-            t_init = t_var.value if isinstance(t_var, Var) else float(t_var)
+            var_init = t_var.value if isinstance(t_var, Var) else float(t_var)
+            if node.id in self._t_init_overrides:
+                t_init = float(self._t_init_overrides[node.id])
+            elif self._default_t_init is not None:
+                t_init = self._default_t_init
+            else:
+                t_init = var_init
             self._ltc_initial_t_pu[node.id] = t_init
             junc.t_pu = Var(
                 t_init,
@@ -163,8 +251,14 @@ class LumpedThermalCapacitance(NetworkAspect):
         variables), making the thermal inertia effective in both solve modes.
 
         *T_prev* = ``temporal_state.get(node_id, "t_pu")`` — ``None`` on the
-        first step/period, in which case the initial ``t_pu`` value anchors the
-        constraint so the very first solve is thermally consistent.
+        first step/period.  In that case the resolved first-step anchor
+        (see precedence in the class docstring) is used: an explicit
+        ``t_init_overrides`` value, the ``default_t_init`` constructor
+        argument, or the junction's own ``t_pu`` ``Var`` initialiser.  We
+        keep an explicit numerical anchor on the first step rather than
+        emitting the steady-state balance directly, because Newton/IPOPT
+        path solvers (e.g. GEKKO) lose convergence when the heat-balance
+        equation is fully unanchored on a degenerate node.
 
         This equation replaces the degenerate junction heat balance
         (``T_n × mass_balance == 0``) which is suppressed for LTC nodes via
@@ -182,15 +276,23 @@ class LumpedThermalCapacitance(NetworkAspect):
 
             junc = node.model
             rho_v = self._ltc_rho_v[node.id]
+            if rho_v <= 0.0:
+                self._ltc_constrained.add(node.id)
+                continue
 
-            # Use stored previous temperature, or fall back to the initial
-            # value (so the very first step/period is also thermally consistent).
+            net_heat = self._net_convective_heat(node, network)
+
             t_prev = temporal_state.get(node.id, "t_pu")
-            if t_prev is None:
-                t_prev = self._ltc_initial_t_pu.get(node.id, 1.0)
-
-            if rho_v > 0.0:
-                net_heat = self._net_convective_heat(node, network)
+            if t_prev is None and self._first_step_steady_state:
+                # No anchor: drop the inertia term and let T(0) emerge
+                # from the steady-state heat balance.  MIP-only — see
+                # class docstring.
+                eqs.append(net_heat == 0)
+            else:
+                if t_prev is None:
+                    # First step / period: use the resolved anchor (see
+                    # ``prepare`` for precedence).
+                    t_prev = self._ltc_initial_t_pu.get(node.id, 1.0)
                 eqs.append(rho_v * (junc.t_pu - t_prev) / dt_s == net_heat)
 
             self._ltc_constrained.add(node.id)
@@ -217,22 +319,47 @@ class LumpedThermalCapacitance(NetworkAspect):
         (sum = 0, positive = outflow).  Here we need the net *inflow*,
         so each branch term is the negative of the junction balance term.
 
-        For each branch connected to *node*:
-        - If *node* is the FROM-end:
-          - mpos > 0  (backward flow, to→from): fluid arrives at T_from_pu → heat IN
-          - mneg > 0  (forward flow, from→to): fluid leaves at T_n → heat OUT
-          → term = mpos * t_from_pu - mneg * T_n
-        - If *node* is the TO-end:
-          - mneg > 0  (forward flow, from→to): fluid arrives at T_to_pu → heat IN
-          - mpos > 0  (backward flow, to→from): fluid leaves at T_n → heat OUT
-          → term = mneg * t_to_pu - mpos * T_n
+        Two formulation paths for the branch contribution:
 
-        Children are modelled as injecting/withdrawing at junction temperature
-        (well-mixed assumption).  Their mass_flow sign follows load convention:
-        negative = injection, so net heat IN = -m_ext * T_n.
+        * **Plain (nonlinear) path** — the branch model carries
+          ``t_from_pu`` / ``t_to_pu`` Vars that the nonlinear water
+          formulation pins to the actual pipe-end temperatures (with heat
+          loss along the pipe).  We compute the net mass-weighted enthalpy
+          flow directly:
+
+          - FROM-end of the branch:
+            ``term = mpos · t_from_pu − mneg · T_n``
+          - TO-end of the branch:
+            ``term = mneg · t_to_pu − mpos · T_n``
+
+        * **McCormick path** — the McCormick branch formulation
+          (:mod:`monee.model.formulation.mccormick.water`) deliberately
+          works around ``t_from_pu`` / ``t_to_pu`` (they are left as
+          dangling Vars) and exposes the relaxed enthalpies ``H_out_mw``
+          (sender side) and ``H_in_mw`` (receiver side) instead — those
+          are exactly the ``c · m · τ`` quantities, with heat loss
+          Taylor-linearised between them.  Reusing the dangling
+          ``t_to_pu`` here would (a) silently relax the LTC equation
+          because ``t_to_pu`` has no other constraint, and (b) reintroduce
+          the bilinear ``m·τ`` products that McCormick was specifically
+          designed to eliminate.  We instead use the McCormick enthalpies
+          directly:
+
+          - FROM-end:  ``term = − H_out_mw / scale_mw_per_kgs``  (heat OUT)
+          - TO-end:    ``term = + H_in_mw  / scale_mw_per_kgs``  (heat IN)
+
+          where ``scale_mw_per_kgs = c · t_ref / 1e6`` converts back from
+          MW to ``kg·s⁻¹·t_pu`` units used by the rest of the LTC equation.
+          McCormick already gates ``H_*_mw`` with ``on_off`` in its own
+          equations, so no extra ``on_off`` factor is needed here.
+
+        Children are modelled as injecting/withdrawing at junction
+        temperature (well-mixed assumption).  Their mass_flow sign follows
+        load convention: negative = injection, so net heat IN = -m_ext * T_n.
         """
         T_n = node.model.t_pu  # solver variable after injection
         terms = []
+        scale_mw_per_kgs = SPECIFIC_HEAT_CAP_WATER * node.grid.t_ref / 1e6
 
         for branch in network.branches:
             if not isinstance(branch.grid, WaterGrid):
@@ -242,25 +369,33 @@ class LumpedThermalCapacitance(NetworkAspect):
             if "mass_flow_pos" not in bvars or "mass_flow_neg" not in bvars:
                 continue
 
-            on_off = bvars.get("on_off", 1)
-            mpos = bvars["mass_flow_pos"] * on_off
-            mneg = bvars["mass_flow_neg"] * on_off
+            # McCormick path: use the relaxed enthalpies the branch already
+            # carries instead of the dangling pipe-side temperatures.  We key
+            # on H_out_mw / H_in_mw rather than a flag so this works whether
+            # the network has McCormick partially or fully applied.
+            is_mccormick = "H_out_mw" in bvars and "H_in_mw" in bvars
 
             if branch.from_node_id == node.id:
-                # This node is FROM-end.
-                # mpos > 0 (backward, to→from): fluid arrives at t_from_pu → +heat IN
-                # mneg > 0 (forward, from→to):  fluid leaves at T_n        → -heat OUT
-                if "t_from_pu" not in bvars:
-                    continue
-                terms.append(mpos * bvars["t_from_pu"] - mneg * T_n)
+                if is_mccormick:
+                    terms.append(-bvars["H_out_mw"] / scale_mw_per_kgs)
+                else:
+                    if "t_from_pu" not in bvars:
+                        continue
+                    on_off = bvars.get("on_off", 1)
+                    mpos = bvars["mass_flow_pos"] * on_off
+                    mneg = bvars["mass_flow_neg"] * on_off
+                    terms.append(mpos * bvars["t_from_pu"] - mneg * T_n)
 
             elif branch.to_node_id == node.id:
-                # This node is TO-end.
-                # mneg > 0 (forward, from→to): fluid arrives at t_to_pu → +heat IN
-                # mpos > 0 (backward, to→from): fluid leaves at T_n     → -heat OUT
-                if "t_to_pu" not in bvars:
-                    continue
-                terms.append(mneg * bvars["t_to_pu"] - mpos * T_n)
+                if is_mccormick:
+                    terms.append(bvars["H_in_mw"] / scale_mw_per_kgs)
+                else:
+                    if "t_to_pu" not in bvars:
+                        continue
+                    on_off = bvars.get("on_off", 1)
+                    mpos = bvars["mass_flow_pos"] * on_off
+                    mneg = bvars["mass_flow_neg"] * on_off
+                    terms.append(mneg * bvars["t_to_pu"] - mpos * T_n)
 
         for child in network.childs_by_ids(node.child_ids):
             cm = child.model
@@ -277,7 +412,6 @@ class LumpedThermalCapacitance(NetworkAspect):
                 # convention: positive = consumption (heat OUT), negative = generation
                 # (heat IN) — we want net heat IN, so negate.
                 q = cvars["q_mw_heat"] * cvars.get("regulation", 1)
-                scale_mw_per_kgs = SPECIFIC_HEAT_CAP_WATER * node.grid.t_ref / 1e6
                 terms.append(-q / scale_mw_per_kgs)
 
         # Branch-level q_mw_heat (e.g. GasToHeatHG): absorbed at the branch's
@@ -290,7 +424,6 @@ class LumpedThermalCapacitance(NetworkAspect):
             if branch.to_node_id != node.id:
                 continue
             q = bvars["q_mw_heat"] * bvars.get("on_off", 1)
-            scale_mw_per_kgs = SPECIFIC_HEAT_CAP_WATER * node.grid.t_ref / 1e6
             terms.append(-q / scale_mw_per_kgs)
 
         return sum(terms) if terms else 0

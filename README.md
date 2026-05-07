@@ -104,22 +104,20 @@ print(result.get("WaterPipe")[["mass_flow"]])
 Solve minimum-curtailment problems with per-carrier operational bounds:
 
 ```python
-from monee import run_energy_flow_optimization, PyomoSolver
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
-from monee.problem import create_load_shedding_optimization_problem
+import monee
 
-net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)
 
-problem = create_load_shedding_optimization_problem(
+problem = monee.create_load_shedding_optimization_problem(
     bounds_el=(0.9, 1.1),    # voltage bounds (pu)
     bounds_heat=(0.9, 1.1),  # temperature bounds (pu)
     bounds_gas=(0.9, 1.1),   # pressure bounds (pu)
     use_ext_grid_bounds=False,
 )
 
-result = run_energy_flow_optimization(
+result = monee.run_energy_flow_optimization(
     net, problem,
-    solver=PyomoSolver(), solver_name="highs",
+    solver=monee.PyomoSolver(), solver_name="highs",
     exclude_unconnected_nodes=True,
 )
 
@@ -145,9 +143,9 @@ Every new `Network` starts with three single-domain defaults:
 To use the convex MISOCP relaxation for electricity optimal power flow, apply it over the defaults — gas and heat equations remain unchanged:
 
 ```python
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+import monee
 
-net.apply_formulation(MISOCP_NETWORK_FORMULATION)   # replaces electricity equations only
+net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)   # replaces electricity equations only
 ```
 
 Custom formulations follow the same pattern — subclass the appropriate base class and register it for the target component types:

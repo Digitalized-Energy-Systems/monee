@@ -2,9 +2,15 @@ import math
 
 import pytest
 
-from monee import PyomoSolver, enable_islanding, mm, mx, run_energy_flow
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
-from monee.model.islanding import GridFormingGenerator
+from monee import (
+    MISOCP_NETWORK_FORMULATION,
+    GridFormingGenerator,
+    PyomoSolver,
+    enable_islanding,
+    mm,
+    mx,
+    run_energy_flow,
+)
 from monee.network.mes import create_monee_benchmark_net
 
 

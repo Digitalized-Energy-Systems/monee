@@ -1158,9 +1158,8 @@ def create_resilient_urban_mes_net() -> mm.Network:
 
 
 if __name__ == "__main__":
-    from monee import PyomoSolver, run_energy_flow
-    from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+    import monee
 
     net = create_resilient_urban_mes_net()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
-    print(run_energy_flow(net, solver=PyomoSolver(), solver_name="gurobi"))
+    net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)
+    print(monee.run_energy_flow(net, solver=monee.PyomoSolver(), solver_name="gurobi"))

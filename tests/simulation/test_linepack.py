@@ -18,8 +18,7 @@ Design properties verified:
 import math
 
 import monee.model as mm
-from monee import run_energy_flow
-from monee.model.formulation.linepack import GasLinepack
+from monee import GasLinepack, run_energy_flow
 from monee.simulation.timeseries import TimeseriesData, run
 
 

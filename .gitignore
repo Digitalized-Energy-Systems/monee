@@ -82,7 +82,6 @@ celerybeat-schedule
 .venv/
 venv/
 ENV/
-env_peext/
 
 # Spyder project settings
 .spyderproject

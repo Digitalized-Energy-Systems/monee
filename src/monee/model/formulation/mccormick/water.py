@@ -141,62 +141,76 @@ class MccDHSNodeFormulation(NodeFormulation):
         # Solve in MW; conversion factor (c·t_ref/1e6) maps kg/s·t_pu → MW.
         scale_mw_per_kgs = C_WATER * grid.t_ref / 1e6
 
-        # Pipe enthalpies — paper eq. 9c/9d. Sender carries H_out, receiver H_in.
-        h_out_terms = [
-            bm.vars["H_out_mw"] * bm.vars.get("on_off", 1)
-            for bm in from_branch_models
-            if "H_out_mw" in bm.vars
-        ]
-        h_in_terms = [
-            bm.vars["H_in_mw"] * bm.vars.get("on_off", 1)
-            for bm in to_branch_models
-            if "H_in_mw" in bm.vars
-        ]
+        eqs = []
 
-        # Node-based heat children (paper eq. 9a). Load convention:
-        # HeatGenerator → negative q_mw_heat, HeatLoad → positive.
-        q_child_terms = [
-            cm.vars["q_mw_heat"] * cm.vars.get("regulation", 1)
-            for cm in connected_child_models
-            if "q_mw_heat" in cm.vars
-        ]
+        # When :class:`~monee.model.extension.ltc.LumpedThermalCapacitance`
+        # has taken over a junction (``_ltc_active``), it already emits an
+        # *inter-temporal* heat balance built from the same ``H_in_mw`` /
+        # ``H_out_mw`` quantities, plus the thermal-mass term
+        # ``ρ·V·(T(t) − T(t−1))/Δt``.  Adding paper eq. 9a here on top of
+        # that would enforce the *steady-state* balance simultaneously,
+        # which together force the time-derivative term to zero — i.e.
+        # T(t) ≡ T(t−1) at every LTC junction, defeating the extension.
+        # Skip the steady-state balance for those nodes and let LTC own it.
+        ltc_owns_node = getattr(node, "_ltc_active", False)
 
-        # Branch-level q_mw_heat (e.g. GasToHeatHG) absorbed at the TO node.
-        q_branch_terms = [
-            bm.vars["q_mw_heat"] * bm.vars.get("on_off", 1)
-            for bm in to_branch_models
-            if "q_mw_heat" in bm.vars
-        ]
+        if not ltc_owns_node:
+            # Pipe enthalpies — paper eq. 9c/9d. Sender carries H_out,
+            # receiver H_in.
+            h_out_terms = [
+                bm.vars["H_out_mw"] * bm.vars.get("on_off", 1)
+                for bm in from_branch_models
+                if "H_out_mw" in bm.vars
+            ]
+            h_in_terms = [
+                bm.vars["H_in_mw"] * bm.vars.get("on_off", 1)
+                for bm in to_branch_models
+                if "H_in_mw" in bm.vars
+            ]
 
-        # Use the node's own τ so outflow boundaries (Sink) leave water at
-        # node temperature. Fixed-supply inflow boundaries pin τ to the
-        # child's t_k via ``overwrite``, collapsing the t_pu factor to a
-        # constant.
-        boundary_enthalpy_in = [
-            -cm.vars["mass_flow"]
-            * cm.vars.get("regulation", 1)
-            * scale_mw_per_kgs
-            * node.vars["t_pu"]
-            for cm in connected_child_models
-            if "mass_flow" in cm.vars and "q_mw_heat" not in cm.vars
-        ]
+            # Node-based heat children (paper eq. 9a). Load convention:
+            # HeatGenerator → negative q_mw_heat, HeatLoad → positive.
+            q_child_terms = [
+                cm.vars["q_mw_heat"] * cm.vars.get("regulation", 1)
+                for cm in connected_child_models
+                if "q_mw_heat" in cm.vars
+            ]
 
-        if not (
-            h_out_terms
-            or h_in_terms
-            or q_child_terms
-            or q_branch_terms
-            or boundary_enthalpy_in
-        ):
-            print("Warning: you are ignoring enthalpy equation.")
-            return []
+            # Branch-level q_mw_heat (e.g. GasToHeatHG) absorbed at the TO node.
+            q_branch_terms = [
+                bm.vars["q_mw_heat"] * bm.vars.get("on_off", 1)
+                for bm in to_branch_models
+                if "q_mw_heat" in bm.vars
+            ]
 
-        # Paper eq. 9a, load convention:
-        #   Σ H_in + Σ H_boundary − Σ H_out = Σ q_child + Σ q_branch
-        eqs = [
-            sum(h_in_terms) + sum(boundary_enthalpy_in) - sum(h_out_terms)
-            == sum(q_child_terms) + sum(q_branch_terms)
-        ]
+            # Use the node's own τ so outflow boundaries (Sink) leave water at
+            # node temperature. Fixed-supply inflow boundaries pin τ to the
+            # child's t_k via ``overwrite``, collapsing the t_pu factor to a
+            # constant.
+            boundary_enthalpy_in = [
+                -cm.vars["mass_flow"]
+                * cm.vars.get("regulation", 1)
+                * scale_mw_per_kgs
+                * node.vars["t_pu"]
+                for cm in connected_child_models
+                if "mass_flow" in cm.vars and "q_mw_heat" not in cm.vars
+            ]
+
+            if not (
+                h_out_terms
+                or h_in_terms
+                or q_child_terms
+                or q_branch_terms
+                or boundary_enthalpy_in
+            ):
+                print("Warning: you are ignoring enthalpy equation.")
+            else:
+                # Paper eq. 9a, load convention:
+                #   Σ H_in + Σ H_boundary − Σ H_out = Σ q_child + Σ q_branch
+                eqs.append(
+                    sum(h_in_terms) + sum(boundary_enthalpy_in) - sum(h_out_terms)
+                    == sum(q_child_terms) + sum(q_branch_terms)
+                )
 
         # |S| = 1 uses the plain envelopes assembled on the branch side.
         if self.num_partitions > 1:

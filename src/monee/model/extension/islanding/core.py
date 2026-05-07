@@ -18,7 +18,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 
 from monee.model.child import GridFormingMixin
-from monee.model.formulation.core import NetworkAspect
+from monee.model.extension.core import NetworkAspect
 from monee.model.network import Network
 from monee.model.phys.islanding import (
     connectivity_arc_capacity_line,

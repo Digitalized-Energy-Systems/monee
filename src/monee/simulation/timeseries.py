@@ -728,6 +728,7 @@ def run(
     on_step_error: str = "raise",
     progress_callback: Callable[[int, int], None] | None = None,
     datetime_index: pandas.DatetimeIndex | None = None,
+    **solver_kwargs,
 ) -> TimeseriesResult:
     """
     Run a timeseries simulation over *net*.
@@ -759,6 +760,10 @@ def run(
             ``progress_callback(step, total_steps)``.
         datetime_index: Optional ``pd.DatetimeIndex`` aligned to the steps.
             Used as the row index of result DataFrames.
+        **solver_kwargs: Forwarded to the per-step ``solve(...)`` call (and
+            ultimately to ``solver.solve(...)``).  Use this to pass
+            backend-specific configuration such as ``solver_name='gurobi'``
+            or ``debug=True`` without having to subclass the solver.
 
     Returns:
         A ``TimeseriesResult`` containing per-step outcomes.
@@ -810,6 +815,7 @@ def run(
                     optimization_problem=optimization_problem,
                     solver=solver,
                     step_state=step_state,
+                    **solver_kwargs,
                 )
                 step_state.push(result.network)
                 sr = StepResult(step=step, result=result)

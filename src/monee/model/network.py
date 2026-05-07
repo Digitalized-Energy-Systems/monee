@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import copy
+from typing import TYPE_CHECKING
 
 import networkx as nx
 import pandas
@@ -23,10 +26,12 @@ from .formulation import (
     NL_DARCY_WEISBACH_NETWORK_FORMULATION,
     NL_WEYMOUTH_NETWORK_FORMULATION,
     Formulation,
-    NetworkAspect,
     NetworkFormulation,
 )
 from .grid import create_gas_grid, create_power_grid, create_water_grid
+
+if TYPE_CHECKING:
+    from .extension.core import NetworkAspect
 
 
 class Network:

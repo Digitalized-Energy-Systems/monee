@@ -1587,7 +1587,7 @@ def create_grid_forming_generator(
                 net, bus_island, p_mw_max=5.0, q_mvar_max=2.0
             )
     """
-    from monee.model.islanding import GridFormingGenerator
+    from monee.model.extension.islanding import GridFormingGenerator
 
     return create_el_child(
         network,
@@ -1642,7 +1642,7 @@ def create_grid_forming_source(
 
             gf_src = mx.create_grid_forming_source(net, junction_island, pressure_pu=1.0)
     """
-    from monee.model.islanding import GridFormingSource
+    from monee.model.extension.islanding import GridFormingSource
 
     return network.child_to(
         GridFormingSource(
