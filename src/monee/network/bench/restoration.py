@@ -336,4 +336,4 @@ if __name__ == "__main__":
     import monee
 
     res = create_restoration_benchmark(linepack=False, ltc=False, misocp=True)
-    print(monee.PyomoSolver().solve(res, solver_name="gurobi"))
+    print(monee.solve(res, solver="gurobi"))

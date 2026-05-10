@@ -11,6 +11,7 @@ from monee.model.core import Var
 from monee.simulation.core import solve
 from monee.simulation.step_state import StepState
 from monee.solver.core import _TABLE_CSS, _col_summary, _display_df
+from monee.solver.dispatch import resolve_solver
 
 _log = logging.getLogger(__name__)
 
@@ -704,7 +705,8 @@ class StepHook(ABC):
         step: int,
         step_state: StepState,
     ) -> None:
-        """Called before the step's solve.  *net* already has timeseries data applied."""
+        """Called before the step's solve, before the per-step network copy is made
+        and before timeseries data is applied.  *base_net* is the original network."""
 
     def post_run(
         self,
@@ -723,6 +725,7 @@ def run(
     steps: int | None = None,
     step_hooks: list[StepHook | Callable] | None = None,
     solver=None,
+    backend: str | None = None,
     optimization_problem=None,
     solve_flag: bool = True,
     on_step_error: str = "raise",
@@ -747,8 +750,11 @@ def run(
             ``StepHook`` subclasses or plain callables
             ``(net_copy, step, step_state, step_result) -> None`` called in
             the post-step position.
-        solver: Solver instance.  If ``None``, the default GEKKO solver is
-            used.
+        solver: Either a solver-name string (e.g. ``"gurobi"``, ``"ipopt"``),
+            a concrete :class:`SolverInterface` instance, or ``None``
+            (default — GEKKO+IPOPT).  Resolved once and reused across all steps.
+        backend: ``"gekko"`` / ``"pyomo"`` to force the modelling backend.
+            When ``None`` (default), the backend is auto-routed from *solver*.
         optimization_problem: Optional optimization problem passed to the
             solver.
         solve_flag: If ``False``, timeseries data is applied and hooks are
@@ -762,8 +768,8 @@ def run(
             Used as the row index of result DataFrames.
         **solver_kwargs: Forwarded to the per-step ``solve(...)`` call (and
             ultimately to ``solver.solve(...)``).  Use this to pass
-            backend-specific configuration such as ``solver_name='gurobi'``
-            or ``debug=True`` without having to subclass the solver.
+            backend-specific configuration such as ``debug=True`` without
+            having to subclass the solver.
 
     Returns:
         A ``TimeseriesResult`` containing per-step outcomes.
@@ -793,6 +799,9 @@ def run(
             f"on_step_error must be 'raise' or 'skip', got {on_step_error!r}"
         )
 
+    # Resolve solver/backend once up-front; reused across every step.
+    resolved_solver = resolve_solver(solver, backend=backend)
+
     step_results: list[StepResult] = []
     step_state = StepState()
 
@@ -813,7 +822,7 @@ def run(
                 result = solve(
                     net_copy,
                     optimization_problem=optimization_problem,
-                    solver=solver,
+                    solver=resolved_solver,
                     step_state=step_state,
                     **solver_kwargs,
                 )

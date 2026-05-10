@@ -299,10 +299,6 @@ class LumpedThermalCapacitance(NetworkAspect):
 
         return eqs
 
-    def inter_step_equations(self, network, ignored_nodes: set, step_state) -> list:
-        """Delegate to :meth:`inter_temporal_equations` (backward compatibility)."""
-        return self.inter_temporal_equations(network, ignored_nodes, step_state)
-
     def equations(self, network, ignored_nodes: set) -> list:
         """
         No extra equations are needed for single-step (non-timeseries) solves.

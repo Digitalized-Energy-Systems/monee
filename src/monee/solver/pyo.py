@@ -100,10 +100,16 @@ class PyomoPWLImpl:
 
 
 class PyomoSolver(SolverInterface):
-    """ """
+    """Pyomo-backed solver.
 
-    def __init__(self):
-        pass
+    Args:
+        solver_name: Default Pyomo solver name (e.g. ``"scip"``, ``"gurobi"``,
+            ``"ipopt"``).  Can be overridden per-solve via the ``solver_name``
+            kwarg of :meth:`solve`.
+    """
+
+    def __init__(self, solver_name: str = "scip"):
+        self._solver_name = solver_name
 
     # --------- Injection / Withdrawal ---------
 
@@ -120,9 +126,16 @@ class PyomoSolver(SolverInterface):
         prior call solved with the intrinsic ``[0, 2]`` Var range).  Clamping
         keeps the initial guess feasible and suppresses W1002.
         """
+        import math
+
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
                 init = value.value
+                # Drop NaN init silently; otherwise Pyomo writes the NaN
+                # into the gurobi warmstart file and the solver aborts
+                # with ``Element N of a double array is Nan``.
+                if init is not None and isinstance(init, float) and math.isnan(init):
+                    init = None
                 if init is not None:
                     if value.min is not None and init < value.min:
                         init = value.min
@@ -133,7 +146,7 @@ class PyomoSolver(SolverInterface):
                     bounds=(value.min, value.max),
                     initialize=init,
                 )
-                setattr(pm, f"{prefix}__{key}", v)
+                setattr(pm, PyomoSolver._sanitize_name(f"{prefix}__{key}"), v)
                 setattr(target, key, v)
             elif type(value) is Const:
                 setattr(target, key, float(value.value))
@@ -149,7 +162,7 @@ class PyomoSolver(SolverInterface):
     def withdraw_pyomo_vars_attr(target: GenericModel):
         """Convert Pyomo Var values back into Var objects.
 
-        Sanitises three kinds of noise the next ``inject_pyomo_vars_attr``
+        Sanitises four kinds of noise the next ``inject_pyomo_vars_attr``
         would otherwise pass to Pyomo as ``initialize``:
 
         - **Integer flag lost** → preserves ``integer=value.is_integer()`` and
@@ -162,13 +175,19 @@ class PyomoSolver(SolverInterface):
           W1002 (``outside the bounds``) caused by sub-machine-epsilon drift.
         - **Missing value** → falls back to ``0`` when the solver failed and
           ``pyo.value`` is unavailable, so withdrawal cannot raise.
+        - **NaN value** → also falls back to ``0``.  Gurobi rejects
+          warmstart files containing ``nan`` (``GurobiError: Element N of
+          a double array is Nan``), so any NaN that survived an
+          infeasible solve must be sanitised before re-injection.
         """
+        import math
+
         for key, value in target.__dict__.items():
             if isinstance(value, pyo.Var):
                 lb, ub = value.bounds if value.bounds is not None else (None, None)
                 is_integer = value.is_integer()
                 val = pyo.value(value, exception=False)
-                if val is None:
+                if val is None or (isinstance(val, float) and math.isnan(val)):
                     val = 0
                 if is_integer:
                     val = int(round(val))
@@ -181,11 +200,11 @@ class PyomoSolver(SolverInterface):
                 setattr(target, key, Var(value=val, min=lb, max=ub, integer=is_integer))
             elif isinstance(value, pyo.Expression):
                 expr_val = pyo.value(value, exception=False)
-                setattr(
-                    target,
-                    key,
-                    Intermediate(value=expr_val if expr_val is not None else 0),
-                )
+                if expr_val is None or (
+                    isinstance(expr_val, float) and math.isnan(expr_val)
+                ):
+                    expr_val = 0
+                setattr(target, key, Intermediate(value=expr_val))
 
     # --------- Constraint helpers ---------
 
@@ -251,10 +270,12 @@ class PyomoSolver(SolverInterface):
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
         exclude_unconnected_nodes: bool = False,
-        solver_name: str = "scip",
+        solver_name: str | None = None,
         debug=False,
         step_state: StepState = None,
     ):
+        if solver_name is None:
+            solver_name = self._solver_name
         pm = pyo.ConcreteModel()
         pm.cons = pyo.ConstraintList()
         pm.obj_exprs = []
@@ -385,8 +406,15 @@ class PyomoSolver(SolverInterface):
         persist_solution(network, input_network)
         violations = compute_bound_violations(nodes, branches, compounds, network)
 
-        # objective value
-        obj_val = pyo.value(pm.obj)
+        # Objective value.  ``pyo.value`` raises for any Var the solver
+        # left unset (e.g. McCormick auxiliaries on a freshly-activated
+        # branch the previous solve never touched).  Fall back to NaN —
+        # the SolverResult.success flag already reports the real outcome
+        # via ``status==ok``, and downstream consumers only treat
+        # ``obj_val`` as informational.
+        obj_val = pyo.value(pm.obj, exception=False)
+        if obj_val is None:
+            obj_val = float("nan")
 
         solver_result = SolverResult(
             network,

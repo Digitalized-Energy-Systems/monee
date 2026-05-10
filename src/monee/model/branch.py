@@ -299,7 +299,6 @@ class PassiveHeatExchanger(BranchModel):
         self.roughness = roughness
         self.length_m = length_m
         self.limit = 0.1
-        self.active = True
         self.regulation = regulation
         self.on_off = 1
         self.q_mw_set = -q_mw

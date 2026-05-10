@@ -1162,4 +1162,4 @@ if __name__ == "__main__":
 
     net = create_resilient_urban_mes_net()
     net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)
-    print(monee.run_energy_flow(net, solver=monee.PyomoSolver(), solver_name="gurobi"))
+    print(monee.run_energy_flow(net, solver="gurobi"))

@@ -153,8 +153,8 @@ def test_infeasible_monee_pyomo_solve():
     prob.constraints = cons
 
     # Use ipopt — it detects nonlinear infeasibility much faster than SCIP.
-    solver = PyomoSolver()
-    result = solver.solve(net, optimization_problem=prob, solver_name="ipopt")
+    solver = PyomoSolver(solver_name="ipopt")
+    result = solver.solve(net, optimization_problem=prob)
     assert not result.success
     assert hasattr(result, "infeasibility_report")
     assert isinstance(result.infeasibility_report, InfeasibilityReport)
@@ -189,8 +189,6 @@ def test_infeasible_multi_period_pyomo():
     )
     prob.constraints = cons
 
-    from monee.simulation.multi_period import PyomoMultiPeriodSolver
-
     # Use ipopt — it detects nonlinear infeasibility much faster than SCIP.
     with pytest.raises(RuntimeError, match="Infeasibility diagnostics"):
         run_multi_period(
@@ -198,6 +196,7 @@ def test_infeasible_multi_period_pyomo():
             td,
             steps=2,
             optimization_problem=prob,
-            solver=PyomoMultiPeriodSolver(solver_name="ipopt"),
+            solver="ipopt",
+            backend="pyomo",
             dt_h=1.0,
         )

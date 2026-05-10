@@ -88,7 +88,7 @@ def test_mccormick_dhs_passive_line_temperature_decays():
     # than the sink end (the assertion below checks physical decay).
     net = _build_series_dhs(0.001, 0.001)
 
-    result = ms.PyomoSolver().solve(net, solver_name="gurobi")
+    result = ms.PyomoSolver(solver_name="gurobi").solve(net)
     print(result)
     assert result.success
 

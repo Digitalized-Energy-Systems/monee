@@ -2,7 +2,7 @@ import numpy as np
 
 import monee.model as mm
 import monee.problem as mp
-from monee import PyomoSolver, TimeseriesData, run_energy_flow_optimization
+from monee import TimeseriesData, run_energy_flow_optimization
 from monee.model.formulation import MISOCP_NETWORK_FORMULATION
 from monee.network import create_urban_district_net
 
@@ -65,8 +65,7 @@ def _solve(network):
     )
     return run_energy_flow_optimization(
         network,
-        solver=PyomoSolver(),
-        solver_name="gurobi",
+        solver="gurobi",
         optimization_problem=problem,
         exclude_unconnected_nodes=True,
     )

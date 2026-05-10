@@ -367,8 +367,10 @@ class Network:
         auto_node_creator=None,
         auto_grid_key=None,
     ):
-        child_id = overwrite_id or (
-            0 if len(self._child_dict) == 0 else max(self._child_dict.keys()) + 1
+        child_id = (
+            overwrite_id
+            if overwrite_id is not None
+            else (0 if len(self._child_dict) == 0 else max(self._child_dict.keys()) + 1)
         )
         child = Child(
             child_id,
@@ -539,8 +541,14 @@ class Network:
         overwrite_id=None,
         **connected_node_ids,
     ):
-        compound_id = overwrite_id or (
-            0 if len(self._compound_dict) == 0 else max(self._compound_dict.keys()) + 1
+        compound_id = (
+            overwrite_id
+            if overwrite_id is not None
+            else (
+                0
+                if len(self._compound_dict) == 0
+                else max(self._compound_dict.keys()) + 1
+            )
         )
         self.__force_blacklist = True
         self.__collect_components = True
@@ -751,7 +759,7 @@ def _clean_up_compound(network: Network, compound):
         compound_alive = _clean_up_compound(network, component)
         if not compound_alive:
             fully_intact = False
-    network.remove_compound(compound)
+    network.remove_compound(compound.id)
     return fully_intact
 
 

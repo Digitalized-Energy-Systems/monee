@@ -173,10 +173,8 @@ class Junction(NodeModel):
         ):
             return [0]
 
-        temp_supported = (
-            len(from_branch_models) > 0
-            and "t_to_pu" in from_branch_models[0].vars
-            or (len(to_branch_models) > 0 and "t_to_pu" in to_branch_models[0].vars)
+        temp_supported = any("t_to_pu" in bm.vars for bm in from_branch_models) or any(
+            "t_to_pu" in bm.vars for bm in to_branch_models
         )
         if temp_supported:
             Tn = self.t_pu

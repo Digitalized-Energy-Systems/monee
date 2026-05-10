@@ -3,7 +3,7 @@ import simbench
 
 import monee
 import monee.model as mm
-from monee import PyomoSolver, run_energy_flow, run_timeseries
+from monee import run_energy_flow, run_timeseries
 from monee.io.from_pandapower import from_pandapower_net
 from monee.io.from_simbench import obtain_simbench_profile_by_pp_net
 from monee.model import GasLinepack, LumpedThermalCapacitance
@@ -37,8 +37,9 @@ def test_generate_mes():
     mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
     mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=16))
 
-    res = run_energy_flow(mes, solver=PyomoSolver(), solver_name="gurobi")
+    res = run_energy_flow(mes, solver="gurobi")
     print(res)
+    print(res.get(mm.Bus).to_string())
     print(res.get(mm.Junction).to_string())
     print(res.get(mm.ExtHydrGrid).to_string())
     print(res.get(mm.HeatLoad).to_string())
@@ -91,11 +92,10 @@ def test_generate_mes_min_load_shedding():
     result = monee.run_energy_flow_optimization(
         mes,
         optimization_problem=problem,
-        solver=PyomoSolver(),
-        solver_name="gurobi",
+        solver="gurobi",
     )
     # print(result)
-    # result = run_energy_flow(mes, solver=PyomoSolver(), solver_name="gurobi")
+    # result = run_energy_flow(mes, solver="gurobi")
 
     # THEN
     assert result is not None
@@ -132,6 +132,310 @@ def test_generate_mes_min_load_shedding():
         assert min(t_pus) >= 0.75 - 1e-3, (
             f"junction t_pu fell below envelope: min={min(t_pus):.4f}"
         )
+
+
+@pytest.mark.pptest
+def test_generate_mes_gas_extra_mesh_pipes_reduce_bridges():
+    """``extra_mesh_pipes`` adds tie pipes that break the gas tree's single-
+    point-of-failure structure.
+
+    By default the gas grid mirrors the power spanning tree, so every gas
+    pipe is a bridge (cut-edge): failing it isolates the downstream subtree
+    and severs the fuel path of every CHP / G2P sitting in that subtree.
+    This is the dominant reason additive coupling points are statistically
+    irrelevant under random-failure sampling — the CP's *output* capacity is
+    dwarfed by the topological cost of losing its fuel chain.
+
+    Passing ``extra_mesh_pipes=N`` adds ``N`` random tie pipes between
+    non-adjacent junctions, sized smaller and longer than primary pipes.
+    The resulting graph has ``N`` additional cycles, and the fraction of
+    bridges drops sharply, giving most CHPs an alternative gas path under
+    single-pipe failures.
+    """
+    import networkx as nx
+
+    net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
+    mn = from_pandapower_net(net)
+
+    def gas_graph(mes):
+        g = nx.Graph()
+        for n in mes.nodes:
+            if isinstance(n.model, mm.Junction) and isinstance(n.grid, mm.GasGrid):
+                g.add_node(n.id)
+        for b in mes.branches:
+            if isinstance(b.model, mm.GasPipe):
+                g.add_edge(b.from_node_id, b.to_node_id)
+        return g
+
+    common = dict(
+        coupling_density=0.5,
+        centralized=False,
+        couplings=("chp", "p2g", "p2h"),
+        coupling_kwargs={"seed": 1, "use_hg_variants": True},
+        heat_kwargs={"node_based_heat_loads": True},
+    )
+
+    mes_tree = generate_supply_return_mes_based_on_power_net(mn, **common)
+    mes_mesh = generate_supply_return_mes_based_on_power_net(
+        mn, gas_kwargs={"extra_mesh_pipes": 20, "mesh_seed": 42}, **common
+    )
+
+    g_tree, g_mesh = gas_graph(mes_tree), gas_graph(mes_mesh)
+    # Tree baseline: 0 cycles → every edge is a bridge.
+    cycles_tree = (
+        g_tree.number_of_edges()
+        - g_tree.number_of_nodes()
+        + nx.number_connected_components(g_tree)
+    )
+    assert cycles_tree == 0
+    assert len(list(nx.bridges(g_tree))) == g_tree.number_of_edges()
+
+    # Mesh: exactly 20 extra edges → 20 cycles, dramatically fewer bridges.
+    cycles_mesh = (
+        g_mesh.number_of_edges()
+        - g_mesh.number_of_nodes()
+        + nx.number_connected_components(g_mesh)
+    )
+    assert cycles_mesh == 20
+    assert g_mesh.number_of_edges() == g_tree.number_of_edges() + 20
+    bridges_mesh = list(nx.bridges(g_mesh))
+    # Tie pipes themselves can never be bridges (they only add edges to an
+    # already-connected graph), so each tie pipe also relieves at least one
+    # primary pipe from bridge status.  Empirically on this net, 20 ties cut
+    # the bridge count to <60 % of the original tree.
+    assert len(bridges_mesh) < 0.6 * g_tree.number_of_edges()
+
+
+@pytest.mark.pptest
+def test_generate_mes_cp_size_multiplier_scales_uniformly():
+    """``cp_size_multiplier`` is the headline knob for CP rated capacity.
+
+    Default (= 1.0) preserves legacy sizing; ``k`` scales every CHP, P2G and
+    P2H rated *output* by the same factor.  Per-type shares
+    (``chp_p_share`` etc.) act independently on top.
+    """
+    net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
+    mn = from_pandapower_net(net)
+    GAS_HHV_MJ_PER_KG = 15.3 * 3.6
+
+    common = dict(
+        coupling_density=0.5,
+        centralized=False,
+        couplings=("chp", "p2g", "p2h"),
+        heat_kwargs={"node_based_heat_loads": True},
+    )
+
+    def build(**ck):
+        base = {"seed": 1, "use_hg_variants": True}
+        base.update(ck)
+        return generate_supply_return_mes_based_on_power_net(
+            mn, coupling_kwargs=base, **common
+        )
+
+    def totals(mes):
+        chp_p = sum(
+            float(c.model.mass_flow_setpoint)
+            * GAS_HHV_MJ_PER_KG
+            * float(c.model.efficiency_power)
+            for c in mes.compounds
+            if "CHP" in type(c.model).__name__
+        )
+        p2g_kgs = sum(
+            abs(float(b.model.gas_kgps))
+            for b in mes.branches
+            if "PowerToGas" in type(b.model).__name__
+        )
+        p2h_q = sum(
+            float(b.model.heat_energy_mw)
+            for b in mes.branches
+            if type(b.model).__name__ == "PowerToHeatHG"
+        )
+        return chp_p, p2g_kgs, p2h_q
+
+    chp_d, p2g_d, p2h_d = totals(build())
+    chp_1, p2g_1, p2h_1 = totals(build(cp_size_multiplier=1.0))
+    chp_2, p2g_2, p2h_2 = totals(build(cp_size_multiplier=2.0))
+    chp_4, p2g_4, p2h_4 = totals(build(cp_size_multiplier=4.0))
+
+    # Default and explicit multiplier=1.0 must be identical (no behavior shift).
+    assert (chp_d, p2g_d, p2h_d) == (chp_1, p2g_1, p2h_1)
+    assert chp_d > 0 and p2g_d > 0 and p2h_d > 0
+
+    # Linear scaling across all three carriers.  Per-CP ``round(..., 6)``
+    # quantisation of mass_flow / heat_energy hits hardest on small P2G
+    # mass flows (≈ 1·10⁻⁶ kg/s per unit at LV scale), where one ULP is a
+    # ~5 % swing on the unit and ~1 % on the aggregate of ~20 units.  A
+    # 2 % relative tolerance is the realistic floor for an aggregate check
+    # at this rounding precision.
+    REL = 2e-2
+    assert chp_2 == pytest.approx(2 * chp_1, rel=REL)
+    assert p2g_2 == pytest.approx(2 * p2g_1, rel=REL)
+    assert p2h_2 == pytest.approx(2 * p2h_1, rel=REL)
+    assert chp_4 == pytest.approx(4 * chp_1, rel=REL)
+    assert p2g_4 == pytest.approx(4 * p2g_1, rel=REL)
+    assert p2h_4 == pytest.approx(4 * p2h_1, rel=REL)
+
+    # Per-type override: ``chp_p_share=1.0`` (vs default 0.5) doubles CHP
+    # rated output but leaves P2G and P2H untouched.
+    chp_s, p2g_s, p2h_s = totals(build(chp_p_share=1.0))
+    assert chp_s == pytest.approx(2 * chp_1, rel=REL)
+    assert p2g_s == pytest.approx(p2g_1, rel=1e-9)
+    assert p2h_s == pytest.approx(p2h_1, rel=1e-9)
+
+
+@pytest.mark.pptest
+def test_generate_mes_replace_primary_generation_invariant():
+    """``replace_primary_generation`` flips the framing of coupling points.
+
+    Default (additive) mode is the *redundancy* framing: every CP stacks on
+    top of the existing primary generators, so CPs always look beneficial —
+    losing one is recoverable by the unchanged primary fleet.  In this
+    framing, on the simbench LV-rural3 grid used by
+    :func:`test_generate_mes_min_load_shedding`, additional CPs do *not*
+    visibly improve resilience because the primary fleet is already over-
+    capacity for the loads (Σ PowerGen ≈ 0.21 MW, Σ PowerLoad ≈ 0.37 MW
+    with the simbench ext-grid covering the rest, and the heat ext-grid
+    bound is essentially infinite at ``(-100, 100)``).
+
+    ``replace_primary_generation=True`` flips this to the *cross-carrier
+    dependence* framing: each CP's rated **output** capacity is absorbed
+    from the matching primary pool (PowerGenerator for CHP/G2P, gas Source
+    for P2G, HX-Generator for CHP/P2H), keeping total rated production per
+    carrier *invariant* but making the system structurally depend on the
+    coupling fleet — losing a carrier now disables both the unit and the
+    primary capacity it displaced.
+
+    This test verifies the invariant: across both modes, total rated power
+    (PowerGen + CP power output) and total rated gas (Source + CP gas
+    output) are identical, while in replacement mode the *primary* pool is
+    strictly smaller.  No solver call needed.
+    """
+    net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
+    mn = from_pandapower_net(net)
+
+    common = dict(
+        coupling_density=0.5,
+        centralized=False,
+        couplings=("chp", "p2g", "p2h"),
+        heat_kwargs={"node_based_heat_loads": True},
+    )
+    mes_add = generate_supply_return_mes_based_on_power_net(
+        mn,
+        coupling_kwargs={"seed": 1, "use_hg_variants": True},
+        **common,
+    )
+    mes_rep = generate_supply_return_mes_based_on_power_net(
+        mn,
+        coupling_kwargs={
+            "seed": 1,
+            "use_hg_variants": True,
+            "replace_primary_generation": True,
+        },
+        **common,
+    )
+
+    GAS_HHV_MJ_PER_KG = 15.3 * 3.6
+
+    def primary_power_mw(mes):
+        return sum(
+            abs(c.model.p_mw)
+            for c in mes.childs
+            if isinstance(c.model, mm.PowerGenerator)
+        )
+
+    def primary_gas_kgs(mes):
+        return sum(
+            abs(c.model.mass_flow)
+            for c in mes.childs
+            if isinstance(c.model, mm.Source) and isinstance(c.grid, mm.GasGrid)
+        )
+
+    def cp_power_out_mw(mes):
+        total = 0.0
+        for compound in mes.compounds:
+            m = compound.model
+            cls = type(m).__name__
+            if "CHP" in cls:
+                total += (
+                    float(m.mass_flow_setpoint)
+                    * GAS_HHV_MJ_PER_KG
+                    * float(m.efficiency_power)
+                )
+        return total
+
+    def cp_gas_out_kgs(mes):
+        # PowerToGas stores its rated injection in ``gas_kgps`` (negated under
+        # the load convention), so the rated kg/s is ``abs(gas_kgps)``.
+        return sum(
+            abs(float(b.model.gas_kgps))
+            for b in mes.branches
+            if "PowerToGas" in type(b.model).__name__
+        )
+
+    n_chp_add = sum(1 for c in mes_add.compounds if "CHP" in type(c.model).__name__)
+    n_chp_rep = sum(1 for c in mes_rep.compounds if "CHP" in type(c.model).__name__)
+    n_p2g_add = sum(
+        1 for b in mes_add.branches if "PowerToGas" in type(b.model).__name__
+    )
+    n_p2g_rep = sum(
+        1 for b in mes_rep.branches if "PowerToGas" in type(b.model).__name__
+    )
+    assert n_chp_add == n_chp_rep > 0, (
+        "CP placement should be deterministic across modes"
+    )
+    assert n_p2g_add == n_p2g_rep > 0
+
+    pri_p_add = primary_power_mw(mes_add)
+    pri_p_rep = primary_power_mw(mes_rep)
+    cp_p = cp_power_out_mw(mes_add)
+    assert cp_p > 0
+    # Replacement mode strictly reduces the primary power pool ...
+    assert pri_p_rep < pri_p_add - 1e-9
+    # ... by exactly the rated CP power output (rated-invariant check).
+    assert pri_p_rep == pytest.approx(pri_p_add - cp_p, abs=1e-9)
+
+    pri_g_add = primary_gas_kgs(mes_add)
+    pri_g_rep = primary_gas_kgs(mes_rep)
+    cp_g = cp_gas_out_kgs(mes_add)
+    assert cp_g > 0
+    assert pri_g_rep < pri_g_add - 1e-12
+    assert pri_g_rep == pytest.approx(pri_g_add - cp_g, abs=1e-9)
+
+    # Heat side: in node_based_heat_loads mode there are no HX-Generators to
+    # drain, so the replacement falls back to bounding the heat supply slack.
+    # The new ``max_import_kgs`` must equal (D_total − C_cp_heat) / (c_p ΔT).
+    def heat_slack(mes):
+        slacks = [
+            c
+            for c in mes.childs
+            if isinstance(c.model, mm.ExtHydrGrid)
+            and isinstance(c.grid, mm.WaterGrid)
+            and float(getattr(c.model, "t_k", 0.0)) >= 350
+        ]
+        assert len(slacks) == 1
+        return slacks[0]
+
+    assert heat_slack(mes_add).model.mass_flow.min is None  # additive: unbounded
+    cp_chp_heat = sum(
+        float(c.model.mass_flow_setpoint)
+        * GAS_HHV_MJ_PER_KG
+        * float(c.model.efficiency_heat)
+        for c in mes_rep.compounds
+        if "CHP" in type(c.model).__name__
+    )
+    cp_p2h_heat = sum(
+        float(b.model.heat_energy_mw)
+        for b in mes_rep.branches
+        if type(b.model).__name__ == "PowerToHeatHG"
+    )
+    cp_heat = cp_chp_heat + cp_p2h_heat
+    total_heat_demand = sum(
+        c.model.q_mw_heat for c in mes_rep.childs if isinstance(c.model, mm.HeatLoad)
+    )
+    expected_max_import_kgs = (total_heat_demand - cp_heat) * 1e6 / (4180.0 * 30.0)
+    actual_min = heat_slack(mes_rep).model.mass_flow.min
+    assert actual_min is not None and actual_min < 0
+    assert -actual_min == pytest.approx(expected_max_import_kgs, rel=1e-6)
 
 
 @pytest.mark.pptest
@@ -230,8 +534,7 @@ def test_generate_mes_storage_capabilities_timeseries():
         timeseries_data=td,
         steps=steps,
         optimization_problem=problem,
-        solver=PyomoSolver(),
-        solver_name="gurobi",
+        solver="gurobi",
     )
 
     # All steps converged.

@@ -1,3 +1,8 @@
+from .dispatch import (
+    GEKKO_SOLVERS,
+    resolve_multi_period_solver,
+    resolve_solver,
+)
 from .gekko import GEKKOSolver
 from .infeasibility import (
     InfeasibilityReport,

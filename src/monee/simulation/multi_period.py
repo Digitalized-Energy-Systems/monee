@@ -69,6 +69,7 @@ from monee.solver.core import (
     mark_ignored_components,
     withdraw_vars,
 )
+from monee.solver.dispatch import resolve_multi_period_solver
 
 _log = logging.getLogger(__name__)
 
@@ -967,6 +968,7 @@ def run_multi_period(
     steps: int | None = None,
     optimization_problem=None,
     solver=None,
+    backend: str | None = None,
     dt_h: float | list[float] = 1.0,
     datetime_index: pandas.DatetimeIndex | None = None,
     initial_state: dict | None = None,
@@ -995,9 +997,12 @@ def run_multi_period(
             known length.
         optimization_problem: Optional optimisation problem with objectives
             and constraints, evaluated per period and summed globally.
-        solver: A :class:`GekkoMultiPeriodSolver` or
-            :class:`PyomoMultiPeriodSolver` instance.  Defaults to
-            ``GekkoMultiPeriodSolver()``.
+        solver: Either a solver-name string (``"gurobi"``, ``"ipopt"``, …),
+            a concrete :class:`GekkoMultiPeriodSolver` /
+            :class:`PyomoMultiPeriodSolver` instance, or ``None``
+            (default — GEKKO+IPOPT).
+        backend: ``"gekko"`` / ``"pyomo"`` to force the modelling backend.
+            When ``None`` (default), the backend is auto-routed from *solver*.
         dt_h: Timestep duration in hours.  Either a single float (constant) or
             a list of length *T*.  Overridden by *datetime_index* if provided.
         datetime_index: Optional ``pd.DatetimeIndex`` aligned to the *T* periods.
@@ -1032,8 +1037,7 @@ def run_multi_period(
         )
         soc = result.get_result_for(mm.ElectricStorage, "e_mwh")
     """
-    if solver is None:
-        solver = GekkoMultiPeriodSolver()
+    solver = resolve_multi_period_solver(solver, backend=backend)
 
     # Validate user-provided state dicts early, before entering the solver.
     _validate_state_keys(initial_state, network, "initial_state")
@@ -1061,6 +1065,7 @@ def run_mpc(
     horizon: int = 4,
     execution_steps: int = 1,
     solver=None,
+    backend: str | None = None,
     optimization_problem=None,
     dt_h: float | list[float] = 1.0,
     datetime_index: pandas.DatetimeIndex | None = None,
@@ -1099,7 +1104,11 @@ def run_mpc(
         execution_steps: Number of periods committed per MPC iteration.
             ``execution_steps=1`` (default) is the classic MPC policy.
             ``execution_steps=horizon`` reduces to open-loop receding-horizon.
-        solver: Solver instance.  Defaults to :class:`GekkoMultiPeriodSolver`.
+        solver: Either a solver-name string, a concrete
+            :class:`GekkoMultiPeriodSolver` / :class:`PyomoMultiPeriodSolver`
+            instance, or ``None`` (default — GEKKO+IPOPT).
+        backend: ``"gekko"`` / ``"pyomo"`` to force the modelling backend.
+            When ``None`` (default), the backend is auto-routed from *solver*.
         optimization_problem: Optional optimisation problem passed to each
             horizon solve.
         dt_h: Timestep duration(s) in hours — scalar or list of length
@@ -1135,8 +1144,7 @@ def run_mpc(
     _validate_state_keys(initial_state, network, "initial_state")
     _validate_state_keys(terminal_state, network, "terminal_state")
 
-    if solver is None:
-        solver = GekkoMultiPeriodSolver()
+    solver = resolve_multi_period_solver(solver, backend=backend)
 
     if execution_steps < 1:
         raise ValueError(f"execution_steps must be >= 1, got {execution_steps}.")

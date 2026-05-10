@@ -709,7 +709,9 @@ def ignore_branch(branch, network: Network, ignored_nodes):
 def ignore_node(node, network: Network, ignored_nodes):
     ig = (not node.active) or (node.id in ignored_nodes)
     if not node.independent:
-        ig = ig or ignore_compound(network.compound_of_node(node.id), ignored_nodes)
+        compound = network.compound_of_node(node.id)
+        if compound is not None:
+            ig = ig or ignore_compound(compound, ignored_nodes)
     return ig
 
 

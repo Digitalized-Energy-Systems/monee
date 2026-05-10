@@ -595,6 +595,10 @@ def create_gas_tree_net_for_power(
     min_load_kgs=1.8e-4,
     min_source_kgs=1.8e-4,
     slack_node_id=None,
+    extra_mesh_pipes=0,
+    mesh_diameter_factor=0.5,
+    mesh_length_factor=2.0,
+    mesh_seed=None,
 ):
     """Create an acyclic gas grid mirroring the spanning tree of ``power_net``.
 
@@ -603,6 +607,18 @@ def create_gas_tree_net_for_power(
     * One gas junction per power node, positioned at the corresponding bus.
     * Gas pipes mirror the spanning-tree branches of the power network, so the
       resulting gas grid is guaranteed to be non-cyclic.
+
+    Resilience meshing
+    ------------------
+    With ``extra_mesh_pipes > 0`` an additional ``N`` cross-connection pipes
+    are added between non-adjacent gas junctions to break the strict tree
+    structure.  Without these, a single pipe failure isolates the entire
+    downstream subtree, which is the dominant reason additive coupling
+    points are statistically irrelevant on this layout: a CHP whose fuel
+    path is severed contributes nothing regardless of how much rated
+    capacity it carries.  Each tie pipe defaults to ``mesh_diameter_factor``
+    × ``default_diameter_m`` and ``mesh_length_factor`` × ``default_length``
+    (smaller and longer than primary pipes, modelling minor cross-feeders).
 
     Capacity sizing
     ---------------
@@ -683,6 +699,36 @@ def create_gas_tree_net_for_power(
                 target_net,
                 node_id=bus_index_to_junction_index[node.id],
                 mass_flow=round(mass_flow, 4),
+            )
+
+    if extra_mesh_pipes > 0:
+        # Add resilience tie pipes: pick non-adjacent junction pairs uniformly
+        # at random and connect them with a smaller-diameter / longer pipe.
+        # The point is to give every junction more than one path to the
+        # slack so single pipe failures don't isolate large subtrees — the
+        # main reason additive CPs underperform on a tree layout.
+        rng = random.Random(mesh_seed) if mesh_seed is not None else random
+        junctions = list(bus_index_to_junction_index.values())
+        existing_pairs = set()
+        for branch in target_net.branches:
+            if isinstance(branch.model, mm.GasPipe):
+                a, b = branch.from_node_id, branch.to_node_id
+                existing_pairs.add(frozenset((a, b)))
+        candidates = [
+            (j1, j2)
+            for i, j1 in enumerate(junctions)
+            for j2 in junctions[i + 1 :]
+            if frozenset((j1, j2)) not in existing_pairs
+        ]
+        rng.shuffle(candidates)
+        for j1, j2 in candidates[:extra_mesh_pipes]:
+            mx.create_gas_pipe(
+                target_net,
+                from_node_id=j1,
+                to_node_id=j2,
+                diameter_m=default_diameter_m * mesh_diameter_factor,
+                length_m=default_length * mesh_length_factor * length_scale,
+                grid=gas_grid,
             )
 
     slack_node = (
@@ -1099,6 +1145,167 @@ def create_heat_supply_return_net_for_power(
     return bus_index_to_supply_junction, return_junction
 
 
+def _drain_power_gen_capacity(net: mm.Network, total_mw: float) -> float:
+    """Subtract ``total_mw`` of rated capacity from ``PowerGenerator`` /
+    ``GridFormingGenerator`` children, walking them in iteration order.
+
+    Generators whose rated drops to zero are removed.  Returns the unabsorbed
+    remainder (positive if the network does not contain enough primary power
+    generation to absorb the request).  ``ExtPowerGrid`` is intentionally not
+    touched: its ``p_mw`` is a free slack variable, not a rated capacity.
+    """
+    remaining = float(total_mw)
+    if remaining <= 0:
+        return 0.0
+    for child in list(net.childs):
+        if remaining <= 1e-12:
+            break
+        if isinstance(child.model, mm.PowerGenerator):
+            current = abs(float(child.model.p_mw))
+            if current <= 0:
+                continue
+            absorb = min(current, remaining)
+            new_mag = current - absorb
+            if new_mag <= 1e-12:
+                net.remove_child(child.id)
+            else:
+                child.model.p_mw = -new_mag
+            remaining -= absorb
+    return remaining
+
+
+def _drain_gas_source_capacity(net: mm.Network, total_kgs: float) -> float:
+    """Subtract ``total_kgs`` of rated capacity from gas-side ``Source``
+    children.  Sources at water junctions are skipped (they belong to the heat
+    grid).  Returns the unabsorbed remainder.
+    """
+    remaining = float(total_kgs)
+    if remaining <= 0:
+        return 0.0
+    for child in list(net.childs):
+        if remaining <= 1e-12:
+            break
+        if not isinstance(child.model, mm.Source):
+            continue
+        if not isinstance(child.grid, mm.GasGrid):
+            continue
+        current = abs(float(child.model.mass_flow))
+        if current <= 0:
+            continue
+        absorb = min(current, remaining)
+        new_mag = current - absorb
+        if new_mag <= 1e-12:
+            net.remove_child(child.id)
+        else:
+            child.model.mass_flow = -new_mag
+        remaining -= absorb
+    return remaining
+
+
+def _drain_heat_gen_capacity(net: mm.Network, total_mw: float) -> float:
+    """Subtract ``total_mw`` of rated heat-injection capacity from
+    ``HeatExchanger`` branches that act as generators (return → supply, with
+    ``q_mw_set > 0`` under the load convention).  Returns the unabsorbed
+    remainder.
+
+    In ``node_based_heat_loads`` mode no HX-Generators exist (heat is balanced
+    through the supply-side ``ExtHydrGrid`` slack); the caller should fall
+    back to :func:`_bound_heat_supply_slack` to drain the unabsorbed remainder
+    by tightening the slack's mass-flow import bound.
+    """
+    remaining = float(total_mw)
+    if remaining <= 0:
+        return 0.0
+    for branch in list(net.branches):
+        if remaining <= 1e-12:
+            break
+        if not isinstance(branch.model, mm.HeatExchanger):
+            continue
+        # q_mw_set > 0 ⇒ injection (HX-Generator); q_mw_set < 0 ⇒ HX-Load.
+        q_set = float(getattr(branch.model, "q_mw_set", 0.0) or 0.0)
+        if q_set <= 0:
+            continue
+        absorb = min(q_set, remaining)
+        new_q = q_set - absorb
+        if new_q <= 1e-12:
+            net.remove_branch_between(
+                branch.from_node_id, branch.to_node_id, branch.id[2]
+            )
+        else:
+            branch.model.q_mw_set = new_q
+        remaining -= absorb
+    return remaining
+
+
+def _bound_heat_supply_slack(
+    net: mm.Network, q_mw_to_remove: float, t_delta_design_k: float = 30.0
+) -> float:
+    """Tighten the heat supply ``ExtHydrGrid`` slack so its rated heat-
+    injection capacity drops by ``q_mw_to_remove``.
+
+    Called from the replacement loop in ``node_based_heat_loads`` mode, where
+    no HX-Generators exist to drain.  The slack's ``max_import_kgs`` is set
+    to:
+
+        m_new = (D_total − C_cp) · 1e6 / (c_p · ΔT_design)
+
+    with ``D_total`` the sum of ``HeatLoad`` demands on the network and
+    ``C_cp`` the cumulative CP heat output (= the requested reduction).
+
+    Without this fallback the heat slack absorbs any imbalance freely, and CP
+    heat output remains "free capacity on top of an infinite slack" even
+    under ``replace_primary_generation`` — which would leave CHP / P2H
+    irrelevant for heat-side resilience.
+
+    Identifies the supply slack as a water-grid ``ExtHydrGrid`` with
+    ``t_k > REF_TEMP − 10`` (excluding the cold return slack present in
+    ``two_port`` heat-plant mode).  Returns the amount absorbed; if the
+    network has no such slack the request passes through unchanged.
+    """
+    remaining = float(q_mw_to_remove)
+    if remaining <= 0:
+        return 0.0
+
+    total_demand_mw = sum(
+        float(getattr(c.model, "q_mw_heat", 0.0) or 0.0)
+        for c in net.childs
+        if isinstance(c.model, mm.HeatLoad)
+    )
+    if total_demand_mw <= 0:
+        return 0.0
+
+    mass_per_mw = 1e6 / (4180.0 * t_delta_design_k)  # kg/s per MW
+
+    candidates = [
+        c
+        for c in net.childs
+        if isinstance(c.model, mm.ExtHydrGrid)
+        and isinstance(c.grid, mm.WaterGrid)
+        and float(getattr(c.model, "t_k", 0.0)) >= REF_TEMP - 10
+    ]
+    if not candidates:
+        return 0.0
+
+    n_slacks = len(candidates)
+    demand_per_slack_mw = total_demand_mw / n_slacks
+    target_per_slack_mw = max(0.0, demand_per_slack_mw - remaining / n_slacks)
+    target_per_slack_kgs = target_per_slack_mw * mass_per_mw
+
+    for c in candidates:
+        # Var.min stores the lower bound under the load convention
+        # (negative = injection cap), so max_import_kgs == abs(min).  Tighten
+        # by replacing the bound; if a tighter user-set bound already exists
+        # keep it.
+        current_min = c.model.mass_flow.min
+        if current_min is None:
+            new_min = -target_per_slack_kgs
+        else:
+            new_min = max(current_min, -target_per_slack_kgs)
+        c.model.mass_flow.min = new_min
+
+    return remaining
+
+
 def create_coupling_points_for_mes(
     mes_net: mm.Network,
     bus_to_gas_junc,
@@ -1111,12 +1318,17 @@ def create_coupling_points_for_mes(
     chp_efficiency_power=0.4,
     chp_efficiency_heat=0.45,
     chp_diameter_m=0.05,
+    chp_p_share=0.5,
     p2g_efficiency=0.7,
+    p2g_p_share=1.0,
     p2h_efficiency=0.95,
+    p2h_p_share=1.0,
     p2h_diameter_m=0.01,
+    cp_size_multiplier=1.0,
     regulation=1.0,
     use_hg_variants=False,
     seed=None,
+    replace_primary_generation=False,
 ):
     """Add multi-energy coupling points (CHP / P2G / P2H) to an MES network.
 
@@ -1136,11 +1348,51 @@ def create_coupling_points_for_mes(
     :func:`create_gas_tree_net_for_power` and
     :func:`create_heat_supply_return_net_for_power`:
 
-    * **CHP** — fuel mass flow scaled to cover ~50% of the bus's electrical
-      generation (or its load, if the bus is a pure consumer).
-    * **P2G** — electrical input scaled from the bus's load, output gas mass
-      flow derived via the gas HHV.
-    * **P2H** — heat output scaled from the bus's load.
+    * **CHP** — fuel mass flow chosen so the *electrical* output covers
+      ``chp_p_share`` × ``p_ref_mw`` (default 0.5, i.e. ~50 % of the bus's
+      load / generation magnitude).
+    * **P2G** — electrical input is ``p2g_p_share`` × ``p_ref_mw`` (default
+      1.0); output gas mass flow follows from ``p2g_efficiency`` and HHV.
+    * **P2H** — electrical input is ``p2h_p_share`` × ``p_ref_mw`` (default
+      1.0); heat output follows via ``p2h_efficiency``.
+
+    The global ``cp_size_multiplier`` (default 1.0) scales every unit's
+    rated output uniformly on top of the per-type shares above.  Use it as
+    the headline knob for resilience studies that ask "how big do CPs need
+    to be before their contribution rises above noise?" — pair with
+    ``extra_mesh_pipes`` on the gas grid to give the larger CPs a fuel
+    path that survives single failures.
+
+    Replacement mode
+    ----------------
+    Default (``replace_primary_generation=False``) is **purely additive**:
+    coupling units stack on top of the existing primary generators, which
+    makes coupling points look unconditionally beneficial for resilience —
+    losing one is always recoverable by the unchanged primary fleet.
+
+    With ``replace_primary_generation=True`` each unit's *output* capacity is
+    absorbed from the matching pool of primary generation, keeping the
+    network's total rated production per carrier invariant:
+
+    * **CHP** (gas → power + heat): subtract its rated electrical output from
+      ``PowerGenerator`` capacity and its rated thermal output from the
+      heat-generator (HX-Gen) pool.
+    * **G2P** (gas → power): subtract its rated electrical output from
+      ``PowerGenerator`` capacity.
+    * **P2G** (power → gas): subtract its rated gas mass flow from the
+      gas-side ``Source`` pool.
+    * **P2H** (power → heat): subtract its rated thermal output from the
+      heat-generator pool.
+
+    This flips the framing of the network from *redundancy* to *cross-carrier
+    dependence*: losing a carrier now disables both the coupling unit *and*
+    the primary generation it displaced.  In ``node_based_heat_loads`` mode
+    no HX-Generators exist; the heat-side reduction then falls back to
+    tightening the supply-slack's ``max_import_kgs`` so its rated heat-
+    delivery capacity drops by the CP heat output (computed from the total
+    ``HeatLoad`` demand and the design ΔT = 30 K).  Without this fallback
+    the slack would absorb every CP-induced imbalance for free, leaving CHP
+    and P2H irrelevant for heat-side resilience even under replacement.
 
     Returns
     -------
@@ -1151,6 +1403,15 @@ def create_coupling_points_for_mes(
         raise ValueError("regulation must be in [0, 1]")
     if not 0 <= density <= 1:
         raise ValueError("density must be in [0, 1]")
+    if cp_size_multiplier <= 0:
+        raise ValueError("cp_size_multiplier must be > 0")
+    for share_name, share in (
+        ("chp_p_share", chp_p_share),
+        ("p2g_p_share", p2g_p_share),
+        ("p2h_p_share", p2h_p_share),
+    ):
+        if share < 0:
+            raise ValueError(f"{share_name} must be >= 0")
 
     rng = random.Random(seed) if seed is not None else random
 
@@ -1178,6 +1439,12 @@ def create_coupling_points_for_mes(
         target_nodes = [nid for nid in candidate_node_ids if rng.random() < density]
 
     created = []
+    # Tracks the cumulative rated *output* capacity of every CP we add, so we
+    # can absorb the same amount from primary generation when
+    # ``replace_primary_generation`` is set (see end of function).
+    cp_power_out_mw = 0.0
+    cp_gas_out_kgs = 0.0
+    cp_heat_out_mw = 0.0
     for power_node_id in target_nodes:
         gas_junc = bus_to_gas_junc[power_node_id]
         heat_supply_junc = bus_to_heat_supply_junc[power_node_id]
@@ -1197,11 +1464,16 @@ def create_coupling_points_for_mes(
         unit_type = rng.choice(sorted(coupling_set))
 
         if unit_type == "chp":
-            # Fuel mass flow needed to supply ~half of p_ref_mw electrically
-            # at the configured electrical efficiency (rough sizing).
-            mass_flow = (
-                0.5 * p_ref_mw / max(chp_efficiency_power, 1e-3) / GAS_HHV_MJ_PER_KG
+            # Fuel mass flow chosen so the electrical output covers
+            # ``chp_p_share · cp_size_multiplier · p_ref_mw`` at the configured
+            # electrical efficiency.
+            chp_p_target_mw = chp_p_share * cp_size_multiplier * p_ref_mw
+            mass_flow = round(
+                chp_p_target_mw / max(chp_efficiency_power, 1e-3) / GAS_HHV_MJ_PER_KG,
+                6,
             )
+            cp_power_out_mw += mass_flow * GAS_HHV_MJ_PER_KG * chp_efficiency_power
+            cp_heat_out_mw += mass_flow * GAS_HHV_MJ_PER_KG * chp_efficiency_heat
             if use_hg_variants:
                 # HeatGenerator-based CHP: heat injection via q_mw_heat at the
                 # supply junction, no return-side branch.  Required for the
@@ -1212,7 +1484,7 @@ def create_coupling_points_for_mes(
                     power_node_id=power_node_id,
                     heat_node_id=heat_supply_junc,
                     gas_node_id=gas_junc,
-                    mass_flow_setpoint=round(mass_flow, 6),
+                    mass_flow_setpoint=mass_flow,
                     efficiency_power=chp_efficiency_power,
                     efficiency_heat=chp_efficiency_heat,
                     regulation=regulation,
@@ -1224,7 +1496,7 @@ def create_coupling_points_for_mes(
                     heat_node_id=heat_supply_junc,
                     heat_return_node_id=heat_return_junc,
                     gas_node_id=gas_junc,
-                    mass_flow_setpoint=round(mass_flow, 6),
+                    mass_flow_setpoint=mass_flow,
                     diameter_m=chp_diameter_m,
                     efficiency_power=chp_efficiency_power,
                     efficiency_heat=chp_efficiency_heat,
@@ -1233,25 +1505,29 @@ def create_coupling_points_for_mes(
             created.append({"type": "chp", "node": power_node_id, "id": uid})
 
         elif unit_type == "p2g":
-            mass_flow = p2g_efficiency * p_ref_mw / GAS_HHV_MJ_PER_KG
+            p2g_p_in_mw = p2g_p_share * cp_size_multiplier * p_ref_mw
+            mass_flow = round(p2g_efficiency * p2g_p_in_mw / GAS_HHV_MJ_PER_KG, 6)
+            cp_gas_out_kgs += mass_flow
             bid = mx.create_p2g(
                 mes_net,
                 from_node_id=power_node_id,
                 to_node_id=gas_junc,
                 efficiency=p2g_efficiency,
-                mass_flow_setpoint=round(mass_flow, 6),
+                mass_flow_setpoint=mass_flow,
                 regulation=regulation,
             )
             created.append({"type": "p2g", "node": power_node_id, "id": bid})
 
         elif unit_type == "p2h":
-            heat_mw = p_ref_mw * p2h_efficiency
+            p2h_p_in_mw = p2h_p_share * cp_size_multiplier * p_ref_mw
+            heat_mw = round(p2h_p_in_mw * p2h_efficiency, 6)
+            cp_heat_out_mw += heat_mw
             if use_hg_variants:
                 bid = mx.create_p2h_hg(
                     mes_net,
                     power_node_id=power_node_id,
                     heat_node_id=heat_supply_junc,
-                    heat_energy_mw=round(heat_mw, 6),
+                    heat_energy_mw=heat_mw,
                     efficiency=p2h_efficiency,
                 )
                 created.append({"type": "p2h", "node": power_node_id, "id": bid})
@@ -1261,12 +1537,39 @@ def create_coupling_points_for_mes(
                     power_node_id=power_node_id,
                     heat_node_id=heat_supply_junc,
                     heat_return_node_id=heat_return_junc,
-                    heat_energy_mw=round(heat_mw, 6),
+                    heat_energy_mw=heat_mw,
                     diameter_m=p2h_diameter_m,
                     efficiency=p2h_efficiency,
                     regulation=regulation,
                 )
                 created.append({"type": "p2h", "node": power_node_id, "id": uid})
+
+    if replace_primary_generation:
+        # Drain primary generation to keep total rated capacity per carrier
+        # invariant.  For heat we first try the HX-Generator pool; whatever
+        # the HX pool cannot absorb (typically the full request in
+        # ``node_based_heat_loads`` mode, where no HX-Gens exist) falls back
+        # to tightening the supply-slack's mass-flow import bound — without
+        # that fallback the slack would absorb every CP-induced imbalance
+        # for free and CHP / P2H heat output would remain irrelevant for
+        # resilience even under replacement.
+        unabsorbed_p = _drain_power_gen_capacity(mes_net, cp_power_out_mw)
+        unabsorbed_g = _drain_gas_source_capacity(mes_net, cp_gas_out_kgs)
+        unabsorbed_h = _drain_heat_gen_capacity(mes_net, cp_heat_out_mw)
+        if unabsorbed_h > 1e-12:
+            absorbed_via_slack = _bound_heat_supply_slack(mes_net, unabsorbed_h)
+            unabsorbed_h -= absorbed_via_slack
+        for label, asked, left in (
+            ("PowerGenerator", cp_power_out_mw, unabsorbed_p),
+            ("gas Source", cp_gas_out_kgs, unabsorbed_g),
+            ("heat (HX-Gen + supply slack)", cp_heat_out_mw, unabsorbed_h),
+        ):
+            if left > 1e-9 and asked > 0:
+                print(
+                    f"[create_coupling_points_for_mes] replace_primary_generation: "
+                    f"{label} pool absorbed {asked - left:g} of {asked:g} requested; "
+                    f"{left:g} unabsorbed (likely no remaining primary capacity)."
+                )
 
     return created
 
@@ -1289,6 +1592,36 @@ def generate_supply_return_mes_based_on_power_net(
     Capacities for the gas/heat demands and generators are derived from the
     power network's ``PowerLoad`` / ``PowerGenerator`` magnitudes so the
     three grids remain dimensionally consistent.
+
+    Useful ``coupling_kwargs`` flags forwarded to
+    :func:`create_coupling_points_for_mes`:
+
+    * ``seed`` — RNG seed for reproducible CP placement.
+    * ``use_hg_variants`` — switch CHP / P2H to their ``HeatGenerator``-style
+      compounds (required by the McCormick-DHS formulation).
+    * ``cp_size_multiplier`` — global scaling on every CP's rated capacity
+      (default 1.0).  Headline knob for resilience studies that ask how
+      large CPs need to be before their additive contribution rises above
+      noise; per-type overrides via ``chp_p_share`` / ``p2g_p_share`` /
+      ``p2h_p_share`` (defaults 0.5 / 1.0 / 1.0).
+    * ``replace_primary_generation`` — make every CP's rated *output* absorb
+      capacity from the matching primary pool (PowerGenerator / gas Source /
+      HX-Generator), keeping total rated production per carrier invariant.
+      Default is purely additive.  Use the replacement mode to study the
+      *cross-carrier dependence cost* of coupling points (the "danger" framing,
+      complementing the additive "redundancy" framing).
+
+    Useful ``gas_kwargs`` flags forwarded to
+    :func:`create_gas_tree_net_for_power`:
+
+    * ``extra_mesh_pipes`` — add ``N`` random cross-connection pipes to the
+      otherwise-strict gas tree.  Recommended for resilience studies in
+      additive CP mode: without meshing, a single gas-pipe failure isolates
+      the entire downstream subtree, which is the dominant reason additive
+      coupling points are statistically irrelevant under random-failure
+      sampling on this layout (a CHP whose fuel path is severed contributes
+      nothing regardless of how much rated capacity it carries).
+    * ``mesh_seed`` — RNG seed for reproducible tie-pipe placement.
     """
     new_mes_net = net_power.copy()
     bus_to_gas_junc = create_gas_tree_net_for_power(
