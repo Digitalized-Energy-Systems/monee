@@ -401,9 +401,13 @@ def test_generate_mes_replace_primary_generation_invariant():
     assert pri_g_rep < pri_g_add - 1e-12
     assert pri_g_rep == pytest.approx(pri_g_add - cp_g, abs=1e-9)
 
-    # Heat side: in node_based_heat_loads mode there are no HX-Generators to
-    # drain, so the replacement falls back to bounding the heat supply slack.
-    # The new ``max_import_kgs`` must equal (D_total − C_cp_heat) / (c_p ΔT).
+    # Heat side: in node-based mode with no ``node_heat_gen_share`` there is
+    # no primary heat fleet to drain, so the heat replacement is a no-op and
+    # the heat supply slack stays unbounded.  Bounding ``max_import_kgs`` is
+    # *not* attempted: in node-based DHS the slack's mass flow is set by the
+    # consumer sinks (hydraulically determined), so a ``max_import_kgs`` cap
+    # is not a smooth heat-power scarcity dial.  See the dedicated
+    # ``node_heat_gen_share`` test for the principled heat-side replacement.
     def heat_slack(mes):
         slacks = [
             c
@@ -415,7 +419,72 @@ def test_generate_mes_replace_primary_generation_invariant():
         assert len(slacks) == 1
         return slacks[0]
 
-    assert heat_slack(mes_add).model.mass_flow.min is None  # additive: unbounded
+    assert heat_slack(mes_add).model.mass_flow.min is None
+    assert heat_slack(mes_rep).model.mass_flow.min is None  # also unbounded now
+
+
+@pytest.mark.pptest
+def test_generate_mes_node_heat_gen_share_and_replacement():
+    """``node_heat_gen_share`` adds a distributed ``HeatGenerator`` fleet
+    that's actually drainable under ``replace_primary_generation``.
+
+    In ``node_based_heat_loads`` mode the default network has no node-based
+    heat sources — every kJ flows through the unbounded supply slack, which
+    makes heat-side resilience studies meaningless (bounding
+    ``max_import_kgs`` is a hydraulic, not energetic, constraint).  The
+    principled fix is to distribute :class:`~monee.model.HeatGenerator`
+    children at ``PowerGenerator`` buses via ``node_heat_gen_share``.  Under
+    ``replace_primary_generation`` that fleet is the primary pool the CP
+    heat output is absorbed from, keeping total rated heat capacity
+    invariant exactly like the power and gas sides.
+    """
+    net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
+    mn = from_pandapower_net(net)
+    GAS_HHV_MJ_PER_KG = 15.3 * 3.6
+
+    common = dict(
+        coupling_density=0.5,
+        centralized=False,
+        couplings=("chp", "p2g", "p2h"),
+    )
+
+    # 1) Explicit share=0.0 disables the distributed heat fleet (legacy).
+    mes_no_hg = generate_supply_return_mes_based_on_power_net(
+        mn,
+        coupling_kwargs={"seed": 1, "use_hg_variants": True},
+        heat_kwargs={"node_based_heat_loads": True, "node_heat_gen_share": 0.0},
+        **common,
+    )
+    assert not [c for c in mes_no_hg.childs if isinstance(c.model, mm.HeatGenerator)], (
+        "node_heat_gen_share=0.0 must not create HeatGenerator children"
+    )
+
+    # 2) Default (share=1.0): distributed HeatGenerators at PowerGenerator buses.
+    mes_add = generate_supply_return_mes_based_on_power_net(
+        mn,
+        coupling_kwargs={"seed": 1, "use_hg_variants": True},
+        heat_kwargs={"node_based_heat_loads": True},  # default share=1.0
+        **common,
+    )
+    hg_add = [c for c in mes_add.childs if isinstance(c.model, mm.HeatGenerator)]
+    assert hg_add, "node_heat_gen_share > 0 must distribute HeatGenerators"
+    total_hg_add = sum(abs(c.model.q_mw_heat) for c in hg_add)
+    assert total_hg_add > 0
+
+    # 3) Replacement mode drains the HeatGenerator pool by the CP heat output.
+    mes_rep = generate_supply_return_mes_based_on_power_net(
+        mn,
+        coupling_kwargs={
+            "seed": 1,
+            "use_hg_variants": True,
+            "replace_primary_generation": True,
+        },
+        heat_kwargs={"node_based_heat_loads": True, "node_heat_gen_share": 1.0},
+        **common,
+    )
+    hg_rep = [c for c in mes_rep.childs if isinstance(c.model, mm.HeatGenerator)]
+    total_hg_rep = sum(abs(c.model.q_mw_heat) for c in hg_rep)
+
     cp_chp_heat = sum(
         float(c.model.mass_flow_setpoint)
         * GAS_HHV_MJ_PER_KG
@@ -429,13 +498,40 @@ def test_generate_mes_replace_primary_generation_invariant():
         if type(b.model).__name__ == "PowerToHeatHG"
     )
     cp_heat = cp_chp_heat + cp_p2h_heat
-    total_heat_demand = sum(
-        c.model.q_mw_heat for c in mes_rep.childs if isinstance(c.model, mm.HeatLoad)
+    assert cp_heat > 0
+
+    # Total rated heat (HeatGenerator + CP) must be invariant across modes.
+    assert total_hg_rep < total_hg_add - 1e-9
+    assert total_hg_rep == pytest.approx(total_hg_add - cp_heat, abs=1e-9)
+
+
+@pytest.mark.pptest
+def test_generate_mes_supply_slack_t_k_parameter():
+    """``supply_slack_t_k`` propagates to the heat supply slack's ``t_k``."""
+    net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
+    mn = from_pandapower_net(net)
+
+    def slack_t_k(mes):
+        slacks = [
+            c
+            for c in mes.childs
+            if isinstance(c.model, mm.ExtHydrGrid) and isinstance(c.grid, mm.WaterGrid)
+        ]
+        assert len(slacks) == 1
+        return slacks[0].model.t_k
+
+    mes_default = generate_supply_return_mes_based_on_power_net(
+        mn,
+        coupling_kwargs={"seed": 1, "use_hg_variants": True},
+        heat_kwargs={"node_based_heat_loads": True},
     )
-    expected_max_import_kgs = (total_heat_demand - cp_heat) * 1e6 / (4180.0 * 30.0)
-    actual_min = heat_slack(mes_rep).model.mass_flow.min
-    assert actual_min is not None and actual_min < 0
-    assert -actual_min == pytest.approx(expected_max_import_kgs, rel=1e-6)
+    mes_lowered = generate_supply_return_mes_based_on_power_net(
+        mn,
+        coupling_kwargs={"seed": 1, "use_hg_variants": True},
+        heat_kwargs={"node_based_heat_loads": True, "supply_slack_t_k": 330.0},
+    )
+    assert slack_t_k(mes_default) == 356  # legacy default
+    assert slack_t_k(mes_lowered) == 330.0
 
 
 @pytest.mark.pptest

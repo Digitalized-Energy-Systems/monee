@@ -187,7 +187,21 @@ class Network:
         return child_id in self._child_dict
 
     def remove_child(self, child_id):
-        del self._child_dict[child_id]
+        # Drop the parent node's reference too; otherwise downstream
+        # code that walks ``node.child_ids`` (e.g.\ ``childs_by_ids``)
+        # raises ``KeyError`` when it tries to look up the now-absent
+        # child.  Failing that, ``replace_primary_generation`` on the
+        # MES generator silently leaves dangling ids that crash
+        # scenario builders downstream.
+        child = self._child_dict.pop(child_id)
+        node_id = getattr(child, "node_id", None)
+        if node_id is not None and node_id in self._network_internal.nodes:
+            try:
+                node = self.node_by_id(node_id)
+            except KeyError:
+                node = None
+            if node is not None and child_id in node.child_ids:
+                node.child_ids.remove(child_id)
 
     def compound_of_node(self, node_id):
         for compound in self.compounds:

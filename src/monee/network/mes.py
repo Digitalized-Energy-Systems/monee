@@ -762,6 +762,8 @@ def create_heat_supply_return_net_for_power(
     return_t_k=REF_TEMP - 30,
     return_pressure_pu=0.95,
     return_pin_temperature=False,
+    node_heat_gen_share=1.0,
+    supply_slack_t_k=REF_TEMP,
 ):
     """Create a supply/return DHS grid mirroring the spanning tree of ``power_net``.
 
@@ -813,6 +815,37 @@ def create_heat_supply_return_net_for_power(
     demand is roughly comparable to peak electric demand, so a 1:1 ratio is
     a reasonable starting point.  ``balance_gen_to_load`` rescales the
     generator side so total HX-Gen capacity matches total HX-Load demand.
+
+    Node-based heat generators (``node_heat_gen_share``)
+    ----------------------------------------------------
+    In ``node_based_heat_loads`` mode, distributes node-based
+    :class:`~monee.model.HeatGenerator` children across every bus with a
+    ``PowerGenerator``, sized as ``node_heat_gen_share × p_gen_mw`` (clamped
+    by ``min_gen_mw``).  These enter the McCormick-DHS nodal balance via
+    ``q_mw_heat``, exactly like ``HeatLoad`` and the HG-variant CPs — they
+    are the heat-side analogue of the gas ``Source`` injection at generator
+    buses, and the correct primary fleet for replacement-mode studies to
+    drain.
+
+    Default is 1.0 to mirror ``gas_gen_share`` — without a distributed heat
+    fleet every kJ flows through the unbounded supply slack, which makes
+    heat-side resilience studies meaningless: bounding the slack's
+    ``max_import_kgs`` is a hydraulic, not energetic, constraint (mass flow
+    is set by sinks, so the bound either has no effect or makes the system
+    infeasible without a smooth scarcity transition); lowering
+    ``supply_slack_t_k`` only forces consumers to draw *more* mass to
+    deliver the same demand.  Set to 0.0 to recover the legacy "slack does
+    everything" behaviour explicitly.
+
+    Slack temperature (``supply_slack_t_k``)
+    -----------------------------------------
+    Defaults to ``REF_TEMP`` (356 K, the network reference).  Exposed so
+    studies can lower it to simulate degraded primary heat sources.  Note:
+    in node-based mode lowering this *increases* the slack's mass-flow load
+    (consumers compensate for lower enthalpy per kg with more mass), so the
+    physical effect is to raise pipe velocities, not to cap heat power —
+    pair it with distributed ``HeatGenerator`` capacity for a meaningful
+    scarcity setup.
 
     Returns
     -------
@@ -1013,6 +1046,26 @@ def create_heat_supply_return_net_for_power(
                 q_mw=-q_mw,
             )
 
+    # Node-based HeatGenerators at PowerGenerator buses.  This is the
+    # McCormick-DHS-compatible counterpart to the gas-side ``Source``
+    # injection at generator buses: a distributed primary heat fleet whose
+    # rated output participates in the nodal heat balance and gives
+    # downstream resilience studies a finite, drainable pool (instead of
+    # routing every kJ through the unbounded supply slack).
+    if node_based_heat_loads and node_heat_gen_share > 0:
+        for node in power_net_as_st.nodes:
+            if node.id not in bus_index_to_supply_junction:
+                continue
+            p_gen_mw = _node_power_gen_mw(power_net, node)
+            if p_gen_mw <= 0:
+                continue
+            q_mw = max(min_gen_mw, p_gen_mw * node_heat_gen_share)
+            mx.create_heat_generator(
+                target_net,
+                node_id=bus_index_to_supply_junction[node.id],
+                q_mw=round(q_mw, 6),
+            )
+
     slack_supply_junction = bus_index_to_supply_junction[slack_root]
 
     if heat_plant_mode not in ("two_port", "closing_pipe", "screening"):
@@ -1021,12 +1074,12 @@ def create_heat_supply_return_net_for_power(
             f"'two_port', 'closing_pipe', 'screening'."
         )
 
-    # Hot port (supply slack): pins T = REF_TEMP, p = 1.0 at the slack
-    # junction.  Always present.
+    # Hot port (supply slack): pins T = supply_slack_t_k, p = 1.0 at the
+    # slack junction.  Always present.
     mx.create_ext_hydr_grid(
         target_net,
         node_id=slack_supply_junction,
-        t_k=REF_TEMP,
+        t_k=supply_slack_t_k,
         grid_key=mm.WATER_KEY,
         name="Grid Connection Heat Supply",
     )
@@ -1203,25 +1256,56 @@ def _drain_gas_source_capacity(net: mm.Network, total_kgs: float) -> float:
 
 
 def _drain_heat_gen_capacity(net: mm.Network, total_mw: float) -> float:
-    """Subtract ``total_mw`` of rated heat-injection capacity from
-    ``HeatExchanger`` branches that act as generators (return → supply, with
-    ``q_mw_set > 0`` under the load convention).  Returns the unabsorbed
-    remainder.
+    """Subtract ``total_mw`` of rated heat-injection capacity from the
+    primary heat-generation fleet.  Two pools are drained, in order:
 
-    In ``node_based_heat_loads`` mode no HX-Generators exist (heat is balanced
-    through the supply-side ``ExtHydrGrid`` slack); the caller should fall
-    back to :func:`_bound_heat_supply_slack` to drain the unabsorbed remainder
-    by tightening the slack's mass-flow import bound.
+    1. Node-based ``HeatGenerator`` children — the McCormick-DHS-compatible
+       primary fleet (created by ``create_heat_supply_return_net_for_power``
+       when ``node_heat_gen_share > 0``).  ``q_mw_heat`` is negated under
+       the load convention, so the rated magnitude is ``abs(q_mw_heat)``.
+    2. ``HeatExchanger`` branches with ``q_mw_set > 0`` — the non-node-based
+       HX-Generator fleet (return → supply injection branches).
+
+    Returns the unabsorbed remainder.
+
+    When the network is in ``node_based_heat_loads`` mode with
+    ``node_heat_gen_share = 0`` no primary fleet exists, and the request
+    passes through unabsorbed — that is the correct outcome.  Bounding
+    ``ExtHydrGrid.max_import_kgs`` is *not* attempted as a fallback: in
+    node-based DHS the slack's mass flow is hydraulically determined by the
+    consumers (sinks), so a mass-flow cap is not a smooth heat-power
+    scarcity dial — it either has no effect (demand ≤ cap) or makes the
+    model hard-infeasible (demand > cap), with no graceful in-between.  The
+    principled fix is to give the network a distributed primary heat fleet
+    upstream via ``node_heat_gen_share > 0``; lowering
+    ``supply_slack_t_k`` is the other available knob but only affects pipe
+    velocities, not heat power.
     """
     remaining = float(total_mw)
     if remaining <= 0:
         return 0.0
+
+    for child in list(net.childs):
+        if remaining <= 1e-12:
+            break
+        if not isinstance(child.model, mm.HeatGenerator):
+            continue
+        current = abs(float(child.model.q_mw_heat))
+        if current <= 0:
+            continue
+        absorb = min(current, remaining)
+        new_mag = current - absorb
+        if new_mag <= 1e-12:
+            net.remove_child(child.id)
+        else:
+            child.model.q_mw_heat = -new_mag
+        remaining -= absorb
+
     for branch in list(net.branches):
         if remaining <= 1e-12:
             break
         if not isinstance(branch.model, mm.HeatExchanger):
             continue
-        # q_mw_set > 0 ⇒ injection (HX-Generator); q_mw_set < 0 ⇒ HX-Load.
         q_set = float(getattr(branch.model, "q_mw_set", 0.0) or 0.0)
         if q_set <= 0:
             continue
@@ -1234,74 +1318,6 @@ def _drain_heat_gen_capacity(net: mm.Network, total_mw: float) -> float:
         else:
             branch.model.q_mw_set = new_q
         remaining -= absorb
-    return remaining
-
-
-def _bound_heat_supply_slack(
-    net: mm.Network, q_mw_to_remove: float, t_delta_design_k: float = 30.0
-) -> float:
-    """Tighten the heat supply ``ExtHydrGrid`` slack so its rated heat-
-    injection capacity drops by ``q_mw_to_remove``.
-
-    Called from the replacement loop in ``node_based_heat_loads`` mode, where
-    no HX-Generators exist to drain.  The slack's ``max_import_kgs`` is set
-    to:
-
-        m_new = (D_total − C_cp) · 1e6 / (c_p · ΔT_design)
-
-    with ``D_total`` the sum of ``HeatLoad`` demands on the network and
-    ``C_cp`` the cumulative CP heat output (= the requested reduction).
-
-    Without this fallback the heat slack absorbs any imbalance freely, and CP
-    heat output remains "free capacity on top of an infinite slack" even
-    under ``replace_primary_generation`` — which would leave CHP / P2H
-    irrelevant for heat-side resilience.
-
-    Identifies the supply slack as a water-grid ``ExtHydrGrid`` with
-    ``t_k > REF_TEMP − 10`` (excluding the cold return slack present in
-    ``two_port`` heat-plant mode).  Returns the amount absorbed; if the
-    network has no such slack the request passes through unchanged.
-    """
-    remaining = float(q_mw_to_remove)
-    if remaining <= 0:
-        return 0.0
-
-    total_demand_mw = sum(
-        float(getattr(c.model, "q_mw_heat", 0.0) or 0.0)
-        for c in net.childs
-        if isinstance(c.model, mm.HeatLoad)
-    )
-    if total_demand_mw <= 0:
-        return 0.0
-
-    mass_per_mw = 1e6 / (4180.0 * t_delta_design_k)  # kg/s per MW
-
-    candidates = [
-        c
-        for c in net.childs
-        if isinstance(c.model, mm.ExtHydrGrid)
-        and isinstance(c.grid, mm.WaterGrid)
-        and float(getattr(c.model, "t_k", 0.0)) >= REF_TEMP - 10
-    ]
-    if not candidates:
-        return 0.0
-
-    n_slacks = len(candidates)
-    demand_per_slack_mw = total_demand_mw / n_slacks
-    target_per_slack_mw = max(0.0, demand_per_slack_mw - remaining / n_slacks)
-    target_per_slack_kgs = target_per_slack_mw * mass_per_mw
-
-    for c in candidates:
-        # Var.min stores the lower bound under the load convention
-        # (negative = injection cap), so max_import_kgs == abs(min).  Tighten
-        # by replacing the bound; if a tighter user-set bound already exists
-        # keep it.
-        current_min = c.model.mass_flow.min
-        if current_min is None:
-            new_min = -target_per_slack_kgs
-        else:
-            new_min = max(current_min, -target_per_slack_kgs)
-        c.model.mass_flow.min = new_min
 
     return remaining
 
@@ -1387,12 +1403,13 @@ def create_coupling_points_for_mes(
     This flips the framing of the network from *redundancy* to *cross-carrier
     dependence*: losing a carrier now disables both the coupling unit *and*
     the primary generation it displaced.  In ``node_based_heat_loads`` mode
-    no HX-Generators exist; the heat-side reduction then falls back to
-    tightening the supply-slack's ``max_import_kgs`` so its rated heat-
-    delivery capacity drops by the CP heat output (computed from the total
-    ``HeatLoad`` demand and the design ΔT = 30 K).  Without this fallback
-    the slack would absorb every CP-induced imbalance for free, leaving CHP
-    and P2H irrelevant for heat-side resilience even under replacement.
+    the heat pool drains node-based ``HeatGenerator`` children created via
+    ``heat_kwargs={"node_heat_gen_share": ...}`` upstream.  If no such
+    fleet exists the heat-side reduction is reported as unabsorbed and *no*
+    slack-bound fallback is attempted — bounding ``ExtHydrGrid.max_import_kgs``
+    is a hydraulic, not energetic, constraint (mass flow is set by sinks),
+    so it is not a smooth scarcity dial.  Provision a ``HeatGenerator``
+    fleet upstream if you want CP heat output to displace something.
 
     Returns
     -------
@@ -1546,23 +1563,22 @@ def create_coupling_points_for_mes(
 
     if replace_primary_generation:
         # Drain primary generation to keep total rated capacity per carrier
-        # invariant.  For heat we first try the HX-Generator pool; whatever
-        # the HX pool cannot absorb (typically the full request in
-        # ``node_based_heat_loads`` mode, where no HX-Gens exist) falls back
-        # to tightening the supply-slack's mass-flow import bound — without
-        # that fallback the slack would absorb every CP-induced imbalance
-        # for free and CHP / P2H heat output would remain irrelevant for
-        # resilience even under replacement.
+        # invariant.  The heat pool now covers both node-based
+        # ``HeatGenerator`` children (created when
+        # ``node_heat_gen_share > 0``) and non-node-based HX-Generator
+        # branches.  No slack-bound fallback: in node-based DHS the slack's
+        # mass flow is hydraulically determined by consumer sinks, so a
+        # ``max_import_kgs`` cap is not a smooth scarcity dial — the
+        # principled fix is to give the network a distributed
+        # ``HeatGenerator`` fleet via ``heat_kwargs={"node_heat_gen_share":
+        # ...}`` upstream.
         unabsorbed_p = _drain_power_gen_capacity(mes_net, cp_power_out_mw)
         unabsorbed_g = _drain_gas_source_capacity(mes_net, cp_gas_out_kgs)
         unabsorbed_h = _drain_heat_gen_capacity(mes_net, cp_heat_out_mw)
-        if unabsorbed_h > 1e-12:
-            absorbed_via_slack = _bound_heat_supply_slack(mes_net, unabsorbed_h)
-            unabsorbed_h -= absorbed_via_slack
         for label, asked, left in (
             ("PowerGenerator", cp_power_out_mw, unabsorbed_p),
             ("gas Source", cp_gas_out_kgs, unabsorbed_g),
-            ("heat (HX-Gen + supply slack)", cp_heat_out_mw, unabsorbed_h),
+            ("heat (HeatGenerator + HX-Gen)", cp_heat_out_mw, unabsorbed_h),
         ):
             if left > 1e-9 and asked > 0:
                 print(
@@ -1622,6 +1638,25 @@ def generate_supply_return_mes_based_on_power_net(
       sampling on this layout (a CHP whose fuel path is severed contributes
       nothing regardless of how much rated capacity it carries).
     * ``mesh_seed`` — RNG seed for reproducible tie-pipe placement.
+
+    Useful ``heat_kwargs`` flags forwarded to
+    :func:`create_heat_supply_return_net_for_power`:
+
+    * ``node_based_heat_loads`` — node-based ``HeatLoad`` consumers
+      (required by McCormick-DHS); default ``False``.
+    * ``node_heat_gen_share`` — in node-based mode, distribute
+      ``HeatGenerator`` children at every ``PowerGenerator`` bus with rated
+      output ``node_heat_gen_share × p_gen_mw``.  Default is 1.0, mirroring
+      ``gas_gen_share``; the heat sector gets a finite, drainable primary
+      fleet rather than routing every kJ through the unbounded supply
+      slack.  Set to 0.0 to recover the legacy slack-only behaviour
+      explicitly.
+    * ``supply_slack_t_k`` — supply slack pinned temperature (default
+      ``REF_TEMP``).  Lowering it does *not* cap slack heat power directly
+      (mass flow is hydraulically determined by sinks); it forces
+      consumers to pull more mass to meet the same demand and is mostly
+      useful as a "degraded primary" scenario when combined with finite
+      ``node_heat_gen_share``.
     """
     new_mes_net = net_power.copy()
     bus_to_gas_junc = create_gas_tree_net_for_power(
