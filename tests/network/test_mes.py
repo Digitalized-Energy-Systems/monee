@@ -72,7 +72,7 @@ def test_generate_mes_min_load_shedding():
     )
     mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
     mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=1))
-    mes.apply_formulation(make_nl_weymouth_pwl_network_formulation())
+    # mes.apply_formulation(make_nl_weymouth_pwl_network_formulation())
 
     problem = create_min_load_shedding_problem(
         bounds_el=(0.9, 1.5),
@@ -101,6 +101,7 @@ def test_generate_mes_min_load_shedding():
     assert result is not None
     assert result.success, "min load shedding did not converge"
     assert result.objective is not None
+    print(result.objective)
     assert False
     # Aggregate heat delivery should be ≥ 95 % of design — the
     # McCormick-DHS + node-based + HG-variants stack is the only one that
