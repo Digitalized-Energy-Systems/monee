@@ -41,9 +41,9 @@ from monee.problem.core import (
     nan_to_zero,
 )
 
-WEIGHT_DEMAND = 10
-WEIGHT_GENERATOR = 1
-WEIGHT_EXT_GRID = 5
+WEIGHT_DEMAND = 1e3
+WEIGHT_GENERATOR = 0.1
+WEIGHT_EXT_GRID = 0.1
 
 # Gas higher heating value for MW-equivalent conversion.
 _HHV_DEFAULT = 15.3  # kWh/kg
@@ -277,8 +277,41 @@ def create_min_load_shedding_problem(
         # HeatExchanger to exclude SubHE (internal compound-model branch).
         return isinstance(m, objective_types) or type(m) is HeatExchanger
 
+    def _is_gas_grid(g):
+        # ``Sink``/``Source`` shed in ``_shedding_mw`` is weighted via the
+        # gas higher-heating-value factor.  Applying it to water-grid Sinks
+        # (heating-loop mass flows) gives them a bogus ~MW-scale penalty
+        # in the objective, which dominates real demand shed.  Water-side
+        # heat demand is already captured by ``HeatLoad`` children; the
+        # water mass flows are derived, not independently sched.
+        if g is None:
+            return False
+        grids = g if isinstance(g, list) else [g]
+        return any(
+            gg is not None and hasattr(gg, "higher_heating_value") for gg in grids
+        )
+
+    def _objective_models(network):
+        """Like ``Objectives.select`` but with grid-aware Sink/Source filtering.
+
+        Water-grid Sinks/Sources represent heating-loop mass flow, not
+        gas demand.  Applying the gas higher-heating-value factor in
+        ``_shedding_mw`` to them would yield a ~MW-scale phantom demand
+        penalty that has no physical meaning (real heat demand is
+        captured by the ``HeatLoad`` children attached to the same
+        water junctions).
+        """
+        out = []
+        for model, grid in network.all_models_with_grid():
+            if not _is_objective_model(model):
+                continue
+            if isinstance(model, (Sink, Source)) and not _is_gas_grid(grid):
+                continue
+            out.append(model)
+        return out
+
     objectives = Objectives()
-    objectives.select(_is_objective_model).data(weight_fn).calculate(_calc_objective)
+    objectives.with_models(_objective_models).data(weight_fn).calculate(_calc_objective)
     problem.objectives = objectives
 
     # --- Constraints ---
