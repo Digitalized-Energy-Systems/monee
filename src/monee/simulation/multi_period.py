@@ -734,7 +734,12 @@ class PyomoMultiPeriodSolver:
 
         pm = pyo.ConcreteModel()
         pm.cons = pyo.ConstraintList()
-        pm.obj_exprs: list = []
+        # See ``PyomoSolver.solve`` — split user-defined objectives from
+        # formulation-level tightening terms so a future lex extension
+        # can pull them apart.  Multi-period still solves single-phase
+        # (sum of both) today.
+        pm.user_obj_exprs: list = []
+        pm.aux_obj_exprs: list = []
 
         _single = PyomoSolver()
 
@@ -820,7 +825,8 @@ class PyomoMultiPeriodSolver:
                     if var is not None:
                         pm.cons.add(var == target)
 
-        obj_expr = sum(pm.obj_exprs) if pm.obj_exprs else 0
+        all_exprs = pm.user_obj_exprs + pm.aux_obj_exprs
+        obj_expr = sum(all_exprs) if all_exprs else 0
         pm.obj = pyo.Objective(expr=obj_expr, sense=pyo.minimize)
 
         _log.info("Solving multi-period problem (T=%d) ...", steps)

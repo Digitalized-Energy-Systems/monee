@@ -86,6 +86,8 @@ def test_generate_mes_min_load_shedding():
         check_pressure=True,
         check_temperature=True,
         check_line_loading=True,
+        auto_priority_floor=True,
+        debug=True,
     )
 
     # WHEN

@@ -468,13 +468,36 @@ class OptimizationProblem:
         prob.constraints = cons
     """
 
-    def __init__(self, debug=False) -> None:
+    def __init__(self, debug=False, lex_objectives: bool = False) -> None:
+        """Initialise an optimisation problem.
+
+        Args:
+            debug: Enable verbose logging during variable promotion.
+            lex_objectives: When ``True``, solve in two phases (Pyomo
+                backend only): first optimise the user-defined
+                objectives, then — with the phase-1 optimum pinned via
+                a cap constraint — optimise the formulation-level
+                tightening terms (``branch.minimize`` / ``node.minimize``
+                / ``child.minimize`` hooks, e.g. the MISOCP
+                ``current_pu · br_r`` Joule-loss term).  Removes the
+                need to hand-tune relative weights between the two
+                tiers and is robust against network growth.  Ignored
+                by the GEKKO backend (which falls back to the
+                single-objective sum).  Default ``False`` preserves
+                legacy behaviour.
+        """
         self._controllable_appliables: list = []
         self._controllable_to_attr: dict[GenericModel, str] = {}
         self._bounds_for_controllables: list = []
         self._objectives: Objectives = None
         self._constraints: Constraints = None
         self._debug = debug
+        self._lex_objectives = lex_objectives
+
+    @property
+    def lex_objectives(self) -> bool:
+        """Whether to solve in lexicographic two-phase mode."""
+        return self._lex_objectives
 
     def _apply(self, network: Network):
         self._controllable_to_attr.clear()

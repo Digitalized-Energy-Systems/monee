@@ -278,7 +278,12 @@ class PyomoSolver(SolverInterface):
             solver_name = self._solver_name
         pm = pyo.ConcreteModel()
         pm.cons = pyo.ConstraintList()
-        pm.obj_exprs = []
+        # Two parallel objective buckets for lexicographic mode.  Both
+        # are summed for the legacy single-objective solve; in lex mode
+        # ``user_obj_exprs`` is optimised first and ``aux_obj_exprs``
+        # second under a cap on the phase-1 optimum.
+        pm.user_obj_exprs = []  # OptimizationProblem.objectives / Network.objectives
+        pm.aux_obj_exprs = []  # formulation-level minimize() tightening terms
 
         network = input_network.copy()
 
@@ -370,12 +375,14 @@ class PyomoSolver(SolverInterface):
         for ext in network.extensions:
             self._add_equations(pm, ext.equations(network, ignored_nodes))
 
-        # single objective: sum of collected objective expressions
-        pm.obj = pyo.Objective(expr=sum(pm.obj_exprs), sense=pyo.minimize)
+        lex_objectives = (
+            optimization_problem is not None
+            and optimization_problem.lex_objectives
+            and len(pm.user_obj_exprs) > 0
+            and len(pm.aux_obj_exprs) > 0
+        )
 
-        # solve
         solver = pyo.SolverFactory(solver_name)
-
         for k, v in DEFAULT_SOLVER_OPTIONS.items():
             solver.options[k] = v
         for k, v in PER_SOLVER_OPTIONS.get(solver_name, {}).items():
@@ -384,20 +391,31 @@ class PyomoSolver(SolverInterface):
         solve_kwargs = {"tee": debug}
         if getattr(solver, "warm_start_capable", lambda: False)():
             solve_kwargs["warmstart"] = True
-        result = solver.solve(pm, **solve_kwargs)
 
-        success = result.solver.status == SolverStatus.ok
-        if not success:
-            from monee.solver.infeasibility import diagnose_infeasibility
+        if lex_objectives:
+            result, success, report = self._solve_lexicographic(
+                pm, solver, solver_name, solve_kwargs
+            )
+        else:
+            # Legacy single-objective: sum of all collected expressions.
+            pm.obj = pyo.Objective(
+                expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
+                sense=pyo.minimize,
+            )
+            result = solver.solve(pm, **solve_kwargs)
+            success = result.solver.status == SolverStatus.ok
+            report = None
+            if not success:
+                from monee.solver.infeasibility import diagnose_infeasibility
 
-            report = diagnose_infeasibility(
-                pm, solver_name=solver_name, compute_mis_flag=False, tol=0.001
-            )
-            _log.warning(
-                "Pyomo solve failed (status=%s). Infeasibility report:\n%s",
-                result.solver.status,
-                report.summary(),
-            )
+                report = diagnose_infeasibility(
+                    pm, solver_name=solver_name, compute_mis_flag=False, tol=0.001
+                )
+                _log.warning(
+                    "Pyomo solve failed (status=%s). Infeasibility report:\n%s",
+                    result.solver.status,
+                    report.summary(),
+                )
 
         # pull values back into your objects
         withdraw_vars(
@@ -427,6 +445,98 @@ class PyomoSolver(SolverInterface):
             solver_result.infeasibility_report = report
         return solver_result
 
+    # --------- Lexicographic two-phase solve ---------
+
+    # Default cap tolerance: relative ε on the phase-1 optimum.  For
+    # MIPs the solver's MIPGap dominates; ``_lex_cap_slack`` adds it on
+    # top so the phase-2 feasible region always contains phase-1's
+    # optimum, even after relative-gap rounding.
+    _LEX_REL_TOL = 1e-6
+    _LEX_ABS_TOL = 1e-9
+
+    @classmethod
+    def _lex_cap_slack(cls, s_star: float, solver_options: dict) -> float:
+        """Slack to add to the phase-1 optimum when capping in phase 2.
+
+        Combines a small numerical tolerance with the solver's MIPGap so
+        the cap never excludes a phase-1 incumbent that the solver
+        accepted within its declared optimality tolerance.
+        """
+        rel_gap = float(solver_options.get("MIPGap", 0.0) or 0.0)
+        rel = max(rel_gap, cls._LEX_REL_TOL)
+        return cls._LEX_ABS_TOL + rel * max(1.0, abs(s_star))
+
+    def _solve_lexicographic(self, pm, solver, solver_name, solve_kwargs):
+        """Run a two-phase lexicographic solve.
+
+        Phase 1 minimises ``sum(pm.user_obj_exprs)`` only.  Phase 2
+        minimises ``sum(pm.aux_obj_exprs)`` with the constraint
+        ``sum(user) <= S* + slack`` pinning the phase-1 optimum.  After
+        both phases ``pm.obj`` is attached (deactivated) so the rest of
+        the pipeline can still call ``pyo.value(pm.obj)`` on the
+        combined value.
+        """
+        pm.obj_user = pyo.Objective(expr=sum(pm.user_obj_exprs), sense=pyo.minimize)
+        pm.obj_aux = pyo.Objective(expr=sum(pm.aux_obj_exprs), sense=pyo.minimize)
+        pm.obj_aux.deactivate()
+
+        # Phase 1: user objective only.
+        result = solver.solve(pm, **solve_kwargs)
+        success = result.solver.status == SolverStatus.ok
+        if not success:
+            from monee.solver.infeasibility import diagnose_infeasibility
+
+            report = diagnose_infeasibility(
+                pm, solver_name=solver_name, compute_mis_flag=False, tol=0.001
+            )
+            _log.warning(
+                "Lexicographic phase 1 failed (status=%s). Infeasibility report:\n%s",
+                result.solver.status,
+                report.summary(),
+            )
+            # Attach a combined Objective for downstream pyo.value(pm.obj).
+            pm.obj = pyo.Objective(
+                expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
+                sense=pyo.minimize,
+            )
+            pm.obj.deactivate()
+            return result, success, report
+
+        s_star = pyo.value(pm.obj_user, exception=False)
+        if s_star is None:
+            s_star = 0.0
+
+        # Phase 2: cap phase-1 and minimise the tightening terms.
+        slack = self._lex_cap_slack(s_star, solver.options)
+        pm.lex_cap = pyo.Constraint(expr=sum(pm.user_obj_exprs) <= s_star + slack)
+        pm.obj_user.deactivate()
+        pm.obj_aux.activate()
+
+        result = solver.solve(pm, **solve_kwargs)
+        success = result.solver.status == SolverStatus.ok
+        report = None
+        if not success:
+            from monee.solver.infeasibility import diagnose_infeasibility
+
+            report = diagnose_infeasibility(
+                pm, solver_name=solver_name, compute_mis_flag=False, tol=0.001
+            )
+            _log.warning(
+                "Lexicographic phase 2 failed (status=%s). Infeasibility report:\n%s",
+                result.solver.status,
+                report.summary(),
+            )
+
+        # Combined objective for backwards-compatible reporting via
+        # ``pyo.value(pm.obj)``.  Deactivated so it does not interfere
+        # with any subsequent solve on the same model.
+        pm.obj = pyo.Objective(
+            expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
+            sense=pyo.minimize,
+        )
+        pm.obj.deactivate()
+        return result, success, report
+
     # --------- Your original processing rewritten to Pyomo ---------
 
     def process_internal_oxf_components(self, pm, network):
@@ -437,7 +547,7 @@ class PyomoSolver(SolverInterface):
         for objective in network.objectives:
             obj = objective(network) if obj is None else (obj + objective(network))
         if obj is not None:
-            pm.obj_exprs.append(obj)
+            pm.user_obj_exprs.append(obj)
 
     def process_oxf_components(
         self,
@@ -464,7 +574,7 @@ class PyomoSolver(SolverInterface):
         ):
             obj = objective if obj is None else (obj + objective)
         if obj is not None:
-            pm.obj_exprs.append(obj)
+            pm.user_obj_exprs.append(obj)
 
     def process_equations_compounds(self, pm, network, compounds, ignored_nodes):
         for compound in compounds:
@@ -532,7 +642,7 @@ class PyomoSolver(SolverInterface):
             for expr in node.minimize(
                 grid, from_branches, to_branches, connected_childs, sqrt_impl=sqrt_impl
             ):
-                pm.obj_exprs.append(expr)
+                pm.aux_obj_exprs.append(expr)
 
             node_eqs = [eq for eq in equations if not isinstance(eq, bool)]
             self._process_intermediate_eqs(pm, node.model, node_eqs)
@@ -544,7 +654,7 @@ class PyomoSolver(SolverInterface):
                 if ignore_child(child, ignored_nodes):
                     continue
                 for expr in child.minimize(grid, node, sqrt_impl=sqrt_impl):
-                    pm.obj_exprs.append(expr)
+                    pm.aux_obj_exprs.append(expr)
                 child_eqs = as_iter(child.equations(grid, node))
                 self._process_intermediate_eqs(pm, child.model, child_eqs)
                 self._add_equations(
@@ -605,7 +715,7 @@ class PyomoSolver(SolverInterface):
                 network.node_by_id(branch.to_node_id).model,
                 sqrt_impl=sqrt_impl,
             ):
-                pm.obj_exprs.append(expr)
+                pm.aux_obj_exprs.append(expr)
 
             self._process_intermediate_eqs(pm, branch.model, branch_eqs)
             self._add_equations(

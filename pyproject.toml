@@ -64,6 +64,7 @@ Issues = "https://github.com/Digitalized-Energy-Systems/monee/issues"
 [tool.pytest.ini_options]
 markers = [
     "pptest: marks tests as dependant on pandapower",
+    "benchmark: marks performance comparison tests (skipped by default unless selected via -m benchmark)",
 ]
 
 [tool.coverage.run]
