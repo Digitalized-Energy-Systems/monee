@@ -54,10 +54,14 @@ class GenericPowerBranch(BranchModel):
         return abs((self.p_from_mw.value - self.p_to_mw.value) / self.p_from_mw.value)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
-        return [
-            self.loading_to_percent == self.i_to_ka / self.max_i_ka,
-            self.loading_from_percent == self.i_from_ka / self.max_i_ka,
-        ]
+        # The loading_*_percent == i_*_ka / max_i_ka identity is owned by the
+        # active branch formulation: the AC formulation adds it as a solver
+        # equality (i_*_ka are pinned by the AC current-magnitude equations),
+        # while MISOCP replaces i_*_ka with Intermediates derived from
+        # current_pu post-solve (it can't add a sqrt-based equality to the
+        # LP).  Keeping the identity in the base would constrain Intermediates
+        # against a scalar, which Pyomo / GEKKO can't translate.
+        return []
 
 
 @model

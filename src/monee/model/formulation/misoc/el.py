@@ -1,3 +1,5 @@
+import math
+
 from monee.model.core import Intermediate, IntermediateEq, Var
 from monee.model.formulation.core import BranchFormulation, NodeFormulation
 from monee.model.phys.misoc.pf import (
@@ -6,6 +8,8 @@ from monee.model.phys.misoc.pf import (
     soc_rel,
     voltage_drop,
 )
+
+SQRT_3 = math.sqrt(3.0)
 
 
 class MISOCPElectricityNodeFormulation(NodeFormulation):
@@ -62,6 +66,19 @@ def _big_m(w_max: float) -> float:
 class MISOCPElectricityBranchFormulation(BranchFormulation):
     def ensure_var(self, branch):
         branch.current_pu = Var(1, min=0)
+        # i_*_ka and loading_*_percent are not free decision variables under
+        # MISOCP — they are algebraically determined by ``current_pu`` (the
+        # per-unit |I|² SOC variable) and the bus voltage base.  Replace the
+        # base-model ``Var`` declarations with ``Intermediate`` so:
+        #   * the LP/MIP doesn't carry four unconstrained slack vars per
+        #     branch (a real correctness bug on top of cluttering the model);
+        #   * the post-solve sqrt-based conversion stays a Pyomo Expression
+        #     (sqrt is nonlinear; Gurobi's LP/SOC writer would reject it as
+        #     a hard constraint, but post-solve evaluation is fine).
+        branch.i_from_ka = Intermediate(0)
+        branch.i_to_ka = Intermediate(0)
+        branch.loading_from_percent = Intermediate(0)
+        branch.loading_to_percent = Intermediate(0)
 
     def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
         return [branch.current_pu * branch.br_r]
@@ -71,6 +88,14 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         big_m = _big_m(w_max)
         ell_phys = _ell_physics_max(branch, w_max)
         tap = _branch_tap(branch)
+        sqrt_impl = kwargs["sqrt_impl"]
+        # Per-unit current base on each side:  I_base_ka = S_base / (√3 · V_base)
+        # For trafos the from-side primary current is the secondary current
+        # divided by the tap ratio (ideal a:1 transformer).  Lines have
+        # tap = 1.0 so both bases collapse to the same value.
+        I_base_from = grid.sn_mva / (SQRT_3 * from_node_model.base_kv) / tap
+        I_base_to = grid.sn_mva / (SQRT_3 * to_node_model.base_kv)
+        i_mag_pu = sqrt_impl(branch.current_pu)
         return [
             branch.current_pu <= ell_phys * branch.on_off,
             voltage_drop(
@@ -113,5 +138,18 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
                 branch.vars["q_to_mvar"] / grid.sn_mva,
                 branch.current_pu,
                 branch.br_x,
+            ),
+            # |I_ka| = √current_pu · I_base_ka.  Same √current_pu on both
+            # sides — under the SOC relaxation ``current_pu`` represents the
+            # from-side magnitude; lossy branches see a slightly different
+            # to-side magnitude (off by r·ell, x·ell), but for diagnostic
+            # loading the from-side value is the conventional report.
+            IntermediateEq("i_from_ka", i_mag_pu * I_base_from),
+            IntermediateEq("i_to_ka", i_mag_pu * I_base_to),
+            IntermediateEq(
+                "loading_from_percent", i_mag_pu * I_base_from / branch.max_i_ka
+            ),
+            IntermediateEq(
+                "loading_to_percent", i_mag_pu * I_base_to / branch.max_i_ka
             ),
         ]

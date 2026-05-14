@@ -1046,12 +1046,57 @@ def create_heat_supply_return_net_for_power(
                 q_mw=-q_mw,
             )
 
+    # ---- Downstream-demand sweep (used by both HG capping and m_U_design) ---
+    # Each supply junction *i* sees a mass-flow ``m_downstream[i]`` equal to
+    # the sum of all consumer demands in its rooted subtree (post-order over
+    # the supply spanning tree).  This is the *only* mass-flow that can carry
+    # heat injected at *i* downstream toward consumers in a tree-shaped DHS
+    # with pinned flow direction (McCormick-DHS), so it sets the physical
+    # limit on local heat injection: ``q ≤ c · m · ΔT_design``.
+    bus_demand_kgs: dict[int, float] = {}
+    subtree: dict = {}
+    if node_based_heat_loads:
+        for supply_id, q_mw in load_specs:
+            m_design = q_mw * 1e6 / (4180.0 * 30.0)
+            bus_demand_kgs[supply_id] = bus_demand_kgs.get(supply_id, 0.0) + m_design
+
+        children_of: dict = {}
+        for p, c in bfs_edges:
+            if p in keep_nodes and c in keep_nodes:
+                children_of.setdefault(p, []).append(c)
+
+        # Post-order accumulation: each bus's subtree mass-flow demand is its
+        # own consumer share plus the sum of its children's subtree totals.
+        # Iterative DFS keeps the worklist bounded; visited-flag pattern
+        # finalises a parent only after all its children are finalised.
+        stack = [(slack_root, False)]
+        while stack:
+            bus, visited = stack.pop()
+            if visited:
+                supply_id = bus_index_to_supply_junction[bus]
+                total = bus_demand_kgs.get(supply_id, 0.0)
+                for child_bus in children_of.get(bus, []):
+                    total += subtree[child_bus]
+                subtree[bus] = total
+            else:
+                stack.append((bus, True))
+                for child_bus in children_of.get(bus, []):
+                    stack.append((child_bus, False))
+
     # Node-based HeatGenerators at PowerGenerator buses.  This is the
     # McCormick-DHS-compatible counterpart to the gas-side ``Source``
     # injection at generator buses: a distributed primary heat fleet whose
     # rated output participates in the nodal heat balance and gives
     # downstream resilience studies a finite, drainable pool (instead of
     # routing every kJ through the unbounded supply slack).
+    #
+    # The rated output ``p_gen_mw · node_heat_gen_share`` is capped by the
+    # local transport bandwidth ``c · m_downstream · ΔT_design`` so the HG
+    # never injects more heat than the supply tree at this junction can
+    # actually carry away at the 30 K design ΔT.  Without this cap a small
+    # PowerGenerator on a low-demand branch would force the local water to
+    # overheat past any physical DHS temperature (the supply-pipe McCormick
+    # envelope rejects it; a real network would simply have undersized HX).
     if node_based_heat_loads and node_heat_gen_share > 0:
         for node in power_net_as_st.nodes:
             if node.id not in bus_index_to_supply_junction:
@@ -1060,6 +1105,13 @@ def create_heat_supply_return_net_for_power(
             if p_gen_mw <= 0:
                 continue
             q_mw = max(min_gen_mw, p_gen_mw * node_heat_gen_share)
+            m_downstream = subtree.get(node.id, 0.0)
+            q_cap_mw = 4180.0 * m_downstream * 30.0 / 1e6
+            if q_cap_mw > 0:
+                q_mw = min(q_mw, q_cap_mw)
+            elif q_cap_mw == 0:
+                # No downstream consumers — no heat can be transported.
+                continue
             mx.create_heat_generator(
                 target_net,
                 node_id=bus_index_to_supply_junction[node.id],
@@ -1141,43 +1193,13 @@ def create_heat_supply_return_net_for_power(
     # For the McCormick-DHS formulation each pipe's mass-flow upper bound
     # determines the McCormick envelope width; the velocity-cap default is
     # tens of kg/s, while the actual downstream design demand on an LV-rural
-    # tree is typically below 1 kg/s.  A forward sweep on the supply tree
-    # gives every pipe its true demand; the formulation's ``_branch_m_U``
-    # then prefers it over the velocity cap.  Only meaningful under
-    # ``node_based_heat_loads`` (branch-HX trees route flow through HXs and
-    # closing pipes, where the simple downstream sum is misleading).
+    # tree is typically below 1 kg/s.  Reuses the ``subtree`` sweep computed
+    # above (also used to cap HG injection at the local transport bandwidth);
+    # the formulation's ``_branch_m_U`` then prefers ``m_U_design`` over the
+    # velocity cap.  Only meaningful under ``node_based_heat_loads``
+    # (branch-HX trees route flow through HXs and closing pipes, where the
+    # simple downstream sum is misleading).
     if node_based_heat_loads:
-        bus_demand_kgs = {}
-        for supply_id, q_mw in load_specs:
-            m_design = q_mw * 1e6 / (4180.0 * 30.0)
-            bus_demand_kgs[supply_id] = bus_demand_kgs.get(supply_id, 0.0) + m_design
-
-        children_of = {}
-        for p, c in bfs_edges:
-            if p in keep_nodes and c in keep_nodes:
-                children_of.setdefault(p, []).append(c)
-
-        # Post-order accumulation: each pipe's design mass-flow cap equals
-        # the sum of its downstream subtree's consumer demands.  Walk the
-        # supply tree once with an iterative DFS — children are popped onto
-        # the stack first and finalized before their parent, so when we
-        # process a parent every ``children_of[parent]`` is already in
-        # ``subtree``.
-        subtree = {}
-        stack = [(slack_root, False)]
-        while stack:
-            bus, visited = stack.pop()
-            if visited:
-                supply_id = bus_index_to_supply_junction[bus]
-                total = bus_demand_kgs.get(supply_id, 0.0)
-                for child_bus in children_of.get(bus, []):
-                    total += subtree[child_bus]
-                subtree[bus] = total
-            else:
-                stack.append((bus, True))
-                for child_bus in children_of.get(bus, []):
-                    stack.append((child_bus, False))
-
         # Decorate each pipe with a per-branch m_U_design.  The base estimate
         # ``m = q / (c · ΔT_design)`` assumes the rated 30 K supply/return
         # ΔT, but under tight network bounds (vm/p/t/loading checks) the

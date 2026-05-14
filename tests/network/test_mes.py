@@ -3,7 +3,7 @@ import simbench
 
 import monee
 import monee.model as mm
-from monee import run_energy_flow, run_timeseries
+from monee import run_timeseries
 from monee.io.from_pandapower import from_pandapower_net
 from monee.io.from_simbench import obtain_simbench_profile_by_pp_net
 from monee.model import GasLinepack, LumpedThermalCapacitance
@@ -17,34 +17,258 @@ from monee.network import generate_supply_return_mes_based_on_power_net
 from monee.problem.min_load_shedding import create_min_load_shedding_problem
 from monee.simulation.timeseries import TimeseriesData
 
+GAS_HHV_MJ_PER_KG = 15.3 * 3.6
+
+
+def _carrier_balance(mes):
+    """Return (deficit, load) per carrier from the un-solved MES capacities.
+
+    Deficit = max(0, demand - internal supply); load = the raw user-load
+    magnitude (PowerLoad / HeatLoad / Sink).  Self-sufficiency =
+    1 - deficit / (load + cp_internal_consumption).
+    """
+    p_load = sum(c.model.p_mw for c in mes.childs if isinstance(c.model, mm.PowerLoad))
+    p_gen = sum(
+        abs(c.model.p_mw) for c in mes.childs if isinstance(c.model, mm.PowerGenerator)
+    )
+    q_load = sum(
+        c.model.q_mw_heat for c in mes.childs if isinstance(c.model, mm.HeatLoad)
+    )
+    q_gen = sum(
+        abs(c.model.q_mw_heat)
+        for c in mes.childs
+        if isinstance(c.model, mm.HeatGenerator)
+    )
+    g_sink = sum(
+        c.model.mass_flow
+        for c in mes.childs
+        if isinstance(c.model, mm.Sink) and isinstance(c.grid, mm.GasGrid)
+    )
+    g_source = sum(
+        abs(c.model.mass_flow)
+        for c in mes.childs
+        if isinstance(c.model, mm.Source) and isinstance(c.grid, mm.GasGrid)
+    )
+    chp_p = sum(
+        float(c.model.mass_flow_setpoint)
+        * GAS_HHV_MJ_PER_KG
+        * float(c.model.efficiency_power)
+        for c in mes.compounds
+        if "CHP" in type(c.model).__name__
+    )
+    chp_q = sum(
+        float(c.model.mass_flow_setpoint)
+        * GAS_HHV_MJ_PER_KG
+        * float(c.model.efficiency_heat)
+        for c in mes.compounds
+        if "CHP" in type(c.model).__name__
+    )
+    chp_gas = sum(
+        float(c.model.mass_flow_setpoint)
+        for c in mes.compounds
+        if "CHP" in type(c.model).__name__
+    )
+    p2g_g = sum(
+        abs(float(b.model.gas_kgps))
+        for b in mes.branches
+        if "PowerToGas" in type(b.model).__name__
+    )
+    p2h_q = sum(
+        float(b.model.heat_energy_mw)
+        for b in mes.branches
+        if type(b.model).__name__ == "PowerToHeatHG"
+    )
+    # CP power draws — approximate via the default efficiencies the
+    # generator function uses (p2g 0.7, p2h 0.95); good to ±5 %.
+    p2g_p_in = p2g_g * GAS_HHV_MJ_PER_KG / 0.7
+    p2h_p_in = p2h_q / 0.95
+
+    p_def = max(0.0, p_load + p2g_p_in + p2h_p_in - p_gen - chp_p)
+    q_def = max(0.0, q_load - q_gen - chp_q - p2h_q)
+    g_def = max(0.0, g_sink + chp_gas - g_source - p2g_g)
+    return (p_def, p_load), (q_def, q_load), (g_def, g_sink)
+
+
+def create_large_lv_simbench(
+    density,
+    *,
+    slack_budget_pct: float | None = None,
+    simbench_code: str = "1-LV-rural3--1-no_sw",
+    backup_lines_per_sector: int = 0,
+    backup_seed: int | None = None,
+    cp_size_multiplier: float = 1.0,
+    replace_primary_generation: bool = False,
+):
+    """Build a simbench LV multi-energy network.
+
+    Parameters
+    ----------
+    density:
+        Coupling-point density passed straight to monee's MES generator
+        (controls how many CHP / P2G / P2H plants are placed).
+    slack_budget_pct:
+        When set, caps the external power and gas grid injections at
+        this fraction of the network's total nominal load.  Defaults
+        to ``None`` (unbounded slack — original behaviour).  Setting
+        to e.g. 0.5 forces the MAS to actually choose what to serve
+        post-failure rather than letting the slack absorb everything.
+    simbench_code:
+        simbench network code; the default ``1-LV-rural3--1-no_sw`` is
+        the established ~340-load benchmark, but smaller variants
+        (rural1, semiurb4) are useful for the scaling experiment.
+    backup_lines_per_sector:
+        If ``> 0``, augment the network with that many normally-open
+        backup branches per sector via ``add_backup_lines``.  This is
+        the test fixture for the reconfiguration pillar — without
+        them the grid is purely radial and the GridReconfigurator has
+        no alternative paths to discover.
+    backup_seed:
+        RNG seed for backup placement (reproducible test fixtures).
+    cp_size_multiplier:
+        Scales every coupling-point's rated output uniformly (1.0 =
+        monee's per-bus default; 2.0 doubles every CP capacity).
+        Larger CPs amplify the cross-sector substitution potential —
+        the headline knob for "how big do CPs need to be before
+        their contribution rises above noise?".
+    replace_primary_generation:
+        When True (default False), the rated output of every CP is
+        absorbed from the matching primary generation pool, keeping
+        total per-carrier rated production invariant.  This flips the
+        framing from CP-as-redundancy (the additive default) to
+        CP-as-cross-carrier-dependence: losing a CP now disables
+        both the unit and the primary gen it displaced, so cross-
+        sector ADMM coordination becomes load-bearing for resilience.
+    """
+
+    def create():
+        net = simbench.get_simbench_net(simbench_code)
+        mn = from_pandapower_net(net)
+        mes = generate_supply_return_mes_based_on_power_net(
+            mn,
+            coupling_density=density,
+            centralized=False,
+            couplings=("chp", "p2g", "p2h"),
+            coupling_kwargs={
+                "seed": 1,
+                "use_hg_variants": True,
+                "cp_size_multiplier": cp_size_multiplier,
+                "replace_primary_generation": replace_primary_generation,
+            },
+            heat_kwargs={"node_based_heat_loads": True},
+        )
+        mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
+        mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=16))
+        return mes
+
+    return create
+
+
+@pytest.mark.pptest
+def test_generate_scare():
+    net = create_large_lv_simbench(0.25)()
+    from monee import run_energy_flow
+
+    print(run_energy_flow(net, solver="gurobi"))
+
 
 @pytest.mark.pptest
 def test_generate_mes():
-    # GIVEN
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
-
-    # WHEN
     mn = from_pandapower_net(net)
 
     mes = generate_supply_return_mes_based_on_power_net(
         mn,
-        coupling_density=0.5,
+        coupling_density=0.20,
         centralized=False,
         couplings=("chp", "p2g", "p2h"),
-        coupling_kwargs={"seed": 1, "use_hg_variants": False},
-        heat_kwargs={"node_based_heat_loads": False},
+        coupling_kwargs={
+            "seed": 1,
+            "use_hg_variants": True,
+            "chp_p_share": 2.0,
+            "p2g_p_share": 0.3,
+            "p2h_p_share": 0.5,
+            "cp_size_multiplier": 3.0,
+        },
+        heat_kwargs={
+            "node_based_heat_loads": True,
+            "node_heat_gen_share": 3.0,
+        },
+        gas_kwargs={
+            "gas_gen_share": 8.0,
+            "mesh_seed": 42,
+        },
     )
+
+    # (1) Per-carrier balance check — capacity-only, no solve.
+    (p_def, p_load), (q_def, q_load), (g_def, g_sink) = _carrier_balance(mes)
+    p_self = 1 - p_def / p_load
+    q_self = 1 - q_def / q_load
+    g_self = 1 - g_def / g_sink
+    print(
+        f"Self-sufficiency:  P={100 * p_self:.1f} %  "
+        f"Q={100 * q_self:.1f} %  G={100 * g_self:.1f} %"
+    )
+    assert p_self >= 0.90, f"power self-sufficiency {100 * p_self:.1f} % < 90 %"
+    assert q_self >= 0.90, f"heat  self-sufficiency {100 * q_self:.1f} % < 90 %"
+    assert g_self >= 0.90, f"gas   self-sufficiency {100 * g_self:.1f} % < 90 %"
+
+    # (2) Baseline min-load-shedding solve must shed nothing — the
+    # restoration metric is meaningful only if shed_baseline = 0.
     mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
-    mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=16))
+    mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=1))
 
-    res = run_energy_flow(mes, solver="gurobi")
-    print(res)
-    print(res.get(mm.Bus).to_string())
-    print(res.get(mm.Junction).to_string())
-    print(res.get(mm.ExtHydrGrid).to_string())
-    print(res.get(mm.HeatLoad).to_string())
+    problem = create_min_load_shedding_problem(
+        bounds_el=(0.9, 1.1),
+        bounds_gas=(0.9, 1.1),
+        bounds_heat=(0.7, 1.3),
+        # Bounds sized at ~10–15 % of per-carrier nominal load.  The
+        # numbers below correspond to:
+        #   power: ±0.10 MW    (~27 % of 0.374 MW load — covers baseline
+        #                       shortfall ≈ 0.005 MW + worst single PowerGen
+        #                       loss ≈ 30 kW + worst single CHP power loss
+        #                       ≈ 25 kW + headroom for re-dispatch)
+        #   gas:   ±0.02 kg/s  (~80 % of 0.025 kg/s sink — covers baseline
+        #                       shortfall ≈ 0.002 kg/s + worst single Source
+        #                       loss ≈ 4 g/s + worst single CHP intake loss
+        #                       + headroom)
+        #   heat:  ±100 kg/s   (effectively unbounded; the water slack
+        #                       absorbs whatever mass flow the consumer
+        #                       sinks require — not a smooth energy dial)
+        ext_grid_el_bounds=(-0.10, 0.10),
+        ext_grid_gas_bounds=(-0.02, 0.02),
+        ext_grid_heat_bounds=(-100, 100),
+        include_ext_grids=True,
+        auto_priority_floor=True,
+    )
+    result = monee.run_energy_flow_optimization(
+        mes, optimization_problem=problem, solver="gurobi"
+    )
+    assert result.success, "baseline solve must converge before any contingency"
 
-    assert False
+    solved = result.network
+
+    def _reg_val(model):
+        reg = model.regulation
+        return float(reg.value if hasattr(reg, "value") else reg)
+
+    p_shed = sum(
+        c.model.p_mw * (1 - _reg_val(c.model))
+        for c in solved.childs
+        if isinstance(c.model, mm.PowerLoad)
+    )
+    q_shed = sum(
+        c.model.q_mw_heat * (1 - _reg_val(c.model))
+        for c in solved.childs
+        if isinstance(c.model, mm.HeatLoad)
+    )
+    g_shed = sum(
+        c.model.mass_flow * (1 - _reg_val(c.model))
+        for c in solved.childs
+        if isinstance(c.model, mm.Sink) and isinstance(c.grid, mm.GasGrid)
+    )
+    assert p_shed < 1e-6, f"baseline power shed {p_shed:.6g} MW > tol"
+    assert q_shed < 1e-6, f"baseline heat  shed {q_shed:.6g} MW > tol"
+    assert g_shed < 1e-9, f"baseline gas   shed {g_shed:.6g} kg/s > tol"
 
 
 @pytest.mark.pptest
