@@ -266,9 +266,11 @@ def create_multi_period_load_shedding_optimization_problem(
         )
 
     if check_lp:
+        from monee.problem.utils import line_loading_limit
+
         constraints.select_types(GenericPowerBranch).equation(
-            lambda model: model.loading_from_percent <= bounds_lp[1]
-        ).equation(lambda model: model.loading_to_percent <= bounds_lp[1])
+            lambda model: line_loading_limit(model, "from", bounds_lp[1])
+        ).equation(lambda model: line_loading_limit(model, "to", bounds_lp[1]))
 
     if regulation_ramp_limit is not None:
         constraints.regulation_ramp(regulation_ramp_limit)
@@ -359,9 +361,11 @@ def create_load_shedding_optimization_problem(
         )
 
     if check_lp:
+        from monee.problem.utils import line_loading_limit
+
         constraints.select_types(GenericPowerBranch).equation(
-            lambda model: model.loading_from_percent <= bounds_lp[1]
-        ).equation(lambda model: model.loading_to_percent <= bounds_lp[1])
+            lambda model: line_loading_limit(model, "from", bounds_lp[1])
+        ).equation(lambda model: line_loading_limit(model, "to", bounds_lp[1]))
     problem.constraints = constraints
     problem.objectives = objectives
     return problem

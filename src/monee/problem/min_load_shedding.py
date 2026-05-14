@@ -555,9 +555,11 @@ def create_min_load_shedding_problem(
     constraints = Constraints()
 
     if check_line_loading:
+        from monee.problem.utils import line_loading_limit
+
         constraints.select_types(GenericPowerBranch).equation(
-            lambda m: m.loading_from_percent <= max_line_loading
-        ).equation(lambda m: m.loading_to_percent <= max_line_loading)
+            lambda m: line_loading_limit(m, "from", max_line_loading)
+        ).equation(lambda m: line_loading_limit(m, "to", max_line_loading))
 
     if include_ext_grids:
         constraints.select_types(ExtPowerGrid).equation(

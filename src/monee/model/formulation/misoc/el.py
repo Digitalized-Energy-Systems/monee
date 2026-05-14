@@ -96,6 +96,16 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         I_base_from = grid.sn_mva / (SQRT_3 * from_node_model.base_kv) / tap
         I_base_to = grid.sn_mva / (SQRT_3 * to_node_model.base_kv)
         i_mag_pu = sqrt_impl(branch.current_pu)
+        # Stash the loading scale factor for LP-writable line-loading
+        # constraints.  Squaring ``loading = i/max_i_ka = √current_pu · I_base
+        # / max_i_ka`` gives ``loading² = current_pu · (I_base/max_i_ka)²``
+        # — linear in current_pu.  Problem code (load-shedding et al.) reads
+        # ``_misocp_loading_*_scale_squared`` to emit
+        # ``current_pu · scale² <= max_loading²`` instead of the
+        # sqrt-bearing ``loading_*_percent`` expression, which the LP writer
+        # would reject.  See :func:`monee.problem.utils.line_loading_limit`.
+        branch._misocp_loading_from_scale_squared = (I_base_from / branch.max_i_ka) ** 2
+        branch._misocp_loading_to_scale_squared = (I_base_to / branch.max_i_ka) ** 2
         return [
             branch.current_pu <= ell_phys * branch.on_off,
             voltage_drop(

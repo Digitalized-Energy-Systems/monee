@@ -178,9 +178,11 @@ def create_economic_dispatch_problem(
     constraints = Constraints()
 
     if check_lp:
+        from monee.problem.utils import line_loading_limit
+
         constraints.select_types(GenericPowerBranch).equation(
-            lambda model: model.loading_from_percent <= bounds_lp[1]
-        ).equation(lambda model: model.loading_to_percent <= bounds_lp[1])
+            lambda model: line_loading_limit(model, "from", bounds_lp[1])
+        ).equation(lambda model: line_loading_limit(model, "to", bounds_lp[1]))
 
     if include_ext_grid and ext_grid_bounds is not None:
         constraints.select_types(ExtPowerGrid).equation(
