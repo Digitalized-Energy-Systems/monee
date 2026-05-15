@@ -12,6 +12,8 @@ Typical usage::
     result = monee.run_energy_flow_optimization(net, optimization_problem=prob)
 """
 
+import math
+
 from monee.model.branch import (
     GenericPowerBranch,
     HeatExchanger,
@@ -43,6 +45,12 @@ from monee.problem.core import (
 
 WEIGHT_DEMAND = 1e3
 WEIGHT_GENERATOR = 0.1
+# Ratio of ext-grid slack penalty to demand weight.  Picked so the
+# nudge-to-zero force on the slack bus is ~10× weaker than the cost
+# of shedding 1 MW of demand, i.e. the optimiser will gladly accept
+# a few MW of ext exchange to avoid any shedding, but in a tie will
+# pick the solution closer to self-sufficiency.
+EXT_SLACK_WEIGHT_RATIO = 0.1
 
 # Fallback higher heating value (kWh/kg) for gas Sink/Source when the
 # enclosing :class:`~monee.model.grid.GasGrid` does not expose
@@ -90,7 +98,15 @@ def _gas_mw_factor(grid):
     return 3.6 * hhv
 
 
-def _aux_objective_upper_bound(network, *, vm_pu_fallback: float = 1.1) -> float:
+_SQRT_3 = math.sqrt(3.0)
+
+
+def _aux_objective_upper_bound(
+    network,
+    *,
+    vm_pu_fallback: float = 1.1,
+    max_line_loading: float | None = None,
+) -> float:
     """Provable over-estimate of ``|Σ pm.aux_obj_exprs|`` for a network.
 
     Sums per-formulation contributions to the formulation-level
@@ -98,11 +114,15 @@ def _aux_objective_upper_bound(network, *, vm_pu_fallback: float = 1.1) -> float
     class):
 
     * **MISOCP electricity** (``MISOCPElectricityBranchFormulation``):
-      contributes ``current_pu · br_r`` per power branch.  Bounded by
-      the physical current limit ``ell_phys = 4·w_max / (br_r²+br_x²)``
-      already used inside the formulation (see
-      :func:`monee.model.formulation.misoc.el._ell_physics_max`) ⇒
-      bound term ``= 4·w_max·br_r / (br_r²+br_x²)``.
+      contributes ``current_pu · br_r`` per power branch.  Two upper
+      bounds apply: the physics-only SOC bound
+      ``ell_phys = 4·w_max / (br_r²+br_x²)`` (see
+      :func:`monee.model.formulation.misoc.el._ell_physics_max`), and
+      — when line-loading limits are enforced — the operational bound
+      ``max_loading² · (max_i_ka / I_base)²`` from
+      :func:`monee.problem.utils.line_loading_limit`.  We use the
+      smaller of the two; for typical distribution lines the loading
+      bound is ~10²–10⁴× tighter and is what makes the bound usable.
     * **Linear heat exchanger** (``LinearHeatExchangerFormulation``):
       contributes ``±q_mw_delivered`` per HE branch.  The formulation
       caps ``|q_mw_delivered| ≤ |q_mw_set·regulation|`` ⇒ bound term
@@ -127,6 +147,11 @@ def _aux_objective_upper_bound(network, *, vm_pu_fallback: float = 1.1) -> float
         vm_pu_fallback: Voltage upper bound to use when a power grid
             does not define ``vm_pu_max``.  ``1.1`` matches the
             ``bounds_el`` default of :func:`create_min_load_shedding_problem`.
+        max_line_loading: When not ``None``, tighten the MISOCP current
+            bound using the line-loading constraint with this
+            upper limit.  ``None`` means line-loading limits are not
+            enforced and only the SOC physics bound is used (loose but
+            correct).
 
     Returns:
         A non-negative float ``A_max`` such that any feasible solution
@@ -135,15 +160,53 @@ def _aux_objective_upper_bound(network, *, vm_pu_fallback: float = 1.1) -> float
     total = 0.0
     for component in network.all_components():
         m = component.model
-        # MISOCP-style current·R contribution.
+        # MISOCP-style current·R contribution.  ``br_r``/``br_x`` on
+        # PowerLine/Trafo are computed inside ``equations()`` (via
+        # ``calc_r_x``) and are still 0 at ``_apply`` time when this
+        # hook runs.  Read them via ``calc_r_x`` when available so the
+        # MISOCP aux contribution — typically the dominant term —
+        # isn't silently dropped from the bound.
         br_r = getattr(m, "br_r", None)
         br_x = getattr(m, "br_x", None)
+        from_model = to_model = None
+        if hasattr(component, "from_node_id"):
+            try:
+                from_model = network.node_by_id(component.from_node_id).model
+                to_model = network.node_by_id(component.to_node_id).model
+                if hasattr(m, "calc_r_x"):
+                    br_r, br_x = m.calc_r_x(component.grid, from_model, to_model)
+            except Exception:
+                from_model = to_model = None
         if isinstance(br_r, (int, float)) and isinstance(br_x, (int, float)):
             denom = br_r * br_r + br_x * br_x
             if denom > 0 and br_r > 0:
                 vm_max = getattr(component.grid, "vm_pu_max", vm_pu_fallback)
                 w_max = vm_max * vm_max
-                total += 4.0 * w_max * br_r / denom
+                current_pu_max = 4.0 * w_max / denom  # SOC physics bound
+                # Tighten with the line-loading constraint when enforced.
+                # ``line_loading_limit`` writes
+                # ``current_pu · (I_base/max_i_ka)² ≤ max_loading²``,
+                # i.e. ``current_pu ≤ max_loading² · (max_i_ka/I_base)²``.
+                # The from-side base is divided by the tap; use the
+                # tighter of the two side-specific bounds.
+                max_i_ka = getattr(m, "max_i_ka", None)
+                grid = component.grid
+                if (
+                    max_line_loading is not None
+                    and isinstance(max_i_ka, (int, float))
+                    and from_model is not None
+                    and to_model is not None
+                    and getattr(grid, "sn_mva", None)
+                    and getattr(from_model, "base_kv", None)
+                    and getattr(to_model, "base_kv", None)
+                ):
+                    tap = getattr(m, "tap", 1.0) or 1.0
+                    i_base_from = grid.sn_mva / (_SQRT_3 * from_model.base_kv) / tap
+                    i_base_to = grid.sn_mva / (_SQRT_3 * to_model.base_kv)
+                    i_base_min = min(i_base_from, i_base_to)
+                    loading_bound = max_line_loading**2 * (max_i_ka / i_base_min) ** 2
+                    current_pu_max = min(current_pu_max, loading_bound)
+                total += current_pu_max * br_r
         # LinearHX delivered-heat contribution.  ``q_mw_set`` is set
         # to ``-q_mw`` by the constructor; magnitude is what matters.
         q_mw_set = getattr(m, "q_mw_set", None)
@@ -168,7 +231,13 @@ def _aux_objective_upper_bound(network, *, vm_pu_fallback: float = 1.1) -> float
     return total
 
 
-def _make_auto_priority_floor_hook(weights: dict, *, alpha: float, debug: bool):
+def _make_auto_priority_floor_hook(
+    weights: dict,
+    *,
+    alpha: float,
+    debug: bool,
+    max_line_loading: float | None,
+):
     """Build a callback that retunes *weights* from the live network.
 
     Designed to be appended to
@@ -183,13 +252,18 @@ def _make_auto_priority_floor_hook(weights: dict, *, alpha: float, debug: bool):
        ``weights['demand']`` was scaled by, preserving the
        demand:generator ratio the user encoded with
        ``generator_weight``.
+
+    *max_line_loading* is forwarded to the bound so the MISOCP term is
+    tightened via the line-loading constraint when active.  Pass
+    ``None`` when ``check_line_loading=False`` so the bound falls back
+    to the (loose but correct) SOC physics limit.
     """
     import logging
 
     _log = logging.getLogger(__name__)
 
     def _hook(network):
-        a_max = _aux_objective_upper_bound(network)
+        a_max = _aux_objective_upper_bound(network, max_line_loading=max_line_loading)
         floor = alpha * a_max
         old_demand = weights["demand"]
         if floor > old_demand:
@@ -376,9 +450,12 @@ def create_min_load_shedding_problem(
         regulation_ramp_limit: Maximum change of ``regulation`` per period.
             ``None`` = no ramp limit.
         include_storages: Make storage components controllable.
-        include_ext_grids: Enable external-grid bound constraints.
-            External grids do not contribute to the objective regardless
-            of this flag.
+        include_ext_grids: Enable external-grid bound constraints
+            (``ext_grid_*_bounds``) and add a quadratic slack penalty
+            ``(p_mw)²`` / ``(mass_flow)²`` to the objective at weight
+            ``demand_weight · EXT_SLACK_WEIGHT_RATIO`` (currently 0.1
+            of demand) so ties are resolved toward zero exchange with
+            the upstream grid.  ``False`` disables both.
         check_vm: Enforce electrical voltage magnitude bounds.
         check_pressure: Enforce gas pressure bounds.
         check_temperature: Enforce water/heat temperature bounds.
@@ -445,7 +522,10 @@ def create_min_load_shedding_problem(
     if auto_priority_floor:
         problem._controllable_appliables.append(
             _make_auto_priority_floor_hook(
-                _weights, alpha=priority_safety_factor, debug=debug
+                _weights,
+                alpha=priority_safety_factor,
+                debug=debug,
+                max_line_loading=max_line_loading if check_line_loading else None,
             )
         )
 
@@ -549,6 +629,41 @@ def create_min_load_shedding_problem(
     objectives.with_models(_objective_models).data(_data_attacher).calculate(
         _calc_objective
     )
+
+    # --- Ext-grid slack penalty -----------------------------------------
+    # Soft nudge for ExtPowerGrid / ExtHydrGrid exchange toward zero (the
+    # natural lower bound of |p_mw| / |mass_flow|) so ties are resolved
+    # toward self-sufficiency.  Weight is ``demand_weight ·
+    # EXT_SLACK_WEIGHT_RATIO`` and is read live from ``_weights`` so it
+    # tracks the auto-priority-floor scaling.  Quadratic (``x²``) so we
+    # don't need aux vars — the MISOCP problem already has quadratic
+    # constraints.  Off when ``include_ext_grids=False`` since there
+    # would be no ext-grid bounds either.
+    if include_ext_grids:
+
+        def _ext_slack_models(network):
+            out = []
+            for model in network.all_models():
+                if isinstance(model, (ExtPowerGrid, ExtHydrGrid)):
+                    out.append(model)
+            return out
+
+        def _ext_slack_data(_model):
+            return _weights["demand"] * EXT_SLACK_WEIGHT_RATIO
+
+        def _ext_slack_calc(model_to_data):
+            total = 0
+            for model, weight in model_to_data.items():
+                if isinstance(model, ExtPowerGrid):
+                    total = total + model.p_mw * model.p_mw * weight
+                elif isinstance(model, ExtHydrGrid):
+                    total = total + model.mass_flow * model.mass_flow * weight
+            return total
+
+        objectives.with_models(_ext_slack_models).data(_ext_slack_data).calculate(
+            _ext_slack_calc
+        )
+
     problem.objectives = objectives
 
     # --- Constraints ---

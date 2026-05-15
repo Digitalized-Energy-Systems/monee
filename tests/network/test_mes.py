@@ -3,7 +3,7 @@ import simbench
 
 import monee
 import monee.model as mm
-from monee import run_timeseries
+from monee import run_energy_flow, run_timeseries
 from monee.io.from_pandapower import from_pandapower_net
 from monee.io.from_simbench import obtain_simbench_profile_by_pp_net
 from monee.model import GasLinepack, LumpedThermalCapacitance
@@ -157,7 +157,9 @@ def create_large_lv_simbench(
             heat_kwargs={"node_based_heat_loads": True},
         )
         mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
-        mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=16))
+        mes.add_extension(GasLinepack())
+        mes.add_extension(LumpedThermalCapacitance(first_step_steady_state=True))
+        # mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=16))
         return mes
 
     return create
@@ -165,10 +167,15 @@ def create_large_lv_simbench(
 
 @pytest.mark.pptest
 def test_generate_scare():
-    net = create_large_lv_simbench(0.25)()
-    from monee import run_energy_flow
+    net = create_large_lv_simbench(0.3)()
+    import time
 
-    print(run_energy_flow(net, solver="gurobi"))
+    s = time.time()
+    result = run_energy_flow(net, solver="gurobi")
+    print(time.time() - s)
+
+    assert result.success
+    assert False
 
 
 @pytest.mark.pptest

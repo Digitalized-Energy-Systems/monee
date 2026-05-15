@@ -42,6 +42,7 @@ from monee.simulation import (
     MultiPeriodResult,
     GekkoMultiPeriodSolver,
     PyomoMultiPeriodSolver,
+    Conductor,
 )
 from monee.solver import GEKKOSolver, PyomoSolver
 from monee.solver.core import persist_solution, compute_bound_violations

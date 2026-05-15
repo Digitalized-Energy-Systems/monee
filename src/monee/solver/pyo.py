@@ -2,7 +2,7 @@ import logging
 import types
 
 import pyomo.environ as pyo
-from pyomo.opt import SolverStatus
+from pyomo.opt import SolverStatus, TerminationCondition
 
 from monee.model import (
     Const,
@@ -97,6 +97,49 @@ class PyomoPWLImpl:
             warn_domain_coverage=False,
         )
         setattr(pm, name, pw)
+
+
+def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
+    """Classify a Pyomo solve outcome and emit appropriate logging.
+
+    Policy:
+      - ``status == ok``: silent, ``success=True``, no report.
+      - ``termination_condition == infeasible``: real failure.  Emit an
+        ``ERROR`` with a full :func:`diagnose_infeasibility` report
+        including the Minimal Infeasible Subsystem so the model can be
+        debugged after the fact.
+      - any other non-ok status (typical for Gurobi when it stops on
+        time/node/gap limits with a feasible incumbent): emit a single
+        ``WARNING`` carrying the termination condition and treat the
+        solve as successful — the witness solution is still valid and
+        downstream consumers can use it.
+    """
+    status = result.solver.status
+    tc = result.solver.termination_condition
+    if status == SolverStatus.ok:
+        return True, None
+    if tc == TerminationCondition.infeasible:
+        from monee.solver.infeasibility import diagnose_infeasibility
+
+        report = diagnose_infeasibility(
+            pm, solver_name=solver_name, compute_mis_flag=True, tol=0.001
+        )
+        _log.error(
+            "%s infeasible (status=%s, termination=%s).  Diagnostic report:\n%s",
+            phase_label,
+            status,
+            tc,
+            report.summary(max_items=50),
+        )
+        return False, report
+    _log.warning(
+        "%s returned non-ok status (status=%s, termination=%s); "
+        "using witness solution.",
+        phase_label,
+        status,
+        tc,
+    )
+    return True, None
 
 
 class PyomoSolver(SolverInterface):
@@ -403,19 +446,12 @@ class PyomoSolver(SolverInterface):
                 sense=pyo.minimize,
             )
             result = solver.solve(pm, **solve_kwargs)
-            success = result.solver.status == SolverStatus.ok
-            report = None
-            if not success:
-                from monee.solver.infeasibility import diagnose_infeasibility
-
-                report = diagnose_infeasibility(
-                    pm, solver_name=solver_name, compute_mis_flag=False, tol=0.001
-                )
-                _log.warning(
-                    "Pyomo solve failed (status=%s). Infeasibility report:\n%s",
-                    result.solver.status,
-                    report.summary(),
-                )
+            success, report = _classify_solve_result(
+                result,
+                pm,
+                solver_name,
+                phase_label="Pyomo solve",
+            )
 
         # pull values back into your objects
         withdraw_vars(
@@ -482,18 +518,13 @@ class PyomoSolver(SolverInterface):
 
         # Phase 1: user objective only.
         result = solver.solve(pm, **solve_kwargs)
-        success = result.solver.status == SolverStatus.ok
+        success, report = _classify_solve_result(
+            result,
+            pm,
+            solver_name,
+            phase_label="Lexicographic phase 1",
+        )
         if not success:
-            from monee.solver.infeasibility import diagnose_infeasibility
-
-            report = diagnose_infeasibility(
-                pm, solver_name=solver_name, compute_mis_flag=False, tol=0.001
-            )
-            _log.warning(
-                "Lexicographic phase 1 failed (status=%s). Infeasibility report:\n%s",
-                result.solver.status,
-                report.summary(),
-            )
             # Attach a combined Objective for downstream pyo.value(pm.obj).
             pm.obj = pyo.Objective(
                 expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
@@ -513,19 +544,12 @@ class PyomoSolver(SolverInterface):
         pm.obj_aux.activate()
 
         result = solver.solve(pm, **solve_kwargs)
-        success = result.solver.status == SolverStatus.ok
-        report = None
-        if not success:
-            from monee.solver.infeasibility import diagnose_infeasibility
-
-            report = diagnose_infeasibility(
-                pm, solver_name=solver_name, compute_mis_flag=False, tol=0.001
-            )
-            _log.warning(
-                "Lexicographic phase 2 failed (status=%s). Infeasibility report:\n%s",
-                result.solver.status,
-                report.summary(),
-            )
+        success, report = _classify_solve_result(
+            result,
+            pm,
+            solver_name,
+            phase_label="Lexicographic phase 2",
+        )
 
         # Combined objective for backwards-compatible reporting via
         # ``pyo.value(pm.obj)``.  Deactivated so it does not interfere

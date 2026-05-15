@@ -141,11 +141,22 @@ class StepState(InterStepState):
 
     ``dt_h`` carries the duration of the *current* timestep in hours.
     Defaults to 1.0.
+
+    *initial_state* is consulted as a fallback when no previous-step value
+    exists — i.e. on the very first step, before any solve has populated
+    the carrier.  Mirrors the same kwarg on :class:`PeriodState` so models
+    can use a uniform ``state.get(...)`` lookup in both modes.
+
+    Args:
+        initial_state: Optional ``{(component_id, attr): value}`` overrides
+            that surface through :meth:`get` whenever no prior solve has
+            written the requested attribute.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, initial_state: dict | None = None) -> None:
         self._networks: list = []
         self.dt_h: float = 1.0
+        self._initial_state: dict = dict(initial_state) if initial_state else {}
 
     def push(self, net) -> None:
         """Append a fully-solved (post-withdrawal) network copy."""
@@ -161,19 +172,22 @@ class StepState(InterStepState):
                 ``-2`` = two steps back.  ``0`` = first step.
 
         Returns:
-            Float value, or ``None`` when no prior steps exist or the
-            component/attribute is absent.
+            Float value from a prior solve if available, otherwise the
+            corresponding entry in *initial_state* (passed at construction),
+            otherwise ``None``.
         """
-        if not self._networks:
-            return None
-        try:
-            net = self._networks[step]
-        except IndexError:
-            return None
-        model = _find_model(net, component_id, attr)
-        if model is None:
-            return None
-        return _extract_value(getattr(model, attr, None))
+        if self._networks:
+            try:
+                net = self._networks[step]
+            except IndexError:
+                net = None
+            if net is not None:
+                model = _find_model(net, component_id, attr)
+                if model is not None:
+                    val = _extract_value(getattr(model, attr, None))
+                    if val is not None:
+                        return val
+        return self._initial_state.get((component_id, attr))
 
     def __len__(self) -> int:
         return len(self._networks)
