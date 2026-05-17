@@ -74,10 +74,8 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
 
         self.t_k = Var(350, min=200, max=800, name="t_k")
         self.t_pu = Var(1, min=0, max=2, name="t_pu")
-        # ``pressure_pa`` is solver-irrelevant — only ``pressure_pu`` enters
-        # the equations.  Keep it as an Intermediate (computed post-solve as
-        # pressure_pu·pressure_ref) so we don't pay a 1e-6 coefficient on
-        # every junction balance row in the LP.
+        # pressure_pa is post-solve only; keeping it Intermediate avoids a 1e-6
+        # coefficient on every junction balance row.
         self.pressure_pa = Intermediate(1000000)
         self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
 
@@ -110,7 +108,7 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
-        # Fuel-to-heat: gas_kgps [kg/s] * 3.6 * hhv [kWh/kg] = MW.
+        # MW = gas_kgps * 3.6 * hhv [kWh/kg]
         return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
@@ -194,53 +192,7 @@ class SubHE(HeatExchanger):
 
 @model
 class CHPControlNode(MultiGridNodeModel, Junction, Bus):
-    """
-    Represents a control node for combined heat and power (CHP) systems, managing energy and mass balances across power, heat, and gas domains.
-
-    CHPControlNode extends MultiGridNodeModel, Junction, and Bus to provide a unified interface for modeling the operational logic and constraints of a CHP unit within a multi-energy network. It tracks key parameters such as fuel mass flow, electrical and thermal efficiencies, and regulation factors, and exposes variables for integration with network branches. Use this class when simulating or optimizing CHP systems that require explicit coupling between gas, heat, and electrical grids.
-
-    Example::
-
-        chp_node = CHPControlNode(
-            mass_flow_capacity=1.2,
-            efficiency_power=0.35,
-            efficiency_heat=0.5,
-            hhv=11.8,
-            q_mvar=0,
-            regulation=1
-        )
-        # Integrate chp_node into a network and call chp_node.equations(...) during simulation
-
-    Parameters:
-        mass_flow_capacity: Maximum or setpoint mass flow of fuel (e.g., gas) supplied to the CHP unit.
-        efficiency_power: Electrical efficiency (fraction, 0 < value ≤ 1).
-        efficiency_heat: Thermal efficiency (fraction, 0 < value ≤ 1).
-        hhv: Higher heating value of the fuel (kWh/kg).
-        q_mvar (optional): Reactive power setpoint for the generator. Defaults to 0.
-        regulation (optional): Regulation factor for operational flexibility. Defaults to 1.
-        **kwargs: Additional keyword arguments for parent class initialization.
-
-    Attributes:
-        mass_flow_capacity: Fuel mass flow capacity or setpoint.
-        efficiency_power: Electrical efficiency.
-        efficiency_heat: Thermal efficiency.
-        gen_q_mvar: Reactive power setpoint.
-        _hhv: Higher heating value of the fuel.
-        regulation: Regulation factor.
-        _gen_p_mw: Electrical power generation variable.
-        heat_gen_w: Thermal power generation variable.
-        el_gen_mw: Electrical power generation variable (duplicate for unified interface).
-        el_mw: Unified electrical power variable.
-        gas_kgps: Unified gas mass flow variable.
-        heat_mw: Unified heat power variable [MW].
-        t_k: Node temperature (K).
-        t_pu: Node temperature (per unit).
-        pressure_pa: Node pressure (Pa).
-        pressure_pu: Node pressure (per unit).
-
-    Methods:
-        equations(grid, from_branch_models, to_branch_models, childs, **kwargs): Defines the system of equations for the CHP node, including mass and energy balances, power and heat conversion, and normalization constraints.
-    """
+    """Control node for a CHP unit; couples power, heat, and gas domains."""
 
     def __init__(
         self,
@@ -265,44 +217,11 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
 
         self.t_k = Var(350, min=200, max=800, name="t_k")
         self.t_pu = Var(1, min=0, max=2, name="t_pu")
-        # See GasToHeatControlNode — pressure_pa kept as Intermediate to
-        # avoid the 1e-6 LP coefficient on pressure_pu/pressure_pa rows.
+        # pressure_pa kept as Intermediate (see GasToHeatControlNode).
         self.pressure_pa = Intermediate(1000000)
         self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
-        """
-        Defines the system of equations for a combined heat and power (CHP) control node, capturing energy and mass balances across power, heat, and gas domains.
-
-        This method assembles the physical and operational constraints for a CHP node, including mass flow balances for heat and gas, power balance equations, and thermodynamic relationships for energy conversion. It integrates the effects of efficiency, regulation, and fuel properties, and links the node's internal variables to the connected branches. Use this method during network simulation or optimization to ensure the CHP node's behavior is accurately represented within the multi-energy system.
-
-        Args:
-            grid: List or collection of grid objects, where grid[1] is expected to be the heat grid for reference values.
-            from_branch_models (list): Branch models representing flows entering the node.
-            to_branch_models (list): Branch models representing flows leaving the node.
-            childs (list): Child component models attached to the node.
-            **kwargs: Additional keyword arguments for solver options or equation customization.
-
-        Returns:
-            tuple: A tuple of equations representing:
-
-                - Heat mass flow balance at the node.
-                - Heat energy flow balance at the node.
-                - Gas mass flow balance at the node.
-                - Power balance equations (active and reactive).
-                - Heat exchanger energy conversion constraint.
-                - Electrical power generation constraint.
-                - Consistency between internal heat and electrical variables and branch flows.
-                - Temperature and pressure normalization constraints.
-
-        Raises:
-            IndexError: If no SubHE branch is found in the heat_from_branches list.
-            KeyError: If expected variables are missing from branch models.
-
-        Examples:
-            # Called automatically during network simulation:
-            eqs = chp_control_node.equations(grid, from_branches, to_branches, childs)
-        """
         heat_to_branches = [
             branch
             for branch in to_branch_models
@@ -385,14 +304,8 @@ class CHP(MultiGridCompoundModel):
 
     def set_active(self, activation_flag):
         if activation_flag:
-            # Skip the restore when the attribute has already been promoted
-            # to a ``Var`` (e.g. by ``controllable_cps`` during ``_apply``):
-            # overwriting it with the plain-number ``_old_regulation`` /
-            # ``mass_flow_setpoint`` would silently un-promote the LP
-            # variable and hard-code the value, preventing the solver from
-            # optimising over ``regulation`` / ``gas_kgps``. The restore is
-            # only needed when the previous ``set_active(False)`` actually
-            # zeroed the primitive value.
+            # Don't overwrite when controllable_cps has promoted the attr to a
+            # Var — restore only the case where set_active(False) zeroed it.
             if isinstance(self._control_node.gas_kgps, (int, float)) and not isinstance(
                 self._control_node.gas_kgps, bool
             ):
@@ -453,9 +366,7 @@ class GasToHeat(MultiGridCompoundModel):
 
     def set_active(self, activation_flag):
         if activation_flag:
-            # See ``CHP.set_active`` — skip restore when the attribute is
-            # already an LP variable so ``controllable_cps`` survives this
-            # solver-time refresh.
+            # See CHP.set_active — skip restore when attr is already an LP Var.
             if isinstance(
                 self._control_node.regulation, (int, float)
             ) and not isinstance(self._control_node.regulation, bool):
@@ -469,7 +380,7 @@ class GasToHeat(MultiGridCompoundModel):
     ):
         self._gas_grid = gas_node.grid
         hhv = gas_node.grid.higher_heating_value
-        # q [MW] = eff · m [kg/s] · 3.6 · hhv [kWh/kg]  →  m = |q| / (eff · 3.6 · hhv)
+        # m = |q| / (eff · 3.6 · hhv)
         self.gas_kgps = abs(self.heat_energy_mw) / (self.efficiency * 3.6 * hhv)
         self._control_node = GasToHeatControlNode(
             self.gas_kgps,
@@ -507,7 +418,6 @@ class PowerToHeat(MultiGridCompoundModel):
         self.temperature_ext_k = temperature_ext_k
         self.efficiency = efficiency
         self.heat_energy_mw = heat_energy_mw
-        # p_load [MW] = q [MW] / eff
         self.load_p_mw = heat_energy_mw / efficiency
         self.load_q_mvar = q_mvar_setpoint
         self.regulation = regulation
@@ -621,15 +531,10 @@ class PowerToGas(MultiGridBranchModel):
 class SubHG(NoVarChildModel):
     """Subordinate node-based heat generator used inside :class:`CHPHG`.
 
-    Acts like :class:`~monee.model.child.HeatGenerator`: its ``q_mw_heat`` is
-    picked up by :meth:`~monee.model.node.Junction.calc_signed_heat_flow` and
-    by the McCormick-DHS nodal balance, following the load convention
-    (negative = injection).  Unlike ``HeatGenerator`` the value is a :class:`Var`
-    constrained at solve time by the parent compound's control-node equations.
-
-    The 2-endpoint HG variants (:class:`GasToHeatHG`, :class:`PowerToHeatHG`)
-    no longer use this child — they carry ``q_mw_heat`` directly on the branch
-    and let :meth:`Junction.calc_signed_heat_flow` absorb it at the TO-node.
+    Like HeatGenerator but with q_mw_heat as a Var constrained by the parent
+    compound's control-node equations. Two-endpoint HG variants
+    (GasToHeatHG / PowerToHeatHG) don't use this — they carry q_mw_heat
+    directly on the branch.
     """
 
     def __init__(self, **kwargs) -> None:
@@ -645,11 +550,10 @@ def _gas_grid_of(grid):
 
 @model
 class CHPHGControlNode(MultiGridNodeModel, Junction, Bus):
-    """CHP control node using a node-based HeatGenerator (no heat-exchanger branch).
+    """CHP control node using a node-based HeatGenerator (no HX branch).
 
-    Variant of :class:`CHPControlNode` that participates only in the power and
-    gas grids.  Heat output is delivered via a :class:`SubHG` child attached to
-    the heat-supply node by :class:`CHPHG`.
+    Like :class:`CHPControlNode` but only on power+gas; heat goes through a
+    :class:`SubHG` child attached at the heat node by :class:`CHPHG`.
     """
 
     def __init__(
@@ -677,7 +581,6 @@ class CHPHGControlNode(MultiGridNodeModel, Junction, Bus):
 
         self.t_k = Var(350, min=200, max=800, name="t_k")
         self.t_pu = Var(1, min=0, max=2, name="t_pu")
-        # See GasToHeatControlNode — pressure_pa kept as Intermediate.
         self.pressure_pa = Intermediate(1000000)
         self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
 
@@ -719,16 +622,9 @@ class CHPHGControlNode(MultiGridNodeModel, Junction, Bus):
 
 @model
 class CHPHG(MultiGridCompoundModel):
-    """HeatGenerator-based CHP variant.
-
-    Drop-in alternative to :class:`CHP`: instead of routing a water-side mass
-    flow through a heat-exchanger branch between a supply and a return node,
-    the thermal output is injected directly at ``heat_node`` via a
-    :class:`SubHG` child.  The gas and electrical interfaces (and the
-    mass_flow_setpoint / efficiency / regulation semantics) are identical to
-    :class:`CHP`.  Because there is no ``heat_return_node`` and no internal
-    heat-exchanger branch, ``diameter_m`` is not required.
-    """
+    """HeatGenerator-based :class:`CHP` variant: heat is injected via a
+    :class:`SubHG` child at ``heat_node`` instead of via an HX branch. No
+    ``heat_return_node`` / ``diameter_m`` required."""
 
     def __init__(
         self,
@@ -777,31 +673,22 @@ class CHPHG(MultiGridCompoundModel):
 
 @model
 class GasToHeatHG(MultiGridBranchModel):
-    """HeatGenerator-based Gas-to-Heat coupling point.
-
-    Two-endpoint branch from ``gas_node`` (from-end) to ``heat_node``
-    (to-end).  Gas is withdrawn at the from-end via ``from_mass_flow`` and
-    heat is injected at the to-end via ``q_mw_heat``, both in load convention.
-    The heat balance on the water junction picks up ``q_mw_heat`` through
-    :meth:`~monee.model.node.Junction.calc_signed_heat_flow` (and through
-    the LTC and McCormick-DHS formulations), so no :class:`SubHG` child or
-    control node is needed.
-    """
+    """Two-endpoint Gas→Heat coupling (gas withdrawal at from-end, q_mw_heat
+    injection at to-end). Junction heat balance picks up ``q_mw_heat`` directly."""
 
     def __init__(self, heat_energy_mw, efficiency, regulation=1) -> None:
         super().__init__()
         self.efficiency = efficiency
-        self.heat_energy_mw = -heat_energy_mw  # load convention: negative = injection
+        self.heat_energy_mw = -heat_energy_mw
 
         self.on_off = 1
         self.regulation = regulation
         self.q_mw_heat = Var(self.heat_energy_mw, max=0, name="g2h_hg_q_mw_heat")
         self.from_mass_flow = Var(1, min=0, name="g2h_hg_from_mass_flow")
-        self.gas_kgps = 0  # overwritten in init() once hhv is known
+        self.gas_kgps = 0  # set in init() once hhv is known
 
     def init(self, grids):
         hhv = grids[GasGrid].higher_heating_value
-        # m [kg/s] = |q [MW]| / (eff · 3.6 · hhv [kWh/kg])
         self.gas_kgps = abs(self.heat_energy_mw) / (self.efficiency * 3.6 * hhv)
 
     def loss_percent(self):
@@ -818,16 +705,8 @@ class GasToHeatHG(MultiGridBranchModel):
 
 @model
 class PowerToHeatHG(MultiGridBranchModel):
-    """HeatGenerator-based Power-to-Heat coupling point.
-
-    Two-endpoint branch from ``power_node`` (from-end) to ``heat_node``
-    (to-end).  Active power is drawn at the from-end via ``p_from_mw`` and
-    heat is injected at the to-end via ``q_mw_heat``, both in load convention.
-    The heat balance on the water junction picks up ``q_mw_heat`` through
-    :meth:`~monee.model.node.Junction.calc_signed_heat_flow` (and through
-    the LTC and McCormick-DHS formulations), so no :class:`SubHG` child or
-    control node is needed.
-    """
+    """Two-endpoint Power→Heat coupling (p_from_mw at from-end, q_mw_heat at
+    to-end). Junction heat balance picks up ``q_mw_heat`` directly."""
 
     def __init__(
         self, heat_energy_mw, efficiency, q_mvar_setpoint=0, regulation=1
@@ -835,7 +714,6 @@ class PowerToHeatHG(MultiGridBranchModel):
         super().__init__()
         self.efficiency = efficiency
         self.heat_energy_mw = heat_energy_mw
-        # p_load [MW] = q [MW] / eff
         self.load_p_mw = heat_energy_mw / efficiency
         self.load_q_mvar = q_mvar_setpoint
 

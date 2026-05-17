@@ -19,13 +19,9 @@ def init_model(model_type, preprocessed_dict):
         )
     model_cls = model_type_dict[model_type]
 
-    # Build the constructor kwargs.  Required parameters (no default) get a
-    # neutral 0 so the constructor can run; parameters that carry a default
-    # keep that default so model-level defaults (e.g. PowerGrid.vm_pu_max)
-    # are preserved when the importer omits them.  Final attribute values
-    # then come from preprocessed_dict via setattr — this bypasses the
-    # constructor's transformations (sign negation, Var wrapping) so the
-    # serialized internal state round-trips exactly.
+    # Required params get 0; optional params keep their default. Real attr
+    # values arrive via setattr, bypassing constructor transforms so the
+    # serialized state round-trips exactly.
     init_kwargs = {}
     for argname, param in list(
         inspect.signature(model_cls.__init__).parameters.items()

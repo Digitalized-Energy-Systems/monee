@@ -6,25 +6,11 @@ from __future__ import annotations
 
 
 def line_loading_limit(branch_model, side: str, max_loading: float):
-    """Return an LP-writable line-loading constraint for *branch_model*.
+    """LP-writable line-loading constraint.
 
-    Under the AC formulation ``loading_*_percent`` is a free ``Var`` pinned
-    by the linear identity ``loading == i / max_i_ka``, so the trivial form
-    ``loading <= max`` works in the LP writer.
-
-    Under MISOCP ``loading_*_percent`` is an ``Intermediate`` whose post-solve
-    Pyomo ``Expression`` carries ``sqrt(current_pu) · I_base / max_i_ka`` —
-    a transcendental term the LP writer rejects.  The formulation stashes a
-    pre-computed loading-scale on the branch in ``_misocp_loading_*_scale_squared``
-    so the equivalent linear-in-``current_pu`` constraint can be emitted here:
-
-        loading² = current_pu · scale²   ⟹   loading <= max
-                                           ⟺   current_pu · scale² <= max²
-
-    Args:
-        branch_model: The branch's model object (i.e. ``component.model``).
-        side: ``"from"`` or ``"to"``.
-        max_loading: Loading limit as a fraction (e.g. ``1.0`` for 100%).
+    AC: ``loading_*_percent ≤ max``. MISOCP: emit
+    ``current_pu · scale² ≤ max²`` using the formulation-stashed
+    ``_misocp_loading_*_scale_squared`` (the sqrt form is LP-incompatible).
     """
     if side not in ("from", "to"):
         raise ValueError(f"side must be 'from' or 'to', got {side!r}")

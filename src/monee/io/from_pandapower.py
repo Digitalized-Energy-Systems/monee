@@ -12,15 +12,7 @@ _SQRT3 = math.sqrt(3.0)
 
 
 def aggregated_pp_load_name(pp_loads_at_bus) -> str:
-    """Stable joined name for the pandapower loads sharing a single bus.
-
-    The matpower converter aggregates every pandapower load on a bus into a
-    single :class:`~monee.model.child.PowerLoad`.  We mirror that grouping
-    by joining the contributing pandapower load names with ``"+"`` so the
-    monee child has a deterministic name that
-    :func:`monee.io.from_simbench.obtain_simbench_profile_by_pp_net` can use
-    to bind the corresponding (summed) timeseries.
-    """
+    """``"+"``-joined names of pandapower loads aggregated onto one monee PowerLoad."""
     return "+".join(pp_loads_at_bus["name"].astype(str).tolist())
 
 
@@ -49,56 +41,13 @@ def _coerce_positive_float(value, default=1.0):
 
 
 def _pp_branch_max_i_ka_overrides(net):
-    """Build a ``{monee_branch_id -> max_i_ka}`` map from the pandapower
-    line / trafo tables, recovering values dropped by the matpower roundtrip.
+    """``{monee_branch_id → max_i_ka}`` rebuilt from ``net.line``/``net.trafo``.
 
-    The matpower converter only carries an apparent-power rating (``rateA``),
-    and our :func:`~monee.io.matpower.fill_branch_dict` hardcodes
-    ``max_i_ka = 0.319`` for every emitted branch — so line current limits
-    and transformer ratings are wrong for any net imported through this
-    path.  This helper builds the authoritative override directly from
-    ``net.line`` / ``net.trafo``.
-
-    Mapping convention (verified empirically against ``pc.to_mpc``):
-
-    * Bus index: ``pc.to_mpc`` renumbers pandapower bus indices to a
-      contiguous 1-based sequence preserving ``net.bus`` row order, so
-      ``mpc_bus_id = net.bus.index.get_loc(pp_bus) + 1``.  For nets whose
-      pandapower indices are already ``0..N-1`` this collapses to
-      ``pp_bus + 1`` (the LV-rural3 case), but simbench MV / HV grids have
-      sparse indices and require the lookup.
-    * Branch ordering: lines first in ``net.line`` row order, then trafos
-      in ``net.trafo`` row order; each ``(from, to)`` pair gets a per-pair
-      parallel-key counter ``0, 1, 2, …`` matching the ``key`` element of
-      monee's branch ID tuple ``(from_node_id, to_node_id, key)``.
-
-    Per-row capacity:
-
-    * **Line** — ``max_i_ka × parallel × df``; ``parallel`` reflects
-      multiple physical conductors sharing the (from, to) endpoint pair,
-      ``df`` is pandapower's derating factor.
-    Transformers are intentionally **not** overridden.  ``GenericPowerBranch``
-    constrains ``i_from_ka`` and ``i_to_ka`` against the *same* ``max_i_ka``
-    scalar (see :class:`~monee.model.branch.GenericPowerBranch.equations`).
-    For a Y-Δ trafo the HV-side current at rated MVA is
-    ``sn_mva / (√3 · vn_hv_kv)`` and the LV-side current is
-    ``sn_mva / (√3 · vn_lv_kv)``; the two differ by the turns ratio (e.g.
-    50× for a 20 kV / 0.4 kV unit), so any single ``max_i_ka`` scalar
-    saturates one side or the other.  The legacy 0.319 kA placeholder is
-    physically wrong for both sides too, but at least doesn't bind the
-    solver into infeasibility under normal loading; introducing an
-    HV-tight bound would make the LV-side current constraint structurally
-    infeasible.  A proper trafo limit requires a model-side change
-    (separate ``max_i_from_ka`` / ``max_i_to_ka`` or an apparent-power
-    ``max_s_mva``).
-
-    Auxiliary branches that ``pc.to_mpc`` synthesises to model open line
-    switches (one extra bus + one extra branch per ``net.switch`` row of
-    type ``"l"``) are also not covered here — there is no corresponding
-    row in ``net.line`` / ``net.trafo`` to draw a rating from.  They keep
-    the legacy ``0.319`` placeholder from
-    :func:`~monee.io.matpower.fill_branch_dict` and can be detected after
-    import as branches whose ``to_node_id`` exceeds ``len(net.bus)``.
+    The matpower roundtrip drops current limits and our writer pins a 0.319 kA
+    placeholder, so we re-derive line ratings as ``max_i_ka·parallel·df`` here.
+    Trafos are *not* overridden: monee's single ``max_i_ka`` cannot represent
+    both HV and LV sides of a Y-Δ trafo simultaneously, so any tight bound
+    would make one side infeasible. Switch-aux branches stay on the placeholder.
     """
     overrides = {}
     seen = {}
@@ -121,10 +70,8 @@ def _pp_branch_max_i_ka_overrides(net):
             df = _coerce_positive_float(getattr(row, "df", 1.0))
             overrides[(f, t, key)] = max_i_ka * parallel * df
 
-    # Trafos: advance the (f, t) parallel-key counter so subsequent lines on
-    # the same node pair get the right key, but do *not* emit an override —
-    # see the docstring above for why mapping ``sn_mva`` onto a single
-    # ``max_i_ka`` scalar is physically inconsistent for a Y-Δ transformer.
+    # Trafos: bump the parallel-key counter so later lines on the same pair
+    # get the right key, but don't override (see docstring).
     if hasattr(net, "trafo") and len(net.trafo):
         for row in net.trafo.itertuples():
             f = mpc_bus(row.hv_bus)
@@ -150,9 +97,7 @@ def from_pandapower_net(net):
                     net.bus_geodata["y"].iloc[pp_id],
                 )
 
-    # Override ``max_i_ka`` from the authoritative pandapower line / trafo
-    # tables — the matpower roundtrip drops physical current limits (see
-    # :func:`_pp_branch_max_i_ka_overrides`).
+    # Recover max_i_ka from pandapower (dropped by the matpower roundtrip).
     overrides = _pp_branch_max_i_ka_overrides(net)
     if overrides:
         for branch in monee_net.branches:
@@ -162,11 +107,8 @@ def from_pandapower_net(net):
             if bid in overrides:
                 branch.model.max_i_ka = overrides[bid]
 
-    # Tag aggregated PowerLoad children with a deterministic name derived
-    # from the contributing pandapower loads, so simbench timeseries can be
-    # matched back to them by name.  Buses with no load are silently
-    # skipped; buses where matpower produced no PowerLoad child (zero
-    # aggregate p/q) are likewise ignored.
+    # Tag aggregated PowerLoad with a deterministic name so simbench
+    # timeseries can be matched back by name.
     if hasattr(net, "load") and len(net.load):
         nodes_by_id = {n.id: n for n in monee_net.nodes}
         for pp_bus, group in net.load.groupby("bus", sort=False):

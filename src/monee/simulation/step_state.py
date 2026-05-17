@@ -1,47 +1,6 @@
-"""
-Network-copy-based state carriers for timeseries and multi-period solves.
-
-Both classes implement :class:`InterStepState` and expose the same
-``get(component_id, attr)`` / ``dt_h`` API so that models implementing
-``inter_step_equations`` work identically in sequential timeseries and joint
-multi-period optimisation.
-
-``StepState`` (sequential timeseries)
-    Accumulates the fully-solved network copies from all previous steps.
-    ``get()`` returns plain Python floats extracted from ``Var.value``.
-
-``PeriodState`` (multi-period)
-    Holds all T period networks after variable injection (live solver objects).
-    ``get()`` returns the solver variable directly, so an equation that reads
-    from a ``PeriodState`` becomes an algebraic cross-period constraint inside
-    the joint solver problem.
-
-Because both classes return ``None`` when no prior network exists (step 0 /
-period 0), model ``inter_step_equations`` implementations use a single
-``if prev is None: prev = self._initial_value`` guard for both modes.
-
-Any attribute is accessible — not just variables annotated as ``tracked``.
-Models can reference velocity, flows, or any other solved quantity from
-adjacent (or any) steps/periods.
-
-Example — a ramp-constrained generator child model::
-
-    class RampGenerator(ChildModel):
-        def __init__(self, p_mw, ramp_up, ramp_down, **kwargs):
-            super().__init__(**kwargs)
-            self.p_mw = Var(-p_mw)
-            self.ramp_up = ramp_up
-            self.ramp_down = ramp_down
-
-        def inter_temporal_equations(self, temporal_state: InterStepState, component_id, **kwargs):
-            prev_p = temporal_state.get(component_id, 'p_mw')
-            if prev_p is None:
-                return []   # first step — no ramp constraint
-            return [
-                self.p_mw - prev_p <= self.ramp_up,
-                prev_p - self.p_mw <= self.ramp_down,
-            ]
-"""
+"""State carriers for timeseries (StepState — floats) and multi-period
+(PeriodState — live solver vars). Both expose the same ``get(comp_id, attr)`` /
+``dt_h`` API so ``inter_step_equations`` works in both modes unchanged."""
 
 from __future__ import annotations
 
@@ -49,12 +8,8 @@ from abc import ABC, abstractmethod
 
 
 def _find_model(net, component_id, attr=None):
-    """Return the model for *component_id* in *net*, or ``None``.
-
-    Node IDs and child IDs are independent namespaces that can collide.
-    When *attr* is given and multiple models match, we return the first one
-    that actually carries *attr*, disambiguating the common case.
-    """
+    """Return the model for *component_id*. Disambiguates node/child id collisions
+    by preferring a model that actually carries *attr*."""
     candidates = []
     for node in net.nodes:
         if node.id == component_id:
@@ -92,66 +47,22 @@ def _extract_value(val):
 
 
 class InterStepState(ABC):
-    """Abstract base for inter-step / inter-period state carriers.
-
-    Both :class:`StepState` (sequential timeseries) and :class:`PeriodState`
-    (multi-period optimisation) implement this interface.  Use as the type hint
-    for ``inter_temporal_equations`` (works in both modes), ``inter_step_equations``
-    (timeseries only, use :class:`StepState`), or ``inter_period_equations``
-    (multi-period only, use :class:`PeriodState`).
-
-    Negative index convention (shared by both subclasses):
-        ``-1`` = one step/period before the current one,
-        ``-2`` = two steps/periods back, etc.
-    Non-negative indices are absolute (``0`` = first step/period).
-
-    Attributes:
-        dt_h: Duration of the current timestep/period in hours.
-    """
+    """Abstract base. ``step``: negative = relative to current, non-negative = absolute."""
 
     dt_h: float = 1.0
 
     @abstractmethod
     def get(self, component_id, attr: str, step: int = -1):
-        """Return the value of *attr* on *component_id* at the given step/period.
-
-        Args:
-            component_id: Component id to look up.
-            attr: Attribute name on the component's model.
-            step: Relative (negative) or absolute (non-negative) index.
-                ``-1`` = previous step/period (default).
-
-        Returns:
-            A float (``StepState``) or a live solver variable (``PeriodState``),
-            or ``None`` when no data exists for the requested index.
-        """
+        """Float (StepState) / live var (PeriodState), or None if no data."""
 
     def has(self, component_id, attr: str) -> bool:
-        """Return ``True`` if a non-``None`` value is available."""
         return self.get(component_id, attr) is not None
 
 
 class StepState(InterStepState):
-    """
-    Carries all previously-solved network copies for sequential timeseries.
+    """All previously-solved network copies (sequential timeseries). ``get`` returns floats.
 
-    Any attribute from any prior step can be queried via :meth:`get`.
-    Values are returned as plain Python floats (extracted from ``Var.value``
-    after each step's ``withdraw_vars``).
-
-    ``dt_h`` carries the duration of the *current* timestep in hours.
-    Defaults to 1.0.
-
-    *initial_state* is consulted as a fallback when no previous-step value
-    exists — i.e. on the very first step, before any solve has populated
-    the carrier.  Mirrors the same kwarg on :class:`PeriodState` so models
-    can use a uniform ``state.get(...)`` lookup in both modes.
-
-    Args:
-        initial_state: Optional ``{(component_id, attr): value}`` overrides
-            that surface through :meth:`get` whenever no prior solve has
-            written the requested attribute.
-    """
+    ``initial_state`` falls back when no prior solve has written the attribute."""
 
     def __init__(self, initial_state: dict | None = None) -> None:
         self._networks: list = []
@@ -159,23 +70,9 @@ class StepState(InterStepState):
         self._initial_state: dict = dict(initial_state) if initial_state else {}
 
     def push(self, net) -> None:
-        """Append a fully-solved (post-withdrawal) network copy."""
         self._networks.append(net)
 
     def get(self, component_id, attr: str, step: int = -1):
-        """Return the float value of *attr* on *component_id* at *step*.
-
-        Args:
-            component_id: Component id to look up.
-            attr: Attribute name on the component's model.
-            step: ``-1`` (default) = most recent solved step.
-                ``-2`` = two steps back.  ``0`` = first step.
-
-        Returns:
-            Float value from a prior solve if available, otherwise the
-            corresponding entry in *initial_state* (passed at construction),
-            otherwise ``None``.
-        """
         if self._networks:
             try:
                 net = self._networks[step]
@@ -198,25 +95,9 @@ class StepState(InterStepState):
 
 
 class PeriodState(InterStepState):
-    """
-    Carries all period networks for multi-period optimisation.
-
-    Variable injection for all T periods has already run before this object
-    is used, so ``get()`` returns live solver-library objects (GEKKO
-    ``GKVariable`` / Pyomo ``Var``).  An equation that reads from a
-    ``PeriodState`` therefore becomes an algebraic cross-period constraint
-    inside the joint solver problem.
-
-    Any period — past *or* future relative to ``current_t`` — is accessible
-    by absolute index, enabling look-ahead constraints such as ramp limits
-    that couple non-adjacent periods.
-
-    Attributes:
-        dt_h: Timestep duration in hours for the *current* period.
-        current_t: Zero-based index of the period whose equations are
-            currently being assembled.
-        T: Total number of periods in the horizon.
-    """
+    """All period networks (multi-period). ``get`` returns live solver vars after
+    injection, so reading from another period becomes an algebraic cross-period
+    constraint. Both past and future absolute indices are accessible."""
 
     def __init__(
         self,
@@ -232,27 +113,9 @@ class PeriodState(InterStepState):
 
     @property
     def T(self) -> int:
-        """Total number of periods in the horizon."""
         return len(self._networks)
 
     def get(self, component_id, attr: str, step: int = -1):
-        """Return the solver variable for *attr* on *component_id* at *step*.
-
-        Args:
-            component_id: Component id to look up.
-            attr: Attribute name on the component's model.
-            step: Negative values are relative to ``current_t``:
-                ``-1`` (default) = ``current_t - 1``, ``-2`` = ``current_t - 2``,
-                etc.  Non-negative values are absolute indices ``0..T-1``,
-                giving direct access to any period including future ones.
-
-        Returns:
-            A live solver variable from the period's network, or ``None``
-            when the effective period index is < 0 (before the horizon
-            start) — triggering the initial-condition fallback in models.
-            Values in *initial_state* take precedence for the virtual t=-1
-            case.
-        """
         actual_t = (self.current_t + step) if step < 0 else step
 
         if actual_t < 0:

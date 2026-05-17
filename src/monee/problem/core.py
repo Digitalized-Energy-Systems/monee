@@ -37,13 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 def nan_to_zero(v):
-    """Return *v* unchanged unless it is (or wraps) ``NaN``, in which case return ``0``.
-
-    Works with plain floats, :class:`~monee.model.core.Var` objects, and
-    anything with a ``.value`` attribute.  Useful inside objective
-    functions where ``NaN`` initial values should not propagate into the
-    solver expression.
-    """
+    """Return *v*, replacing NaN values (in Var/Const wrappers too) with 0."""
     if isinstance(v, (int, float)):
         return 0 if math.isnan(v) else v
     if isinstance(v, Var):
@@ -72,16 +66,8 @@ class Objective:
         self._calculator = calculator
 
     def when_period(self, period_filter):
-        """Only activate this objective for periods where *period_filter* is truthy.
-
-        Args:
-            period_filter: A callable ``(t: int) -> bool``, or a collection
-                of period indices (set, list, range).  Has no effect in
-                single-period solves.
-
-        Returns:
-            ``self`` for method chaining.
-        """
+        """Only activate for periods where *period_filter* is truthy. Accepts a
+        callable ``(t: int) -> bool`` or a collection of indices."""
         if callable(period_filter):
             self._period_filter = period_filter
         else:
@@ -164,55 +150,15 @@ class Constraint:
         return self
 
     def temporal_equation(self, equation_lambda):
-        """Add a cross-period constraint that has access to temporal state.
-
-        The lambda receives ``(model, component_id, temporal_state)`` and
-        must return a single equation or a list of equations.
-
-        *temporal_state* is a :class:`~monee.simulation.step_state.PeriodState`
-        (multi-period) or :class:`~monee.simulation.step_state.StepState`
-        (timeseries). Use ``temporal_state.get(component_id, attr)`` to read
-        variables from other periods.
-
-        These constraints are only evaluated when a temporal state is available
-        (multi-period or timeseries mode). They are silently skipped in
-        single-period solves.
-
-        Example — ramp-rate limit on a generator::
-
-            constraints.select_types(PowerGenerator).temporal_equation(
-                lambda m, cid, ts: [
-                    m.p_mw - ts.get(cid, "p_mw") <= 10,   # ramp up
-                    ts.get(cid, "p_mw") - m.p_mw <= 10,   # ramp down
-                ]
-            )
-
-        Example — storage-like coupling (SoC tracks previous value)::
-
-            constraints.select_types(PowerLoad).temporal_equation(
-                lambda m, cid, ts: m.e_mwh == ts.get(cid, "e_mwh") + ts.dt_h * m.p_mw
-            )
-        """
+        """Add a cross-period constraint. Lambda signature
+        ``(model, component_id, temporal_state) -> eq | list[eq]``. Silently
+        skipped in single-period solves."""
         self._temporal_equations.append(equation_lambda)
         return self
 
     def when_period(self, period_filter):
-        """Only activate this constraint for periods where *period_filter* is truthy.
-
-        Args:
-            period_filter: A callable ``(t: int) -> bool``, or a collection
-                of period indices (set, list, range).  Has no effect in
-                single-period solves.
-
-        Returns:
-            ``self`` for method chaining.
-
-        Example — force generator offline at period 5::
-
-            constraints.select_types(PowerGenerator)
-                .equation(lambda m: m.p_mw == 0)
-                .when_period(lambda t: t == 5)
-        """
+        """Only activate for periods where *period_filter* is truthy. Accepts a
+        callable ``(t: int) -> bool`` or a collection of indices."""
         if callable(period_filter):
             self._period_filter = period_filter
         else:
@@ -248,11 +194,9 @@ class Constraint:
 
     @property
     def has_temporal(self):
-        """True if this constraint has any temporal equations."""
         return len(self._temporal_equations) > 0
 
     def _eval_temporal(self, network, temporal_state, period_index=None):
-        """Evaluate temporal equations that need access to temporal state."""
         if not self._temporal_equations:
             return []
         if self._period_filter is not None and period_index is not None:
@@ -323,11 +267,6 @@ class Constraints:
         return []
 
     def all_temporal(self, network, temporal_state, period_index=None):
-        """Evaluate all temporal constraints that couple across periods.
-
-        Called during inter-step/inter-period equation assembly where
-        *temporal_state* is available.
-        """
         results = []
         for constraint in self._constraints:
             results.extend(
@@ -337,26 +276,11 @@ class Constraints:
 
     @property
     def has_temporal(self):
-        """True if any constraint has temporal equations."""
         return any(c.has_temporal for c in self._constraints)
 
     def regulation_ramp(self, limit):
-        """Add a ramp-rate constraint on ``regulation`` across periods.
-
-        Limits how fast the ``regulation`` variable can change between
-        consecutive periods.  Components without a ``regulation`` attribute
-        (or where it is a plain float) are silently skipped.
-
-        Args:
-            limit: Maximum change of ``regulation`` per period (e.g. 0.3).
-
-        Returns:
-            ``self`` for method chaining.
-
-        Example::
-
-            constraints.regulation_ramp(0.3)
-        """
+        """Limit per-period change of ``regulation`` to ``limit`` (skips models
+        without a regulation Var)."""
 
         def _regulation_ramp(model, cid, ts):
             if not hasattr(model, "regulation") or isinstance(
@@ -406,85 +330,19 @@ REGULATION_ATTR = [
 
 class OptimizationProblem:
     """
-    Declares which network components are free variables and, optionally,
-    what objective function the solver should minimise.
+    Declares which components are free variables plus optional objectives/constraints.
 
-    The typical workflow is:
-
-    1. Create a problem object.
-    2. Call one or more ``controllable_*`` methods to declare which components
-       the solver may dispatch freely.
-    3. Optionally set ``problem.objectives`` and ``problem.constraints``.
-    4. Pass the object to :func:`~monee.simulation.run_multi_period` or
-       :func:`~monee.simulation.run_mpc`.
-
-    Example::
-
-        from monee.problem.core import OptimizationProblem
-        from monee.simulation import run_multi_period
-
-        prob = OptimizationProblem()
-        prob.controllable_storages()
-        result = run_multi_period(net, td, optimization_problem=prob, dt_h=1.0)
-
-    **Time-varying objectives** — register per-period data (e.g. electricity
-    prices) via :meth:`~monee.simulation.timeseries.TimeseriesData.add_objective_data`
-    and read it inside the objective lambda.  ``TimeseriesData`` applies the
-    correct period's value to the model *before* the objective is evaluated::
-
-        td = TimeseriesData()
-        td.add_objective_data(gen_id, "price", [40, 80, 60, 30])
-
-        prob = OptimizationProblem()
-        prob.controllable_generators(["p_mw"])
-        obj = Objectives()
-        obj.select(
-            lambda m: isinstance(m, PowerGenerator)
-        ).calculate(
-            lambda models: sum(m.price * m.p_mw for m in models)
-        )
-        prob.objectives = obj
-
-    **Per-period constraints** — use :meth:`Constraint.when_period` to
-    restrict a constraint to specific periods::
-
-        cons = Constraints()
-        cons.select_types(PowerGenerator).equation(
-            lambda m: m.p_mw <= 0.5
-        ).when_period(lambda t: t >= 3)  # cap output from period 3 onward
-        prob.constraints = cons
-
-    **Cross-period constraints** — use :meth:`Constraint.temporal_equation`
-    to couple variables across periods (ramp rates, custom storage, etc.)::
-
-        cons = Constraints()
-        cons.select_types(ExtPowerGrid).temporal_equation(
-            lambda m, cid, ts: (
-                [] if ts.get(cid, "p_mw") is None else
-                [m.p_mw - ts.get(cid, "p_mw") <= 1.0,
-                 ts.get(cid, "p_mw") - m.p_mw <= 1.0]
-            )
-        )
-        prob.constraints = cons
+    Workflow: create → call ``controllable_*`` helpers → set ``objectives`` and
+    ``constraints`` → pass to :func:`run_multi_period` / :func:`run_mpc`.
     """
 
     def __init__(self, debug=False, lex_objectives: bool = False) -> None:
-        """Initialise an optimisation problem.
-
-        Args:
-            debug: Enable verbose logging during variable promotion.
-            lex_objectives: When ``True``, solve in two phases (Pyomo
-                backend only): first optimise the user-defined
-                objectives, then — with the phase-1 optimum pinned via
-                a cap constraint — optimise the formulation-level
-                tightening terms (``branch.minimize`` / ``node.minimize``
-                / ``child.minimize`` hooks, e.g. the MISOCP
-                ``current_pu · br_r`` Joule-loss term).  Removes the
-                need to hand-tune relative weights between the two
-                tiers and is robust against network growth.  Ignored
-                by the GEKKO backend (which falls back to the
-                single-objective sum).  Default ``False`` preserves
-                legacy behaviour.
+        """Args:
+        debug: verbose logging during variable promotion.
+        lex_objectives: Pyomo-only two-phase solve: first user objectives,
+            then formulation-tightening terms (``branch/node/child.minimize``)
+            with the phase-1 optimum pinned. Removes weight tuning. GEKKO falls
+            back to single-objective sum.
         """
         self._controllable_appliables: list = []
         self._controllable_to_attr: dict[GenericModel, str] = {}
@@ -496,7 +354,6 @@ class OptimizationProblem:
 
     @property
     def lex_objectives(self) -> bool:
-        """Whether to solve in lexicographic two-phase mode."""
         return self._lex_objectives
 
     def _apply(self, network: Network):
@@ -572,25 +429,8 @@ class OptimizationProblem:
         self._controllable_to_attr[model] += attributes
 
     def bounds(self, minmax, component_condition=lambda _: True, attributes=None):
-        """Override the min/max bounds of specific ``Var`` attributes on matching components.
-
-        Args:
-            minmax: A ``(min_value, max_value)`` tuple applied to all matched variables.
-            component_condition: Callable ``(model, grid) -> bool`` that selects
-                which components to bound.  Defaults to all components.
-            attributes: List of attribute names (strings) whose ``Var`` bounds to
-                override.
-
-        Example — cap all generator output at 0.8 MW::
-
-            from monee.model import PowerGenerator
-
-            prob.bounds(
-                (0.0, 0.8),
-                component_condition=lambda m, g: isinstance(m, PowerGenerator),
-                attributes=["p_mw"],
-            )
-        """
+        """Override min/max for ``Var`` attributes on matching components.
+        ``component_condition`` is ``(model, grid) -> bool``."""
         self._bounds_for_controllables.append(
             (minmax[0], minmax[1], component_condition, attributes)
         )
@@ -600,23 +440,9 @@ class OptimizationProblem:
         attributes: list[str | tuple[str, AttributeParameter]],
         component_condition=lambda _: True,
     ):
-        """Make specific attributes on matching components free optimisation variables.
-
-        This is the low-level primitive underlying all ``controllable_*`` helpers.
-        Prefer the typed helpers (``controllable_demands``, ``controllable_generators``,
-        etc.) unless you need custom component selection.
-
-        Args:
-            attributes: List of attribute names to promote to ``Var``.  Each
-                entry is either a plain string (bounds inferred from the current
-                value) or a ``(name, AttributeParameter)`` tuple for explicit
-                bounds/initial value.
-            component_condition: Callable ``(component) -> bool`` that selects
-                which components to affect.  Defaults to all components.
-
-        Returns:
-            ``self`` for method chaining.
-        """
+        """Promote attributes on matching components to free Vars. Low-level
+        primitive; prefer the typed ``controllable_*`` helpers. Each attribute
+        entry is a name or ``(name, AttributeParameter)`` tuple."""
 
         def apply_controllable(network: Network):
             component_list = network.all_components()
@@ -634,34 +460,11 @@ class OptimizationProblem:
     def controllable_demands(
         self, attributes: list[str | tuple[str, AttributeParameter]]
     ):
-        """Make demand-side components (loads, gas sinks, heat exchangers as loads) controllable.
+        """Make PowerLoad/HeatLoad/HeatExchangerLoad/PassiveHeatExchangerLoad,
+        gas Sinks, and consuming HeatExchanger/PassiveHeatExchanger controllable.
 
-        Targets :class:`~monee.model.PowerLoad`, :class:`~monee.model.HeatLoad`,
-        :class:`~monee.model.HeatExchangerLoad`,
-        :class:`~monee.model.PassiveHeatExchangerLoad`, gas
-        :class:`~monee.model.Sink`, and :class:`~monee.model.HeatExchanger` /
-        :class:`~monee.model.PassiveHeatExchanger` instances currently
-        consuming (positive ``q_mw``).
-
-        Args:
-            attributes: Attribute names to promote to ``Var`` (e.g. ``["p_mw"]``).
-
-        Returns:
-            ``self`` for method chaining.
-
-        Example — controllable load shedding::
-
-            prob.controllable_demands(["p_mw"])
-
-        .. note::
-
-            When an attribute's current value is ``0.0`` and no explicit
-            ``AttributeParameter`` is given, the inferred bounds are
-            ``[0, 0]``, effectively locking the variable.  This commonly
-            happens when the base network uses ``p_mw=0.0`` and real
-            values come from ``TimeseriesData``.  Use ``prob.bounds()``
-            or pass an ``(attr, AttributeParameter)`` tuple to set
-            meaningful bounds.
+        Note: an attribute currently at 0.0 with no AttributeParameter is locked
+        to [0,0]. Use prob.bounds() or pass an AttributeParameter for real bounds.
         """
         self.controllable(
             component_condition=lambda component: (
@@ -693,32 +496,9 @@ class OptimizationProblem:
         return self
 
     def controllable_generators(self, attributes):
-        """Make generation-side components controllable.
-
-        Targets :class:`~monee.model.PowerGenerator`,
-        :class:`~monee.model.HeatGenerator`,
-        :class:`~monee.model.HeatExchangerGenerator`,
-        :class:`~monee.model.PassiveHeatExchangerGenerator`, and gas
-        :class:`~monee.model.Source` instances.
-
-        Args:
-            attributes: Attribute names to promote to ``Var`` (e.g. ``["p_mw"]``).
-
-        Returns:
-            ``self`` for method chaining.
-
-        Example — dispatchable generator output::
-
-            prob.controllable_generators(["p_mw"])
-
-        .. note::
-
-            When an attribute's current value is ``0.0`` and no explicit
-            ``AttributeParameter`` is given, the inferred bounds are
-            ``[0, 0]``, effectively locking the variable.  Use
-            ``prob.bounds()`` or pass an ``(attr, AttributeParameter)``
-            tuple to set meaningful bounds.
-        """
+        """Make PowerGenerator/HeatGenerator/HeatExchangerGenerator/
+        PassiveHeatExchangerGenerator/Source controllable. See
+        :meth:`controllable_demands` for the 0.0-locks-to-[0,0] caveat."""
         self.controllable(
             component_condition=lambda component: (
                 isinstance(
@@ -737,11 +517,7 @@ class OptimizationProblem:
         return self
 
     def controllable_ext(self):
-        """Make external grid connections controllable.
-
-        Targets :class:`~monee.model.ExtPowerGrid` and
-        :class:`~monee.model.ExtHydrGrid` (both gas and water/heat grids).
-        """
+        """Make ExtPowerGrid / ExtHydrGrid connections controllable."""
         self.controllable(
             component_condition=lambda component: (
                 isinstance(component.model, ExtPowerGrid | ExtHydrGrid)
@@ -753,27 +529,8 @@ class OptimizationProblem:
         return self
 
     def controllable_cps(self, attributes):
-        """Make coupling-point components controllable.
-
-        Targets :class:`~monee.model.CHPControlNode`,
-        :class:`~monee.model.PowerToHeatControlNode`,
-        :class:`~monee.model.GasToHeatControlNode`,
-        :class:`~monee.model.PowerToGas`,
-        :class:`~monee.model.GasToPower`,
-        :class:`~monee.model.PowerToHeatHG`, and
-        :class:`~monee.model.GasToHeatHG` instances.
-
-        Args:
-            attributes: Attribute names to promote to ``Var``
-                (e.g. ``["regulation"]`` for P2H, ``["p_mw"]`` for CHP).
-
-        Returns:
-            ``self`` for method chaining.
-
-        Example — optimise P2H modulation::
-
-            prob.controllable_cps(["regulation"])
-        """
+        """Make all coupling-point components (CHP / P2H / G2H / P2G / G2P /
+        their HG variants) controllable on *attributes*."""
         self.controllable(
             component_condition=lambda component: (
                 isinstance(
@@ -795,25 +552,7 @@ class OptimizationProblem:
         return self
 
     def controllable_storages(self):
-        """Make all storage components (electric, gas, thermal) controllable.
-
-        Calls :meth:`~monee.model.storage.ElectricStorage.make_controllable` /
-        :meth:`~monee.model.storage.GasStorage.make_controllable` /
-        :meth:`~monee.model.storage.ThermalStorage.make_controllable` on every
-        matching component in the network during :meth:`_apply`.  This converts
-        ``p_mw`` / ``mass_flow`` (and efficiency-split variables for lossy models)
-        from plain floats to :class:`~monee.model.core.Var` objects so the
-        solver can optimise storage dispatch.
-
-        Returns:
-            ``self`` for method chaining.
-
-        Example::
-
-            problem = OptimizationProblem()
-            problem.controllable_storages()
-            result = run_multi_period(net, td, optimization_problem=problem)
-        """
+        """Promote dispatch on all storage components via their ``make_controllable``."""
         from monee.model.storage import ElectricStorage, GasStorage, ThermalStorage
 
         def _apply_storages(network: Network):
@@ -831,15 +570,7 @@ class OptimizationProblem:
         return self
 
     def controllable_backup_lines(self):
-        """Make backup lines switchable (on/off) during optimisation.
-
-        Targets branch components that have ``backup=True``.  Adds an
-        integer ``on_off`` variable in {0, 1} so the solver can decide
-        whether to activate each backup line.
-
-        Returns:
-            ``self`` for method chaining.
-        """
+        """Add a binary ``on_off`` ∈ {0,1} on every branch with ``backup=True``."""
         self.controllable(
             component_condition=lambda component: (
                 "backup" in component.model.vars and component.model.backup

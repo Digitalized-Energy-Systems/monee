@@ -137,14 +137,8 @@ class Junction(NodeModel):
                 if "mass_flow_neg" in model.vars
             ]
             + [
-                # Linepack packing flow — gas absorbed from (positive) or released to
-                # (negative) this node at rate net_pack_kgs/2.  The factor 0.5 splits
-                # the net packing equally between the two endpoint junctions.
-                #
-                # Sign: junction balance uses outflow-positive convention.
-                # net_pack_kgs > 0 (charging): gas leaves both junctions → outflow → +
-                # net_pack_kgs < 0 (discharging): gas arrives at both junctions → inflow → −
-                # Therefore the term is +0.5 * net_pack_kgs (not −).
+                # Linepack: 0.5 splits net packing equally across both endpoints.
+                # Outflow-positive: charging (>0) leaves both junctions, hence +.
                 0.5 * model.vars["net_pack_kgs"] * model.vars["on_off"]
                 for model in from_branch_models
                 if "net_pack_kgs" in model.vars
@@ -164,10 +158,8 @@ class Junction(NodeModel):
     def calc_signed_heat_flow(
         self, from_branch_models, to_branch_models, connected_node_models, grid
     ):
-        # When LTC or the Mcc-DHS formulation is active, the degenerate
-        # heat balance (T_n × mass_balance = 0) is suppressed so that the
-        # temperature is determined solely by the replacing constraint
-        # (LTC inter-step equation / Deng-et-al nodal heat balance).
+        # LTC / Mcc-DHS replace the degenerate T_n × mass_balance with their own
+        # nodal heat balance, so skip emitting it here.
         if getattr(self, "_ltc_active", False) or getattr(
             self, "_mccormick_dhs_active", False
         ):
@@ -181,7 +173,7 @@ class Junction(NodeModel):
 
             terms = []
 
-            # node is FROM-end of these branches (branch orientation: this node -> other node)
+            # node is FROM-end of these branches
             for bm in from_branch_models:
                 if "mass_flow_pos" not in bm.vars or "mass_flow_neg" not in bm.vars:
                     continue
@@ -192,7 +184,7 @@ class Junction(NodeModel):
                 Tout = self.t_pu * bm.vars.get("on_off", 1)
                 terms.append(mneg * Tout - mpos * Tin)
 
-            # node is TO-end of these branches (branch orientation: other node -> this node)
+            # node is TO-end of these branches
             for bm in to_branch_models:
                 if "mass_flow_pos" not in bm.vars or "mass_flow_neg" not in bm.vars:
                     continue
@@ -210,13 +202,8 @@ class Junction(NodeModel):
                 m_ext = nm.vars["mass_flow"] * nm.vars.get("regulation", 1)
                 terms.append(m_ext * Tn)
 
-            # Node-based heat injection / withdrawal (HeatGenerator, HeatLoad).
-            # q_mw_heat is in MW with load convention (positive = consumption,
-            # negative = generation).  Dividing by (c·t_ref / 1e6) converts to
-            # the kg/s·t_pu units used by the mass-weighted temperature balance.
-            # ``grid`` may be None when called from a compound's heat balance
-            # (no domain context) — in that path the loops below are no-ops
-            # so we only compute the scale lazily.
+            # Node q_mw_heat (HeatGenerator/HeatLoad) → kg/s·t_pu via c·t_ref/1e6.
+            # grid may be None (compound heat balance); scale only used if needed.
             scale_mw_per_kgs = (
                 SPECIFIC_HEAT_CAP_WATER * grid.t_ref / 1e6 if grid is not None else None
             )
@@ -226,19 +213,15 @@ class Junction(NodeModel):
                 q = nm.vars["q_mw_heat"] * nm.vars.get("regulation", 1)
                 terms.append(q / scale_mw_per_kgs)
 
-            # Branch-level heat injection at this node.  A multi-grid branch
-            # (e.g. GasToHeatHG) may carry a q_mw_heat Var in load convention
-            # that is absorbed at the TO end — same sign handling as the
-            # connected-child case above.
+            # Branch-level heat injection at the TO end (e.g. GasToHeatHG).
             for bm in to_branch_models:
                 if "q_mw_heat" not in bm.vars:
                     continue
                 q = bm.vars["q_mw_heat"] * bm.vars.get("on_off", 1)
                 terms.append(q / scale_mw_per_kgs)
 
-            # Small conduction-style regularizer on T_n so the
-            # Jacobian entry ∂(heat_bal)/∂T_n does not collapse to the
-            # near-zero difference (Σm_out − Σm_in) on the solver path.
+            # Conduction-style regularizer keeps ∂(heat_bal)/∂T_n non-zero
+            # when Σm_out ≈ Σm_in.
             k_reg = getattr(grid, "node_heat_reg_kgs", 0.0)
             if k_reg:
                 t_anchor = self.t_pu.value if hasattr(self.t_pu, "value") else 1.0

@@ -1,52 +1,6 @@
-"""
-Multi-period optimization for monee networks.
-
-Unlike the sequential :func:`~monee.simulation.timeseries.run` runner, which
-solves one NLP per timestep and passes only *scalar floats* between steps,
-multi-period optimization builds a **single large problem** that spans T
-periods and solves it in one shot.
-
-Cross-period coupling — storage SoC dynamics, thermal mass (LTC), ramp limits,
-gas linepack — appears as explicit equality constraints that link solver
-variables from adjacent periods.  The key mechanism is :class:`PeriodState`,
-which mimics the :class:`~monee.simulation.step_state.StepState` API but
-returns live solver variables instead of floats, so existing
-``inter_step_equations`` implementations on models and extensions work
-**without any modification**.
-
-Usage example::
-
-    import monee
-    import monee.model as mm
-    from monee.simulation.timeseries import TimeseriesData
-
-    td = TimeseriesData()
-    td.add_child_series(load_id, "p_mw", [2.0, 3.0, 2.5, 1.8])
-
-    result = monee.run_multi_period(net, td, optimization_problem=my_opt_problem, dt_h=1.0)
-    vm_df = result.get_result_for(mm.Bus, "vm_pu")  # rows=periods, cols=bus ids
-
-Overriding initial conditions::
-
-    result = monee.run_multi_period(net, td,
-        initial_state={(bat_id, "e_mwh"): 2.0})
-
-Adding a terminal state constraint (storage must end at least half-full)::
-
-    result = monee.run_multi_period(net, td,
-        terminal_state={(bat_id, "e_mwh"): 4.0})  # e_mwh[T-1] == 4.0 MWh
-
-Rolling-horizon MPC::
-
-    result = monee.run_mpc(net, td, total_steps=24, horizon=6, execution_steps=1)
-
-Solver selection::
-
-    from monee.simulation.multi_period import GekkoMultiPeriodSolver, PyomoMultiPeriodSolver
-
-    result = monee.run_multi_period(net, td, solver=GekkoMultiPeriodSolver())
-    result = monee.run_multi_period(net, td, solver=PyomoMultiPeriodSolver())
-"""
+"""Multi-period optimization: build a single problem spanning T periods and
+solve in one shot. :class:`PeriodState` exposes live solver variables behind
+the same API as :class:`StepState`, so ``inter_step_equations`` works unchanged."""
 
 from __future__ import annotations
 
@@ -80,12 +34,8 @@ def _prepare_period(
     t: int,
     optimization_problem,
 ) -> tuple[Network, set]:
-    """Copy *network*, apply timeseries for step *t*, run ``prepare()``, and
-    compute the ignored-node set.
-
-    Returns:
-        ``(net_t, ignored_nodes)`` ready for variable injection.
-    """
+    """Copy net, apply timeseries for *t*, run extension prepare(), compute
+    ignored nodes. Returns ``(net_t, ignored_nodes)`` ready for injection."""
     net_t = network.copy()
 
     if timeseries_data is not None:
@@ -118,14 +68,8 @@ def _prepare_period(
     return net_t, ignored_nodes
 
 
-# Internal helpers for terminal constraints and MPC
-
-
 def _find_component_var(net_t: Network, comp_id, attr: str):
-    """Return the (post-injection) model attribute *attr* for *comp_id* in *net_t*.
-
-    Returns ``None`` when the component or attribute is not found.
-    """
+    """Return ``comp.model.attr`` for *comp_id* in *net_t*, or None."""
     for node in net_t.nodes:
         if node.id == comp_id:
             return getattr(node.model, attr, None)
@@ -142,13 +86,8 @@ def _find_component_var(net_t: Network, comp_id, attr: str):
 
 
 def _extract_terminal_state(net_t: Network) -> dict:
-    """Return ``{(comp_id, attr): value}`` for all ``Var`` attributes in
-    *net_t* after variable withdrawal.
-
-    Used by :func:`run_mpc` to seed the ``initial_state`` of the next horizon.
-    All solved variable values are captured so any attribute can be referenced
-    in the next window's ``inter_step_equations``.
-    """
+    """``{(comp_id, attr): value}`` for all Var/numeric attributes; used by
+    :func:`run_mpc` to seed the next horizon's ``initial_state``."""
     from monee.model.core import Var
 
     state: dict = {}
@@ -172,10 +111,7 @@ def _extract_terminal_state(net_t: Network) -> dict:
 
 
 def _validate_state_keys(state: dict | None, net: Network, label: str) -> None:
-    """Raise :exc:`ValueError` when any key in *state* does not match a component
-    in *net*.  *label* is ``"initial_state"`` or ``"terminal_state"`` for the
-    error message.
-    """
+    """Raise if any (comp_id, attr) key isn't found. ``label`` names the source."""
     if not state:
         return
     for comp_id, attr in state:
@@ -188,12 +124,7 @@ def _validate_state_keys(state: dict | None, net: Network, label: str) -> None:
 
 
 def _slice_timeseries(td: TimeseriesData, start: int, length: int) -> TimeseriesData:
-    """Return a new :class:`~monee.simulation.timeseries.TimeseriesData` whose
-    series are sliced to ``[start : start + length]``.
-
-    Used by :func:`run_mpc` to extract the current window from a full-horizon
-    ``TimeseriesData``.
-    """
+    """Return a TimeseriesData sliced to ``[start, start+length)``."""
     end = start + length
 
     def _slice_dict(d: dict) -> dict:
@@ -244,7 +175,6 @@ class MultiPeriodResult:
 
     @property
     def T(self) -> int:
-        """Number of periods."""
         return len(self._net_copies)
 
     def _make_index(self) -> pandas.Index:
@@ -253,20 +183,7 @@ class MultiPeriodResult:
         return pandas.RangeIndex(self.T)
 
     def get_result_for(self, model_type, attribute: str) -> pandas.DataFrame:
-        """Return a DataFrame with one row per period and one column per component.
-
-        Columns are labelled by component id — select a component with
-        ``df[component_id]``.
-
-        Args:
-            model_type: The model class (e.g. ``mm.Bus``, ``mm.Junction``).
-            attribute: The attribute name (e.g. ``"vm_pu"``, ``"t_pu"``).
-
-        Example::
-
-            vm = result.get_result_for(mm.Bus, "vm_pu")
-            print(vm[bus_home_id])   # voltage series across all periods
-        """
+        """DataFrame of *attribute*: rows=periods, cols=component ids."""
         rows = []
         for dfs in self._period_dfs:
             df = dfs.get(model_type.__name__, pandas.DataFrame())
@@ -280,20 +197,7 @@ class MultiPeriodResult:
         return pandas.DataFrame(rows, index=self._make_index())
 
     def get_result_for_id(self, component_id, attribute: str) -> pandas.Series:
-        """Return a :class:`pandas.Series` of *attribute* values for a specific
-        component across all periods.
-
-        Args:
-            component_id: The component's id.
-            attribute: The attribute name to retrieve.
-
-        Returns:
-            A ``Series`` indexed by period index (or datetime).
-
-        Example::
-
-            soc = result.get_result_for_id(bat_id, "e_mwh")
-        """
+        """Series of *attribute* for *component_id* across all periods."""
         values = []
         for dfs in self._period_dfs:
             found = False
@@ -309,18 +213,7 @@ class MultiPeriodResult:
         return pandas.Series(values, index=self._make_index(), name=attribute)
 
     def __getitem__(self, component_id) -> pandas.DataFrame:
-        """Return all result attributes for *component_id* across every period.
-
-        Each column is one result attribute; each row is one period.
-        Internal bookkeeping columns are excluded.
-
-        Raises :exc:`KeyError` if *component_id* is not found in any period.
-
-        Example::
-
-            df = result[bat_id]
-            print(df["e_mwh"])  # SoC over all periods
-        """
+        """All result attributes for *component_id*, one row per period."""
         rows: list[dict] = []
         for dfs in self._period_dfs:
             for df in dfs.values():
@@ -337,14 +230,8 @@ class MultiPeriodResult:
         return pandas.DataFrame(rows, index=self._make_index())
 
     def get_period_result(self, t: int) -> SolverResult:
-        """Return a :class:`~monee.solver.core.SolverResult` for period *t*.
-
-        Useful for inspecting a single period with the same API as a
-        single-step solve.  The ``objective`` on the returned result is
-        ``None`` because per-period objective breakdown is not tracked;
-        use ``result.objective`` on the :class:`MultiPeriodResult` for
-        the global value.
-        """
+        """SolverResult for period *t* (``objective`` is None; only the global
+        ``MultiPeriodResult.objective`` is tracked)."""
         return SolverResult(
             self._net_copies[t],
             self._period_dfs[t],
@@ -352,11 +239,9 @@ class MultiPeriodResult:
             self.success,
         )
 
-    # Repr helpers
-
     def _temporal_lines(self) -> list[str]:
-        """Return compact per-period evolution lines for attributes that vary
-        across periods (e.g. storage SoC).  At most 2 attributes per type."""
+        """Compact per-period evolution lines for attributes that vary across
+        periods. At most 2 attrs per type."""
         lines = []
         MAX_VALS = 6  # show at most this many period values inline
 
@@ -505,18 +390,9 @@ class MultiPeriodResult:
 
 
 class GekkoMultiPeriodSolver:
-    """
-    Multi-period optimizer backed by GEKKO / IPOPT.
-
-    Uses a two-pass approach:
-
-    1. **Injection pass** — prepare and inject variables for all T periods into
-       the single shared GEKKO model.
-    2. **Equation pass** — assemble per-period equations with a
-       :class:`~monee.simulation.step_state.PeriodState` that has access to
-       *all* period networks (past and future), enabling arbitrary cross-period
-       coupling in ``inter_step_equations`` implementations.
-    """
+    """Multi-period optimizer on GEKKO/IPOPT. Two-pass: inject vars for all T
+    periods, then assemble equations with a :class:`PeriodState` that sees all
+    periods so ``inter_step_equations`` can couple them freely."""
 
     def __init__(self, solver: int = 1):
         self._solver_int = solver
@@ -532,30 +408,11 @@ class GekkoMultiPeriodSolver:
         initial_state: dict | None = None,
         terminal_state: dict | None = None,
     ) -> MultiPeriodResult:
-        """Build and solve a multi-period optimization in a single GEKKO model.
+        """Build and solve a multi-period optimization in one GEKKO model.
 
-        Args:
-            network: Base network.  Not modified; a fresh copy is made per period.
-            timeseries_data: Per-component attribute series applied before each
-                period's equations are assembled.
-            steps: Number of periods *T*.  Inferred from *timeseries_data* length
-                when omitted.
-            optimization_problem: Optional optimisation problem (objectives and
-                constraints) evaluated per period and accumulated globally.
-            dt_h: Timestep duration in hours.  Either a single float (constant
-                step size) or a list of length *T* for variable step sizes.
-                Overridden by *datetime_index* if provided.
-            datetime_index: Optional ``pd.DatetimeIndex`` of length *T*.  Step
-                durations are derived from consecutive differences.
-            initial_state: Optional ``{(component_id, attr): value}`` overrides
-                used when ``PeriodState.get()`` is called for a period before
-                the horizon start (t < 0).  Pass the terminal state of the
-                previous horizon here for rolling-horizon MPC warm-starts.
-            terminal_state: Optional ``{(component_id, attr): float}`` equality
-                constraints added at the last period (t=T-1).
-
-        Returns:
-            A :class:`MultiPeriodResult` with one solved network copy per period.
+        ``dt_h`` may be a list of length T (variable step size); ``datetime_index``
+        derives it from consecutive differences. ``initial_state`` /
+        ``terminal_state`` pin attributes at t<0 / t=T-1.
         """
         from gekko import GEKKO
 
@@ -574,7 +431,7 @@ class GekkoMultiPeriodSolver:
 
         _log.info("Multi-period GEKKO solve: T=%d periods", steps)
 
-        # --- Pass 1: prepare all period networks and inject variables ---
+        # Pass 1: prepare networks and inject variables for all periods.
         net_copies: list[Network] = []
         ignored_list: list[set] = []
 
@@ -601,7 +458,7 @@ class GekkoMultiPeriodSolver:
             net_copies.append(net_t)
             ignored_list.append(ignored_t)
 
-        # --- Pass 2: build equations for all periods ---
+        # Pass 2: build per-period equations.
         _log.debug("Assembling equations for %d periods", steps)
         for t in range(steps):
             net_t = net_copies[t]
@@ -652,7 +509,6 @@ class GekkoMultiPeriodSolver:
                 )
                 m.Equations(ext.equations(net_t, ignored_t))
 
-            # Terminal state constraints — added only at the last period.
             if terminal_state and t == steps - 1:
                 for (comp_id, attr), target in terminal_state.items():
                     var = _find_component_var(net_t, comp_id, attr)
@@ -703,11 +559,8 @@ class GekkoMultiPeriodSolver:
 
 
 class PyomoMultiPeriodSolver:
-    """
-    Multi-period optimizer backed by Pyomo and a pluggable MILP/NLP solver.
-
-    Uses the same two-pass approach as :class:`GekkoMultiPeriodSolver`.
-    """
+    """Multi-period optimizer on Pyomo + pluggable MILP/NLP. Same two-pass
+    structure as :class:`GekkoMultiPeriodSolver`."""
 
     def __init__(self, solver_name: str = "scip"):
         self._solver_name = solver_name
@@ -734,10 +587,8 @@ class PyomoMultiPeriodSolver:
 
         pm = pyo.ConcreteModel()
         pm.cons = pyo.ConstraintList()
-        # See ``PyomoSolver.solve`` — split user-defined objectives from
-        # formulation-level tightening terms so a future lex extension
-        # can pull them apart.  Multi-period still solves single-phase
-        # (sum of both) today.
+        # Split user vs aux objectives so a future lex extension can separate
+        # them; multi-period currently solves the single-phase sum.
         pm.user_obj_exprs: list = []
         pm.aux_obj_exprs: list = []
 
@@ -745,7 +596,7 @@ class PyomoMultiPeriodSolver:
 
         _log.info("Multi-period Pyomo solve: T=%d periods", steps)
 
-        # --- Pass 1: prepare all period networks and inject variables ---
+        # Pass 1: prepare networks and inject variables for all periods.
         net_copies: list[Network] = []
         ignored_list: list[set] = []
 
@@ -772,7 +623,7 @@ class PyomoMultiPeriodSolver:
             net_copies.append(net_t)
             ignored_list.append(ignored_t)
 
-        # --- Pass 2: build equations for all periods ---
+        # Pass 2: build per-period equations.
         _log.debug("Assembling equations for %d periods", steps)
         for t in range(steps):
             net_t = net_copies[t]
@@ -818,7 +669,6 @@ class PyomoMultiPeriodSolver:
                 )
                 _single._add_equations(pm, ext.equations(net_t, ignored_t))
 
-            # Terminal state constraints — added only at the last period.
             if terminal_state and t == steps - 1:
                 for (comp_id, attr), target in terminal_state.items():
                     var = _find_component_var(net_t, comp_id, attr)
@@ -897,7 +747,7 @@ class PyomoMultiPeriodSolver:
 
 
 def _resolve_steps(steps: int | None, timeseries_data: TimeseriesData | None) -> int:
-    """Return *steps*, inferring from *timeseries_data* length when omitted."""
+    """Return *steps*; infer from ``timeseries_data.length`` when omitted."""
     if steps is not None:
         if (
             timeseries_data is not None
@@ -922,7 +772,7 @@ def _resolve_dt_h(
     datetime_index: pandas.DatetimeIndex | None,
     steps: int,
 ) -> list[float]:
-    """Return a list of per-period timestep durations in hours."""
+    """Return per-period timestep durations [h]. datetime_index overrides dt_h."""
     if datetime_index is not None:
         if isinstance(dt_h, (list, tuple)) or dt_h != 1.0:
             _log.warning(
@@ -965,9 +815,6 @@ def _resolve_dt_h(
     return [dt_h] * steps
 
 
-# Convenience entry point — single-shot multi-period
-
-
 def run_multi_period(
     network: Network,
     timeseries_data: TimeseriesData | None = None,
@@ -980,72 +827,11 @@ def run_multi_period(
     initial_state: dict | None = None,
     terminal_state: dict | None = None,
 ) -> MultiPeriodResult:
-    """
-    Run a multi-period optimization over *network*.
-
-    All *T = steps* periods are assembled into a single solver problem and
-    solved in one shot.  Cross-period coupling (storage SoC, thermal mass,
-    ramp limits) is expressed as equality constraints linking solver variables
-    from adjacent periods via the existing ``inter_step_equations`` protocol.
-
-    ``TimeseriesData`` is applied per-period before equations are assembled,
-    so time-varying loads, prices, and availability signals are supported
-    identically to the sequential timeseries runner.  To pass time-varying
-    objective coefficients (e.g. electricity spot prices), register them as
-    component attributes via ``timeseries_data.add_child_series(gen_id,
-    "price", [...])`` and read ``model.price`` inside the objective lambda.
-
-    Args:
-        network: Base network.  Not modified; a fresh copy is made per period.
-        timeseries_data: Per-component attribute series.  ``steps`` is inferred
-            from its length when *steps* is omitted.
-        steps: Number of periods *T*.  Optional if *timeseries_data* has a
-            known length.
-        optimization_problem: Optional optimisation problem with objectives
-            and constraints, evaluated per period and summed globally.
-        solver: Either a solver-name string (``"gurobi"``, ``"ipopt"``, …),
-            a concrete :class:`GekkoMultiPeriodSolver` /
-            :class:`PyomoMultiPeriodSolver` instance, or ``None``
-            (default — GEKKO+IPOPT).
-        backend: ``"gekko"`` / ``"pyomo"`` to force the modelling backend.
-            When ``None`` (default), the backend is auto-routed from *solver*.
-        dt_h: Timestep duration in hours.  Either a single float (constant) or
-            a list of length *T*.  Overridden by *datetime_index* if provided.
-        datetime_index: Optional ``pd.DatetimeIndex`` aligned to the *T* periods.
-            Step durations are derived from consecutive differences; the index
-            is used to label result DataFrame rows.
-        initial_state: Optional ``{(component_id, attr): float}`` overrides for
-            the tracked-variable values used in the t=0 inter-step equations.
-            Values here take precedence over the ``tracked`` attribute values
-            read from *network*.  Useful for warm-starting a rolling-horizon
-            solve with the terminal state of the previous horizon.
-        terminal_state: Optional ``{(component_id, attr): float}`` equality
-            constraints added at the last period (t=T-1).  Each entry pins the
-            named ``tracked`` variable to the given value at the end of the
-            horizon.  Common use: enforce a minimum end-of-horizon storage
-            level to prevent the solver from draining batteries in the final
-            period.
-
-    Returns:
-        A :class:`MultiPeriodResult` with one solved network copy per period.
-
-    Example::
-
-        from monee.simulation.multi_period import run_multi_period
-        from monee.simulation.timeseries import TimeseriesData
-
-        td = TimeseriesData()
-        td.add_child_series(bat_id, "p_mw", [1.0, -1.0, 0.5, -0.5])
-
-        result = run_multi_period(
-            net, td, dt_h=1.0,
-            terminal_state={(bat_id, "e_mwh"): 4.0},  # end at initial SoC
-        )
-        soc = result.get_result_for(mm.ElectricStorage, "e_mwh")
-    """
+    """Run a single-shot multi-period optimisation. Cross-period coupling goes
+    through the standard ``inter_step_equations`` protocol; ``TimeseriesData``
+    is applied per-period before equations are assembled."""
     solver = resolve_multi_period_solver(solver, backend=backend)
 
-    # Validate user-provided state dicts early, before entering the solver.
     _validate_state_keys(initial_state, network, "initial_state")
     _validate_state_keys(terminal_state, network, "terminal_state")
 
@@ -1059,9 +845,6 @@ def run_multi_period(
         initial_state=initial_state,
         terminal_state=terminal_state,
     )
-
-
-# Rolling-horizon MPC
 
 
 def run_mpc(
@@ -1078,59 +861,12 @@ def run_mpc(
     initial_state: dict | None = None,
     terminal_state: dict | None = None,
 ) -> MultiPeriodResult:
-    """
-    Run a rolling-horizon Model Predictive Control (MPC) simulation.
+    """Rolling-horizon MPC. Each iteration solves a *horizon*-period problem,
+    accepts the first *execution_steps* periods, advances and reseeds initial
+    state from the executed terminal state.
 
-    At each MPC iteration a *horizon*-period optimisation is solved, the first
-    *execution_steps* periods are accepted as the committed dispatch, the
-    initial state is updated from the terminal state of those executed periods,
-    and the window advances by *execution_steps*.  The process repeats until
-    *total_steps* periods have been executed.
-
-    The resulting :class:`MultiPeriodResult` contains exactly *total_steps*
-    executed period network copies (the lookahead tail of each horizon is
-    discarded).
-
-    .. note::
-        The ``objective`` field of the returned result is the sum of the
-        per-window objective values.  When *execution_steps* < *horizon* this
-        overcounts (each window's lookahead is included), so treat it as an
-        approximation.  For exact cost accounting, accumulate per-period costs
-        from ``result[component_id]`` after the run.
-
-    Args:
-        network: Base network.  Not modified.
-        timeseries_data: Full-horizon per-component attribute series.  Must
-            cover at least *total_steps* periods.
-        total_steps: Total number of periods to execute.  Inferred from
-            *timeseries_data* length when omitted.
-        horizon: Look-ahead window in periods.  Each solve optimises over
-            ``min(horizon, remaining)`` periods.  Larger values improve
-            dispatch quality at the cost of a bigger problem per solve.
-        execution_steps: Number of periods committed per MPC iteration.
-            ``execution_steps=1`` (default) is the classic MPC policy.
-            ``execution_steps=horizon`` reduces to open-loop receding-horizon.
-        solver: Either a solver-name string, a concrete
-            :class:`GekkoMultiPeriodSolver` / :class:`PyomoMultiPeriodSolver`
-            instance, or ``None`` (default — GEKKO+IPOPT).
-        backend: ``"gekko"`` / ``"pyomo"`` to force the modelling backend.
-            When ``None`` (default), the backend is auto-routed from *solver*.
-        optimization_problem: Optional optimisation problem passed to each
-            horizon solve.
-        dt_h: Timestep duration(s) in hours — scalar or list of length
-            *total_steps*.
-        datetime_index: Optional ``pd.DatetimeIndex`` of length *total_steps*.
-        initial_state: Optional ``{(component_id, attr): float}`` seed for the
-            very first horizon's t=0 inter-step equations.  Subsequent
-            horizons derive their initial state from the executed period results
-            automatically.
-        terminal_state: Optional terminal constraint passed to every horizon
-            solve.  Useful for cyclic storage constraints (enforce the storage
-            to return to its initial level at the end of each horizon).
-
-    Returns:
-        A :class:`MultiPeriodResult` containing the *total_steps* executed
-        period network copies.
+    Note: returned ``objective`` is the sum of per-window values and overcounts
+    when ``execution_steps < horizon``.
 
     Example::
 
@@ -1146,7 +882,6 @@ def run_mpc(
     total_steps = _resolve_steps(total_steps, timeseries_data)
     dt_h_list = _resolve_dt_h(dt_h, datetime_index, total_steps)
 
-    # Validate user-provided state dicts early.
     _validate_state_keys(initial_state, network, "initial_state")
     _validate_state_keys(terminal_state, network, "terminal_state")
 
@@ -1194,11 +929,10 @@ def run_mpc(
         all_net_copies.extend(executed_copies)
         total_objective += window_result.objective
 
-        # Seed next horizon from the terminal state of the last executed period.
         current_initial_state = _extract_terminal_state(executed_copies[-1])
         offset += n_execute
 
-    # Rebuild a datetime index covering only executed periods.
+    # Index covering only executed periods.
     exec_datetime_index = (
         datetime_index[:total_steps] if datetime_index is not None else None
     )

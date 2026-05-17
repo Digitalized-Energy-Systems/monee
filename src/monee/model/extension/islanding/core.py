@@ -1,17 +1,8 @@
-"""
-Islanding system for multi-carrier grid restoration.
+"""Islanding system for multi-carrier grid restoration.
 
-Carrier-independent backbone:
-
-* ``IslandingMode``          – base class per carrier; implements ``NetworkAspect``.
-* ``NetworkIslandingConfig`` – bundles per-carrier modes; registered via
-                               ``network.add_extension()``.
-
-Internal helpers (not part of the public API):
-
-* ``_collect_islanding_state``      – partitions nodes into GF / regular and collects vars.
-* ``_build_connectivity_equations`` – carrier-agnostic connectivity-flow constraint builder.
-"""
+``IslandingMode`` is the per-carrier base (implements :class:`NetworkAspect`);
+``NetworkIslandingConfig`` bundles modes for registration via
+``network.add_extension()``."""
 
 from __future__ import annotations
 
@@ -29,19 +20,7 @@ from monee.model.phys.islanding import (
 
 
 def _collect_islanding_state(network: Network, mode: IslandingMode, ignored_nodes: set):
-    """
-    Partition carrier nodes into grid-forming (GF) and regular, then collect the
-    already-injected solver variable references.
-
-    Returns
-    -------
-    gf_nodes      : list[Node]
-    regular_nodes : list[Node]
-    e_vars        : dict[node_id → injected_var]
-    c_fwd_vars    : dict[branch_id → injected_var]
-    c_rev_vars    : dict[branch_id → injected_var]
-    c_src_vars    : dict[node_id → injected_var]   (GF nodes only)
-    """
+    """Partition carrier nodes into GF/regular and collect injected vars."""
     prefix = mode.var_prefix
     grid_type = mode.carrier_grid_type
     e_attr = f"e_{prefix}"
@@ -81,13 +60,8 @@ def _collect_islanding_state(network: Network, mode: IslandingMode, ignored_node
 
 
 def _branch_inflow_outflow(node, c_fwd_vars, c_rev_vars, network):
-    """
-    Return (inflow_terms, outflow_terms) of connectivity-flow variables for *node*.
-
-    Convention for a branch (from, to):
-      c_fwd flows from → to  (outflow from ``from``, inflow to ``to``)
-      c_rev flows to → from  (outflow from ``to``,   inflow to ``from``)
-    """
+    """Return (inflow, outflow) connectivity-flow terms for *node*.
+    c_fwd flows from→to; c_rev flows to→from."""
     inflow, outflow = [], []
     for branch_id, c_fwd in c_fwd_vars.items():
         branch = network.branch_by_id(branch_id)
@@ -104,18 +78,9 @@ def _branch_inflow_outflow(node, c_fwd_vars, c_rev_vars, network):
 def _build_connectivity_equations(
     network, gf_nodes, regular_nodes, e_vars, c_fwd_vars, c_rev_vars, c_src_vars, big_m
 ) -> list:
-    """
-    Carrier-independent single-commodity connectivity-flow equations.
-
-    Returns a plain list of relational expressions (no solver-specific calls).
-
-    Constraints:
-    1. GF nodes always energized: e_k = 1
-    2. Arc capacity:              c_fwd/rev ≤ big_m · on_off
-    3. Super-source arc capacity: c_src ≤ big_m  (GF nodes, always enabled)
-    4. Per-node balance:          Σ_in c – Σ_out c = e_i
-    5. Super-source supply:       Σ c_src = Σ e_i
-    """
+    """Single-commodity connectivity flow: GF energised (e=1), arc caps via
+    big_m·on_off, per-node balance ``Σ_in − Σ_out = e``, super-source supply
+    ``Σ c_src = Σ e``."""
     eqs = []
     all_nodes = gf_nodes + regular_nodes
 
@@ -153,43 +118,21 @@ def _build_connectivity_equations(
 
 
 class IslandingMode(NetworkAspect, ABC):
-    """
-    Per-carrier islanding configuration.
+    """Per-carrier islanding base. Subclasses set ``carrier_grid_type`` and
+    ``var_prefix``, and may override :meth:`add_physical_constraints` to add
+    e.g. angle pinning / pressure bounds."""
 
-    Subclasses must set the class attributes ``carrier_grid_type`` and ``var_prefix``,
-    and may override ``add_physical_constraints`` to add carrier-specific constraints
-    (e.g. angle pinning for DC electricity, pressure bounds for gas/water).
-
-    Implements ``NetworkAspect``:
-    - ``prepare(network)``               → Phase 1: adds Var placeholders.
-    - ``equations(network, ignored)``    → Phase 2: returns constraint list.
-    """
-
-    carrier_grid_type: type  # e.g. PowerGrid — set in subclass
-    var_prefix: str  # e.g. "el"       — set in subclass
+    carrier_grid_type: type
+    var_prefix: str
 
     def is_grid_forming(self, child) -> bool:
-        """Return True if *child* anchors an island for this carrier."""
         return isinstance(child.model, GridFormingMixin) and child.active
 
     @abstractmethod
     def prepare(self, network: Network) -> None:
-        """
-        Phase 1 — add ``Var`` placeholders to node and branch models before
-        solver variable injection.
-
-        The normal ``inject_gekko_vars`` / ``inject_pyomo_vars`` loops pick up
-        these ``Var`` objects automatically.  Each subclass sets its attributes
-        directly, e.g. ``node.model.e_el = Var(...)``.
-        """
+        """Add Var placeholders before solver variable injection."""
 
     def equations(self, network: Network, ignored_nodes: set) -> list:
-        """
-        Phase 2 — return all islanding constraint equations as a plain list.
-
-        Combines connectivity-flow constraints with carrier-specific physical
-        constraints from ``add_physical_constraints``.
-        """
         gf_nodes, regular_nodes, e_vars, c_fwd_vars, c_rev_vars, c_src_vars = (
             _collect_islanding_state(network, self, ignored_nodes)
         )
@@ -209,23 +152,13 @@ class IslandingMode(NetworkAspect, ABC):
         return eqs
 
     def add_physical_constraints(self, *_) -> list:
-        """
-        Carrier-specific physical constraints (returned as a plain list).
-
-        Override in subclasses to add e.g. angle pinning for electricity or
-        pressure bounds for gas/water.  The default returns an empty list.
-        """
+        """Carrier-specific physics (override in subclasses). Empty by default."""
         return []
 
 
 class NetworkIslandingConfig(NetworkAspect):
-    """
-    Container bundling per-carrier ``IslandingMode`` instances.
-
-    Register on a network via ``network.add_extension(config)``, or use the
-    top-level ``enable_islanding()`` helper which also sets
-    ``network.islanding_config`` for ``find_ignored_nodes`` compatibility.
-    """
+    """Bundle per-carrier :class:`IslandingMode` instances; register via
+    ``network.add_extension`` or :func:`enable_islanding`."""
 
     def __init__(
         self,
@@ -238,16 +171,13 @@ class NetworkIslandingConfig(NetworkAspect):
         self.water = water
 
     def modes(self) -> list[IslandingMode]:
-        """Return the list of active (non-None) carrier modes."""
         return [m for m in [self.electricity, self.gas, self.water] if m is not None]
 
     def prepare(self, network: Network) -> None:
-        """Phase 1: add Var placeholders for all active carrier modes."""
         for mode in self.modes():
             mode.prepare(network)
 
     def equations(self, network: Network, ignored_nodes: set) -> list:
-        """Phase 2: return equations for all active carrier modes."""
         eqs = []
         for mode in self.modes():
             eqs += mode.equations(network, ignored_nodes)

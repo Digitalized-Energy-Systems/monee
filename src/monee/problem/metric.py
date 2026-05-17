@@ -73,8 +73,8 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                     heat_load_curtailed += md.upper(model.q_mw_heat)
                 continue
             if isinstance(model, md.ExtHydrGrid) and include_ext_grid:
+                # Only count when ext grid feeds in (load would need shedding).
                 if md.value(model.mass_flow) < 0:
-                    # only if ext grid needs to feed in (load would need to be shedded)
                     gas_load_curtailed += (
                         -md.value(model.mass_flow)
                         * 3.6
@@ -82,7 +82,6 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                     )
             if isinstance(model, md.ExtPowerGrid) and include_ext_grid:
                 if md.value(model.p_mw) < 0:
-                    # only if ext grid needs to feed in (load would need to be shedded)
                     power_load_curtailed += -md.value(model.p_mw)
             if isinstance(model, md.PowerLoad):
                 power_load_curtailed += md.upper(model.p_mw) - md.value(

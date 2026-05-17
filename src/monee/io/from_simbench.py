@@ -6,23 +6,12 @@ from monee.simulation.timeseries import TimeseriesData
 
 
 def obtain_simbench_profile_by_pp_net(pp_net) -> TimeseriesData:
-    """Build a :class:`TimeseriesData` from a simbench-shaped pandapower net.
+    """Build a :class:`TimeseriesData` from a simbench pandapower net.
 
-    The simbench load profiles are normalized factors: the actual load at
-    timestep ``t`` is ``base_p_mw * profile[t]`` (and analogously for
-    ``q_mvar``).  This helper computes those scaled per-load series and
-    sums them per bus to mirror the way :func:`from_pandapower_net`
-    aggregates multiple loads on a single bus into one monee
-    :class:`~monee.model.child.PowerLoad`.  The summed series are
-    registered under the same joined name produced by
-    :func:`~monee.io.from_pandapower.aggregated_pp_load_name`, so that the
-    series actually bind to the corresponding monee child.
-
-    Non-load profile categories (``renewables``, ``storage``,
-    ``powerplants``) are passed through under their raw simbench
-    profile-column names so callers depending on the previous shape can
-    still retrieve them — those types do not have a stable monee
-    counterpart in the matpower import path.
+    Load profiles are scaled per-load (``base_p_mw·profile[t]``) and summed
+    per bus to match :func:`from_pandapower_net`'s aggregation, registered
+    under :func:`aggregated_pp_load_name`. Non-load profile categories pass
+    through under their raw simbench column names.
     """
     td = TimeseriesData()
     profiles = pp_net.profiles

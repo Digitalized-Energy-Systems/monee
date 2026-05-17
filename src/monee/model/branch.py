@@ -54,13 +54,8 @@ class GenericPowerBranch(BranchModel):
         return abs((self.p_from_mw.value - self.p_to_mw.value) / self.p_from_mw.value)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
-        # The loading_*_percent == i_*_ka / max_i_ka identity is owned by the
-        # active branch formulation: the AC formulation adds it as a solver
-        # equality (i_*_ka are pinned by the AC current-magnitude equations),
-        # while MISOCP replaces i_*_ka with Intermediates derived from
-        # current_pu post-solve (it can't add a sqrt-based equality to the
-        # LP).  Keeping the identity in the base would constrain Intermediates
-        # against a scalar, which Pyomo / GEKKO can't translate.
+        # loading_*_percent ↔ i_*_ka identity is owned by the branch formulation
+        # (AC: equality; MISOCP: derived from current_pu post-solve).
         return []
 
 
@@ -169,15 +164,11 @@ class WaterPipe(BranchModel):
         self.direction = Var(1, integer=True, min=0, max=1, name="direction")
         self.velocity = Var(1, min=-50, max=50, name="velocity")
         self.q_mw = Var(1e-6, name="q_mw")
-        # ``reynolds`` is stored in millions (Re / 1e6) — see
-        # ``phys.core.hydraulics.REYNOLDS_SCALE``.  Initial 1e-3 corresponds
-        # to Re ≈ 1000 (low-Reynolds laminar floor).
+        # reynolds is stored as Re/1e6 (see REYNOLDS_SCALE); 1e-3 ≈ laminar floor.
         self.reynolds = Var(1e-3, min=0, max=10, name="reynolds")
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
-        # Upper bound 7 covers the PWL's leftmost breakpoint at Re=10
-        # (laminar friction 64/10 = 6.4); anything lower silently makes the
-        # zero/low-flow regime infeasible.  Matches GasPipe.
+        # friction upper bound 7 covers the PWL leftmost breakpoint (Re=10, 64/10).
         self.friction = (
             Var(0.02, min=0, max=7, name="friction") if friction is None else friction
         )
@@ -267,24 +258,11 @@ class HeatExchangerGenerator(HeatExchanger):
 @model
 class PassiveHeatExchanger(BranchModel):
     """
-    Passive heat exchanger: injects or extracts a fixed heat power ``q_mw`` into
-    the water flow that passes through it.  The mass flow is *not* prescribed —
-    it is determined by the surrounding network hydraulics.  The formulation then
-    computes the resulting temperature increase (or decrease) from the heat power
-    and the actual mass flow.
+    Passive heat exchanger injecting/extracting fixed ``q_mw`` into a free-flowing
+    water branch. Mass flow is determined by surrounding hydraulics; temperature
+    change follows from q_mw and actual mass flow.
 
-    Use :class:`PassiveHeatExchangerLoad` / :class:`PassiveHeatExchangerGenerator`
-    for the load/generator convenience sub-classes.
-
-    Args:
-        q_mw: Heat power in MW.  Positive = heat consumed (load),
-              negative = heat injected (generator).
-        diameter_m: Inner pipe diameter [m].
-        roughness: Pipe wall roughness [m] (default 0.0001).
-        length_m: Equivalent pipe length for pressure-drop calc [m] (default 2.5).
-        temperature_ext_k: Ambient temperature [K] (default 293).
-        regulation: Scaling factor applied to ``q_mw_set`` (default 1).
-        friction: Pre-computed friction variable (optional).
+    Sign: positive q_mw = load, negative = generator.
     """
 
     def __init__(
@@ -315,14 +293,11 @@ class PassiveHeatExchanger(BranchModel):
         self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
         self.direction = Var(0, integer=True, min=0, max=1, name="direction")
         self.velocity = Var(1, min=-50, max=50, name="velocity")
-        # ``reynolds`` is stored in millions (Re / 1e6) — see
-        # ``phys.core.hydraulics.REYNOLDS_SCALE``.  Initial 1e-3 corresponds
-        # to Re ≈ 1000 (low-Reynolds laminar floor).
+        # reynolds = Re/1e6 (see REYNOLDS_SCALE); 1e-3 ≈ laminar floor.
         self.reynolds = Var(1e-3, min=0, max=10, name="reynolds")
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
-        # Upper bound 7 covers the PWL's leftmost breakpoint at Re=10
-        # (laminar friction 64/10 = 6.4).  Matches WaterPipe / GasPipe.
+        # friction upper bound 7 covers the PWL leftmost breakpoint (Re=10).
         self.friction = (
             Var(0.01, min=0, max=7, name="friction") if friction is None else friction
         )
@@ -374,9 +349,7 @@ class GasPipe(BranchModel):
         self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
         self.direction = Var(0, integer=True, min=0, max=1)
         self.velocity = Var(1, min=-100, max=100, name="velocity")
-        # ``reynolds`` is stored in millions (Re / 1e6) — see
-        # ``phys.core.hydraulics.REYNOLDS_SCALE``.  Initial 1e-3 corresponds
-        # to Re ≈ 1000 (low-Reynolds laminar floor).
+        # reynolds = Re/1e6 (see REYNOLDS_SCALE); 1e-3 ≈ laminar floor.
         self.reynolds = Var(1e-3, min=0, max=10, name="reynolds")
         self.gas_density = Var(1, min=0, max=100, name="gas_density")
         self.friction = (
@@ -391,17 +364,8 @@ class GasPipe(BranchModel):
 @model
 class GasCompressor(BranchModel):
     """
-    Ideal gas compressor — raises pressure from suction junction to discharge junction
-    by a fixed compression ratio.
-
-    The pressure boost equation uses the same first-order linearisation around
-    ``grid.nominal_pressure_pu`` as the Weymouth pipe formulation, keeping the
-    overall system linear.  Mass flow is strictly unidirectional (suction →
-    discharge); no ``mass_flow_neg`` variable is needed.
-
-    Args:
-        compression_ratio (float): Desired outlet/inlet pressure ratio (≥ 1).
-        max_flow_kgs (float): Upper bound on mass throughput in kg/s.
+    Ideal compressor — fixed pressure ratio, unidirectional (suction → discharge).
+    Forward flow lives in ``mass_flow_neg`` to match GasPipe's Weymouth convention.
     """
 
     def __init__(self, compression_ratio=1.5, max_flow_kgs=10.0) -> None:
@@ -409,8 +373,6 @@ class GasCompressor(BranchModel):
         self.compression_ratio = compression_ratio
         self.max_flow_kgs = max_flow_kgs
         self.mass_flow = Intermediate(0.1)
-        # Gas convention: forward physical flow (suction→discharge) uses mass_flow_neg,
-        # matching the sign convention of GasPipe (Weymouth uses mf_neg for forward flow).
         self.mass_flow_neg = Var(0.1, min=0, max=max_flow_kgs, name="mass_flow_neg")
         self.on_off = 1
 
@@ -419,6 +381,5 @@ class GasCompressor(BranchModel):
         p_sq_to = to_node_model.vars["pressure_squared_pu"]
         return [
             IntermediateEq("mass_flow", -self.mass_flow_neg),
-            # p_to² = ratio² · p_from²  (linear when ratio is a fixed scalar)
             self.compression_ratio**2 * p_sq_from == p_sq_to,
         ]

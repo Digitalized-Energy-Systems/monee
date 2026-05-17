@@ -1,26 +1,6 @@
-"""
-Pyomo infeasibility diagnostic tools for monee networks.
-
-When a Pyomo solve returns infeasible, these tools help identify which
-constraints conflict and which variable bounds are violated.  They wrap
-Pyomo's built-in analysis utilities and translate Pyomo variable names
-(``child_3__p_mw``) back to monee component descriptions.
-
-Typical usage — called automatically on solve failure::
-
-    from monee.solver.infeasibility import diagnose_infeasibility
-    report = diagnose_infeasibility(pm, solver_name="scip")
-    print(report)
-
-Or for manual inspection of a solved (or failed) model::
-
-    from monee.solver.infeasibility import (
-        collect_constraint_residuals,
-        collect_variable_bound_violations,
-    )
-    residuals = collect_constraint_residuals(pm, tol=1e-4)
-    violations = collect_variable_bound_violations(pm, tol=1e-4)
-"""
+"""Pyomo infeasibility diagnostics. Translates Pyomo var names like
+``child_3__p_mw`` back to monee component descriptions and wraps the
+Pyomo analysis utilities."""
 
 import logging
 import re
@@ -30,20 +10,14 @@ import pyomo.environ as pyo
 
 _log = logging.getLogger(__name__)
 
-# Pattern for monee-generated Pyomo variable names:
-#   {category}_{component_id}__{attribute}   (single-period)
-#   {category}_{component_id}_t{period}__{attribute}   (multi-period)
+# Pyomo var name: {cat}_{id}__{attr} or {cat}_{id}_t{period}__{attr}.
 _VAR_NAME_RE = re.compile(
     r"^(?P<cat>\w+?)_(?P<id>\d+)(?:_t(?P<t>\d+))?__(?P<attr>\w+)$"
 )
 
 
 def _parse_var_name(name: str) -> dict | None:
-    """Parse a monee Pyomo variable name into its components.
-
-    Returns a dict with keys ``cat``, ``id``, ``t`` (or None), ``attr``,
-    or ``None`` if the name doesn't match the expected pattern.
-    """
+    """Return ``{cat, id, t|None, attr}`` or None if *name* doesn't match."""
     m = _VAR_NAME_RE.match(name)
     if m is None:
         return None
@@ -56,11 +30,7 @@ def _parse_var_name(name: str) -> dict | None:
 
 
 def _var_display_name(name: str) -> str:
-    """Return a human-readable label for a Pyomo variable.
-
-    Translates ``child_3__p_mw`` → ``child[3].p_mw`` and
-    ``child_3_t2__p_mw`` → ``child[3].p_mw (t=2)``.
-    """
+    """Pyomo name → ``cat[id].attr`` (with ``(t=...)`` for multi-period)."""
     parsed = _parse_var_name(name)
     if parsed is None:
         return name
@@ -70,12 +40,9 @@ def _var_display_name(name: str) -> str:
     return label
 
 
-# Constraint residual analysis
-
-
 @dataclass
 class ConstraintResidual:
-    """A single constraint that is violated or close to violation."""
+    """A constraint that is violated or close to violation."""
 
     index: int | str
     body_value: float
@@ -88,11 +55,7 @@ class ConstraintResidual:
 def collect_constraint_residuals(
     pm: pyo.ConcreteModel, tol: float = 1e-4
 ) -> list[ConstraintResidual]:
-    """Return a list of constraints whose residual exceeds *tol*.
-
-    Each entry includes the constraint index, its evaluated body value,
-    bounds, residual magnitude, and (where available) the expression string.
-    """
+    """List constraints whose residual exceeds *tol*, sorted by magnitude."""
     violated = []
     for idx in pm.cons:
         con = pm.cons[idx]
@@ -135,12 +98,9 @@ def collect_constraint_residuals(
     return violated
 
 
-# Variable bound analysis
-
-
 @dataclass
 class BoundViolation:
-    """A variable whose value violates or sits at its bounds."""
+    """A variable violating or sitting on its bounds."""
 
     name: str
     display_name: str
@@ -188,10 +148,7 @@ def collect_variable_bound_violations(
 
 
 def collect_variables_at_bounds(pm: pyo.ConcreteModel, tol: float = 1e-4) -> list[dict]:
-    """Return variables whose current value is at (or within *tol* of) a bound.
-
-    Useful for identifying which bounds are active / binding in the solution.
-    """
+    """List variables whose value sits within *tol* of a bound (active bounds)."""
     at_bounds = []
     for var in pm.component_objects(pyo.Var, active=True):
         name = var.name
@@ -222,24 +179,14 @@ def collect_variables_at_bounds(pm: pyo.ConcreteModel, tol: float = 1e-4) -> lis
     return at_bounds
 
 
-# MIS (Minimal Infeasible Subsystem) via Pyomo
-
-
 def compute_mis(pm: pyo.ConcreteModel, solver_name: str = "scip") -> list[str]:
-    """Compute a Minimal Infeasible Subsystem (MIS) for the model.
-
-    Returns the names/indices of constraints and variable bounds that form
-    the smallest conflicting set.  Removing any single element from the MIS
-    would make the remaining system feasible.
-
-    Requires a working MIP solver (SCIP, Gurobi, CPLEX).
-    """
+    """Names/indices of constraints/bounds forming a Minimal Infeasible Subsystem.
+    Needs SCIP/Gurobi/CPLEX."""
     import contextlib
     import io
 
     from pyomo.contrib.iis import compute_infeasibility_explanation
 
-    # Capture the output from compute_infeasibility_explanation
     log_capture = io.StringIO()
     handler = logging.StreamHandler(log_capture)
     handler.setLevel(logging.INFO)
@@ -250,7 +197,6 @@ def compute_mis(pm: pyo.ConcreteModel, solver_name: str = "scip") -> list[str]:
     iis_logger.addHandler(handler)
 
     try:
-        # Suppress Pyomo warnings about loading infeasible results
         with contextlib.redirect_stderr(io.StringIO()):
             compute_infeasibility_explanation(pm, solver=solver_name)
     except Exception as e:
@@ -260,7 +206,6 @@ def compute_mis(pm: pyo.ConcreteModel, solver_name: str = "scip") -> list[str]:
         iis_logger.removeHandler(handler)
         iis_logger.setLevel(original_level)
 
-    # Parse the output for MIS constraints
     output = log_capture.getvalue()
     mis_constraints = []
     in_mis_section = False
@@ -279,12 +224,9 @@ def compute_mis(pm: pyo.ConcreteModel, solver_name: str = "scip") -> list[str]:
     return mis_constraints
 
 
-# Top-level diagnostic report
-
-
 @dataclass
 class InfeasibilityReport:
-    """Structured report of infeasibility diagnostics."""
+    """Structured infeasibility report."""
 
     constraint_residuals: list[ConstraintResidual] = field(default_factory=list)
     bound_violations: list[BoundViolation] = field(default_factory=list)
@@ -292,7 +234,6 @@ class InfeasibilityReport:
     mis_constraints: list[str] = field(default_factory=list)
 
     def summary(self, max_items: int = 10) -> str:
-        """Return a human-readable summary of the infeasibility."""
         lines = []
 
         if self.constraint_residuals:
@@ -390,18 +331,8 @@ def diagnose_infeasibility(
     tol: float = 1e-4,
     compute_mis_flag: bool = True,
 ) -> InfeasibilityReport:
-    """Run all infeasibility diagnostics on a Pyomo model.
-
-    Args:
-        pm: The (infeasible) Pyomo ConcreteModel.
-        solver_name: Solver to use for MIS computation.
-        tol: Feasibility tolerance for residual/bound checks.
-        compute_mis_flag: Whether to compute the Minimal Infeasible Subsystem
-            (requires re-solving with relaxed constraints, can be slow).
-
-    Returns:
-        An :class:`InfeasibilityReport` with all diagnostic results.
-    """
+    """Build an :class:`InfeasibilityReport`. ``compute_mis_flag`` triggers the
+    Minimal Infeasible Subsystem analysis (slow)."""
     report = InfeasibilityReport(
         constraint_residuals=collect_constraint_residuals(pm, tol=tol),
         bound_violations=collect_variable_bound_violations(pm, tol=tol),

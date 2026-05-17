@@ -17,15 +17,8 @@ _log = logging.getLogger(__name__)
 
 
 class TimeseriesData:
-    """
-    Holds time-varying attribute values for network components.
-
-    Series are registered by component type and lookup key (id or name), then
-    applied to the corresponding model attributes before each solve step.
-
-    All series must have the same length.  Mismatched lengths raise
-    ``ValueError`` at registration time so errors are caught before the run.
-    """
+    """Time-varying attribute values applied to model objects before each step.
+    All registered series must share a length (validated on add)."""
 
     def __init__(self):
         self._node_id_to_series: dict[Any, dict[str, list]] = {}
@@ -86,24 +79,7 @@ class TimeseriesData:
         self._add_to(self._compound_name_to_series, compound_name, attribute, series)
 
     def add_objective_data(self, child_id, attribute: str, series) -> None:
-        """Register time-varying objective data (e.g. prices) for a child component.
-
-        Equivalent to :meth:`add_child_series` but signals intent: the
-        attribute is consumed by an objective function, not used as a
-        physical setpoint.  At each period, ``model.<attribute>`` will hold
-        the series value for that timestep.
-
-        Example — time-of-use electricity pricing::
-
-            td.add_objective_data(gen_id, "price", [40, 80, 60, 30])
-
-            # Then in the objective:
-            obj.select(
-                lambda m: isinstance(m, PowerGenerator)
-            ).calculate(
-                lambda models: sum(m.price * m.p_mw for m in models)
-            )
-        """
+        """Alias for :meth:`add_child_series`; signals the attribute feeds an objective."""
         self.add_child_series(child_id, attribute, series)
 
     def add_objective_data_by_name(
@@ -120,28 +96,8 @@ class TimeseriesData:
         component_id=None,
         component_name: str = None,
     ) -> "TimeseriesData":
-        """
-        Build a ``TimeseriesData`` from a pandas DataFrame.
-
-        Each column of *df* is treated as a time-varying attribute.  Rows are
-        timesteps.
-
-        Args:
-            df: DataFrame where each column is an attribute name.
-            component_type: ``'node'``, ``'child'``, ``'branch'``, or
-                ``'compound'``.
-            component_id: Component identifier (id-based lookup).
-            component_name: Component name (name-based lookup; not available
-                for nodes).
-
-        Returns:
-            A new ``TimeseriesData`` with all columns registered.
-
-        Example::
-
-            df = pandas.DataFrame({'p_mw': [...], 'q_mvar': [...]})
-            td = TimeseriesData.from_dataframe(df, 'child', component_id=load_id)
-        """
+        """Build from a DataFrame (cols=attrs, rows=timesteps). ``component_type``
+        is ``node|child|branch|compound``; pass id or name."""
         _by_id = {
             "node": "add_node_series",
             "child": "add_child_series",
@@ -179,13 +135,8 @@ class TimeseriesData:
 
     @staticmethod
     def _set_model_attr(model, attr: str, value) -> None:
-        """Set *attr* on *model* to *value*.
-
-        * For plain (non-``Var``) attributes the value is replaced directly.
-        * For ``Var`` instances the value, min, and max are all pinned to the
-          series value, fixing the variable at that setpoint for this step
-          while keeping it a ``Var`` so it remains accessible via ``StepState``.
-        """
+        """Set *attr*; for Vars pin value/min/max so it's fixed but stays a Var
+        (still discoverable via StepState)."""
         current = getattr(model, attr, None)
         if isinstance(current, Var):
             current.value = value
@@ -240,13 +191,7 @@ class TimeseriesData:
 
     @staticmethod
     def _merge_component_data(target: dict, source: dict) -> dict:
-        """
-        Attribute-level merge of two ``{component_id: {attr: series}}`` dicts.
-
-        For each component id in *source*: if absent from *target*, add it
-        wholesale.  If present, merge attribute dicts with *target* winning on
-        conflicts (self-wins semantics).
-        """
+        """Attribute-level merge with target-wins semantics on conflicts."""
         result = dict(target)
         for comp_id, attrs in source.items():
             if comp_id in result:
@@ -256,14 +201,7 @@ class TimeseriesData:
         return result
 
     def extend(self, td: "TimeseriesData") -> None:
-        """
-        Merge *td* into this ``TimeseriesData``.
-
-        For components present in both, attributes from *self* take priority
-        on conflicts.  Components present only in *td* are added wholesale.
-
-        Raises ``ValueError`` if the two objects have incompatible lengths.
-        """
+        """Merge *td*; self wins on attribute conflicts. Raises on length mismatch."""
         if (
             td._length is not None
             and self._length is not None
@@ -322,17 +260,7 @@ class TimeseriesData:
 
 @dataclass
 class StepResult:
-    """
-    Wraps the outcome of a single timeseries step.
-
-    Attributes:
-        step: Zero-based step index.
-        result: The ``SolverResult`` for this step, or ``None`` if *failed* or
-            *skipped*.
-        failed: ``True`` if the solve raised an exception.
-        skipped: ``True`` if the solve was not attempted (``solve_flag=False``).
-        error: The exception that caused the failure, or ``None``.
-    """
+    """Outcome of a single timeseries step."""
 
     step: int
     result: Any
@@ -342,13 +270,8 @@ class StepResult:
 
 
 class TimeseriesResult:
-    """
-    Holds the per-step results of a timeseries simulation run.
-
-    Steps that failed (convergence error, infeasibility) are represented by
-    ``StepResult`` entries with ``failed=True`` and ``result=None``.  They
-    are excluded from DataFrame queries but accessible via ``failed_steps``.
-    """
+    """Per-step results. Failed steps are excluded from DataFrame queries but
+    accessible via :attr:`failed_steps`."""
 
     def __init__(
         self,
@@ -361,23 +284,17 @@ class TimeseriesResult:
 
     @property
     def step_results(self) -> list[StepResult]:
-        """All ``StepResult`` objects, including failed steps."""
         return self._step_results
 
     @property
     def raw(self) -> list:
-        """
-        Successful ``SolverResult`` objects in step order.
-
-        Kept for backward compatibility.  Prefer ``step_results``.
-        """
+        """Successful ``SolverResult`` objects in step order (legacy; prefer ``step_results``)."""
         return [
             sr.result for sr in self._step_results if not sr.failed and not sr.skipped
         ]
 
     @property
     def failed_steps(self) -> list[int]:
-        """List of step indices that failed to converge."""
         return [sr.step for sr in self._step_results if sr.failed]
 
     def _successful(self) -> list[StepResult]:
@@ -393,7 +310,7 @@ class TimeseriesResult:
         step_indices = []
         for sr in self._successful():
             raw_df = sr.result.dataframes[model_type.__name__]
-            # Use component IDs as column names so callers can do df[bus_id]
+            # Column labels are component ids so callers can do df[bus_id].
             if "id" in raw_df.columns:
                 row = dict(zip(raw_df["id"], raw_df[attribute]))
             else:
@@ -405,41 +322,13 @@ class TimeseriesResult:
         return df
 
     def get_result_for(self, model_type, attribute: str) -> pandas.DataFrame:
-        """Return a DataFrame of *attribute* values across all successful steps.
-
-        One row per step, one column per component — **columns are labelled by
-        component id** so you can select a specific instance with
-        ``df[bus_id]`` instead of relying on positional indices.
-
-        Args:
-            model_type: The model class (e.g. ``mm.PowerLoad``, ``mm.Bus``).
-            attribute: The attribute name (e.g. ``'p_mw'``).
-
-        Example::
-
-            vm_df = ts_result.get_result_for(mm.Bus, "vm_pu")
-            print(vm_df[bus_home_id])   # time-series for one bus
-        """
+        """DataFrame of *attribute* values: rows=steps, cols=component ids."""
         if (model_type, attribute) in self._cache:
             return self._cache[model_type, attribute]
         return self._create_result_for(model_type, attribute)
 
     def __getitem__(self, component_id) -> pandas.DataFrame:
-        """Return all result attributes for *component_id* across every step.
-
-        Each column is one result attribute; each row is one successful step
-        (indexed by step number or datetime if a ``datetime_index`` was
-        provided).  Internal bookkeeping columns (``active``, ``independent``,
-        ``ignored``) are excluded.
-
-        Raises :exc:`KeyError` if *component_id* is not found in any step.
-
-        Example::
-
-            df = ts_result[bus_home_id]
-            print(df["vm_pu"])          # voltage series
-            print(df["va_degree"].min()) # worst angle
-        """
+        """All result attributes for *component_id* across every successful step."""
         rows: list[dict] = []
         step_indices: list[int] = []
         for sr in self._successful():
@@ -458,21 +347,8 @@ class TimeseriesResult:
         return pandas.DataFrame(rows, index=self._make_index(step_indices))
 
     def get_result_for_id(self, component_id, attribute: str) -> pandas.Series:
-        """
-        Return a ``Series`` of *attribute* values for a specific component
-        across all successful steps.
-
-        Args:
-            component_id: The component's id (as stored in the ``id`` column
-                of the result DataFrames).
-            attribute: The attribute name to retrieve.
-
-        Returns:
-            A ``Series`` indexed by step index (or datetime if a
-            ``datetime_index`` was provided to ``run()``).  Failed steps are
-            excluded.  A ``None`` entry is emitted for a step where the
-            component is absent (e.g. ignored due to islanding).
-        """
+        """Series of *attribute* for *component_id* across successful steps.
+        Yields ``None`` where the component is absent (e.g. islanded out)."""
         values = []
         step_indices = []
         for sr in self._successful():
@@ -546,12 +422,7 @@ class TimeseriesResult:
         return "\n".join(lines)
 
     def __str__(self) -> str:
-        """Full per-type table dump showing the last successful step's data.
-
-        Printing all N steps inline would be impractical; the last step gives
-        a concrete snapshot of the network state.  Use ``get_result_for()`` or
-        ``self[component_id]`` to retrieve the full time-series programmatically.
-        """
+        """Per-type tables from the last successful step (full TS via ``get_result_for``)."""
         n_total = len(self._step_results)
         n_failed = len(self.failed_steps)
         successful = self._successful()
@@ -678,26 +549,7 @@ def apply_to_compound(compound, timeseries_data: TimeseriesData, timestep: int) 
 
 
 class StepHook(ABC):
-    """
-    Base class for objects that receive callbacks before and after each
-    timeseries step.
-
-    Implement one or both of ``pre_run`` / ``post_run`` — both are optional.
-    The base class provides silent no-ops so subclasses override only what they
-    need.
-
-    Both callbacks receive:
-
-    - *net*: the current-step network copy (timeseries data already applied).
-    - *step*: zero-based step index.
-    - *step_state*: ``StepState`` carrying inter-step solved values (readable
-      and writable).
-
-    ``post_run`` additionally receives:
-
-    - *step_result*: ``StepResult`` for this step; ``step_result.failed`` is
-      ``True`` if the solve failed.
-    """
+    """Pre/post-step callbacks for timeseries runs. Both methods are optional no-ops."""
 
     def pre_run(
         self,
@@ -705,8 +557,7 @@ class StepHook(ABC):
         step: int,
         step_state: StepState,
     ) -> None:
-        """Called before the step's solve, before the per-step network copy is made
-        and before timeseries data is applied.  *base_net* is the original network."""
+        """Called before the per-step network copy and timeseries application."""
 
     def post_run(
         self,
@@ -716,7 +567,7 @@ class StepHook(ABC):
         step_result: StepResult,
         base_net: Network,
     ) -> None:
-        """Called after the step's solve (whether it succeeded or failed)."""
+        """Called after the step's solve (success or failure)."""
 
 
 def run(
@@ -733,46 +584,11 @@ def run(
     datetime_index: pandas.DatetimeIndex | None = None,
     **solver_kwargs,
 ) -> TimeseriesResult:
-    """
-    Run a timeseries simulation over *net*.
+    """Run a timeseries simulation: copy net, apply timeseries, solve, collect.
 
-    For each step the network is copied, registered timeseries values are
-    applied to component models, the network is solved, and results are
-    collected.
-
-    Args:
-        net: Base network.  Not modified; a fresh copy is made each step.
-        timeseries_data: Per-component attribute series.
-        steps: Number of steps to simulate.  Defaults to
-            ``timeseries_data.length`` when omitted.  Must not exceed the
-            series length.
-        step_hooks: Hooks called before and after each step.  Items may be
-            ``StepHook`` subclasses or plain callables
-            ``(net_copy, step, step_state, step_result) -> None`` called in
-            the post-step position.
-        solver: Either a solver-name string (e.g. ``"gurobi"``, ``"ipopt"``),
-            a concrete :class:`SolverInterface` instance, or ``None``
-            (default — GEKKO+IPOPT).  Resolved once and reused across all steps.
-        backend: ``"gekko"`` / ``"pyomo"`` to force the modelling backend.
-            When ``None`` (default), the backend is auto-routed from *solver*.
-        optimization_problem: Optional optimization problem passed to the
-            solver.
-        solve_flag: If ``False``, timeseries data is applied and hooks are
-            called but no solve is attempted.  Useful for dry-run testing.
-        on_step_error: What to do when a step fails to converge.
-            ``'raise'`` (default) — re-raise the exception immediately.
-            ``'skip'`` — record the failure and continue to the next step.
-        progress_callback: Called after each step as
-            ``progress_callback(step, total_steps)``.
-        datetime_index: Optional ``pd.DatetimeIndex`` aligned to the steps.
-            Used as the row index of result DataFrames.
-        **solver_kwargs: Forwarded to the per-step ``solve(...)`` call (and
-            ultimately to ``solver.solve(...)``).  Use this to pass
-            backend-specific configuration such as ``debug=True`` without
-            having to subclass the solver.
-
-    Returns:
-        A ``TimeseriesResult`` containing per-step outcomes.
+    ``steps`` defaults to ``timeseries_data.length``. ``on_step_error='skip'``
+    records a failed StepResult and continues. ``solver_kwargs`` are forwarded
+    to ``solver.solve(...)``.
     """
     if steps is None and timeseries_data is None:
         raise ValueError(

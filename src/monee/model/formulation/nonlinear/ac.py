@@ -87,10 +87,7 @@ class ACElectricityBranchFormulation(BranchFormulation):
             == (branch.p_to_mw**2 + branch.q_to_mvar**2) ** 0.5
             / (to_node_model.vars["vm_pu"] * to_node_model.vars["base_kv"])
             / SQRT_3,
-            # Loading = current / current_limit — was previously emitted by
-            # GenericPowerBranch.equations(), moved here so the MISOCP
-            # formulation can replace it with its own current_pu-derived form
-            # without leaving Intermediates on the LHS of base equations.
+            # Loading lives here so MISOCP can swap in its current_pu form.
             branch.loading_from_percent == branch.i_from_ka / branch.max_i_ka,
             branch.loading_to_percent == branch.i_to_ka / branch.max_i_ka,
         ]

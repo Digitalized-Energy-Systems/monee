@@ -10,30 +10,7 @@ def create_bus(
     name=None,
     position=None,
 ):
-    """
-    Adds a bus node to the specified network with configurable voltage, constraints, grid type, and metadata.
-
-    This function is used to define and insert a new bus into a network, serving as a connection point for electrical or other grid components such as generators, loads, or lines. Use it during network construction or expansion to customize bus properties like voltage level, operational constraints, grid type, and identification details. The function integrates the new bus directly into the network, supporting both electrical and non-electrical grids.
-
-    Args:
-        network (mm.Network): The network to which the bus will be added.
-        base_kv (float, optional): Base voltage level of the bus in kilovolts. Defaults to 1.
-        constraints (list, optional): List of constraint callables for the bus.
-        grid: Grid domain for the bus. Defaults to ``mm.EL`` (electrical grid).
-        overwrite_id: Custom identifier to override the auto-assigned node ID.
-        name (str, optional): Human-readable name for the bus.
-        position (tuple, optional): Geographical position as ``(x, y)`` coordinates.
-
-    Returns:
-        int: The node ID of the created bus.  Pass this ID to branch and child
-        creation functions (e.g. ``create_line``, ``create_power_load``).
-
-    Examples::
-
-        bus_0 = create_bus(net, base_kv=11, name='HV Bus')
-        bus_1 = create_bus(net)
-        create_line(net, bus_0, bus_1, length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-    """
+    """Add a Bus node. Returns the node id."""
     return network.node(
         mm.Bus(base_kv=base_kv),
         constraints=constraints,
@@ -52,20 +29,7 @@ def create_water_junction(
     name=None,
     position=None,
 ):
-    """
-    Add a junction node to the water/heat grid.
-
-    Args:
-        network (mm.Network): Target network.
-        grid: Grid domain. Defaults to ``mm.WATER``.
-        constraints (list, optional): Constraint callables for the junction.
-        overwrite_id: Custom identifier to override the auto-assigned node ID.
-        name (str, optional): Human-readable name.
-        position (tuple, optional): Geographical position as ``(x, y)``.
-
-    Returns:
-        int: The node ID of the created junction.
-    """
+    """Add a water/heat junction. Returns the node id."""
     return create_junction(network, grid, constraints, overwrite_id, name, position)
 
 
@@ -77,22 +41,7 @@ def create_gas_junction(
     name=None,
     position=None,
 ):
-    """
-    Creates a gas junction node in the specified network, serving as a connection point for gas components and enabling flexible network expansion.
-
-    This function is used to define nodes where gas pipelines, compressors, or other components connect within a gas network. Use it during network construction or modification to establish the topology and facilitate the flow and distribution of gas resources. The function allows you to specify the grid type (defaulting to `mm.GAS`), operational constraints, custom identifiers, names, and positions, and integrates the new node into the network structure for further configuration or analysis.
-
-    Args:
-        network (mm.Network): Target network.
-        grid: Grid domain. Defaults to ``mm.GAS``.
-        constraints (list, optional): Constraint callables for the junction.
-        overwrite_id: Custom identifier to override the auto-assigned node ID.
-        name (str, optional): Human-readable name.
-        position (tuple, optional): Geographical position as ``(x, y)``.
-
-    Returns:
-        int: The node ID of the created junction.
-    """
+    """Add a gas junction. Returns the node id."""
     return create_junction(network, grid, constraints, overwrite_id, name, position)
 
 
@@ -104,22 +53,7 @@ def create_junction(
     name=None,
     position=None,
 ):
-    """
-    Creates a junction node in the specified network for a given grid type, enabling flexible resource flow and network expansion.
-
-    This function is used to define connection points for components such as pipes, compressors, or valves in resource grids like gas or water systems. Use it during network construction or modification to establish the topology and facilitate the flow and distribution of resources. The function allows you to specify the grid type, operational constraints, custom identifiers, names, and positions for the junction, and integrates the new node into the network structure for further configuration or analysis.
-
-    Args:
-        network (mm.Network): Target network.
-        grid: Grid domain (e.g. ``mm.GAS`` or ``mm.WATER``).
-        constraints (list, optional): Constraint callables for the junction.
-        overwrite_id: Custom identifier to override the auto-assigned node ID.
-        name (str, optional): Human-readable name.
-        position (tuple, optional): Geographical position as ``(x, y)``.
-
-    Returns:
-        int: The node ID of the created junction.
-    """
+    """Add a Junction node on *grid*. Returns the node id."""
     return network.node(
         mm.Junction(),
         constraints=constraints,
@@ -139,23 +73,7 @@ def create_el_branch(
     grid=None,
     name=None,
 ):
-    """
-    Creates an electrical branch in the network, connecting two nodes with a specified electrical model and optional constraints.
-
-    This function is used to define the pathways for electrical energy flow between nodes in a network, supporting tasks such as network construction, expansion, or reconfiguration. Use it when you need to represent transmission lines, feeders, or other electrical connections with specific electrical properties. The function integrates a branch object into the network using the provided model, and allows for additional customization through constraints, grid type, and naming for clarity and reporting.
-
-    Args:
-        network (mm.Network): Target network.
-        from_node_id: Source bus node ID.
-        to_node_id: Destination bus node ID.
-        model: A :class:`mm.BranchModel` instance defining the branch physics.
-        constraints (list, optional): Constraint callables for the branch.
-        grid: Grid domain override. Usually inferred from the node grid.
-        name (str, optional): Human-readable name.
-
-    Returns:
-        tuple: The branch ID ``(from_node_id, to_node_id, edge_key)``.
-    """
+    """Add an electrical branch using *model*. Returns the branch id tuple."""
     return network.branch(
         model,
         from_node_id=from_node_id,
@@ -179,28 +97,7 @@ def create_line(
     name=None,
     on_off=1,
 ):
-    """
-    Add a power line branch to the electrical grid.
-
-    If either referenced node does not yet exist, an electrical bus is created
-    automatically.
-
-    Args:
-        network (mm.Network): Target network.
-        from_node_id: Source bus node ID.
-        to_node_id: Destination bus node ID.
-        length_m (float): Line length in metres.
-        r_ohm_per_m (float): Resistance per metre in Ω/m.
-        x_ohm_per_m (float): Reactance per metre in Ω/m.
-        parallel (int, optional): Number of parallel conductors. Defaults to 1.
-        constraints (list, optional): Constraint callables.
-        grid: Grid domain override.
-        name (str, optional): Human-readable name.
-        on_off (int or Var): ``1`` = active, ``0`` = disconnected. Defaults to 1.
-
-    Returns:
-        tuple: The branch ID ``(from_node_id, to_node_id, edge_key)``.
-    """
+    """Add a :class:`PowerLine` between two buses; missing buses are auto-created."""
     return network.branch(
         mm.PowerLine(length_m, r_ohm_per_m, x_ohm_per_m, parallel, on_off=on_off),
         from_node_id=from_node_id,
@@ -226,27 +123,7 @@ def create_gas_pipe(
     grid=None,
     name=None,
 ):
-    """
-    Creates a gas pipe branch in the network, connecting two nodes with specified physical and operational parameters.
-
-    This function is used to model gas pipelines within a network, enabling the simulation of gas flow between nodes. Use it during network construction, expansion, or modification to represent physical gas infrastructure. The function creates a gas pipe object with user-defined diameter, length, external temperature, roughness, and operational state, then integrates it as a branch between the specified nodes. Optional constraints, grid type, and a descriptive name can be provided for further customization. If the target nodes do not exist, gas junctions are automatically created as needed.
-
-    Args:
-        network (mm.Network): Target network.
-        from_node_id: Source junction node ID.
-        to_node_id: Destination junction node ID.
-        diameter_m (float): Inner pipe diameter in metres.
-        length_m (float): Pipe length in metres.
-        temperature_ext_k (float, optional): Ambient temperature in Kelvin. Defaults to 296.15.
-        roughness (float, optional): Pipe wall roughness in metres. Defaults to 1e-5.
-        on_off (int, optional): ``1`` = active, ``0`` = disconnected. Defaults to 1.
-        constraints (list, optional): Constraint callables.
-        grid: Grid domain override.
-        name (str, optional): Human-readable name.
-
-    Returns:
-        tuple: The branch ID ``(from_node_id, to_node_id, edge_key)``.
-    """
+    """Add a :class:`GasPipe`; missing junctions are auto-created."""
     return network.branch(
         mm.GasPipe(diameter_m, length_m, temperature_ext_k, roughness, on_off=on_off),
         from_node_id=from_node_id,
@@ -268,24 +145,7 @@ def create_compressor(
     grid=None,
     name=None,
 ):
-    """
-    Add a gas compressor branch between two junctions.
-
-    The compressor raises pressure from *from_node* (suction) to *to_node*
-    (discharge) by ``compression_ratio``.  Flow is strictly unidirectional.
-
-    Args:
-        network: Target network.
-        from_node_id: Suction-side junction ID.
-        to_node_id: Discharge-side junction ID.
-        compression_ratio (float): Outlet/inlet pressure ratio (≥ 1). Defaults to 1.5.
-        max_flow_kgs (float): Maximum mass throughput in kg/s. Defaults to 10.
-        grid: Grid domain override.
-        name (str, optional): Human-readable name.
-
-    Returns:
-        tuple: Branch ID ``(from_node_id, to_node_id, edge_key)``.
-    """
+    """Add a :class:`GasCompressor` (unidirectional, fixed ratio)."""
     return network.branch(
         mm.GasCompressor(compression_ratio, max_flow_kgs),
         from_node_id=from_node_id,
@@ -313,35 +173,8 @@ def create_water_pipe(
     grid=None,
     name=None,
 ):
-    """
-    Add a water/heat pipe branch to the hydraulic grid.
-
-    If either referenced node does not yet exist, a water junction is created
-    automatically.
-
-    Args:
-        network (mm.Network): Target network.
-        from_node_id: Source junction node ID.
-        to_node_id: Destination junction node ID.
-        diameter_m (float): Inner pipe diameter in metres.
-        length_m (float): Pipe length in metres.
-        temperature_ext_k (float, optional): Ambient temperature in Kelvin. Defaults to 296.15.
-        roughness (float, optional): Pipe wall roughness in metres. Defaults to 0.001.
-        lambda_insulation_w_per_k (float, optional): Thermal conductivity of insulation in W/(m·K).
-            Defaults to 0.025.
-        insulation_thickness_m (float, optional): Insulation thickness in metres. Defaults to 0.2.
-        on_off (int, optional): ``1`` = active, ``0`` = disconnected. Defaults to 1.
-        unidirectional (bool, optional): If ``True``, pin flow direction to
-            ``from_node → to_node`` (``direction = 0``).  Useful for district-
-            heating trunks where the physical flow direction is known a priori —
-            removes the direction binary from the MIP tree. Defaults to ``False``.
-        constraints (list, optional): Constraint callables.
-        grid: Grid domain override.
-        name (str, optional): Human-readable name.
-
-    Returns:
-        tuple: The branch ID ``(from_node_id, to_node_id, edge_key)``.
-    """
+    """Add a :class:`WaterPipe`. ``unidirectional=True`` pins direction=0
+    (drops the binary on DH trunks with known flow direction)."""
     return network.branch(
         mm.WaterPipe(
             diameter_m,
@@ -372,22 +205,7 @@ def create_el_child(
     name=None,
     **kwargs,
 ):
-    """
-    Attach any electrical child model to a bus node.
-
-    Args:
-        network (mm.Network): Target network.
-        model: A :class:`mm.ChildModel` instance (e.g. ``mm.PowerLoad``, ``mm.ExtPowerGrid``).
-        node_id: Bus node ID to attach the component to.  An electrical bus is
-            created automatically if the node does not yet exist.
-        constraints (list, optional): Constraint callables.
-        overwrite_id: Custom identifier to override the auto-assigned child ID.
-        name (str, optional): Human-readable name.
-        **kwargs: Forwarded to :meth:`Network.child_to`.
-
-    Returns:
-        int: The child ID of the created component.
-    """
+    """Attach an electrical child *model* to ``node_id``; missing buses auto-created."""
     return network.child_to(
         model,
         node_id=node_id,
@@ -409,22 +227,7 @@ def create_water_child(
     name=None,
     **kwargs,
 ):
-    """
-    Attach a hydraulic child component to a water/heat junction node.
-
-    Args:
-        network (mm.Network): Target network.
-        model: A :class:`mm.ChildModel` instance.
-        node_id: Junction node ID.  A water junction is created automatically
-            if the node does not yet exist.
-        constraints (list, optional): Constraint callables.
-        overwrite_id: Custom identifier to override the auto-assigned child ID.
-        name (str, optional): Human-readable name.
-        **kwargs: Forwarded to :meth:`Network.child_to`.
-
-    Returns:
-        int: The child ID of the created component.
-    """
+    """Attach a hydraulic child *model* to a water/heat junction."""
     return network.child_to(
         model,
         node_id=node_id,
@@ -446,22 +249,7 @@ def create_gas_child(
     name=None,
     **kwargs,
 ):
-    """
-    Attach any gas child model to a junction node.
-
-    Args:
-        network (mm.Network): Target network.
-        model: A :class:`mm.ChildModel` instance.
-        node_id: Junction node ID.  A gas junction is created automatically
-            if the node does not yet exist.
-        constraints (list, optional): Constraint callables.
-        overwrite_id: Custom identifier to override the auto-assigned child ID.
-        name (str, optional): Human-readable name.
-        **kwargs: Forwarded to :meth:`Network.child_to`.
-
-    Returns:
-        int: The child ID of the created component.
-    """
+    """Attach a gas child *model* to a junction."""
     return network.child_to(
         model,
         node_id=node_id,
@@ -484,24 +272,7 @@ def create_power_load(
     name=None,
     **kwargs,
 ):
-    """
-    Attach a fixed-setpoint power load to an electrical bus.
-
-    Sign convention: positive values represent *consumption* (load).
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Bus node ID to attach the load to.
-        p_mw (float): Active power demand in MW (positive = consumption).
-        q_mvar (float): Reactive power demand in Mvar (positive = consumption).
-        constraints (list, optional): Constraint callables.
-        overwrite_id: Custom identifier.
-        name (str, optional): Human-readable name.
-        **kwargs: Forwarded to :class:`mm.PowerLoad`.
-
-    Returns:
-        int: The child ID of the created load.
-    """
+    """Attach a :class:`PowerLoad` (positive = consumption)."""
     return create_el_child(
         network,
         mm.PowerLoad(p_mw, q_mvar, **kwargs),
@@ -522,25 +293,8 @@ def create_power_generator(
     name=None,
     **kwargs,
 ):
-    """
-    Attach a fixed-setpoint power generator to an electrical bus.
-
-    Sign convention: supply positive magnitudes — the constructor negates them
-    internally so the node balance sees an injection (negative = generation).
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Bus node ID to attach the generator to.
-        p_mw (float): Active power output in MW (positive = generation).
-        q_mvar (float): Reactive power output in Mvar (positive = generation).
-        constraints (list, optional): Constraint callables.
-        overwrite_id: Custom identifier.
-        name (str, optional): Human-readable name.
-        **kwargs: Forwarded to :class:`mm.PowerGenerator`.
-
-    Returns:
-        int: The child ID of the created generator.
-    """
+    """Attach a :class:`PowerGenerator`. Pass positive magnitudes; the
+    constructor negates internally."""
     return create_el_child(
         network,
         mm.PowerGenerator(p_mw, q_mvar, **kwargs),
@@ -565,30 +319,7 @@ def create_ext_power_grid(
     name=None,
     **kwargs,
 ):
-    """
-    Adds an external power grid to a specified node in the network, enabling simulation of power exchange with external sources.
-
-    This function is used to represent the connection between your network and an external power supply, such as a transmission grid or utility interconnection. Use it when modeling scenarios involving grid import/export, contingency analysis, or integration of distributed energy resources. The function creates an external grid object with user-defined electrical parameters (active/reactive power, voltage magnitude, and angle) and attaches it to the chosen node. Additional customization is supported through operational constraints, custom identifiers, and metadata.
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Bus node ID to attach the slack source to.
-        p_mw (float, optional): Initial active power exchange guess in MW. Defaults to 0.
-        q_mvar (float, optional): Initial reactive power exchange guess in Mvar. Defaults to 0.
-        vm_pu (float, optional): Voltage magnitude setpoint in per-unit. Defaults to 1.0.
-        va_degree (float, optional): Voltage angle setpoint in degrees. Defaults to 0.0.
-        max_import_mw (float | None, optional): Maximum power drawn from the external
-            grid in MW.  ``None`` = unlimited (default).
-        max_export_mw (float | None, optional): Maximum power fed back to the external
-            grid in MW.  ``None`` = unlimited (default).
-        constraints (list, optional): Constraint callables.
-        overwrite_id: Custom identifier.
-        name (str, optional): Human-readable name.
-        **kwargs: Forwarded to :class:`mm.ExtPowerGrid`.
-
-    Returns:
-        int: The child ID of the created external grid.
-    """
+    """Attach an :class:`ExtPowerGrid` (slack bus, pinned vm_pu/va_degree)."""
     return create_el_child(
         network,
         mm.ExtPowerGrid(
@@ -622,57 +353,8 @@ def create_ext_hydr_grid(
     name=None,
     **kwargs,
 ):
-    """
-    Adds an external hydraulic grid to a specified node in the network with configurable flow, pressure, and operational parameters.
-
-    This function is used to model the integration of external hydraulic sources into an energy network, supporting scenarios such as sector coupling, hydraulic fueling, or storage. Use it during network setup or expansion to represent points where hydraulic is supplied from outside the system. The function creates an external hydraulic grid object with user-defined mass flow, pressure, and temperature, applies any operational constraints, and connects it to the designated node in the network. Additional customization is available via keyword arguments for advanced modeling needs.
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Junction node ID to attach the slack source to.
-        mass_flow (float, optional): Initial mass-flow guess in kg/s.  The solver
-            determines the final value; negative = injection (source). Defaults to 1.
-        pressure_pu (float, optional): Junction pressure setpoint in per-unit. Defaults to 1.0.
-        t_k (float, optional): Supply temperature setpoint in Kelvin. Defaults to 356.
-        grid_key (str, optional): Carrier key — ``mm.GAS_KEY`` or ``mm.WATER_KEY``.
-            Prefer the carrier-specific shortcuts :func:`create_gas_ext_grid` and
-            :func:`create_water_ext_grid`. Defaults to ``mm.GAS_KEY``.
-        max_import_kgs (float | None, optional): Maximum mass flow the external grid
-            can inject into the network (kg/s).  ``None`` = unlimited (default).
-        max_export_kgs (float | None, optional): Maximum mass flow the external grid
-            can absorb from the network (kg/s).  ``None`` = unlimited (default).
-        constraints (list, optional): Constraint callables.
-        overwrite_id: Custom identifier.
-        name (str, optional): Human-readable name.
-        **kwargs: Forwarded to :class:`mm.ExtHydrGrid`.
-
-    Returns:
-        int: The child ID of the created external hydraulic grid.
-
-    Raises:
-        ValueError: If the network is invalid, node_id is missing or incorrect, or if parameter values are out of valid ranges or incompatible.
-
-    Examples:
-        Add an external hydraulic grid with custom mass flow and pressure::
-
-            ext_hydr_grid = create_ext_hydr_grid(
-                my_network,
-                node_id=5,
-                mass_flow=2,
-                pressure_pa=1500000,
-                name='External hydraulic Grid A'
-            )
-
-        Add an external hydraulic grid with operational constraints and a custom ID::
-
-            ext_hydr_grid = create_ext_hydr_grid(
-                my_network,
-                node_id='EXT_H2_NODE',
-                mass_flow=3.5,
-                constraints={'max_flow': 5.0},
-                overwrite_id='EXT_H2_GRID_1'
-            )
-    """
+    """Attach an :class:`ExtHydrGrid` (slack source). Prefer the carrier-specific
+    :func:`create_gas_ext_grid` / :func:`create_water_ext_grid` shortcuts."""
     return network.child_to(
         mm.ExtHydrGrid(
             mass_flow=mass_flow,
@@ -702,30 +384,7 @@ def create_source(
     name=None,
     **kwargs,
 ):
-    """
-    Attach a fixed mass-flow source (injection) to a gas or water junction.
-
-    Sign convention: supply a positive magnitude — the constructor negates it
-    internally so the junction balance sees an injection (negative = generation).
-
-    .. note::
-        *grid_key* defaults to ``mm.GAS_KEY``.  For water/heat networks use
-        ``grid_key=mm.WATER_KEY`` or the dedicated :func:`create_water_source`.
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Junction node ID.
-        mass_flow (float, optional): Mass flow rate to inject in kg/s (positive = injection).
-            Defaults to 1.
-        grid_key (str, optional): Carrier key. Defaults to ``mm.GAS_KEY``.
-        constraints (list, optional): Constraint callables.
-        overwrite_id: Custom identifier.
-        name (str, optional): Human-readable name.
-        **kwargs: Forwarded to :class:`mm.Source`.
-
-    Returns:
-        int: The child ID of the created source.
-    """
+    """Attach a :class:`Source`. Pass positive magnitude; constructor negates internally."""
     return network.child_to(
         mm.Source(mass_flow, **kwargs),
         node_id=node_id,
@@ -748,26 +407,7 @@ def create_consume_hydr_grid(
     name=None,
     **kwargs,
 ):
-    """
-    Adds a hydraulic consumption grid to a specified node in the network with configurable flow, pressure, and operational parameters.
-
-    This function is intended for modeling hydraulic demand points within an energy network, such as those required for fuel cell integration, hydraulic storage, or sector coupling applications. Use it during network setup or expansion to represent locations where hydraulic is consumed. The function creates a hydraulic consumption grid object with user-defined mass flow, pressure, and temperature, applies any operational constraints, and integrates it into the network at the designated node. Additional customization is supported via keyword arguments for advanced modeling needs.
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Junction node ID.
-        mass_flow (float, optional): Mass flow rate to consume in kg/s (positive = consumption).
-            Defaults to 1.
-        pressure_pa (float, optional): Junction pressure setpoint in Pa. Defaults to 1,000,000.
-        t_k (float, optional): Return temperature in Kelvin. Defaults to 293.
-        constraints (list, optional): Constraint callables.
-        overwrite_id: Custom identifier.
-        name (str, optional): Human-readable name.
-        **kwargs: Forwarded to :class:`mm.ConsumeHydrGrid`.
-
-    Returns:
-        int: The child ID of the created consumption grid.
-    """
+    """Attach a :class:`ConsumeHydrGrid` (fixed-pressure consumption point)."""
     return network.child_to(
         mm.ConsumeHydrGrid(
             mass_flow=mass_flow, pressure_pa=pressure_pa, t_k=t_k, **kwargs
@@ -789,30 +429,7 @@ def create_sink(
     name=None,
     **kwargs,
 ):
-    """
-    Attach a fixed mass-flow sink (withdrawal) to a gas or water junction.
-
-    Sign convention: positive values represent *consumption*.  Unlike
-    :func:`create_source`, the value is stored as-is (not negated).
-
-    .. note::
-        *grid_key* defaults to ``mm.GAS_KEY``.  For water/heat networks use
-        ``grid_key=mm.WATER_KEY`` or the dedicated :func:`create_water_sink`.
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Junction node ID.
-        mass_flow (float, optional): Mass flow rate to withdraw in kg/s (positive = consumption).
-            Defaults to 1.
-        grid_key (str, optional): Carrier key. Defaults to ``mm.GAS_KEY``.
-        constraints (list, optional): Constraint callables.
-        overwrite_id: Custom identifier.
-        name (str, optional): Human-readable name.
-        **kwargs: Forwarded to :class:`mm.Sink`.
-
-    Returns:
-        int: The child ID of the created sink.
-    """
+    """Attach a :class:`Sink` (positive = consumption)."""
     return network.child_to(
         mm.Sink(mass_flow=mass_flow, **kwargs),
         node_id=node_id,
@@ -833,25 +450,7 @@ def create_heat_generator(
     name=None,
     **kwargs,
 ):
-    """
-    Attach a node-based heat generator (``H_G,i``) to a water junction.
-
-    Supply a positive magnitude — the constructor negates it internally so
-    the node balance sees an injection (load convention).  Works with both
-    the default nodal heat balance and the McCormick-DHS formulation.
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Water junction node ID.
-        q_mw (float): Heat output in MW (positive = generation).
-        constraints (list, optional): Constraint callables.
-        overwrite_id: Custom identifier.
-        name (str, optional): Human-readable name.
-        **kwargs: Forwarded to :class:`mm.HeatGenerator`.
-
-    Returns:
-        int: The child ID of the created heat generator.
-    """
+    """Attach a :class:`HeatGenerator` to a water junction. Positive magnitude."""
     return create_water_child(
         network,
         mm.HeatGenerator(q_mw=q_mw, **kwargs),
@@ -871,24 +470,7 @@ def create_heat_load(
     name=None,
     **kwargs,
 ):
-    """
-    Attach a node-based heat load (``H_L,i``) to a water junction.
-
-    Load convention: positive values represent consumption.  Works with both
-    the default nodal heat balance and the McCormick-DHS formulation.
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Water junction node ID.
-        q_mw (float): Heat demand in MW (positive = consumption).
-        constraints (list, optional): Constraint callables.
-        overwrite_id: Custom identifier.
-        name (str, optional): Human-readable name.
-        **kwargs: Forwarded to :class:`mm.HeatLoad`.
-
-    Returns:
-        int: The child ID of the created heat load.
-    """
+    """Attach a :class:`HeatLoad` to a water junction (positive = consumption)."""
     return create_water_child(
         network,
         mm.HeatLoad(q_mw=q_mw, **kwargs),
@@ -909,29 +491,8 @@ def create_heat_exchanger(
     grid=None,
     name=None,
 ):
-    """
-    Add a heat exchanger branch to the water/heat grid.
-
-    Sign convention (load convention — positive = consumption):
-
-    * ``q_mw > 0`` → :class:`mm.HeatExchangerLoad` (heat *consumed* along the branch).
-    * ``q_mw < 0`` → :class:`mm.HeatExchangerGenerator` (heat *injected* into the branch).
-
-    Args:
-        network (mm.Network): Target network.
-        from_node_id: Upstream junction node ID.
-        to_node_id: Downstream junction node ID.
-        q_mw (float): Heat exchange power in MW.  Positive = consumption (load),
-            negative = generation (injection).
-        regulation (float): Scaling factor in [0, 1] applied to the setpoint.
-            ``1`` = full demand, ``0`` = off.  Default ``1``.
-        constraints (list, optional): Constraint callables.
-        grid: Grid domain override.
-        name (str, optional): Human-readable name.
-
-    Returns:
-        tuple: The branch ID ``(from_node_id, to_node_id, edge_key)``.
-    """
+    """Add a heat-exchanger branch. ``q_mw > 0`` → :class:`HeatExchangerLoad`;
+    ``q_mw < 0`` → :class:`HeatExchangerGenerator`."""
     return network.branch(
         mm.HeatExchangerLoad(q_mw=-q_mw, regulation=regulation)
         if q_mw > 0
@@ -958,31 +519,7 @@ def create_p2g(
     grid=None,
     name=None,
 ):
-    """
-    Add a Power-to-Gas (P2G) coupling branch between an electrical bus and a gas junction.
-
-    Converts electrical power to gas mass flow.  The branch spans two different
-    carrier domains and is therefore treated as a control point in the solver.
-
-    Args:
-        network (mm.Network): Target network.
-        from_node_id: Electrical bus node ID (power side).
-        to_node_id: Gas junction node ID (gas side).
-        efficiency (float): Conversion efficiency in ``(0, 1]`` — ratio of
-            chemical energy output to electrical energy input.
-        mass_flow_setpoint (float): Target gas mass flow in kg/s (positive = injection
-            into the gas network, i.e. generation).
-        consume_q_mvar_setpoint (float, optional): Reactive power consumed from the
-            electrical side in Mvar. Defaults to 0.
-        regulation (float, optional): Dispatch fraction in ``[0.0, 1.0]``.
-            ``1.0`` = full setpoint, ``0.0`` = off. Defaults to 1.
-        constraints (list, optional): Constraint callables.
-        grid: Grid domain override.
-        name (str, optional): Human-readable name.
-
-    Returns:
-        tuple: The branch ID ``(from_node_id, to_node_id, edge_key)``.
-    """
+    """Add a Power-to-Gas coupling branch (power → gas)."""
     return network.branch(
         mm.PowerToGas(
             efficiency=efficiency,
@@ -1010,29 +547,7 @@ def create_g2p(
     grid=None,
     name=None,
 ):
-    """
-    Adds a gas-to-power conversion branch to the network, connecting specified nodes and enabling gas-to-electricity conversion with defined operational parameters.
-
-    This function is used to model the conversion of gas energy into electrical power within an energy network, such as in combined cycle plants or distributed generation scenarios. Use it during network setup or expansion to represent gas turbines or similar conversion equipment. The function creates a gas-to-power branch with user-defined efficiency, active and reactive power setpoints, and regulation factor, then connects it between the designated gas and power nodes. Optional constraints, grid type, and a descriptive name can be provided for further customization and clarity.
-
-    Args:
-        network (mm.Network): Target network.
-        from_node_id: Gas junction node ID (gas side).
-        to_node_id: Electrical bus node ID (power side).
-        efficiency (float): Conversion efficiency in ``(0, 1]`` — ratio of
-            electrical output to gas energy input.
-        p_mw_setpoint (float): Target active power output in MW (positive = generation
-            onto the electrical bus, i.e. injection).
-        q_mvar_setpoint (float, optional): Target reactive power in Mvar. Defaults to 0.
-        regulation (float, optional): Dispatch fraction in ``[0.0, 1.0]``.
-            ``1.0`` = full setpoint, ``0.0`` = off. Defaults to 1.
-        constraints (list, optional): Constraint callables.
-        grid: Grid domain override.
-        name (str, optional): Human-readable name.
-
-    Returns:
-        tuple: The branch ID ``(from_node_id, to_node_id, edge_key)``.
-    """
+    """Add a Gas-to-Power coupling branch (gas → power)."""
     return network.branch(
         mm.GasToPower(
             efficiency=efficiency,
@@ -1062,31 +577,7 @@ def create_chp(
     constraints=None,
     remove_existing_branch=False,
 ):
-    """
-    Adds a Combined Heat and Power (CHP) unit to the network with specified connectivity, efficiency, and operational parameters.
-
-    This function is intended for modeling cogeneration systems that simultaneously generate electricity and heat, enhancing overall energy efficiency in multi-energy networks. Use it during network construction or expansion to represent distributed energy resources that require explicit connections to power, heat, and gas nodes. The function creates a CHP unit with user-defined physical and operational characteristics, applies optional constraints and regulation factors, and integrates the unit into the network by connecting it to the specified nodes.
-
-    Args:
-        network (mm.Network): Target network.
-        power_node_id: Electrical bus node ID (electrical output side).
-        heat_node_id: Water junction node ID (heat supply side).
-        heat_return_node_id: Water junction node ID (heat return side).
-        gas_node_id: Gas junction node ID (fuel supply side).
-        diameter_m (float): Internal pipe diameter of the water-side branch in metres.
-        efficiency_power (float): Electrical efficiency in ``(0, 1]``.
-        efficiency_heat (float): Thermal efficiency in ``(0, 1]``.
-        mass_flow_setpoint (float): Target water-side mass flow in kg/s.
-        regulation (float, optional): Dispatch fraction in ``[0.0, 1.0]``.
-            ``1.0`` = full setpoint, ``0.0`` = off. Defaults to 1.
-        constraints (list, optional): Constraint callables.
-        remove_existing_branch (bool, optional): If ``True``, remove any existing branch
-            between *heat_node_id* and *heat_return_node_id* before adding the CHP.
-            Defaults to ``False``.
-
-    Returns:
-        int: The compound ID of the created CHP unit.
-    """
+    """Add a CHP compound (gas → power + heat via internal HX branch)."""
     if remove_existing_branch:
         network.remove_branch_between(heat_node_id, heat_return_node_id)
     return network.compound(
@@ -1120,28 +611,7 @@ def create_p2h(
     regulation=1,
     constraints=None,
 ):
-    """
-    Add a Power-to-Heat (P2H) compound to the network.
-
-    Couples an electrical bus to a water/heat circuit.  The unit draws
-    electrical power and delivers heat as a water mass flow.
-
-    Args:
-        network (mm.Network): Target network.
-        power_node_id: Electrical bus node ID (power consumption side).
-        heat_node_id: Water junction node ID (heat supply side).
-        heat_return_node_id: Water junction node ID (heat return side).
-        heat_energy_mw (float): Heat output setpoint in **MW**.
-        diameter_m (float): Inner diameter of the internal water-side branch in metres.
-        efficiency (float): Electrical-to-heat conversion efficiency in ``(0, 1]``.
-        temperature_ext_k (float, optional): Ambient temperature in Kelvin. Defaults to 293.
-        q_mvar_setpoint (float, optional): Reactive power consumed from the electrical
-            bus in Mvar. Defaults to 0.
-        constraints (list, optional): Constraint callables.
-
-    Returns:
-        int: The compound ID of the created P2H unit.
-    """
+    """Add a Power-to-Heat compound with an internal water HX branch."""
     return network.compound(
         mm.PowerToHeat(
             heat_energy_mw=heat_energy_mw,
@@ -1169,25 +639,7 @@ def create_g2h(
     temperature_ext_k=293,
     constraints=None,
 ):
-    """
-    Adds a gas-to-heat conversion unit to the network, connecting specified gas and heat nodes with defined operational parameters.
-
-    This function is used to model the conversion of gas energy into heat within an energy network, such as in district heating systems or industrial processes requiring gas-fired heating. Use it during network setup or expansion to represent gas boilers or similar equipment. The function creates a gas-to-heat unit with user-defined heat output, efficiency, and physical characteristics, then connects it to the appropriate gas supply, heat delivery, and heat return nodes. Optional constraints and external temperature settings can be applied to tailor the unit's operation and ensure compliance with system requirements.
-
-    Args:
-        network (mm.Network): Target network.
-        gas_node_id: Gas junction node ID (fuel supply side).
-        heat_node_id: Water junction node ID (heat supply side).
-        heat_return_node_id: Water junction node ID (heat return side).
-        heat_energy_mw (float): Heat output setpoint in **MW**.
-        diameter_m (float): Inner diameter of the internal water-side branch in metres.
-        efficiency (float): Gas-to-heat conversion efficiency in ``(0, 1]``.
-        temperature_ext_k (float, optional): Ambient temperature in Kelvin. Defaults to 293.
-        constraints (list, optional): Constraint callables.
-
-    Returns:
-        int: The compound ID of the created G2H unit.
-    """
+    """Add a Gas-to-Heat compound with an internal water HX branch."""
     return network.compound(
         mm.GasToHeat(
             heat_energy_mw=heat_energy_mw,
@@ -1213,30 +665,7 @@ def create_chp_hg(
     regulation=1,
     constraints=None,
 ):
-    """
-    Add a HeatGenerator-based CHP compound to the network.
-
-    Drop-in alternative to :func:`create_chp` that delivers heat as a node-based
-    injection (:class:`mm.HeatGenerator`-style) at ``heat_node_id`` instead of
-    routing it through an internal heat-exchanger branch to a heat-return node.
-    Because there is no water-side branch, no ``heat_return_node_id`` and no
-    ``diameter_m`` are required.
-
-    Args:
-        network (mm.Network): Target network.
-        power_node_id: Electrical bus node ID (electrical output side).
-        heat_node_id: Water junction node ID (heat injection point).
-        gas_node_id: Gas junction node ID (fuel supply side).
-        efficiency_power (float): Electrical efficiency in ``(0, 1]``.
-        efficiency_heat (float): Thermal efficiency in ``(0, 1]``.
-        mass_flow_setpoint (float): Fuel mass flow setpoint in kg/s.
-        regulation (float, optional): Dispatch fraction in ``[0.0, 1.0]``.
-            ``1.0`` = full setpoint, ``0.0`` = off. Defaults to 1.
-        constraints (list, optional): Constraint callables.
-
-    Returns:
-        int: The compound ID of the created CHP unit.
-    """
+    """CHP variant using a SubHG node-based heat injector (no heat_return / diameter)."""
     return network.compound(
         mm.CHPHG(
             efficiency_power=efficiency_power,
@@ -1261,32 +690,7 @@ def create_p2h_hg(
     q_mvar_setpoint=0,
     constraints=None,
 ):
-    """
-    Add a HeatGenerator-based Power-to-Heat branch to the network.
-
-    Drop-in alternative to :func:`create_p2h` that delivers heat as a node-based
-    injection at ``heat_node_id`` instead of routing it through an internal
-    heat-exchanger branch.  No ``heat_return_node_id`` / ``diameter_m`` needed.
-
-    Unlike :func:`create_p2h` (which creates a compound with a control node
-    and an internal SubHE branch), this couples the two domains with a single
-    :class:`~monee.model.PowerToHeatHG` multi-grid branch: the branch's
-    ``p_from_mw`` is absorbed by the power-bus balance and its ``q_mw_heat`` is
-    absorbed by the water-junction heat balance.
-
-    Args:
-        network (mm.Network): Target network.
-        power_node_id: Electrical bus node ID (power consumption side).
-        heat_node_id: Water junction node ID (heat injection point).
-        heat_energy_mw (float): Heat output setpoint in MW.
-        efficiency (float): Electrical-to-heat conversion efficiency in ``(0, 1]``.
-        q_mvar_setpoint (float, optional): Reactive power consumed from the
-            electrical bus in Mvar. Defaults to 0.
-        constraints (list, optional): Constraint callables.
-
-    Returns:
-        The branch ID of the created P2H-HG unit.
-    """
+    """Single-branch P2H using :class:`PowerToHeatHG` (heat injected at the to-node)."""
     return network.branch(
         mm.PowerToHeatHG(
             heat_energy_mw=heat_energy_mw,
@@ -1307,30 +711,7 @@ def create_g2h_hg(
     efficiency,
     constraints=None,
 ):
-    """
-    Add a HeatGenerator-based Gas-to-Heat branch to the network.
-
-    Drop-in alternative to :func:`create_g2h` that delivers heat as a node-based
-    injection at ``heat_node_id`` instead of routing it through an internal
-    heat-exchanger branch.  No ``heat_return_node_id`` / ``diameter_m`` needed.
-
-    Unlike :func:`create_g2h` (which creates a compound with a control node
-    and an internal SubHE branch), this couples the two domains with a single
-    :class:`~monee.model.GasToHeatHG` multi-grid branch: the branch's
-    ``from_mass_flow`` is absorbed by the gas-junction mass balance and its
-    ``q_mw_heat`` is absorbed by the water-junction heat balance.
-
-    Args:
-        network (mm.Network): Target network.
-        gas_node_id: Gas junction node ID (fuel supply side).
-        heat_node_id: Water junction node ID (heat injection point).
-        heat_energy_mw (float): Heat output setpoint in MW.
-        efficiency (float): Gas-to-heat conversion efficiency in ``(0, 1]``.
-        constraints (list, optional): Constraint callables.
-
-    Returns:
-        The branch ID of the created G2H-HG unit.
-    """
+    """Single-branch G2H using :class:`GasToHeatHG` (heat injected at the to-node)."""
     return network.branch(
         mm.GasToHeatHG(
             heat_energy_mw=heat_energy_mw,
@@ -1354,28 +735,7 @@ def create_trafo(
     grid=None,
     name=None,
 ):
-    """
-    Adds a two-winding transformer branch to the network.
-
-    The from-node is treated as the low-voltage side and the to-node as the
-    high-voltage side when computing per-unit impedance. If the referenced
-    nodes do not yet exist, electrical buses are created automatically.
-
-    Args:
-        network (mm.Network): The network to which the transformer is added.
-        from_node_id: Low-voltage bus identifier.
-        to_node_id: High-voltage bus identifier.
-        vk_percent (float): Short-circuit voltage in percent. Defaults to 12.2.
-        vkr_percent (float): Real part of short-circuit voltage in percent. Defaults to 0.25.
-        sn_trafo_mva (float): Rated apparent power in MVA. Defaults to 160.
-        shift (float): Phase shift in radians. Defaults to 0.
-        constraints: Operational constraints for the transformer.
-        grid: Grid type. Defaults to the electrical grid.
-        name (str): Human-readable name for the transformer.
-
-    Returns:
-        mm.Trafo: The created transformer object integrated into the network.
-    """
+    """Add a two-winding :class:`Trafo`. from-node = LV side, to-node = HV side."""
     return network.branch(
         mm.Trafo(
             vk_percent=vk_percent,
@@ -1555,38 +915,8 @@ def create_grid_forming_generator(
     overwrite_id=None,
     name=None,
 ):
-    """
-    Attach a grid-forming generator to an electricity bus, making it the slack
-    node for its island.
-
-    Unlike ``create_power_generator`` (fixed p/q setpoint), a grid-forming
-    generator has *variable* active and reactive power so it can absorb any
-    supply–demand imbalance within its island.  Its voltage magnitude is pinned
-    to ``vm_pu``; the voltage angle is pinned to 0 by the islanding formulation.
-
-    Requires ``enable_islanding(net, electricity=True)`` (or a custom
-    ``ElectricityIslandingMode``) to be active on the network.
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Bus identifier where the generator is attached.
-        p_mw_max (float): Maximum active power injection/absorption in MW.
-        q_mvar_max (float): Maximum reactive power injection/absorption in Mvar.
-        vm_pu (float, optional): Voltage magnitude setpoint in per-unit. Defaults to 1.0.
-        constraints: Operational constraints for the child component.
-        overwrite_id: Custom identifier for the child, overriding the auto-assigned one.
-        name (str, optional): Human-readable name.
-
-    Returns:
-        GridFormingGenerator: The created component, already attached to the network.
-
-    Examples:
-        Add an islanded generator that can supply up to 5 MW::
-
-            gf_gen = mx.create_grid_forming_generator(
-                net, bus_island, p_mw_max=5.0, q_mvar_max=2.0
-            )
-    """
+    """Attach a :class:`GridFormingGenerator` (island slack bus). Requires
+    ``enable_islanding(net, electricity=True)``."""
     from monee.model.extension.islanding import GridFormingGenerator
 
     return create_el_child(
@@ -1610,38 +940,8 @@ def create_grid_forming_source(
     overwrite_id=None,
     name=None,
 ):
-    """
-    Attach a grid-forming hydraulic source to a gas or water junction, making
-    it the pressure reference for its island.
-
-    The junction's pressure is pinned to ``pressure_pu`` and the source's
-    ``mass_flow`` is a *variable* that absorbs the island's supply–demand
-    imbalance, mirroring the role of ``ExtHydrGrid`` but usable on an isolated
-    island.
-
-    Requires ``enable_islanding(net, gas=True)`` or ``enable_islanding(net, water=True)``
-    to be active on the network for the relevant carrier.
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Junction identifier where the source is attached.
-        pressure_pu (float, optional): Pressure setpoint in per-unit. Defaults to 1.0.
-        t_k (float, optional): Temperature in Kelvin. Defaults to 356.0.
-        mass_flow_max (float, optional): Maximum absolute mass flow in kg/s. Defaults to 1e6.
-        grid_key: Grid key determining the carrier (``mm.GAS_KEY`` or ``mm.WATER_KEY``).
-            Defaults to ``mm.GAS_KEY``.
-        constraints: Operational constraints for the child component.
-        overwrite_id: Custom identifier for the child, overriding the auto-assigned one.
-        name (str, optional): Human-readable name.
-
-    Returns:
-        GridFormingSource: The created component, already attached to the network.
-
-    Examples:
-        Add an islanded gas source at 1.0 pu pressure::
-
-            gf_src = mx.create_grid_forming_source(net, junction_island, pressure_pu=1.0)
-    """
+    """Attach a :class:`GridFormingSource` (island pressure reference). Requires
+    ``enable_islanding`` for the relevant carrier."""
     from monee.model.extension.islanding import GridFormingSource
 
     return network.child_to(
@@ -1667,23 +967,7 @@ def create_gas_grid_forming_source(
     overwrite_id=None,
     name=None,
 ):
-    """
-    Attach a grid-forming source to a gas junction.  Shortcut for
-    ``create_grid_forming_source(..., grid_key=mm.GAS_KEY)``.
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Gas junction identifier.
-        pressure_pu (float, optional): Pressure setpoint in per-unit. Defaults to 1.0.
-        t_k (float, optional): Gas temperature in Kelvin. Defaults to 356.0.
-        mass_flow_max (float, optional): Maximum mass flow in kg/s. Defaults to 1e6.
-        constraints: Operational constraints for the child component.
-        overwrite_id: Custom identifier for the child.
-        name (str, optional): Human-readable name.
-
-    Returns:
-        GridFormingSource: The created component.
-    """
+    """Gas-side shortcut for :func:`create_grid_forming_source`."""
     return create_grid_forming_source(
         network,
         node_id,
@@ -1707,23 +991,7 @@ def create_water_grid_forming_source(
     overwrite_id=None,
     name=None,
 ):
-    """
-    Attach a grid-forming source to a water/heat junction.  Shortcut for
-    ``create_grid_forming_source(..., grid_key=mm.WATER_KEY)``.
-
-    Args:
-        network (mm.Network): Target network.
-        node_id: Water junction identifier.
-        pressure_pu (float, optional): Pressure setpoint in per-unit. Defaults to 1.0.
-        t_k (float, optional): Water temperature in Kelvin. Defaults to 356.0.
-        mass_flow_max (float, optional): Maximum mass flow in kg/s. Defaults to 1e6.
-        constraints: Operational constraints for the child component.
-        overwrite_id: Custom identifier for the child.
-        name (str, optional): Human-readable name.
-
-    Returns:
-        GridFormingSource: The created component.
-    """
+    """Water-side shortcut for :func:`create_grid_forming_source`."""
     return create_grid_forming_source(
         network,
         node_id,
@@ -1738,23 +1006,7 @@ def create_water_grid_forming_source(
 
 
 def create_multi_energy_network():
-    """
-    Create an empty multi-energy :class:`mm.Network` container.
-
-    This is a convenience alias for ``mm.Network()`` that makes the intent
-    explicit in user code.  The returned network supports all three carriers
-    (electricity, gas, water/heat) and can be populated with any combination
-    of nodes, branches, children, and compounds.
-
-    Returns:
-        mm.Network: A new, empty network.
-
-    Example::
-
-        net = create_multi_energy_network()
-        bus = create_bus(net)
-        create_ext_power_grid(net, bus)
-    """
+    """Empty multi-energy :class:`mm.Network` (convenience alias for ``mm.Network()``)."""
     return mm.Network()
 
 
