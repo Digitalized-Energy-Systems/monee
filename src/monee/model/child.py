@@ -3,26 +3,15 @@ from .core import ChildModel, Const, Var, model
 
 class GridFormingMixin:
     """
-    Marker mixin: this child component can serve as the reference node (slack bus /
-    pressure reference) for an islanded sub-network.
+    Marker: this child can serve as the slack/reference for an islanded sub-network.
 
-    Any child class that carries this mixin *must* implement ``overwrite()`` to pin
-    the carrier-specific reference variable (voltage angle, pressure, …) on the node
-    model it is attached to.  When islanding is enabled, ``find_ignored_nodes`` treats
-    components that contain a ``GridFormingMixin`` child as "leading" and keeps them in
-    the solve.
+    Carriers must implement ``overwrite()`` to pin their reference variable.
+    Islanding keeps components containing a ``GridFormingMixin`` child in the solve.
     """
 
 
 class NoVarChildModel(ChildModel):
-    """
-    A :class:`ChildModel` whose parameters are plain scalars (no ``Var`` decision variables).
-
-    All attributes are fixed constants during a solve.  The ``equations()``
-    method returns an empty list because the component's contribution to the
-    system equations comes solely through node balance equations that reference
-    the stored scalar values.
-    """
+    """:class:`ChildModel` with only scalar parameters and no equations of its own."""
 
     def set(self, n, value):
         user_attributes = [
@@ -41,24 +30,10 @@ class NoVarChildModel(ChildModel):
 
 @model
 class PowerGenerator(NoVarChildModel):
-    """
-    Fixed-setpoint active/reactive power generator.
-
-    Follows the load convention: internally stores *negative* values so that
-    the node balance sees this component as an injection.  The constructor
-    accepts positive magnitudes and negates them::
-
-        PowerGenerator(p_mw=5, q_mvar=0)  →  p_mw=-5, q_mvar=0
-
-    Args:
-        p_mw (float): Active power output in MW (positive = generation).
-        q_mvar (float): Reactive power output in Mvar (positive = generation).
-    """
+    """Fixed-setpoint active/reactive generator. Constructor takes positive magnitudes; sign is internal."""
 
     def __init__(self, p_mw, q_mvar, **kwargs) -> None:
-        # isinstance guard: compound models (e.g. CHP) internally construct
-        # PowerGenerator with a live solver variable as p_mw. Sign validation
-        # only makes sense for plain numeric inputs from user code.
+        # Compound models pass solver Vars for p_mw — only validate plain numerics.
         if isinstance(p_mw, (int, float)) and p_mw < 0:
             raise ValueError(
                 f"PowerGenerator expects a positive generation magnitude; "
@@ -73,27 +48,9 @@ class PowerGenerator(NoVarChildModel):
 @model
 class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
     """
-    External (slack) power grid connection — the reference bus for an electrical island.
-
-    ``ExtPowerGrid`` pins the bus voltage magnitude and angle to fixed setpoints
-    (via :meth:`overwrite`) and exposes ``p_mw`` / ``q_mvar`` as free
-    :class:`Var` decision variables that absorb the island's power imbalance.
-
-    Follows the load convention: positive ``p_mw`` / ``q_mvar`` at the node
-    represents net *import* from the external grid (consumption perspective).
-    The ``p_mw`` / ``q_mvar`` initial values are starting guesses; the solver
-    determines the final values.
-
-    Args:
-        p_mw (float): Initial active power exchange in MW.
-        q_mvar (float): Initial reactive power exchange in Mvar.
-        vm_pu (float): Voltage magnitude setpoint in per-unit. Defaults to 1.0.
-        va_degree (float): Voltage angle setpoint in degrees. Defaults to 0.0.
-        max_import_mw (float | None): Maximum power that can be drawn from the
-            external grid (positive direction).  ``None`` = unlimited.
-        max_export_mw (float | None): Maximum power that can be fed back into
-            the external grid (positive magnitude; internally stored as a lower
-            bound ``-max_export_mw``).  ``None`` = unlimited.
+    External slack-bus connection. Pins vm_pu and va_degree, leaves p_mw/q_mvar
+    as free Vars absorbing the island's imbalance. Load convention: positive
+    p_mw = import.
     """
 
     def __init__(
@@ -126,19 +83,7 @@ class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
 
 @model
 class PowerLoad(NoVarChildModel):
-    """
-    Fixed-setpoint active/reactive power load.
-
-    Follows the load convention: positive values represent *consumption*.
-    Unlike :class:`PowerGenerator`, the constructor does **not** negate
-    the supplied values::
-
-        PowerLoad(p_mw=5, q_mvar=1)  →  p_mw=+5, q_mvar=+1
-
-    Args:
-        p_mw (float): Active power demand in MW (positive = consumption).
-        q_mvar (float): Reactive power demand in Mvar (positive = consumption).
-    """
+    """Fixed-setpoint power load. Load convention: positive = consumption."""
 
     def __init__(self, p_mw, q_mvar, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -148,22 +93,10 @@ class PowerLoad(NoVarChildModel):
 
 @model
 class Source(NoVarChildModel):
-    """
-    Fixed-setpoint mass-flow source (injection) for gas or water networks.
-
-    Follows the load convention: internally stores a *negative* mass-flow so
-    that the junction balance treats this component as an injection.  The
-    constructor accepts positive magnitudes and negates them::
-
-        Source(mass_flow=2.0)  →  self.mass_flow = -2.0
-
-    Args:
-        mass_flow (float): Mass flow rate in kg/s to inject (positive = injection).
-    """
+    """Fixed-setpoint mass-flow source. Constructor takes positive magnitude; sign is internal."""
 
     def __init__(self, mass_flow, **kwargs) -> None:
-        # isinstance guard: same reasoning as PowerGenerator — internal callers
-        # may pass solver variables; sign validation only applies to user code.
+        # Internal callers may pass solver Vars — only validate plain numerics.
         if isinstance(mass_flow, (int, float)) and mass_flow < 0:
             raise ValueError(
                 f"Source expects a positive injection magnitude; "
@@ -177,27 +110,8 @@ class Source(NoVarChildModel):
 @model
 class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
     """
-    External hydraulic grid (slack source) — the pressure/temperature reference for a gas or water island.
-
-    ``ExtHydrGrid`` pins the junction pressure and temperature to fixed
-    setpoints (via :meth:`overwrite`) and exposes ``mass_flow`` as a free
-    :class:`Var` decision variable that absorbs the island's flow imbalance.
-
-    Follows the load convention: the default ``mass_flow=-1`` represents
-    *injection* (negative = generation/source).  The solver determines the
-    actual mass flow.
-
-    Args:
-        mass_flow (float): Initial mass-flow guess in kg/s. Negative = injection
-            (source), positive = consumption (sink). Defaults to -1.
-        pressure_pu (float): Junction pressure setpoint in per-unit. Defaults to 1.0.
-        t_k (float): Supply temperature setpoint in Kelvin. Defaults to 356 K.
-        max_import_kgs (float | None): Maximum mass flow the external grid can
-            inject into the network (kg/s, positive magnitude; stored as lower
-            bound ``-max_import_kgs``).  ``None`` = unlimited.
-        max_export_kgs (float | None): Maximum mass flow the external grid can
-            absorb from the network (kg/s; stored as upper bound).
-            ``None`` = unlimited.
+    External hydraulic slack source. Pins pressure (and optionally temperature),
+    leaves mass_flow as a free Var. Load convention: negative mass_flow = injection.
     """
 
     def __init__(
@@ -222,15 +136,8 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
         self.pin_temperature = pin_temperature
 
     def overwrite(self, node_model, grid):
-        """Pin the junction pressure (always) and — when ``pin_temperature``
-        is True (default) — the junction temperature to the configured
-        setpoints.  Setting ``pin_temperature=False`` leaves the junction
-        temperature as a free Var, useful for return-side slacks that
-        anchor pressure but should let the return temperature emerge from
-        the upstream heat balance (otherwise pinning T forces every
-        consumer's HX outlet to match the slack T setpoint, which is
-        infeasible whenever pipe losses or partial HX regulation make the
-        true outlet mix differ)."""
+        """Pin pressure; pin temperature only if ``pin_temperature`` (default True).
+        Set False on return-side slacks so T emerges from upstream heat balance."""
         node_model.pressure_pu = Const(self.pressure_pu)
         node_model.pressure_squared_pu = Const(self.pressure_pu**2)
         if self.pin_temperature:
@@ -240,25 +147,7 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
 
 @model
 class ConsumeHydrGrid(NoVarChildModel):
-    """
-    Hydraulic demand point (consumption) for gas or water networks.
-
-    Represents a fixed-pressure offtake point (e.g. a building substation or
-    a gas consumer).  Pins the junction pressure to a setpoint and applies a
-    fixed mass-flow consumption.
-
-    Follows the load convention: internally stores a *negative* mass-flow so
-    that the junction balance treats it as withdrawal.  The constructor
-    accepts positive magnitudes and negates them::
-
-        ConsumeHydrGrid(mass_flow=0.5)  →  self.mass_flow = -0.5
-
-    Args:
-        mass_flow (float): Mass flow rate in kg/s to consume (positive = consumption).
-            Defaults to 0.1.
-        pressure_pu (float): Junction pressure setpoint in per-unit. Defaults to 1.0.
-        t_k (float): Return temperature in Kelvin. Defaults to 293 K.
-    """
+    """Hydraulic demand point: fixed pressure setpoint plus a free mass_flow Var."""
 
     def __init__(self, mass_flow=0.1, pressure_pu=1, t_k=293, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -272,20 +161,7 @@ class ConsumeHydrGrid(NoVarChildModel):
 
 @model
 class HeatGenerator(NoVarChildModel):
-    """Node-based heat injection (``H_G,i``) for district-heating formulations.
-
-    Supplies heat at a junction without routing it through a heat-exchanger
-    branch.  Integrated into both the default mass-weighted nodal heat balance
-    (:meth:`~monee.model.node.Junction.calc_signed_heat_flow`) and the
-    McCormick-DHS nodal balance
-    (:class:`~monee.model.formulation.mccormick.water.MccDHSNodeFormulation`).
-    Follows monee's load convention: the user-visible magnitude is positive,
-    but the internal ``q_mw_heat`` is negated so the node balance treats this
-    child as an injection.
-
-    Args:
-        q_mw (float): Heat output in MW (positive = generation).
-    """
+    """Node-based heat injection (``H_G,i``). Takes positive magnitude; sign is internal."""
 
     def __init__(self, q_mw, **kwargs) -> None:
         if isinstance(q_mw, (int, float)) and q_mw < 0:
@@ -300,18 +176,7 @@ class HeatGenerator(NoVarChildModel):
 
 @model
 class HeatLoad(NoVarChildModel):
-    """Node-based heat withdrawal (``H_L,i``) for district-heating formulations.
-
-    Draws heat at a junction without routing it through a heat-exchanger
-    branch.  Integrated into both the default mass-weighted nodal heat balance
-    (:meth:`~monee.model.node.Junction.calc_signed_heat_flow`) and the
-    McCormick-DHS nodal balance
-    (:class:`~monee.model.formulation.mccormick.water.MccDHSNodeFormulation`).
-    Load convention: positive ``q_mw_heat`` represents consumption.
-
-    Args:
-        q_mw (float): Heat demand in MW (positive = consumption).
-    """
+    """Node-based heat withdrawal (``H_L,i``). Positive q_mw = consumption."""
 
     def __init__(self, q_mw, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -320,18 +185,7 @@ class HeatLoad(NoVarChildModel):
 
 @model
 class Sink(NoVarChildModel):
-    """
-    Fixed-setpoint mass-flow sink (withdrawal) for gas or water networks.
-
-    Follows the load convention: positive values represent *consumption*.
-    Unlike :class:`Source`, the constructor does **not** negate the supplied
-    value::
-
-        Sink(mass_flow=2.0)  →  self.mass_flow = +2.0
-
-    Args:
-        mass_flow (float): Mass flow rate in kg/s to withdraw (positive = consumption).
-    """
+    """Fixed-setpoint mass-flow sink. Positive = consumption (load convention)."""
 
     def __init__(self, mass_flow, **kwargs) -> None:
         super().__init__(**kwargs)

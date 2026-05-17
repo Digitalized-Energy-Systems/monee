@@ -135,11 +135,9 @@ class GEKKOSolver(SolverInterface):
         m.solver_options = DEFAULT_SOLVER_OPTIONS
         network = input_network.copy()
 
-        # Phase 1: add Var placeholders for all NetworkAspect extensions
         for ext in network.extensions:
             ext.prepare(network)
 
-        # detect islanding config for topology-aware pre-filtering
         from monee.model.extension.islanding.core import NetworkIslandingConfig
 
         islanding_config = next(
@@ -147,9 +145,8 @@ class GEKKOSolver(SolverInterface):
             None,
         )
 
-        # Compute ignored_nodes BEFORE _apply() so that controllable filters
-        # (e.g. controllable_demands) honouring component.ignored correctly
-        # exclude disconnected components.
+        # Compute ignored_nodes BEFORE _apply so controllable filters checking
+        # component.ignored correctly exclude disconnected components.
         ignored_nodes = set()
         if optimization_problem is None or exclude_unconnected_nodes:
             ignored_nodes = find_ignored_nodes(network, islanding_config)
@@ -180,7 +177,6 @@ class GEKKOSolver(SolverInterface):
             network,
             ignored_nodes,
         )
-        # Phase 1.5: let extensions mark nodes before equations are assembled.
         if step_state is not None:
             for ext in network.extensions:
                 ext.activate_timeseries(network, ignored_nodes, step_state=step_state)
@@ -207,8 +203,6 @@ class GEKKOSolver(SolverInterface):
                 step_state,
                 optimization_problem=optimization_problem,
             )
-            # Also collect inter-step equations from NetworkAspect extensions
-            # (e.g. LTC thermal-mass constraints that couple T[t] to T[t-1]).
             for ext in network.extensions:
                 m.Equations(
                     ext.inter_step_equations(network, ignored_nodes, step_state)
@@ -217,7 +211,6 @@ class GEKKOSolver(SolverInterface):
                     ext.inter_temporal_equations(network, ignored_nodes, step_state)
                 )
 
-        # Phase 2: add NetworkAspect extension equations after variable injection
         for ext in network.extensions:
             m.Equations(ext.equations(network, ignored_nodes))
 
@@ -239,8 +232,7 @@ class GEKKOSolver(SolverInterface):
                     width=0.4,
                 )
                 plt.savefig("debug-network.pdf")
-            # Best-effort: extract partial iterate so the next solve warm-starts
-            # from the last known point rather than constructor defaults.
+            # Best-effort warm-start handoff from the partial iterate.
             try:
                 withdraw_vars(
                     GEKKOSolver.withdraw_gekko_vars_attr,
@@ -383,7 +375,7 @@ class GEKKOSolver(SolverInterface):
     def process_equations_branches(
         self, m, network, branches, ignored_nodes, objs_exprs
     ):
-        # using spline instead of pwl as spline tends to outperform the gekko pwl
+        # spline outperforms GEKKO's native pwl
         pwl_impl = GekkoCubicSplineImpl(m)
         for branch in branches:
             if ignore_branch(branch, network, ignored_nodes):

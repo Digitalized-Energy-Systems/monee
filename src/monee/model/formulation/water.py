@@ -26,19 +26,10 @@ def make_nl_darcy_weisbach_pwl_network_formulation(
 ) -> NetworkFormulation:
     """Variable-friction Darcy-Weisbach via per-pipe PWL of ``φ(m)``.
 
-    Opt-in alternative to :data:`NL_DARCY_WEISBACH_NETWORK_FORMULATION`
-    for networks with significant laminar-regime operation (lightly
-    loaded pipes, low-flow conditions).  At ``Re < 2300`` the
-    asymptotic-friction shortcut used by
-    :class:`NLDarcyWeisbachBranchFormulation` under-estimates pressure
-    drop by 5–50× — this formulation captures the full Colebrook
-    friction.  See
-    :class:`monee.model.formulation.nonlinear.water.NLDarcyWeisbachPWLBranchFormulation`
-    for details and trade-offs.
-
-    HeatExchanger and PassiveHeatExchanger keep their default
-    formulations (the friction approximation only matters for the pipe
-    branches).
+    Opt-in alternative to :data:`NL_DARCY_WEISBACH_NETWORK_FORMULATION` for
+    laminar-heavy networks (Re < 2300); the default's asymptotic shortcut
+    under-estimates pressure drop there. HeatExchanger formulations are
+    unaffected.
     """
     return NetworkFormulation(
         branch_type_to_formulations={

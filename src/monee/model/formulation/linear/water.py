@@ -30,17 +30,12 @@ class LinearHeatExchangerFormulation(BranchFormulation):
         is_dynamic_mf = isinstance(branch.mass_flow_design_kgs, Var)
 
         if is_dynamic_mf:
-            # SubHE / dynamic case: mass_flow_design_kgs is a Var determined
-            # by the parent compound model (CHP, P2H, G2H).
+            # SubHE / dynamic: mass_flow_design_kgs is a Var set by the parent compound.
             mf_eq = branch.mass_flow_mag == branch.mass_flow_design_kgs
             mf_neg_eq = (
                 branch.mass_flow_neg == branch.mass_flow_design_kgs * branch.on_off
             )
         else:
-            # Fixed-design HE: scale mass flow with regulation so the junction
-            # mass balance stays feasible when generators are curtailed.
-            # In plain solves regulation=1 (float) -> identical to original.
-            # In optimization regulation is a Var(0..1) -> mass flow adapts.
             mf_eq = branch.mass_flow_mag == branch.mass_flow_design_kgs
             mf_neg_eq = (
                 branch.mass_flow_neg == branch.mass_flow_design_kgs * branch.on_off
@@ -51,11 +46,10 @@ class LinearHeatExchangerFormulation(BranchFormulation):
             branch.direction == 0,
             branch.mass_flow_pos == 0,
             mf_neg_eq,
-            # Temperature routing
             branch.t_in_pu == from_node_model.vars["t_pu"],
             branch.t_from_pu == from_node_model.vars["t_pu"],
             branch.t_to_pu == branch.t_out_pu,
-            # Energy balance in MW (cp/1e6 converts J/(kg·K) → MJ/(kg·K) = MW·s/(kg·K)).
+            # Energy balance in MW (cp/1e6 converts J/(kg·K) → MW·s/(kg·K)).
             branch.t_out_pu
             * (branch.mass_flow_design_kgs * cp_mw_per_kgs_K * grid.t_ref)
             == branch.t_in_pu

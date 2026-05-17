@@ -117,59 +117,8 @@ def create_multi_period_load_shedding_optimization_problem(
     check_t=True,
     debug=False,
 ):
-    """Create an optimization problem for multi-period minimal load shedding.
-
-    Minimises total unserved energy across all periods.  Each demand and
-    generator receives a ``regulation`` variable (0–1) that scales its
-    output.  The objective penalises deviation from full supply
-    (``regulation = 1``), weighted by component type.
-
-    Compared to :func:`create_load_shedding_optimization_problem`, this
-    variant adds an optional **regulation ramp-rate constraint** that
-    limits how fast load shedding can change between consecutive periods
-    (e.g. to model operator reaction time or equipment limits).
-
-    Args:
-        load_weight: Penalty weight for shedding demand-side components.
-        bounds_el: Voltage magnitude bounds ``(min, max)`` in pu.
-        bounds_heat: Temperature bounds ``(min, max)`` in pu.
-        bounds_gas: Pressure bounds ``(min, max)`` in pu.
-        bounds_lp: Line loading bounds ``(min, max)`` in pu.
-        ext_grid_el_bounds: Active power bounds for electric external grids.
-        ext_grid_gas_bounds: Mass-flow bounds for gas external grids.
-        regulation_ramp_limit: Maximum change of ``regulation`` between
-            consecutive periods.  ``None`` (default) means no ramp limit.
-            A value of e.g. ``0.3`` means regulation can change by at
-            most 0.3 per period (prevents abrupt load shedding swings).
-        use_ext_grid_bounds: Apply ext-grid power/flow constraints.
-        use_ext_grid_objective: Include ext-grid in controllable set.
-        check_lp: Enforce line-loading limits.
-        check_vm: Enforce voltage magnitude bounds.
-        check_pressure: Enforce gas pressure bounds.
-        check_t: Enforce temperature bounds.
-        debug: Enable debug logging for variable promotion.
-
-    Returns:
-        An :class:`OptimizationProblem` suitable for
-        :func:`~monee.simulation.multi_period.run_multi_period` or
-        :func:`~monee.simulation.multi_period.run_mpc`.
-
-    Example::
-
-        import monee
-        from monee.problem.load_shedding import (
-            create_multi_period_load_shedding_optimization_problem,
-        )
-
-        td = monee.TimeseriesData()
-        td.add_child_series(load_id, "p_mw", [2.0, 5.0, 3.0, 1.0])
-
-        prob = create_multi_period_load_shedding_optimization_problem(
-            regulation_ramp_limit=0.3,
-            ext_grid_el_bounds=(-3.0, 3.0),
-        )
-        result = monee.run_multi_period(net, td, steps=4, optimization_problem=prob)
-    """
+    """Multi-period minimal load-shedding problem. Adds an optional regulation
+    ramp-rate constraint vs the single-period :func:`create_load_shedding_optimization_problem`."""
     problem = OptimizationProblem(debug=debug)
     problem.controllable_demands(REGULATION_ATTR)
     problem.controllable_generators(REGULATION_ATTR)
@@ -188,11 +137,7 @@ def create_multi_period_load_shedding_optimization_problem(
     if check_pressure:
         problem.bounds(bounds_gas, lambda m, _: type(m) is Junction, ["pressure_pu"])
 
-    # --- Objective: minimise total unserved energy across all periods ---
-    # Use select() instead of with_models(controllables_link) because
-    # controllables_link references models from the last _apply() call,
-    # which in multi-period mode points to the last period's network copy
-    # rather than the current period being evaluated.
+    # Use select() — controllables_link points to the last-applied network copy.
     objectives = Objectives()
 
     _controllable_types = (
@@ -253,7 +198,6 @@ def create_multi_period_load_shedding_optimization_problem(
         calc_weight
     ).calculate(calculate_objective)
 
-    # --- Constraints ---
     constraints = Constraints()
     if use_ext_grid_bounds:
         constraints.select_types(ExtPowerGrid).equation(

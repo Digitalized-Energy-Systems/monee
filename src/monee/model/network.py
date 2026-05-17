@@ -112,12 +112,9 @@ class Network:
                 branch.active = active
         elif cls == Compound:
             compound: Compound = self.compound_by_id(id)
-            # Always propagate to subcomponents and the compound's own ``active``
-            # flag so ``ignore_compound``/``ignore_child``/``inject_vars`` see a
-            # fully deactivated compound.  ``set_active`` (when available) is
-            # *additional* state on the model — useful for compounds that need
-            # to zero out internal setpoints — but on its own it leaves
-            # subcomponent children injected with live Vars.
+            # Propagate to subcomponents and the compound's own ``active`` so
+            # ignore_*/inject_vars see a fully deactivated compound; model
+            # set_active alone wouldn't deactivate subcomponent children.
             for component in compound.subcomponents:
                 self._set_active(type(component), component.id, active)
             compound.active = active
@@ -187,12 +184,8 @@ class Network:
         return child_id in self._child_dict
 
     def remove_child(self, child_id):
-        # Drop the parent node's reference too; otherwise downstream
-        # code that walks ``node.child_ids`` (e.g.\ ``childs_by_ids``)
-        # raises ``KeyError`` when it tries to look up the now-absent
-        # child.  Failing that, ``replace_primary_generation`` on the
-        # MES generator silently leaves dangling ids that crash
-        # scenario builders downstream.
+        # Also drop the parent node's reference; otherwise childs_by_ids
+        # raises KeyError walking node.child_ids.
         child = self._child_dict.pop(child_id)
         node_id = getattr(child, "node_id", None)
         if node_id is not None and node_id in self._network_internal.nodes:
@@ -722,8 +715,8 @@ class Network:
         new._constraints = list(self._constraints)
         new._objectives = list(self._objectives)
         new._extensions = copy.deepcopy(self._extensions, memo)
-        # Compound-construction transients — proper deepcopy keeps internal
-        # references consistent in the unlikely case the copy lands mid-build.
+        # Compound-construction transients — deepcopy preserves consistency
+        # if the copy ever lands mid-build.
         new._Network__blacklist = copy.deepcopy(self._Network__blacklist, memo)
         new._Network__collected_components = copy.deepcopy(
             self._Network__collected_components, memo
@@ -734,9 +727,7 @@ class Network:
         # Default formulations are module-level singletons — share by reference.
         new._Network__default_formulation = dict(self._Network__default_formulation)
 
-        # Manually rebuild the MultiGraph: networkx generic deepcopy walks
-        # nested adjacency dicts and is dramatically slower than add_node /
-        # add_edge.
+        # Manual MultiGraph rebuild — networkx generic deepcopy is much slower.
         g = nx.MultiGraph()
         new._network_internal = g
         for node_id, data in self._network_internal.nodes(data=True):

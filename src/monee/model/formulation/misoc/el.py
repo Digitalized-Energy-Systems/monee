@@ -32,49 +32,27 @@ class MISOCPElectricityNodeFormulation(NodeFormulation):
 
 
 def _branch_tap(branch) -> float:
-    """Off-nominal turns ratio for a power branch (1.0 if absent or zero)."""
+    """Off-nominal turns ratio (1.0 if absent or zero)."""
     tap = getattr(branch, "tap", 1.0) or 1.0
     return float(tap)
 
 
 def _ell_physics_max(branch, w_max: float) -> float:
-    """Upper bound on per-unit squared current derived from voltage bounds alone.
-
-    With an ideal a:1 transformer in series with Z, the from-side voltage
-    seen by the impedance is V_i' = V_i / a.  From |I_ij| = |V_i' - V_j| / |Z|
-    and |V_i'|, |V_j| <= sqrt(W_max):
-        ell_ij <= (2*sqrt(W_max))^2 / |Z|^2 = 4*W_max / (r^2 + x^2).
-
-    The tap drops out because both endpoints are bounded by sqrt(W_max) on
-    their own per-unit base, so the tap-adjusted from-side voltage is also
-    bounded by sqrt(W_max) (the branch tap is normalised relative to the
-    base ratio).
-    """
+    """Per-unit |I|² upper bound from voltage bounds: ``4·W_max / |Z|²``."""
     return 4 * w_max / (branch.br_r**2 + branch.br_x**2)
 
 
 def _big_m(w_max: float) -> float:
-    """Compute a tight big-M bound from the voltage bound alone.
-
-    Substituting the physics-based current bound ell_max = 4*W_max/|Z|^2 into
-    the Cauchy-Schwarz result M = (sqrt(W_max) + |Z|*sqrt(ell_max))^2, the
-    impedance cancels and M = 9*W_max, independent of branch impedance and tap.
-    """
+    """Cauchy-Schwarz big-M; with ``ell_max = 4·W_max/|Z|²`` this collapses to 9·W_max."""
     return 9 * w_max
 
 
 class MISOCPElectricityBranchFormulation(BranchFormulation):
     def ensure_var(self, branch):
         branch.current_pu = Var(1, min=0)
-        # i_*_ka and loading_*_percent are not free decision variables under
-        # MISOCP — they are algebraically determined by ``current_pu`` (the
-        # per-unit |I|² SOC variable) and the bus voltage base.  Replace the
-        # base-model ``Var`` declarations with ``Intermediate`` so:
-        #   * the LP/MIP doesn't carry four unconstrained slack vars per
-        #     branch (a real correctness bug on top of cluttering the model);
-        #   * the post-solve sqrt-based conversion stays a Pyomo Expression
-        #     (sqrt is nonlinear; Gurobi's LP/SOC writer would reject it as
-        #     a hard constraint, but post-solve evaluation is fine).
+        # i_*_ka / loading_*_percent are derived from current_pu (|I|² SOC) post-solve.
+        # As Intermediates they don't leak into the LP as free Vars and the sqrt
+        # conversion stays a Python expression (Gurobi's LP writer rejects sqrt).
         branch.i_from_ka = Intermediate(0)
         branch.i_to_ka = Intermediate(0)
         branch.loading_from_percent = Intermediate(0)
@@ -89,21 +67,12 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         ell_phys = _ell_physics_max(branch, w_max)
         tap = _branch_tap(branch)
         sqrt_impl = kwargs["sqrt_impl"]
-        # Per-unit current base on each side:  I_base_ka = S_base / (√3 · V_base)
-        # For trafos the from-side primary current is the secondary current
-        # divided by the tap ratio (ideal a:1 transformer).  Lines have
-        # tap = 1.0 so both bases collapse to the same value.
+        # I_base_ka = S_base / (√3 · V_base); trafo primary divides by tap.
         I_base_from = grid.sn_mva / (SQRT_3 * from_node_model.base_kv) / tap
         I_base_to = grid.sn_mva / (SQRT_3 * to_node_model.base_kv)
         i_mag_pu = sqrt_impl(branch.current_pu)
-        # Stash the loading scale factor for LP-writable line-loading
-        # constraints.  Squaring ``loading = i/max_i_ka = √current_pu · I_base
-        # / max_i_ka`` gives ``loading² = current_pu · (I_base/max_i_ka)²``
-        # — linear in current_pu.  Problem code (load-shedding et al.) reads
-        # ``_misocp_loading_*_scale_squared`` to emit
-        # ``current_pu · scale² <= max_loading²`` instead of the
-        # sqrt-bearing ``loading_*_percent`` expression, which the LP writer
-        # would reject.  See :func:`monee.problem.utils.line_loading_limit`.
+        # loading² = current_pu · (I_base/max_i_ka)² is linear in current_pu.
+        # Used by line_loading_limit() instead of the sqrt-bearing form.
         branch._misocp_loading_from_scale_squared = (I_base_from / branch.max_i_ka) ** 2
         branch._misocp_loading_to_scale_squared = (I_base_to / branch.max_i_ka) ** 2
         return [
@@ -149,11 +118,8 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
                 branch.current_pu,
                 branch.br_x,
             ),
-            # |I_ka| = √current_pu · I_base_ka.  Same √current_pu on both
-            # sides — under the SOC relaxation ``current_pu`` represents the
-            # from-side magnitude; lossy branches see a slightly different
-            # to-side magnitude (off by r·ell, x·ell), but for diagnostic
-            # loading the from-side value is the conventional report.
+            # |I_ka| = √current_pu · I_base. current_pu is the from-side magnitude;
+            # the to-side report is approximate (off by r·ell, x·ell).
             IntermediateEq("i_from_ka", i_mag_pu * I_base_from),
             IntermediateEq("i_to_ka", i_mag_pu * I_base_to),
             IntermediateEq(

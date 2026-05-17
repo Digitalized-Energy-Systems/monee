@@ -63,21 +63,8 @@ _TABLE_CSS = (
 
 @dataclass
 class SolverResult:
-    """
-    The outcome of a single energy-flow or optimisation solve.
-
-    Attributes:
-        network: The solved network with all ``Var.value`` attributes updated
-            to the solution values.
-        dataframes: Per-component-type result tables, keyed by class name
-            (e.g. ``"Bus"``, ``"PowerLoad"``).  Each DataFrame has one row
-            per component instance and one column per model attribute.
-            Prefer :meth:`get` over direct dict access to avoid string-key typos.
-        objective: Value of the optimisation objective at the solution.
-            ``0.0`` for plain energy-flow (no optimisation problem).
-            ``None`` when per-period objectives are not meaningful (e.g.
-            from :meth:`MultiPeriodResult.get_period_result`).
-    """
+    """Outcome of a single solve. ``objective=0.0`` for plain energy flow;
+    ``None`` when not meaningful (e.g. ``MultiPeriodResult.get_period_result``)."""
 
     network: Network
     dataframes: dict[str, pandas.DataFrame]
@@ -92,44 +79,17 @@ class SolverResult:
         return self.network.as_result_dataframe_dict_str()
 
     def get(self, model_type) -> pandas.DataFrame:
-        """Return the result DataFrame for *model_type*.
-
-        Preferred over ``result.dataframes["ClassName"]`` — avoids string-key
-        typos and benefits from IDE autocomplete.
-
-        Args:
-            model_type: The model class (e.g. ``mm.PowerLoad``, ``mm.Bus``).
-
-        Returns:
-            The result :class:`pandas.DataFrame` for that component type, or an
-            empty DataFrame if no instances of that type exist in the network.
-
-        Example::
-
-            df = result.get(mm.PowerLoad)
-            print(df["p_mw"])
-        """
+        """Result DataFrame for *model_type* (typo-safe vs. dict access)."""
         return self.dataframes.get(model_type.__name__, pandas.DataFrame())
 
     def __getitem__(self, component_id) -> pandas.Series:
-        """Return the result row for the component with *component_id*.
-
-        Searches all component-type DataFrames and returns the matching row as
-        a :class:`pandas.Series`.  Raises :exc:`KeyError` if no component with
-        that id is found.
-
-        Example::
-
-            row = result[bus_id]
-            print(row["vm_pu"])
-        """
+        """Return the result row matching *component_id*. Raises KeyError if missing."""
         for df in self.dataframes.values():
             if "id" in df.columns:
                 try:
                     mask = df["id"] == component_id
                 except (ValueError, TypeError):
-                    # Tuple branch IDs can trigger a pandas broadcasting error
-                    # when the id column has a different dtype (e.g. int64 vs tuple).
+                    # Tuple branch IDs vs scalar id column triggers a broadcasting error.
                     mask = df["id"].apply(lambda x: x == component_id)
                 if mask.any():
                     return df[mask].iloc[0]
@@ -164,11 +124,7 @@ class SolverResult:
         return "\n".join(lines)
 
     def __str__(self) -> str:
-        """Full per-type table dump, one section per component class.
-
-        This is what ``print(result)`` renders.  Use ``repr(result)`` (or just
-        evaluate ``result`` in a REPL) for the compact one-line-per-type summary.
-        """
+        """Full per-type table dump (``print(result)``); ``repr`` gives the summary."""
         title = "SolverResult"
         if self.objective is not None and self.objective != 0.0:
             title += f"  (objective = {self.objective:.6g})"
@@ -226,28 +182,7 @@ class SolverResult:
         use_monee_positions: bool = False,
         write_to: str | None = None,
     ):
-        """Plot this result as an annotated interactive network graph.
-
-        Delegates to :func:`monee.visualization.plot_result`.  Requires
-        *plotly* (already a project dependency).
-
-        Args:
-            title: Figure title.  Defaults to ``"Network Result"``.
-            show_children: Show child components (loads, generators, …) in
-                parent-node hover text.  Default ``True``.
-            use_monee_positions: Use stored ``node.position`` coordinates
-                instead of automatic layout.
-            write_to: Optional path to export the figure (PDF / PNG / SVG).
-
-        Returns:
-            A :class:`plotly.graph_objects.Figure`.
-
-        Example::
-
-            result = solver.solve(network)
-            result.plot()          # display in Jupyter
-            result.plot(write_to="result.pdf")
-        """
+        """Plotly interactive network graph; delegates to :func:`plot_result`."""
         from monee.visualization.result_visualization import plot_result
 
         return plot_result(
@@ -260,38 +195,9 @@ class SolverResult:
 
 
 class SinglePeriodSolverProtocol:
-    """
-    Documents the interface a solver backend must expose to be usable as a
-    delegate inside :class:`~monee.simulation.multi_period.GekkoMultiPeriodSolver`
-    and :class:`~monee.simulation.multi_period.PyomoMultiPeriodSolver`.
-
-    Not enforced at runtime — it exists purely for documentation.  Both
-    :class:`GEKKOSolver` and :class:`PyomoSolver` satisfy this protocol through
-    their concrete implementations of the methods listed below.
-
-    Required methods
-    ----------------
-    ``inject_*_vars_attr`` (static)
-        Replace :class:`~monee.model.core.Var` attrs on a model with
-        backend-native variable objects.
-    ``withdraw_*_vars_attr`` (static)
-        Copy solved values from backend objects back to :class:`~monee.model.core.Var`.
-    ``init_branches``
-        Initialise branch model parameters before equation assembly.
-    ``process_equations_nodes_childs``
-        Build node balance and child equations for all non-ignored nodes.
-    ``process_equations_branches``
-        Build branch flow equations for all non-ignored branches.
-    ``process_equations_compounds``
-        Build compound equations for all non-ignored compounds.
-    ``process_oxf_components`` / ``process_internal_oxf_components``
-        Apply optimisation-problem objectives and constraints.
-    ``process_inter_step_equations``
-        Collect and register ``inter_step_equations`` from all models,
-        linking current-period variables to *prev_state*.
-    ``_add_equations``
-        Register a list of relational expressions with the backend model.
-    """
+    """Documents the contract a solver backend must expose to act as a delegate
+    inside :class:`GekkoMultiPeriodSolver` / :class:`PyomoMultiPeriodSolver`.
+    Not enforced at runtime."""
 
 
 class SolverInterface(ABC):
@@ -331,14 +237,8 @@ class SolverInterface(ABC):
 
     @staticmethod
     def mark_temporal_components(network, ignored_nodes: set) -> None:
-        """Set ``_temporal_active = True`` on every component model that has any
-        temporal method (``inter_temporal_equations``, ``inter_step_equations``,
-        or ``inter_period_equations``).
-
-        Called after ``activate_timeseries`` and before ``equations()`` so that
-        models can suppress static-only constraints (e.g. the linepack-pipe's
-        ``to_mass_flow == from_mass_flow``) when temporal coupling is active.
-        """
+        """Set ``_temporal_active`` on every model carrying a temporal method,
+        so static-only constraints can be suppressed when coupling is active."""
         _temporal_methods = frozenset(
             (
                 "inter_temporal_equations",
@@ -378,16 +278,8 @@ class SolverInterface(ABC):
         state,
         mode_method,
     ):
-        """Collect and register temporal equations for all active components.
-
-        Calls ``inter_temporal_equations`` (mode-agnostic) and *mode_method*
-        (either ``inter_step_equations`` or ``inter_period_equations``) on every
-        model and formulation that implements them.
-
-        Args:
-            mode_method: ``"inter_step_equations"`` (timeseries) or
-                ``"inter_period_equations"`` (multi-period).
-        """
+        """Register ``inter_temporal_equations`` and *mode_method* for every
+        model/formulation that implements them."""
         methods = ("inter_temporal_equations", mode_method)
         for node in nodes:
             if ignore_node(node, network, ignored_nodes):
@@ -462,9 +354,8 @@ class SolverInterface(ABC):
         optimization_problem=None,
         period_index=None,
     ):
-        """Collect timeseries inter-step equations (``inter_step_equations`` +
-        ``inter_temporal_equations``) for all active components, plus any
-        user-defined temporal constraints from the optimization problem."""
+        """Collect ``inter_step_equations`` + ``inter_temporal_equations`` plus
+        user temporal constraints for timeseries solves."""
         self._collect_temporal_eqs(
             solver_obj,
             network,
@@ -491,9 +382,8 @@ class SolverInterface(ABC):
         optimization_problem=None,
         period_index=None,
     ):
-        """Collect multi-period inter-period equations (``inter_period_equations`` +
-        ``inter_temporal_equations``) for all active components, plus any
-        user-defined temporal constraints from the optimization problem."""
+        """Collect ``inter_period_equations`` + ``inter_temporal_equations`` plus
+        user temporal constraints for multi-period solves."""
         self._collect_temporal_eqs(
             solver_obj,
             network,
@@ -535,7 +425,7 @@ def filter_intermediate_eqs(eqs):
 
 
 def inject_nans(target: GenericModel):
-    """Replace Var/Const fields on *target* with NaN placeholders (for ignored components)."""
+    """Replace Var/Const fields with NaN placeholders; zero regulation."""
     for key, value in target.__dict__.items():
         if isinstance(value, Const):
             setattr(target, key, Const(float("nan")))
@@ -545,18 +435,12 @@ def inject_nans(target: GenericModel):
                 key,
                 Var(float("nan"), max=value.max, min=value.min, name=value.name),
             )
-    # Ignored (disconnected) components receive no power: reflect this in regulation.
     if hasattr(target, "regulation") and not isinstance(target.regulation, Var):
         target.regulation = 0.0
 
 
 def mark_ignored_components(network, ignored_nodes):
-    """Pre-mark component.ignored for all components in ignored nodes/branches/compounds.
-
-    Call this *before* ``optimization_problem._apply()`` so that controllable
-    filters that check ``component.ignored`` (e.g. ``controllable_demands``)
-    correctly exclude disconnected components.
-    """
+    """Pre-mark ``component.ignored`` so ``optimization_problem._apply`` excludes them."""
     for branch in network.branches:
         if ignore_branch(branch, network, ignored_nodes):
             branch.ignored = True
@@ -571,12 +455,10 @@ def mark_ignored_components(network, ignored_nodes):
 
 
 def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
-    """
-    Traverse all network components and call *inject_fn* for each active one.
+    """Call ``inject_fn(model, component, category)`` on each active component;
+    ignored components get :func:`inject_nans` instead.
 
-    *inject_fn* has signature ``inject_fn(model, component, category)`` where
-    *category* is one of ``"branch"``, ``"node"``, ``"child"``, ``"compound"``.
-    Ignored components receive NaN placeholders via :func:`inject_nans` instead.
+    ``category`` ∈ {``branch``, ``node``, ``child``, ``compound``}.
     """
     for branch in branches:
         if ignore_branch(branch, network, ignored_nodes):
@@ -610,10 +492,7 @@ def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
 
 
 def withdraw_vars(withdraw_fn, nodes, branches, compounds, network):
-    """
-    Traverse all network components and call *withdraw_fn(model)* on each,
-    converting backend-specific variable objects back to :class:`Var` instances.
-    """
+    """Call ``withdraw_fn(model)`` on each component to materialise solved Vars."""
     for branch in branches:
         withdraw_fn(branch.model)
     for node in nodes:
@@ -625,14 +504,8 @@ def withdraw_vars(withdraw_fn, nodes, branches, compounds, network):
 
 
 def _copy_var_values(src, dst) -> None:
-    """Copy solved values from *src* to *dst* in place.
-
-    Both ``Var`` and ``Intermediate`` carry a ``.value`` slot that the solver
-    fills in.  Intermediates (e.g. ``Bus.vm_pu`` recovered from
-    ``vm_pu_squared``) must be propagated too, otherwise the user-facing
-    network keeps the constructor default and the solved value is silently
-    lost when the solver works on a deepcopy.
-    """
+    """Copy ``.value`` for Var/Intermediate from *src* to *dst*. Intermediates
+    must be propagated so e.g. derived ``vm_pu`` isn't silently lost."""
     for key, val in src.__dict__.items():
         if isinstance(val, (Var, Intermediate)):
             dst_attr = dst.__dict__.get(key)
@@ -641,12 +514,7 @@ def _copy_var_values(src, dst) -> None:
 
 
 def persist_solution(solved_copy: Network, original: Network) -> None:
-    """Propagate solved ``Var.value`` from *solved_copy* back to *original* in-place.
-
-    Called after every solve (successful or partial) so that the next call to
-    :func:`inject_vars` warm-starts from the previous solution rather than the
-    constructor defaults.
-    """
+    """Propagate solved values back so the next ``inject_vars`` warm-starts."""
     for src_node, dst_node in zip(solved_copy.nodes, original.nodes):
         _copy_var_values(src_node.model, dst_node.model)
         for src_child, dst_child in zip(
@@ -663,15 +531,7 @@ def persist_solution(solved_copy: Network, original: Network) -> None:
 def compute_bound_violations(
     nodes, branches, compounds, network, tol: float = 1e-6
 ) -> dict[str, float]:
-    """Return a dict of bound violations found in the current ``Var.value`` state.
-
-    Keys are ``"<ComponentType>.<id>.<attr>"``; values are the magnitude of the
-    violation (always positive).  Only variables whose ``Var.value`` is a finite
-    number and outside ``[min, max]`` by more than *tol* are reported.
-
-    This is solver-agnostic: it operates on the ``Var`` objects after
-    ``withdraw_vars`` has run (or after ``inject_nans`` for ignored components).
-    """
+    """``{"<Type>.<id>.<attr>": magnitude}`` for Var.value violations beyond *tol*."""
     violations: dict[str, float] = {}
 
     def _check(model, label: str) -> None:
@@ -733,8 +593,7 @@ def ignore_compound(compound, ignored_nodes):
 
 def generate_real_topology(nx_net):
     net_copy = nx_net.copy()
-    # Iterate with keys=True so we can remove the exact edge (not always key 0)
-    # when there are parallel branches between the same pair of nodes.
+    # keys=True targets the exact parallel edge — not always key 0.
     for u, v, key, data in nx_net.edges(keys=True, data=True):
         branch = data["internal_branch"]
         if not branch.active or (
@@ -767,30 +626,18 @@ def remove_cps(network: Network):
 
 
 def find_ignored_nodes(network: Network, islanding_config=None):
-    """
-    Return the set of node IDs that should be excluded from the solve.
+    """Return node IDs to exclude from the solve.
 
-    When *islanding_config* is ``None`` (default), the original behaviour is
-    preserved: only *active* branches are considered and only components that
-    contain an ``ExtPowerGrid`` or ``ExtHydrGrid`` child are kept.
-
-    When *islanding_config* is provided, the function switches to a more
-    permissive pre-filter:
-
-    * **All** branches are included in the topology (even inactive / on_off=0
-      ones), because a backup line that is currently off may be switched on
-      during the solve.  Only nodes with **no path at all** (through any branch)
-      to a grid-forming node are pre-removed.
-    * Both ``ExtPowerGrid`` / ``ExtHydrGrid`` **and** any child that carries
-      ``GridFormingMixin`` are treated as "leading" for the carriers that have
-      islanding enabled.
+    Default: active topology, only ExtPowerGrid/ExtHydrGrid children are
+    "leading". With *islanding_config*: full topology (backup lines included)
+    and any :class:`GridFormingMixin` child counts as leading for an
+    islanding-enabled carrier.
     """
     ignored_nodes = set()
     without_cps = network.copy()
     remove_cps(without_cps)
 
     if islanding_config is not None:
-        # Full topology: every branch is a potential connectivity path.
         topology = without_cps._network_internal.copy()
     else:
         topology = generate_real_topology(without_cps._network_internal)
@@ -804,13 +651,10 @@ def find_ignored_nodes(network: Network, islanding_config=None):
                 child = without_cps.child_by_id(child_id)
                 if not child.active:
                     continue
-                # Original check: ExtPowerGrid / ExtHydrGrid are always leading.
                 if isinstance(child.model, ExtPowerGrid | ExtHydrGrid):
                     component_leading = True
                     break
-                # Islanding extension: any GridFormingMixin child is leading for
-                # the carrier of its node, provided that carrier has islanding
-                # enabled.
+                # With islanding enabled, any GridFormingMixin child also leads.
                 if islanding_config is not None and isinstance(
                     child.model, GridFormingMixin
                 ):
@@ -839,34 +683,14 @@ def find_ignored_nodes(network: Network, islanding_config=None):
         if not component_leading:
             ignored_nodes.update(component)
 
-    # Leaf-stub pruning.  After deactivating a pipe in a tree-shaped carrier
-    # (e.g. supply DHS), the connected-components pass correctly removes the
-    # downstream subtree (no path back to the leading source) but leaves the
-    # *upstream* dead-end junction in place — it can still reach the source via
-    # its remaining branch, but has no consumer past it.  The supply pump then
-    # has nowhere to send flow, and the LP becomes infeasible despite the
-    # load-shedding objective (which can only shed via a child's ``regulation``
-    # variable, and stub junctions have none).
-    #
-    # Rule: a node is a dangling stub iff it has *no active children* and
-    # degree ≤ 1 in the remaining (non-ignored) active topology.  Removing one
-    # stub can expose its parent as a new stub, so iterate to fixed point.
-    #
-    # Skipped under islanding because ``topology`` there includes inactive
-    # backup branches, so degree-in-topology overstates active connectivity
-    # and pruning would be too aggressive.
+    # Leaf-stub pruning: a node with no active children and degree ≤ 1 in the
+    # remaining active topology is a dead-end pump-target (infeasible LP).
+    # Iterate to fixed point. Skipped under islanding (topology there includes
+    # inactive backup branches, so degree overstates connectivity).
     if islanding_config is None:
-        # Compound *port* children (e.g. ``SubHG`` attached to the heat-supply
-        # node by ``CHPHG``) carry no consumer demand of their own — their
-        # variables are driven by the parent compound's control-node equations.
-        # They must NOT keep an otherwise-isolated junction alive: when the
-        # only outlet pipe of such a junction dies, the compound's heat
-        # injection equations end up writing into a degree-1 leaf that the
-        # McCormick-DHS balance cannot satisfy (LP infeasible).
-        # NB: ``without_cps`` has had its compound objects removed by
-        # ``remove_cps`` but the *port children* (e.g. SubHG) live on as
-        # regular ``Child`` entries — read the compound list from the
-        # original ``network`` so we can still identify them.
+        # Compound port children (e.g. SubHG on a CHPHG heat node) carry no
+        # demand of their own; they must not keep an otherwise-isolated
+        # junction alive.
         compound_port_child_ids = {
             sub.id
             for compound in network.compounds

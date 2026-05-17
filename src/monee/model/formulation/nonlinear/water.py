@@ -9,12 +9,8 @@ from ..core import BranchFormulation, NodeFormulation
 
 
 def _pin_friction_const(model):
-    """Pin ``model.friction`` to the asymptotic turbulent value.
-
-    See ``phys.core.hydraulics.friction_at_high_re`` for the rationale and
-    accuracy caveats.  Also pins ``model.reynolds`` to a Const so the
-    Reynolds equation and the friction PWL can both be dropped.
-    """
+    """Pin ``friction`` to the turbulent asymptote and ``reynolds`` to 0,
+    so the Reynolds eq and friction PWL can be dropped."""
     f_const = hydraulicsmodel.friction_at_high_re(model.diameter_m, model.roughness)
     model.friction = Const(f_const)
     model.reynolds = Const(0.0)
@@ -41,7 +37,7 @@ class NLDarcyWeisbachNodeFormulation(NodeFormulation):
 
 
 class NLDarcyWeisbachBranchFormulation(BranchFormulation):
-    # See ``nonlinear/gas.py`` ``NLWeymouthBranchFormulation`` for rationale.
+    # See NLWeymouthBranchFormulation for rationale.
     EPIGRAPH_TIGHTENING_EPS = 1e-5
 
     def ensure_var(self, model):
@@ -71,10 +67,8 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
             / math.log(pipe_outside_r / pipe_inside_r)
         ) / ohfmodel.SPECIFIC_HEAT_CAP_WATER
 
-        # Per-pipe big-M tightening: the physical max flow is bounded by the
-        # pipe cross-section times the velocity cap, which is typically far
-        # below the grid-wide ``f_max``.  Using the tighter value shrinks
-        # Gurobi's LP relaxation gap and speeds up the direction/on_off B&B.
+        # Per-pipe big-M tightening via π/4·D²·ρ·v_max — usually well below
+        # f_max; tighter big-M shrinks the LP relaxation gap.
         f_max_local = min(
             grid.f_max,
             hydraulicsmodel.calc_max_mass_flow(
@@ -82,12 +76,9 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
             ),
         )
 
-        # Unidirectional pipes pin direction = 0 (forward flow from_node →
-        # to_node).  This eliminates the direction binary from the MIP tree
-        # and collapses the temperature routing to the from-node as the inlet,
-        # which is the common case for district-heating supply/return pipes.
+        # Unidirectional pipes pin direction=0 below, eliminating that binary.
         eqs = [
-            # Epigraph relaxation kept tight by the ε term in :meth:`minimize`.
+            # Epigraph relaxation kept tight by the ε term in minimize().
             branch.mass_flow_pos * branch.mass_flow_pos <= branch.mass_flow_pos_squared,
             branch.mass_flow_neg * branch.mass_flow_neg <= branch.mass_flow_neg_squared,
             branch.mass_flow_pos <= f_max_local * branch.direction,
@@ -97,7 +88,7 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
             branch.mass_flow_mag <= f_max_local,
             branch.mass_flow_pos_squared <= f_max_local**2 * branch.on_off,
             branch.mass_flow_neg_squared <= f_max_local**2 * branch.on_off,
-            # note that the density is not temperature dependent modeled
+            # density is not modelled as temperature-dependent
             owfmodel.darcy_weisbach_equation(
                 from_node_model.vars["pressure_pu"],
                 to_node_model.vars["pressure_pu"],
@@ -133,23 +124,12 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
 
 
 class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
-    """Variable-friction Darcy-Weisbach via a single PWL of φ(m) = friction(Re(m))·m².
+    """Variable-friction Darcy-Weisbach via a PWL of φ(m) = friction(Re(m))·m².
 
-    Opt-in alternative to :class:`NLDarcyWeisbachBranchFormulation` (which
-    pins friction to the high-Reynolds asymptote).  Use this when you
-    need accurate pressure drops in the **laminar regime** — for water
-    distribution that's a real concern: ~30 % of pipes operate at
-    ``Re < 2300`` on simbench LV-rural3 at design, where the asymptotic
-    friction under-estimates pressure drop by a factor of 5–50×.
-
-    See :class:`monee.model.formulation.nonlinear.gas.NLWeymouthPWLBranchFormulation`
-    for the full rationale of the PWL trick.  As with that class, two
-    PWLs (one per flow direction) preserve bidirectional flow gated by
-    the ``direction`` binary.
-
-    Temperature-routing and ``mass_flow_mag``/``alpha`` constraints are
-    kept identical to :class:`NLDarcyWeisbachBranchFormulation` — they
-    don't involve the friction bilinear.
+    Opt-in alternative to :class:`NLDarcyWeisbachBranchFormulation` for
+    laminar-heavy networks (Re < 2300) where the turbulent asymptote
+    under-estimates pressure drop by 5–50×. Two PWLs (one per direction)
+    preserve bidirectional flow gated by ``direction``.
     """
 
     def __init__(self, n_breakpoints: int = 12):
@@ -161,12 +141,9 @@ class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
         model.mass_flow_mag = Var(1, min=0, name="mass_flow_mag")
         model.alpha = Var(0.01, min=0, max=1, name="alpha")
         model.t_inc = Var(1, min=-2, max=2, name="temperature_increase")
-        # φ aux Vars: friction · m² per flow direction.  Two PWLs let
-        # the original direction binary keep its role of selecting which
-        # side of the pipe is active.
+        # φ = friction · m², per flow direction; replaces the squared-mf Vars.
         model.phi_pwl_pos = Var(0, min=0, name="phi_pwl_pos")
         model.phi_pwl_neg = Var(0, min=0, name="phi_pwl_neg")
-        # Squared-mass-flow Vars unused — φ replaces them.
         model.mass_flow_pos_squared = Const(0.0)
         model.mass_flow_neg_squared = Const(0.0)
         model.reynolds = Const(0.0)
@@ -192,12 +169,11 @@ class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
             ),
         )
 
-        # Pyomo Piecewise requires both ends of the x-Var to be bounded.
+        # Pyomo Piecewise requires bounded x.
         branch.mass_flow_pos.setub(m_max * 1.001)
         branch.mass_flow_neg.setub(m_max * 1.001)
 
-        # Build two φ(m) PWLs (one per direction).  0-anchor on the PWL
-        # ensures the inactive side's φ collapses to 0.
+        # Two φ(m) PWLs; 0-anchor collapses the inactive side's φ to 0.
         xs, ys = hydraulicsmodel.phi_pwl_breakpoints(
             branch.diameter_m,
             branch.roughness,
@@ -219,15 +195,13 @@ class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
             ys=ys,
         )
 
-        # Darcy-Weisbach pressure drop with φ replacing friction · m²:
+        # Pressure drop with φ replacing friction·m²:
         #   (p_i − p_j) · pressure_ref · on_off == K · -(φ_pos − φ_neg)
-        # matching ``owfmodel.darcy_weisbach_equation``'s sign convention.
         K = branch.length_m / (
             2.0 * grid.fluid_density * branch._pipe_area**2 * branch.diameter_m
         )
 
         return [
-            # Direction gating (matches the original Darcy formulation).
             branch.mass_flow_pos <= m_max * branch.direction,
             branch.mass_flow_neg <= m_max * (1 - branch.direction),
             branch.mass_flow_pos <= m_max * branch.on_off,
@@ -238,7 +212,6 @@ class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
             * grid.pressure_ref
             * branch.on_off
             == K * (branch.phi_pwl_neg - branch.phi_pwl_pos),
-            # Temperature routing — original direction-dependent form.
             branch.alpha * (branch.mass_flow_mag + UA_C) == branch.mass_flow_mag,
             branch.t_out_pu
             == branch.temperature_ext_k / grid.t_ref
@@ -256,18 +229,9 @@ class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
 
 
 class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
-    """
-    Passive heat-exchanger formulation based on Darcy-Weisbach hydraulics.
-
-    The network hydraulics determine the mass flow freely (no prescribed design
-    flow).  Given the fixed heat-power ``q_w`` stored on the branch model, the
-    formulation computes the resulting temperature increase (or decrease) via
-
-        mass_flow_mag * t_inc = -q_w / (cp * t_ref)
-
-    so that the outlet temperature rises (or falls) proportionally.  Pressure
-    drop is calculated the same way as for a plain water pipe.
-    """
+    """Passive HE: free mass flow, fixed q_mw. ``mass_flow_mag * t_inc =
+    -q_w / (cp · t_ref)`` sets the outlet temperature change. Pressure drop
+    follows the plain water-pipe form."""
 
     def ensure_var(self, model):
         model.t_in_pu = Var(1, min=0, max=2, name="t_in_pu")
@@ -288,7 +252,7 @@ class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
         )
 
         return [
-            # Epigraph relaxation kept tight by the ε term in :meth:`minimize`.
+            # Epigraph relaxation kept tight by the ε term in minimize().
             branch.mass_flow_pos * branch.mass_flow_pos <= branch.mass_flow_pos_squared,
             branch.mass_flow_neg * branch.mass_flow_neg <= branch.mass_flow_neg_squared,
             branch.mass_flow_pos <= f_max_local * branch.direction,

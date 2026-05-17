@@ -12,8 +12,6 @@ from monee.model import (
     Network,
     Var,
 )
-
-# detect islanding config for topology-aware pre-filtering
 from monee.model.extension.islanding.core import NetworkIslandingConfig
 from monee.problem.core import OptimizationProblem
 from monee.simulation.step_state import StepState
@@ -39,27 +37,11 @@ _log = logging.getLogger(__name__)
 
 DEFAULT_SOLVER_OPTIONS = {}
 
-# Per-solver defaults applied on top of ``DEFAULT_SOLVER_OPTIONS``.  Tuned
-# for the McCormick-DHS + MISOCP electrical formulation:
-#   ``ScaleFlag=2``  — most aggressive geometric scaling, useful even with a
-#                      well-conditioned matrix because the SOC and bilinear
-#                      blocks still benefit.
-#   ``MIPFocus=2``   — focus on proving optimality, not finding incumbents.
-#                      For the multi-energy load-shedding problem the LP
-#                      root bound is already at the optimum (gap ~0.001 %),
-#                      so the solver's job is to *close the gap*, not to
-#                      discover an incumbent.
-#   ``MIPGap=1e-3``  — 0.1 % relative gap.  At MW objective scale this is
-#                      ~kW precision, which already exceeds the model's
-#                      physical accuracy.  The default 1e-4 spends most of
-#                      B&B proving an extra digit nobody can use.
-#
-# ``NumericFocus`` is intentionally left at default (0).  It was useful while
-# the matrix range spanned 1e-6…1e+7 (Reynolds PWL breakpoints + pressure_pa
-# coefficients), but once those were rescaled the matrix range collapsed to
-# ~1e-6…4e+2 and the extra numerical conservatism became net-negative
-# (Linear-HX measured ~3× slower with NumericFocus=2 once the matrix was
-# fixed).
+# Gurobi defaults tuned for McCormick-DHS + MISOCP electrical:
+#   ScaleFlag=2 — aggressive geometric scaling for the SOC/bilinear blocks;
+#   MIPFocus=2  — close the gap (the LP root bound is already at the optimum);
+#   MIPGap=1e-3 — ~kW precision at MW scale (default 1e-4 wastes B&B).
+# NumericFocus stays at 0: was net-negative once Reynolds/pressure_pa scaling fixed.
 PER_SOLVER_OPTIONS = {
     "gurobi": {
         "ScaleFlag": 2,
@@ -100,19 +82,10 @@ class PyomoPWLImpl:
 
 
 def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
-    """Classify a Pyomo solve outcome and emit appropriate logging.
+    """Map a Pyomo solve outcome to ``(success, report)``.
 
-    Policy:
-      - ``status == ok``: silent, ``success=True``, no report.
-      - ``termination_condition == infeasible``: real failure.  Emit an
-        ``ERROR`` with a full :func:`diagnose_infeasibility` report
-        including the Minimal Infeasible Subsystem so the model can be
-        debugged after the fact.
-      - any other non-ok status (typical for Gurobi when it stops on
-        time/node/gap limits with a feasible incumbent): emit a single
-        ``WARNING`` carrying the termination condition and treat the
-        solve as successful — the witness solution is still valid and
-        downstream consumers can use it.
+    OK → silent; infeasible → error + MIS report; other non-OK (limits with a
+    feasible incumbent) → warning, treated as success.
     """
     status = result.solver.status
     tc = result.solver.termination_condition
@@ -143,40 +116,23 @@ def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
 
 
 class PyomoSolver(SolverInterface):
-    """Pyomo-backed solver.
-
-    Args:
-        solver_name: Default Pyomo solver name (e.g. ``"scip"``, ``"gurobi"``,
-            ``"ipopt"``).  Can be overridden per-solve via the ``solver_name``
-            kwarg of :meth:`solve`.
-    """
+    """Pyomo-backed solver. ``solver_name`` is overridable per :meth:`solve`."""
 
     def __init__(self, solver_name: str = "scip"):
         self._solver_name = solver_name
-
-    # --------- Injection / Withdrawal ---------
 
     @staticmethod
     def inject_pyomo_vars_attr(
         pm: pyo.ConcreteModel, target: GenericModel, prefix: str
     ):
-        """Replace Var/Const fields on `target` with Pyomo Var / numeric constants.
-
-        ``initialize`` is clamped to the current ``[min, max]`` bounds before
-        being handed to Pyomo.  The previous solve's stored value can fall
-        outside the *current* bounds when an :class:`OptimizationProblem`
-        applies a tighter range (e.g. ``bounds_heat=(0.8, 1.15)`` after a
-        prior call solved with the intrinsic ``[0, 2]`` Var range).  Clamping
-        keeps the initial guess feasible and suppresses W1002.
-        """
+        """Replace Var/Const with Pyomo Var / numeric. Clamps stale ``initialize``
+        into ``[min, max]`` (suppresses W1002 when bounds tightened since last solve)."""
         import math
 
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
                 init = value.value
-                # Drop NaN init silently; otherwise Pyomo writes the NaN
-                # into the gurobi warmstart file and the solver aborts
-                # with ``Element N of a double array is Nan``.
+                # NaN survives into Gurobi's warmstart file and crashes the solve.
                 if init is not None and isinstance(init, float) and math.isnan(init):
                     init = None
                 if init is not None:
@@ -194,35 +150,14 @@ class PyomoSolver(SolverInterface):
             elif type(value) is Const:
                 setattr(target, key, float(value.value))
 
-    # Tolerance for snapping near-bound values back into bounds during
-    # withdrawal.  Solver outputs commonly carry sub-epsilon noise (e.g.
-    # ``-1.4e-16`` for a Var with bound ``[0, None]``).  Re-injecting that
-    # noise as ``initialize`` for the next solve triggers W1002 even though
-    # the value is numerically zero.
+    # Snap-to-bound tolerance; sub-epsilon noise re-injected as ``initialize``
+    # otherwise triggers W1002.
     _BOUND_SNAP_TOL = 1e-9
 
     @staticmethod
     def withdraw_pyomo_vars_attr(target: GenericModel):
-        """Convert Pyomo Var values back into Var objects.
-
-        Sanitises four kinds of noise the next ``inject_pyomo_vars_attr``
-        would otherwise pass to Pyomo as ``initialize``:
-
-        - **Integer flag lost** → preserves ``integer=value.is_integer()`` and
-          snaps near-integer floats to ``int(round(val))``.  Without this,
-          relaxed values like ``1.14e-6`` re-enter as the initial guess for a
-          fresh ``pyo.Var(domain=Integers)`` and trigger W1001
-          (``not in domain Integers``).
-        - **Bound noise** → snaps continuous values within
-          ``_BOUND_SNAP_TOL`` of a bound to the bound itself, suppressing
-          W1002 (``outside the bounds``) caused by sub-machine-epsilon drift.
-        - **Missing value** → falls back to ``0`` when the solver failed and
-          ``pyo.value`` is unavailable, so withdrawal cannot raise.
-        - **NaN value** → also falls back to ``0``.  Gurobi rejects
-          warmstart files containing ``nan`` (``GurobiError: Element N of
-          a double array is Nan``), so any NaN that survived an
-          infeasible solve must be sanitised before re-injection.
-        """
+        """Pyomo Var → :class:`Var`. Restores ``integer``, snaps bound-noise to
+        bounds, replaces NaN/None with 0 so the next solve's warmstart survives."""
         import math
 
         for key, value in target.__dict__.items():
@@ -296,17 +231,11 @@ class PyomoSolver(SolverInterface):
                 else intermediate_eq.eq
             )
 
-            # If the target attribute is not "Intermediate" wrapper, force equality:
             if type(attr_val) is Intermediate:
-                # Create a Pyomo Expression and attach it
                 e = pyo.Expression(expr=eq)
-
-                # Put on pm for uniqueness + easy value extraction
                 name = f"expr__{id(model_obj)}__{intermediate_eq.attr}"
                 setattr(pm, name, e)
                 setattr(model_obj, intermediate_eq.attr, e)
-
-    # --------- Core solve ---------
 
     def solve(
         self,
@@ -321,16 +250,12 @@ class PyomoSolver(SolverInterface):
             solver_name = self._solver_name
         pm = pyo.ConcreteModel()
         pm.cons = pyo.ConstraintList()
-        # Two parallel objective buckets for lexicographic mode.  Both
-        # are summed for the legacy single-objective solve; in lex mode
-        # ``user_obj_exprs`` is optimised first and ``aux_obj_exprs``
-        # second under a cap on the phase-1 optimum.
-        pm.user_obj_exprs = []  # OptimizationProblem.objectives / Network.objectives
-        pm.aux_obj_exprs = []  # formulation-level minimize() tightening terms
+        # Two buckets for lex mode (single sum in legacy mode).
+        pm.user_obj_exprs = []  # user objectives
+        pm.aux_obj_exprs = []  # formulation minimize() tightening terms
 
         network = input_network.copy()
 
-        # Phase 1: add Var placeholders for all NetworkAspect extensions
         for ext in network.extensions:
             ext.prepare(network)
 
@@ -339,9 +264,8 @@ class PyomoSolver(SolverInterface):
             None,
         )
 
-        # Compute ignored_nodes BEFORE _apply() so that controllable filters
-        # (e.g. controllable_demands) honouring component.ignored correctly
-        # exclude disconnected components.
+        # ignored_nodes computed before _apply so controllable filters checking
+        # component.ignored exclude disconnected components.
         ignored_nodes = set()
         if optimization_problem is None or exclude_unconnected_nodes:
             ignored_nodes = find_ignored_nodes(network, islanding_config)
@@ -362,7 +286,6 @@ class PyomoSolver(SolverInterface):
         branches = network.branches
         compounds = network.compounds
 
-        # inject vars
         inject_vars(
             lambda model, comp, cat: PyomoSolver.inject_pyomo_vars_attr(
                 pm, model, prefix=f"{cat}_{comp.id}"
@@ -374,21 +297,17 @@ class PyomoSolver(SolverInterface):
             ignored_nodes,
         )
 
-        # Phase 1.5: let extensions mark nodes before equations are assembled.
         if step_state is not None:
             for ext in network.extensions:
                 ext.activate_timeseries(network, ignored_nodes, step_state=step_state)
             self.mark_temporal_components(network, ignored_nodes)
 
-        # init branches
         self.init_branches(branches)
 
-        # build constraints & objectives
         self.process_equations_nodes_childs(pm, network, nodes, ignored_nodes)
         self.process_equations_branches(pm, network, branches, ignored_nodes)
         self.process_equations_compounds(pm, network, compounds, ignored_nodes)
 
-        # OXF components
         if optimization_problem is not None:
             self.process_oxf_components(pm, network, optimization_problem)
         else:
@@ -405,7 +324,6 @@ class PyomoSolver(SolverInterface):
                 step_state,
                 optimization_problem=optimization_problem,
             )
-            # Also collect inter-step equations from NetworkAspect extensions.
             for ext in network.extensions:
                 self._add_equations(
                     pm, ext.inter_step_equations(network, ignored_nodes, step_state)
@@ -414,7 +332,6 @@ class PyomoSolver(SolverInterface):
                     pm, ext.inter_temporal_equations(network, ignored_nodes, step_state)
                 )
 
-        # Phase 2: add NetworkAspect extension equations after variable injection
         for ext in network.extensions:
             self._add_equations(pm, ext.equations(network, ignored_nodes))
 
@@ -440,7 +357,6 @@ class PyomoSolver(SolverInterface):
                 pm, solver, solver_name, solve_kwargs
             )
         else:
-            # Legacy single-objective: sum of all collected expressions.
             pm.obj = pyo.Objective(
                 expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
                 sense=pyo.minimize,
@@ -453,19 +369,14 @@ class PyomoSolver(SolverInterface):
                 phase_label="Pyomo solve",
             )
 
-        # pull values back into your objects
         withdraw_vars(
             PyomoSolver.withdraw_pyomo_vars_attr, nodes, branches, compounds, network
         )
         persist_solution(network, input_network)
         violations = compute_bound_violations(nodes, branches, compounds, network)
 
-        # Objective value.  ``pyo.value`` raises for any Var the solver
-        # left unset (e.g. McCormick auxiliaries on a freshly-activated
-        # branch the previous solve never touched).  Fall back to NaN —
-        # the SolverResult.success flag already reports the real outcome
-        # via ``status==ok``, and downstream consumers only treat
-        # ``obj_val`` as informational.
+        # NaN fallback: pyo.value raises on unset Vars (e.g. McCormick aux on a
+        # freshly-activated branch); SolverResult.success is the real outcome.
         obj_val = pyo.value(pm.obj, exception=False)
         if obj_val is None:
             obj_val = float("nan")
@@ -481,37 +392,21 @@ class PyomoSolver(SolverInterface):
             solver_result.infeasibility_report = report
         return solver_result
 
-    # --------- Lexicographic two-phase solve ---------
-
-    # Default cap tolerance: relative ε on the phase-1 optimum.  For
-    # MIPs the solver's MIPGap dominates; ``_lex_cap_slack`` adds it on
-    # top so the phase-2 feasible region always contains phase-1's
-    # optimum, even after relative-gap rounding.
+    # Slack added on top of solver MIPGap so the phase-2 cap never excludes
+    # a phase-1 incumbent the solver accepted within tolerance.
     _LEX_REL_TOL = 1e-6
     _LEX_ABS_TOL = 1e-9
 
     @classmethod
     def _lex_cap_slack(cls, s_star: float, solver_options: dict) -> float:
-        """Slack to add to the phase-1 optimum when capping in phase 2.
-
-        Combines a small numerical tolerance with the solver's MIPGap so
-        the cap never excludes a phase-1 incumbent that the solver
-        accepted within its declared optimality tolerance.
-        """
         rel_gap = float(solver_options.get("MIPGap", 0.0) or 0.0)
         rel = max(rel_gap, cls._LEX_REL_TOL)
         return cls._LEX_ABS_TOL + rel * max(1.0, abs(s_star))
 
     def _solve_lexicographic(self, pm, solver, solver_name, solve_kwargs):
-        """Run a two-phase lexicographic solve.
-
-        Phase 1 minimises ``sum(pm.user_obj_exprs)`` only.  Phase 2
-        minimises ``sum(pm.aux_obj_exprs)`` with the constraint
-        ``sum(user) <= S* + slack`` pinning the phase-1 optimum.  After
-        both phases ``pm.obj`` is attached (deactivated) so the rest of
-        the pipeline can still call ``pyo.value(pm.obj)`` on the
-        combined value.
-        """
+        """Two-phase lex: minimise ``Σ user`` then ``Σ aux`` under
+        ``Σ user ≤ S* + slack``. Combined ``pm.obj`` attached (deactivated)
+        for backwards-compatible ``pyo.value(pm.obj)``."""
         pm.obj_user = pyo.Objective(expr=sum(pm.user_obj_exprs), sense=pyo.minimize)
         pm.obj_aux = pyo.Objective(expr=sum(pm.aux_obj_exprs), sense=pyo.minimize)
         pm.obj_aux.deactivate()
@@ -525,7 +420,6 @@ class PyomoSolver(SolverInterface):
             phase_label="Lexicographic phase 1",
         )
         if not success:
-            # Attach a combined Objective for downstream pyo.value(pm.obj).
             pm.obj = pyo.Objective(
                 expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
                 sense=pyo.minimize,
@@ -537,7 +431,6 @@ class PyomoSolver(SolverInterface):
         if s_star is None:
             s_star = 0.0
 
-        # Phase 2: cap phase-1 and minimise the tightening terms.
         slack = self._lex_cap_slack(s_star, solver.options)
         pm.lex_cap = pyo.Constraint(expr=sum(pm.user_obj_exprs) <= s_star + slack)
         pm.obj_user.deactivate()
@@ -551,17 +444,12 @@ class PyomoSolver(SolverInterface):
             phase_label="Lexicographic phase 2",
         )
 
-        # Combined objective for backwards-compatible reporting via
-        # ``pyo.value(pm.obj)``.  Deactivated so it does not interfere
-        # with any subsequent solve on the same model.
         pm.obj = pyo.Objective(
             expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
             sense=pyo.minimize,
         )
         pm.obj.deactivate()
         return result, success, report
-
-    # --------- Your original processing rewritten to Pyomo ---------
 
     def process_internal_oxf_components(self, pm, network):
         for constraint in network.constraints:
@@ -619,7 +507,6 @@ class PyomoSolver(SolverInterface):
     def process_equations_nodes_childs(
         self, pm, network: Network, nodes, ignored_nodes
     ):
-        # Pyomo math operators
         sin_impl = pyo.sin
         cos_impl = pyo.cos
         abs_impl = abs
@@ -693,7 +580,7 @@ class PyomoSolver(SolverInterface):
         abs_impl = abs
         sqrt_impl = pyo.sqrt
         log_impl = pyo.log
-        pwl_impl = PyomoPWLImpl(pm, pw_repn="SOS2")  # <-- add this
+        pwl_impl = PyomoPWLImpl(pm, pw_repn="SOS2")
 
         def if_impl(*args, **kwargs):
             raise NotImplementedError(

@@ -2,7 +2,7 @@ import math
 
 import scipy.io
 
-# necessary for the construction
+# needed for the dynamic class lookup
 from monee.model.branch import *  # noqa
 from monee.model.child import *  # noqa
 from monee.model.grid import *  # noqa

@@ -1,67 +1,12 @@
 """
-Gas linepack extension for gas pipes.
+Gas linepack extension.
 
-Linepack models the inertia of the gas network: pipelines act as distributed
-storage because the compressible gas column in each pipe can absorb or release
-gas mass as pressure changes.  This enables limited short-term buffering of
-supply/demand imbalances — the most important dynamic effect in quasi-static
-gas-network timeseries simulations.
+Pipelines act as distributed storage: ``linepack_kg = V_pipe · ρ_avg`` with
+``ρ = p · M / (R · T)``. Between timesteps,
+``net_pack_kgs(t) · Δt = linepack_kg(t) − linepack_kg(t−1)`` — positive = charging.
+Each endpoint junction sees ``+0.5 · net_pack_kgs`` (outflow-positive convention).
 
-Physics
--------
-The stored gas mass in a pipe at any instant is:
-
-    linepack_kg(t)  =  V_pipe × ρ_avg(t)
-
-where ``ρ_avg`` is the spatially-averaged gas density computed from the average
-nodal pressure via the ideal-gas equation of state:
-
-    ρ  =  p × M / (R × T)
-
-The stored mass can change between timesteps.  The rate of change is the **net
-packing flow** ``net_pack_kgs`` [kg/s]:
-
-    net_pack_kgs(t) × Δt  =  linepack_kg(t) − linepack_kg(t−1)
-
-When ``net_pack_kgs > 0`` the pipe is *charging* (absorbing gas from the
-network); when negative it is *discharging* (releasing gas back).  The gas is
-drawn equally from the two endpoint junctions, so each junction sees an
-additional flow of ``−net_pack_kgs / 2`` in its mass balance.
-
-Capacity calculation
---------------------
-The extension auto-computes per-pipe capacities from the grid parameters:
-
-* **Initial linepack** — ``V_pipe × ρ`` at nominal pressure
-  (``pressure_ref × nominal_pressure_pu``).
-* **Maximum linepack** — ``V_pipe × ρ`` at the maximum allowed pressure
-  (``pressure_ref × sqrt(p_squared_pu_max)``).
-
-Both can be overridden per pipe via the ``overrides`` argument.
-
-Single-step vs timeseries
--------------------------
-In a **single-step** (steady-state) solve the linepack variables are present
-but ``net_pack_kgs`` is pinned to zero — no temporal dynamics, no effect on
-the flow solution beyond defining ``linepack_kg`` from the solved pressures.
-
-In a **timeseries or multi-period** solve the inter-temporal constraint links
-successive linepack states and ``net_pack_kgs`` enters the junction mass
-balances, so the solver accounts for linepack charging/discharging when
-balancing supply and demand.
-
-Usage::
-
-    # All gas pipes, auto-computed capacity:
-    net.add_extension(GasLinepack())
-
-    # All gas pipes, with per-pipe overrides:
-    net.add_extension(GasLinepack(overrides={
-        pipe_id: dict(linepack_kg_initial=500, linepack_kg_max=2000),
-    }))
-
-Results are accessible via ``result.get_result_for_id(pipe_id, "linepack_kg")``
-and ``result.get_result_for_id(pipe_id, "net_pack_kgs")`` in timeseries mode.
+Single-step solves pin ``net_pack_kgs = 0``; timeseries activates the temporal coupling.
 """
 
 from __future__ import annotations
@@ -76,37 +21,9 @@ from .core import NetworkAspect
 
 
 class GasLinepack(NetworkAspect):
-    """
-    Linepack (stored gas mass) extension for gas pipes.
-
-    By default applies to **all** :class:`~monee.model.branch.GasPipe` branches
-    in the network.  Capacities (initial and maximum stored mass) are computed
-    automatically from pipe geometry and gas-grid thermodynamic parameters.
-
-    Two variables are injected onto each active pipe:
-
-    * ``linepack_kg`` — stored gas mass [kg].
-      Algebraically equal to ``V_pipe × gas_density`` (derived from nodal
-      pressures), bounded by the auto-computed or overridden maximum.
-    * ``net_pack_kgs`` — net packing flow rate [kg/s].  Zero in single-step
-      mode; coupled to ``Δlinepack_kg / Δt`` in timeseries / multi-period
-      solves, and contributes ``−net_pack_kgs / 2`` to each endpoint junction's
-      mass balance.
-
-    Capacity auto-calculation:
-
-    * ``linepack_kg_initial`` = ``V_pipe × ρ(p_nominal)``
-    * ``linepack_kg_max``     = ``V_pipe × ρ(p_max)``
-
-    where ``p_nominal = pressure_ref × nominal_pressure_pu`` and
-    ``p_max = pressure_ref × sqrt(p_squared_pu_max)``.
-
-    Args:
-        overrides: Optional ``{branch_id: dict}`` to override the auto-computed
-            capacity for specific pipes.  Recognised keys are
-            ``"linepack_kg_initial"`` and ``"linepack_kg_max"``.  Omitted keys
-            fall back to the auto-computed values.
-    """
+    """Linepack extension. Injects ``linepack_kg`` and ``net_pack_kgs`` on every
+    GasPipe; auto-sizes initial/max from grid params. Per-pipe overrides via the
+    ``overrides`` ``{branch_id: {"linepack_kg_initial": ..., "linepack_kg_max": ...}}``."""
 
     def __init__(self, overrides: dict[int, dict] | None = None) -> None:
         self._overrides: dict[int, dict] = overrides or {}
@@ -146,25 +63,18 @@ class GasLinepack(NetworkAspect):
             grid: GasGrid = branch.grid
             v_pipe = math.pi / 4 * bm.diameter_m**2 * bm.length_m
 
-            # Auto-compute capacities from pipe geometry and grid properties.
             rho_nominal = self._density(grid, self._nominal_pressure(grid))
             rho_max = self._density(grid, self._max_pressure(grid))
             auto_initial = v_pipe * rho_nominal
             auto_max = v_pipe * rho_max
 
-            # Apply per-pipe overrides if provided.
             overrides = self._overrides.get(branch.id, {})
             lp_initial = overrides.get("linepack_kg_initial", auto_initial)
             lp_max = overrides.get("linepack_kg_max", auto_max)
-            # Guard: max must always be >= initial.
             lp_max = max(lp_max, lp_initial * 1.05)
-            # State: stored gas mass in the pipe [kg].
             bm.linepack_kg = Var(
                 lp_initial, min=0, max=lp_max * 1.5, name="linepack_kg"
             )
-            # Rate: net mass flow rate into the pipe storage [kg/s].
-            # Positive = pipe absorbing gas (charging), negative = releasing (discharging).
-            # Bounded by the grid's maximum flow capacity.
             bm.net_pack_kgs = Var(
                 0, min=-grid.f_max, max=grid.f_max, name="net_pack_kgs"
             )
@@ -174,12 +84,8 @@ class GasLinepack(NetworkAspect):
             self._active_branches.add(branch.id)
 
     def activate_timeseries(self, network, ignored_nodes: set, step_state=None) -> None:
-        """
-        Called before node equations are assembled in a timeseries / multi-period
-        solve.  Sets the timeseries flag so that ``equations()`` does NOT pin
-        ``net_pack_kgs == 0``, and warm-starts ``linepack_kg`` from the
-        previous step's solved value.
-        """
+        """Mark timeseries so equations() stops pinning net_pack_kgs=0; warm-start
+        linepack_kg from step_state when available."""
         self._timeseries_active = True
 
         if step_state is None:
@@ -194,13 +100,8 @@ class GasLinepack(NetworkAspect):
                 branch.model.linepack_kg.value = prev_lp
 
     def equations(self, network, ignored_nodes: set) -> list:
-        """
-        Link ``linepack_kg`` to the average gas density from nodal pressures.
-
-        In single-step (non-timeseries) mode also pins ``net_pack_kgs == 0``
-        so the variable is fully constrained with no effect on the steady-state
-        flow solution.
-        """
+        """``linepack_kg = V_pipe · gas_density``; pin ``net_pack_kgs = 0`` in
+        steady-state mode."""
         eqs = []
         for branch in network.branches:
             if branch.id not in self._active_branches:
@@ -208,12 +109,9 @@ class GasLinepack(NetworkAspect):
             if branch.ignored or branch.id in ignored_nodes:
                 continue
             bm = branch.model
-            # Algebraic definition: stored mass = pipe volume × average density.
-            # gas_density is set by NLWeymouthBranchFormulation from nodal pressures.
             eqs.append(bm.linepack_kg == self._pipe_volume[branch.id] * bm.gas_density)
 
             if not self._timeseries_active:
-                # Steady-state: no packing flow.
                 eqs.append(bm.net_pack_kgs == 0)
 
         return eqs
@@ -221,15 +119,7 @@ class GasLinepack(NetworkAspect):
     def inter_temporal_equations(
         self, network, ignored_nodes: set, temporal_state
     ) -> list:
-        """
-        Mass-conservation update for linepack across timesteps / periods::
-
-            net_pack_kgs(t) × Δt  =  linepack_kg(t) − linepack_kg(t−1)
-
-        ``net_pack_kgs`` appears in the junction mass balance of both endpoint
-        nodes (via :meth:`~monee.model.node.Junction.calc_signed_mass_flow`),
-        so the nodal balances account for gas absorbed or released by the pipe.
-        """
+        """``net_pack_kgs(t) · Δt = linepack_kg(t) − linepack_kg(t−1)``."""
         eqs = []
         dt_s = temporal_state.dt_h * 3600.0
         for branch in network.branches:
@@ -240,7 +130,6 @@ class GasLinepack(NetworkAspect):
             bm = branch.model
             prev_lp = temporal_state.get(branch.id, "linepack_kg")
             if prev_lp is None:
-                # First step: anchor to initial condition.
                 prev_lp = self._initial_lp[branch.id]
             eqs.append(bm.net_pack_kgs * dt_s == bm.linepack_kg - prev_lp)
         return eqs

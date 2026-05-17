@@ -1,6 +1,4 @@
-"""
-Gas-carrier islanding mode and grid-forming source model.
-"""
+"""Gas-carrier islanding mode and grid-forming source model."""
 
 from __future__ import annotations
 
@@ -13,23 +11,8 @@ from .core import GridFormingMixin, IslandingMode
 
 @model
 class GridFormingSource(ChildModel, GridFormingMixin):
-    """
-    Grid-forming source for islanded gas or water networks.
-
-    Acts as the pressure reference of its island: the node's pressure is pinned to
-    ``pressure_pu`` via ``overwrite()``, and the source's ``mass_flow`` is a *variable*
-    so it can absorb any supply–demand imbalance in the island.
-
-    Parameters
-    ----------
-    pressure_pu : float
-        Pressure setpoint in per-unit.  Pinned on the junction model by
-        ``overwrite()``.
-    t_k : float
-        Temperature in Kelvin (used to pin ``t_pu`` and ``t_k`` on the junction).
-    mass_flow_max : float
-        Maximum absolute mass flow (kg/s).  Set to a large value if unconstrained.
-    """
+    """Grid-forming source: pins pressure (and t_pu/t_k) on the junction, leaves
+    mass_flow as a Var to absorb island imbalance."""
 
     def __init__(
         self,
@@ -45,7 +28,6 @@ class GridFormingSource(ChildModel, GridFormingMixin):
         self._t_k = t_k
 
     def overwrite(self, node_model, grid) -> None:
-        """Pin the junction pressure (like ``ExtHydrGrid.overwrite``)."""
         node_model.pressure_pu = Const(self._pressure_pu)
         node_model.pressure_squared_pu = Const(self._pressure_pu**2)
         node_model.t_pu = Const(self._t_k / grid.t_ref)
@@ -56,23 +38,8 @@ class GridFormingSource(ChildModel, GridFormingMixin):
 
 
 class GasIslandingMode(IslandingMode):
-    """
-    Islanding configuration for the gas carrier.
-
-    Adds:
-    * Single-commodity connectivity-flow constraints (via the base class).
-    * Pressure bounds conditional on energisation for regular junctions:
-      ``pressure_pu ≤ p_max · e_i`` so that de-energised junctions have pressure = 0.
-
-    The pressure at grid-forming junctions is already pinned by
-    ``GridFormingSource.overwrite()`` (or ``ExtHydrGrid.overwrite()``), so no
-    additional pinning is needed for GF nodes in this method.
-
-    Parameters
-    ----------
-    big_m_conn : int
-        Big-M for connectivity-flow arc capacity.  Must be ≥ number of carrier nodes.
-    """
+    """Gas islanding: connectivity flow plus ``pressure_pu ≤ 2·e`` on regular
+    junctions (GF junctions already pin pressure via overwrite())."""
 
     carrier_grid_type = GasGrid
     var_prefix = "gas"
@@ -81,7 +48,6 @@ class GasIslandingMode(IslandingMode):
         self.big_m_conn = big_m_conn
 
     def prepare(self, network: Network) -> None:
-        """Phase 1 — add gas islanding Var placeholders."""
         for node in network.nodes:
             if isinstance(node.grid, GasGrid) and node.active:
                 node.model.e_gas = Var(1, min=0, max=1, integer=True, name="e_gas")
@@ -99,17 +65,9 @@ class GasIslandingMode(IslandingMode):
     def add_physical_constraints(
         self, network, gf_nodes, regular_nodes, e_vars
     ) -> list:
-        """
-        Gas-specific physical constraint equations (returned as a list).
-
-        Force ``pressure_pu = 0`` for de-energised junctions via an upper bound
-        that is conditional on ``e_i``.
-        """
         eqs = []
         for node in regular_nodes:
             e = e_vars[node.id]
-            # Junction.pressure_pu has max=2 in per-unit; use 2.0 as the big-M so
-            # that when e_i=0 pressure is forced to 0, and when e_i=1 the bound is
-            # non-binding (pressure is free up to its existing model bounds).
+            # 2.0 is the existing model bound; non-binding when e=1.
             eqs.append(node.model.pressure_pu <= 2.0 * e)
         return eqs

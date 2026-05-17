@@ -1,10 +1,4 @@
-"""
-Water-carrier islanding mode.
-
-Water networks share the same junction model (``Junction`` with pressure_pu) and
-the same grid-forming child (``GridFormingSource``) as gas networks.  The only
-difference is the ``carrier_grid_type`` class attribute.
-"""
+"""Water-carrier islanding mode (structurally identical to :class:`GasIslandingMode`)."""
 
 from __future__ import annotations
 
@@ -16,20 +10,7 @@ from .core import GridFormingMixin, IslandingMode
 
 
 class WaterIslandingMode(IslandingMode):
-    """
-    Islanding configuration for the water/heat carrier.
-
-    Structurally identical to ``GasIslandingMode``; pressure bounds are applied to
-    de-energised junctions so that ``pressure_pu = 0`` when ``e_i = 0``.
-
-    Use ``GridFormingSource`` (from ``monee.model.extension.islanding.gas``) as the grid-forming
-    child for water junctions.
-
-    Parameters
-    ----------
-    big_m_conn : int
-        Big-M for connectivity-flow arc capacity.  Must be ≥ number of carrier nodes.
-    """
+    """Water/heat islanding. Use :class:`GridFormingSource` from the gas module."""
 
     carrier_grid_type = WaterGrid
     var_prefix = "water"
@@ -38,7 +19,6 @@ class WaterIslandingMode(IslandingMode):
         self.big_m_conn = big_m_conn
 
     def prepare(self, network: Network) -> None:
-        """Phase 1 — add water islanding Var placeholders."""
         for node in network.nodes:
             if isinstance(node.grid, WaterGrid) and node.active:
                 node.model.e_water = Var(1, min=0, max=1, integer=True, name="e_water")
@@ -56,10 +36,8 @@ class WaterIslandingMode(IslandingMode):
     def add_physical_constraints(
         self, network, gf_nodes, regular_nodes, e_vars
     ) -> list:
-        """Force ``pressure_pu = 0`` for de-energised water junctions (returned as list)."""
         eqs = []
         for node in regular_nodes:
             e = e_vars[node.id]
-            # Junction.pressure_pu has max=2 in per-unit; use 2.0 as the big-M.
             eqs.append(node.model.pressure_pu <= 2.0 * e)
         return eqs

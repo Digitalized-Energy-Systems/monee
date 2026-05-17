@@ -1,6 +1,4 @@
-"""
-Electricity-carrier islanding mode and grid-forming generator model.
-"""
+"""Electricity-carrier islanding mode and grid-forming generator model."""
 
 from __future__ import annotations
 
@@ -19,28 +17,8 @@ from .core import GridFormingMixin, IslandingMode
 
 @model
 class GridFormingGenerator(NoVarChildModel, GridFormingMixin):
-    """
-    Grid-forming generator for islanded electricity networks.
-
-    Acts as the slack bus of its island: variable active/reactive power output
-    (absorbs the island's power imbalance) with a fixed voltage magnitude setpoint.
-
-    Unlike ``PowerGenerator`` (which has *fixed* p/q), this component has *variable*
-    ``p_mw`` and ``q_mvar`` so that it can balance any generation–load mismatch in its
-    island.  The voltage angle is **not** pinned here; instead, the
-    ``ElectricityIslandingMode`` formulation pins the angle to 0 via
-    ``source_reference_angle`` from ``dc.py``.
-
-    Parameters
-    ----------
-    p_mw_max : float
-        Maximum active power injection (and absorption) in MW.
-    q_mvar_max : float
-        Maximum reactive power injection (and absorption) in Mvar.
-    vm_pu : float
-        Voltage magnitude setpoint in per-unit.  The ``overwrite()`` method pins
-        ``node_model.vm_pu`` to this constant, making this bus a PV/slack bus.
-    """
+    """Grid-forming generator: variable p_mw/q_mvar (absorbs island imbalance)
+    with a pinned vm_pu. Angle is pinned by :class:`ElectricityIslandingMode`."""
 
     def __init__(
         self, p_mw_max: float, q_mvar_max: float, vm_pu: float = 1.0, **kwargs
@@ -51,29 +29,13 @@ class GridFormingGenerator(NoVarChildModel, GridFormingMixin):
         self._vm_pu_setpoint = vm_pu
 
     def overwrite(self, node_model, grid) -> None:
-        """Pin the bus voltage magnitude (like ``ExtPowerGrid.overwrite``)."""
         node_model.vm_pu = Const(self._vm_pu_setpoint)
         node_model.vm_pu_squared = Const(self._vm_pu_setpoint**2)
-        # Angle is NOT pinned here — the islanding formulation does it.
 
 
 class ElectricityIslandingMode(IslandingMode):
-    """
-    Islanding configuration for the electricity carrier.
-
-    Adds:
-    * Single-commodity connectivity-flow constraints (via the base class).
-    * ``source_reference_angle`` at every grid-forming bus → θ = 0.
-    * ``angle_{upper,lower}_bound_energized`` at every regular bus →
-      forces θ = 0 when ``e_i = 0`` (de-energised).
-
-    Parameters
-    ----------
-    angle_bound : float
-        Maximum absolute angle (radians) for energised buses.  Default ≈ π.
-    big_m_conn : int
-        Big-M for connectivity-flow arc capacity.  Must be ≥ number of carrier nodes.
-    """
+    """Electricity islanding: connectivity flow plus θ=0 at GF buses and
+    energisation-gated angle bounds elsewhere."""
 
     carrier_grid_type = PowerGrid
     var_prefix = "el"
@@ -83,7 +45,6 @@ class ElectricityIslandingMode(IslandingMode):
         self.big_m_conn = big_m_conn
 
     def prepare(self, network: Network) -> None:
-        """Phase 1 — add electricity islanding Var placeholders."""
         for node in network.nodes:
             if isinstance(node.grid, PowerGrid) and node.active:
                 node.model.e_el = Var(1, min=0, max=1, integer=True, name="e_el")
@@ -101,12 +62,6 @@ class ElectricityIslandingMode(IslandingMode):
     def add_physical_constraints(
         self, network, gf_nodes, regular_nodes, e_vars
     ) -> list:
-        """
-        Electricity-specific physical constraint equations (returned as a list).
-
-        * Grid-forming nodes: angle reference = 0 (``source_reference_angle`` from dc.py).
-        * Regular nodes: angle bounds conditional on energisation.
-        """
         eqs = []
         for node in gf_nodes:
             eqs.append(source_reference_angle(node.model.va_radians))
