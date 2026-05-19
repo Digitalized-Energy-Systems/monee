@@ -159,11 +159,22 @@ def _make_auto_priority_floor_hook(
     alpha: float,
     debug: bool,
     max_line_loading: float | None,
+    weight_for_load=None,
 ):
     """Return a ``_controllable_appliables`` hook that retunes *weights*.
 
     Sets ``weights['demand'] = max(weights['demand'], α·A_max)`` and scales
     ``weights['generator']`` by the same factor so the user-set ratio is kept.
+
+    When ``weight_for_load`` is supplied, per-load weights returned by the
+    callback may be smaller than ``weights['demand']``.  To preserve the
+    auto-floor contract (every load's shed cost dominates aux), the hook
+    samples the minimum effective weight across all demand-class models
+    and, if it is below the floor, scales every weight up by
+    ``floor / min_w``.  Generator weights and the per-load callback's
+    returns are both lifted by the same scale via the ``weights["scale"]``
+    multiplier consulted in ``weight_fn`` — the user-set load-priority
+    *ratios* are preserved.
     """
     import logging
 
@@ -172,6 +183,44 @@ def _make_auto_priority_floor_hook(
     def _hook(network):
         a_max = _aux_objective_upper_bound(network, max_line_loading=max_line_loading)
         floor = alpha * a_max
+
+        if weight_for_load is not None:
+            # Sample the minimum effective per-load weight.  We consider
+            # every model that ``weight_fn`` would route through
+            # ``weight_for_load`` (demand + HX-objective types).
+            min_w: float | None = None
+            for model in network.all_models():
+                if isinstance(model, _DEMAND_TYPES + _HE_OBJECTIVE_TYPES):
+                    try:
+                        w = weight_for_load(model)
+                    except Exception:
+                        w = None
+                    if w is None:
+                        # Model falls back to ``weights['demand']``.
+                        w = weights["demand"]
+                    if min_w is None or float(w) < min_w:
+                        min_w = float(w)
+            if min_w is not None and min_w < floor:
+                scale = floor / min_w if min_w > 0 else 1.0
+                # ``weights['scale']`` multiplies BOTH the callback return
+                # AND the default ``weights['demand']`` — see ``weight_fn``.
+                weights["scale"] = weights.get("scale", 1.0) * scale
+                weights["generator"] = weights["generator"] * scale
+                if debug:
+                    _log.warning(
+                        "Auto priority floor (per-load): A_max=%.3g, α=%.3g, "
+                        "min_w=%.3g → scale ×%.3g (generator weight scaled too)",
+                        a_max, alpha, min_w, scale,
+                    )
+            elif debug:
+                _log.warning(
+                    "Auto priority floor (per-load): A_max=%.3g, α·A_max=%.3g "
+                    "already covered by per-load min_w=%.3g — no change.",
+                    a_max, floor, min_w or 0.0,
+                )
+            return
+
+        # Legacy path: no per-load callback, scale the single demand weight.
         old_demand = weights["demand"]
         if floor > old_demand:
             scale = floor / old_demand if old_demand > 0 else 1.0
@@ -255,6 +304,7 @@ def create_min_load_shedding_problem(
     *,
     demand_weight=WEIGHT_DEMAND,
     generator_weight=WEIGHT_GENERATOR,
+    weight_for_load=None,
     bounds_el=(0.9, 1.1),
     bounds_gas=(0.9, 1.1),
     bounds_heat=(0.9, 1.1),
@@ -290,7 +340,17 @@ def create_min_load_shedding_problem(
     problem = OptimizationProblem(debug=debug, lex_objectives=lex_objectives)
 
     # Mutable so the auto-priority-floor hook can retune at _apply time.
-    _weights = {"demand": float(demand_weight), "generator": float(generator_weight)}
+    # ``scale`` is a multiplicative factor applied on top of both the
+    # default ``demand`` weight AND any per-load weight returned by
+    # ``weight_for_load`` — the auto-floor hook uses it to lift every
+    # demand-side weight uniformly when the minimum effective per-load
+    # weight would otherwise fall below ``α·A_max``.  Default 1.0 makes
+    # it a no-op for legacy (no callback) usage.
+    _weights = {
+        "demand": float(demand_weight),
+        "generator": float(generator_weight),
+        "scale": 1.0,
+    }
 
     problem.controllable_demands(REGULATION_ATTR)
     problem.controllable_generators(REGULATION_ATTR)
@@ -308,6 +368,7 @@ def create_min_load_shedding_problem(
                 alpha=priority_safety_factor,
                 debug=debug,
                 max_line_loading=max_line_loading if check_line_loading else None,
+                weight_for_load=weight_for_load,
             )
         )
 
@@ -323,15 +384,29 @@ def create_min_load_shedding_problem(
         )
 
     # Lookups go through _weights so the auto-priority-floor can retune.
+    # When ``weight_for_load`` is set and applicable, the per-load
+    # weight it returns takes precedence — multiplied by the auto-
+    # floor scale so per-load weights and the legacy demand weight
+    # share the same aux-dominance lift.
     def weight_fn(model):
+        scale = _weights.get("scale", 1.0)
+        if weight_for_load is not None and isinstance(
+            model, _DEMAND_TYPES + _HE_OBJECTIVE_TYPES
+        ):
+            try:
+                w = weight_for_load(model)
+            except Exception:
+                w = None
+            if w is not None:
+                return float(w) * scale
         if isinstance(model, _DEMAND_TYPES):
-            return _weights["demand"]
+            return _weights["demand"] * scale
         # Bare HeatExchanger / PassiveHeatExchanger: route by sign of q_mw_set.
         if isinstance(model, (HeatExchanger, PassiveHeatExchanger)):
             q = getattr(model, "q_mw_set", 0)
             if isinstance(q, (int, float)):
-                return _weights["demand"] if q > 0 else _weights["generator"]
-            return _weights["demand"]
+                return (_weights["demand"] if q > 0 else _weights["generator"]) * scale
+            return _weights["demand"] * scale
         if isinstance(model, _GENERATOR_TYPES):
             return _weights["generator"]
         return 1

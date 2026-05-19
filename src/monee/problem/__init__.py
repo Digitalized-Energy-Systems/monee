@@ -7,7 +7,11 @@ from .load_shedding import (
     create_load_shedding_optimization_problem,
     create_multi_period_load_shedding_optimization_problem,
 )
-from .min_load_shedding import create_min_load_shedding_problem
+from .min_load_shedding import (
+    WEIGHT_DEMAND,
+    WEIGHT_GENERATOR,
+    create_min_load_shedding_problem,
+)
 from .metric import GeneralResiliencePerformanceMetric
 from monee.problem.core import (
     AttributeParameter,
