@@ -179,9 +179,28 @@ def collect_variables_at_bounds(pm: pyo.ConcreteModel, tol: float = 1e-4) -> lis
     return at_bounds
 
 
+# Per-solver option key for a wall-clock cap on each internal solve in
+# ``compute_infeasibility_explanation`` (it iterates several solves).
+_MIS_TIME_LIMIT_OPTION = {
+    "gurobi": "TimeLimit",
+    "cplex": "timelimit",
+    "scip": "limits/time",
+    "appsi_highs": "time_limit",
+    "cbc": "seconds",
+}
+
+# Cap on every internal MIS solve.  The MIS routine elastically relaxes
+# the LP (≈3× model size) and runs a fresh MILP for each candidate; on
+# pathological cases (large slack envelope + 100%-gap-from-zero) those
+# never converge.  10 s is enough to return a useful MIS on small cases
+# and to time out gracefully on hard ones.
+_MIS_TIME_LIMIT_S: float = 10.0
+
+
 def compute_mis(pm: pyo.ConcreteModel, solver_name: str = "scip") -> list[str]:
     """Names/indices of constraints/bounds forming a Minimal Infeasible Subsystem.
-    Needs SCIP/Gurobi/CPLEX."""
+    Needs SCIP/Gurobi/CPLEX.  Each internal solve is capped at
+    ``_MIS_TIME_LIMIT_S`` so a hard MIS computation can't stall the caller."""
     import contextlib
     import io
 
@@ -196,9 +215,14 @@ def compute_mis(pm: pyo.ConcreteModel, solver_name: str = "scip") -> list[str]:
     iis_logger.setLevel(logging.INFO)
     iis_logger.addHandler(handler)
 
+    solver = pyo.SolverFactory(solver_name)
+    time_limit_key = _MIS_TIME_LIMIT_OPTION.get(solver_name)
+    if time_limit_key is not None:
+        solver.options[time_limit_key] = _MIS_TIME_LIMIT_S
+
     try:
         with contextlib.redirect_stderr(io.StringIO()):
-            compute_infeasibility_explanation(pm, solver=solver_name)
+            compute_infeasibility_explanation(pm, solver=solver)
     except Exception as e:
         _log.warning("MIS computation failed: %s", e)
         return []

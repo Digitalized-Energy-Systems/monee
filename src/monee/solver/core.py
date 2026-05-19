@@ -452,6 +452,13 @@ def mark_ignored_components(network, ignored_nodes):
     for compound in network.compounds:
         if ignore_compound(compound, ignored_nodes):
             compound.ignored = True
+            # Children attached to *external* nodes (e.g. SubHG at the heat
+            # node of a broken CHPHG) wouldn't be caught by the node-loop
+            # above — their host node may still be in the active grid.
+            # Mark them directly so ignore_child filters them out.
+            for sc in compound.subcomponents:
+                if isinstance(sc, Child):
+                    sc.ignored = True
 
 
 def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
@@ -576,12 +583,26 @@ def ignore_node(node, network: Network, ignored_nodes):
 
 
 def ignore_child(child, ignored_nodes):
-    return (not child.active) or (child.node_id in ignored_nodes)
+    # ``child.ignored`` is set by ``mark_ignored_components`` when the child
+    # belongs to an ignored compound — without consulting it here, the child
+    # would still appear in its host node's balance equations as a free Var
+    # (e.g. SubHG.q_mw_heat absorbing arbitrary heat at the heat node).
+    return (not child.active) or (child.node_id in ignored_nodes) or child.ignored
 
 
 def ignore_compound(compound, ignored_nodes):
     ig = not compound.active
-    if any([value in ignored_nodes for value in compound.connected_to.values()]):
+    external_broken = any(
+        value in ignored_nodes for value in compound.connected_to.values()
+    )
+    # Internal subcomponent turned off (e.g. user deactivates one of a
+    # CHPHG's internal transfer branches): the ControlNode's power balance —
+    # degenerate when its from-branches are gone — otherwise collides with
+    # its el_mw / q_mw_heat coupling rows and the LP is infeasible.
+    internal_broken = any(
+        not getattr(sc, "active", True) for sc in compound.subcomponents
+    )
+    if external_broken or internal_broken:
         if hasattr(compound.model, "set_active"):
             compound.model.set_active(False)
         else:
@@ -688,6 +709,8 @@ def find_ignored_nodes(network: Network, islanding_config=None):
     # Iterate to fixed point. Skipped under islanding (topology there includes
     # inactive backup branches, so degree overstates connectivity).
     if islanding_config is None:
+        from monee.model.node import Junction
+
         # Compound port children (e.g. SubHG on a CHPHG heat node) carry no
         # demand of their own; they must not keep an otherwise-isolated
         # junction alive.
@@ -706,18 +729,42 @@ def find_ignored_nodes(network: Network, islanding_config=None):
                     return True
             return False
 
+        def _has_mass_flow_anchor(int_node):
+            """A Junction at degree ≤ 1 needs a mass-flow-contributing child
+            (Sink / Source / ExtHydrGrid) to anchor mass conservation.
+            Heat-only children (HeatLoad / HeatGenerator) don't qualify —
+            with no outgoing pipe their q_mw_heat term has no enthalpy
+            stream to balance against and the junction becomes infeasible."""
+            for cid in int_node.child_ids:
+                if cid in compound_port_child_ids:
+                    continue
+                child = without_cps.child_by_id(cid)
+                if not child.active:
+                    continue
+                if "mass_flow" in getattr(child.model, "vars", {}):
+                    return True
+            return False
+
         while True:
             new_stubs = set()
             for node_id in topology.nodes:
                 if node_id in ignored_nodes:
                     continue
                 int_node: Node = topology.nodes[node_id]["internal_node"]
-                if _has_real_active_child(int_node):
-                    continue
                 active_degree = sum(
                     1 for nb in topology.neighbors(node_id) if nb not in ignored_nodes
                 )
-                if active_degree <= 1:
+                if active_degree > 1:
+                    continue
+                # Classical leaf stub: no real active children at all.
+                if not _has_real_active_child(int_node):
+                    new_stubs.add(node_id)
+                    continue
+                # Mass-balance dead-end: Junction at degree ≤ 1 whose only
+                # children are heat-only (q_mw_heat) — see _has_mass_flow_anchor.
+                if isinstance(int_node.model, Junction) and not _has_mass_flow_anchor(
+                    int_node
+                ):
                     new_stubs.add(node_id)
             if not new_stubs:
                 break

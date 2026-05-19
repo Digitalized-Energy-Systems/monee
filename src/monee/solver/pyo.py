@@ -47,6 +47,7 @@ PER_SOLVER_OPTIONS = {
         "ScaleFlag": 2,
         "MIPFocus": 2,
         "MIPGap": 1e-3,
+        "TimeLimit": 300,
     },
 }
 
