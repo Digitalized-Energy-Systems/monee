@@ -26,6 +26,16 @@ from monee.model.child import (
     Source,
 )
 from monee.model.grid import GasGrid, WaterGrid
+from monee.model.multi import (
+    CHPControlNode,
+    CHPHGControlNode,
+    GasToHeatControlNode,
+    GasToHeatHG,
+    GasToPower,
+    PowerToGas,
+    PowerToHeatControlNode,
+    PowerToHeatHG,
+)
 from monee.model.node import Bus, Junction
 from monee.problem.core import (
     REGULATION_ATTR,
@@ -34,6 +44,7 @@ from monee.problem.core import (
     OptimizationProblem,
     nan_to_zero,
 )
+from monee.problem.utils import cp_input_rated_mw
 
 WEIGHT_DEMAND = 1e3
 WEIGHT_GENERATOR = 0.1
@@ -65,6 +76,20 @@ _HE_OBJECTIVE_TYPES = (
     PassiveHeatExchanger,
     PassiveHeatExchangerLoad,
     PassiveHeatExchangerGenerator,
+)
+# Coupling-point models (control nodes + branch HG variants).  When the
+# load-shedding problem is constructed with ``include_coupling_points=True``
+# every CP regulation cut is penalised at the demand weight, scaled by the
+# CP's nameplate input MW.
+_COUPLING_POINT_TYPES = (
+    CHPControlNode,
+    CHPHGControlNode,
+    GasToHeatControlNode,
+    PowerToHeatControlNode,
+    GasToPower,
+    PowerToGas,
+    PowerToHeatHG,
+    GasToHeatHG,
 )
 
 
@@ -248,14 +273,20 @@ def _make_auto_priority_floor_hook(
     return _hook
 
 
-def _shedding_mw(model, gas_mw_factor=None):
+def _shedding_mw(model, gas_mw_factor=None, cp_rated_mw=None):
     """Unserved-energy expression for *model* in MW-equivalent.
 
     For LinearHX branches the under-delivery gap ``|q_mw_set − q_mw_delivered|``
     captures both regulation cuts and physical shortfall from a narrow ΔT,
     which a pure ``(1−reg)`` proxy would miss. External grids return 0.
+    CP types (when ``include_coupling_points=True``) are penalised by
+    ``cp_rated_mw · (1 − regulation)``.
     """
     reg = getattr(model, "regulation", 1)
+
+    if isinstance(model, _COUPLING_POINT_TYPES):
+        rated = cp_rated_mw if cp_rated_mw is not None else 0
+        return rated * (1 - reg)
 
     if isinstance(model, (PowerLoad, PowerGenerator)):
         p = nan_to_zero(model.p_mw)
@@ -293,10 +324,15 @@ def _shedding_mw(model, gas_mw_factor=None):
 
 
 def _calc_objective(model_to_data):
-    """Sum weighted unserved energy. ``model_to_data: {model → (weight, gas_factor|None)}``."""
+    """Sum weighted unserved energy.
+
+    ``model_to_data: {model → (weight, gas_factor|None, cp_rated_mw|None)}``.
+    ``cp_rated_mw`` is only populated for coupling-point models when
+    ``include_coupling_points=True``; ``gas_factor`` only for Sink/Source.
+    """
     return sum(
-        _shedding_mw(model, gas_mw_factor=factor) * weight
-        for model, (weight, factor) in model_to_data.items()
+        _shedding_mw(model, gas_mw_factor=g, cp_rated_mw=cp) * weight
+        for model, (weight, g, cp) in model_to_data.items()
     )
 
 
@@ -315,6 +351,7 @@ def create_min_load_shedding_problem(
     regulation_ramp_limit=None,
     include_storages=False,
     include_ext_grids=True,
+    include_coupling_points=False,
     check_vm=True,
     check_pressure=True,
     check_temperature=True,
@@ -336,6 +373,12 @@ def create_min_load_shedding_problem(
     formulation-tightening aux terms with the phase-1 optimum pinned.
     ``auto_priority_floor`` (default True) scales ``demand_weight`` to
     ``α · A_max`` so the shed term dominates aux terms regardless of network size.
+
+    ``include_coupling_points`` (default False) extends the demand-side of the
+    objective to coupling-point components (CHP / CHPHG / G2H / P2H control
+    nodes and the HG branch variants P2G / G2P / P2H_HG / G2H_HG). Each CP is
+    penalised at ``demand_weight · cp_input_rated_mw · (1 − regulation)`` —
+    i.e. treated like a load on its input carrier (gas or power).
     """
     problem = OptimizationProblem(debug=debug, lex_objectives=lex_objectives)
 
@@ -401,6 +444,10 @@ def create_min_load_shedding_problem(
                 return float(w) * scale
         if isinstance(model, _DEMAND_TYPES):
             return _weights["demand"] * scale
+        # CPs are penalised at the demand weight when include_coupling_points
+        # is on — the input draw is treated as a load on its input carrier.
+        if isinstance(model, _COUPLING_POINT_TYPES):
+            return _weights["demand"] * scale
         # Bare HeatExchanger / PassiveHeatExchanger: route by sign of q_mw_set.
         if isinstance(model, (HeatExchanger, PassiveHeatExchanger)):
             q = getattr(model, "q_mw_set", 0)
@@ -412,6 +459,8 @@ def create_min_load_shedding_problem(
         return 1
 
     objective_types = _DEMAND_TYPES + _GENERATOR_TYPES + _HE_OBJECTIVE_TYPES
+    if include_coupling_points:
+        objective_types = objective_types + _COUPLING_POINT_TYPES
 
     def _is_objective_model(m):
         # type() is needed for HeatExchanger to exclude SubHE (compound-internal).
@@ -427,29 +476,56 @@ def create_min_load_shedding_problem(
             gg is not None and hasattr(gg, "higher_heating_value") for gg in grids
         )
 
-    # Populated by _objective_models, read by _data_attacher to thread grid HHV.
+    # Populated by _objective_models, read by _data_attacher.
+    #   model_to_grid  — Sink/Source HHV lookup (gas grid only).
+    #   model_to_cp_mw — CP nameplate input MW (when include_coupling_points).
     model_to_grid: dict = {}
+    model_to_cp_mw: dict = {}
 
     def _objective_models(network):
         """Like Objectives.select but filters water-grid Sink/Source (heating
-        loop ≠ gas demand)."""
+        loop ≠ gas demand) and (opt-in) folds in coupling-point components."""
         model_to_grid.clear()
+        model_to_cp_mw.clear()
         out = []
+        # Standard child/branch loads + generators + HX.
         for model, grid in network.all_models_with_grid():
             if not _is_objective_model(model):
                 continue
             if isinstance(model, (Sink, Source)) and not _is_gas_grid(grid):
                 continue
+            # CP control nodes also surface via all_models_with_grid, but we
+            # need ``component`` (not just ``model``) to compute the rated MW
+            # via cp_input_rated_mw — handled in the dedicated loop below.
+            if isinstance(model, _COUPLING_POINT_TYPES):
+                continue
             out.append(model)
             model_to_grid[model] = grid
+        # Opt-in CP coverage: control nodes (in network.nodes) + branch CPs.
+        if include_coupling_points:
+            for component in list(network.nodes) + list(network.branches):
+                if not isinstance(component.model, _COUPLING_POINT_TYPES):
+                    continue
+                if not component.active or component.ignored:
+                    continue
+                cp = cp_input_rated_mw(component)
+                if cp is None:
+                    continue
+                model = component.model
+                out.append(model)
+                model_to_grid[model] = getattr(component, "grid", None)
+                model_to_cp_mw[model] = cp[1]
         return out
 
     def _data_attacher(model):
         weight = weight_fn(model)
-        factor = None
+        gas_factor = None
+        cp_rated = None
         if isinstance(model, (Sink, Source)):
-            factor = _gas_mw_factor(model_to_grid.get(model))
-        return (weight, factor)
+            gas_factor = _gas_mw_factor(model_to_grid.get(model))
+        if isinstance(model, _COUPLING_POINT_TYPES):
+            cp_rated = model_to_cp_mw.get(model)
+        return (weight, gas_factor, cp_rated)
 
     objectives = Objectives()
     objectives.with_models(_objective_models).data(_data_attacher).calculate(
