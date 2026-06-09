@@ -18,6 +18,12 @@ class PowerGrid(Grid):
 
     sn_mva: float = 1
     vm_pu_max: float = 1.5
+    # Lower bound applied to bus ``vm_pu`` at node creation. 0 is unphysical and
+    # lets an NLP solver (IPOPT) drive the 1/vm current-equation Jacobian to
+    # infinity during restoration; a small positive floor keeps it bounded. 0.5
+    # is low enough to preserve realistic stressed / load-shedding operating
+    # points (e.g. ~0.68 pu) yet still bounds the Jacobian.
+    vm_pu_min: float = 0.5
 
 
 @model

@@ -167,7 +167,7 @@ def test_linepack_source_flow_reduced_by_discharge():
     src_flow = result.get_result_for(mm.ExtHydrGrid, "mass_flow")
     npk = result.get_result_for_id(pipe_id, "net_pack_kgs")
 
-    # Source feed = −mass_flow (load convention: negative = injection)
+    # Source feed = -mass_flow (load convention: negative = injection)
     src_feed_1 = float(-src_flow.iloc[1])
     npk1 = float(npk.iloc[1])
     demand_1 = 0.12
@@ -363,7 +363,7 @@ def test_tree_linepack_global_mass_balance():
     At each timeseries step, total source injection + total linepack discharge
     must equal total sink demand (within solver tolerance).
 
-    source_feed + Σ(−net_pack_kgs_i) = Σ(sink_demand_i)
+    source_feed + Σ(-net_pack_kgs_i) = Σ(sink_demand_i)
     """
     net, pipes, sinks = _branching_gas_net()
     net.add_extension(GasLinepack())

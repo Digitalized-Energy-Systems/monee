@@ -3,7 +3,7 @@ Lumped Thermal Capacitance (LTC) extension for water junctions.
 
 Each junction gets thermal mass ``ρ · Σ V_pipe/2`` from connected pipes.
 The inertia equation
-    ρ·V · (T_pu(t) − T_pu(t−1))/Δt  =  net_convective_heat_in
+    ρ·V · (T_pu(t) - T_pu(t-1))/Δt  =  net_convective_heat_in
 replaces the degenerate ``T_n · mass_balance = 0`` heat balance at LTC nodes.
 No-op in single-step solves.
 """
@@ -121,7 +121,7 @@ class LumpedThermalCapacitance(NetworkAspect):
     def inter_temporal_equations(
         self, network, ignored_nodes: set, temporal_state
     ) -> list:
-        """``ρ·V · (T_pu(t) − T_pu(t−1))/Δt == net_convective_heat_in`` per LTC
+        """``ρ·V · (T_pu(t) - T_pu(t-1))/Δt == net_convective_heat_in`` per LTC
         junction. ``T_prev`` falls back to the first-step anchor (see class
         docstring) when ``temporal_state.get`` returns None."""
         self._ltc_constrained = set()

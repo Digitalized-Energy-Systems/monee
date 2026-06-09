@@ -115,7 +115,7 @@ class NLWeymouthPWLBranchFormulation(BranchFormulation):
 
     Opt-in alternative to :class:`NLWeymouthBranchFormulation` for laminar-heavy
     pipes (Re < 2300). Two PWLs (one per direction) replace the friction·m²
-    bilinear; ``(p_i² − p_j²) · C² · on_off == φ_neg − φ_pos`` matches
+    bilinear; ``(p_i² - p_j²) · C² · on_off == φ_neg - φ_pos`` matches
     :func:`ogfmodel.pipe_weymouth`'s sign. ~12 log-spaced breakpoints suffice.
     """
 
@@ -196,7 +196,7 @@ class NLWeymouthPWLBranchFormulation(BranchFormulation):
             branch.mass_flow_neg <= m_max * (1 - branch.direction),
             branch.mass_flow_pos <= m_max * branch.on_off,
             branch.mass_flow_neg <= m_max * branch.on_off,
-            # (p_i² − p_j²) · C² · on_off == φ_neg − φ_pos
+            # (p_i² - p_j²) · C² · on_off == φ_neg - φ_pos
             (
                 from_node_model.vars["pressure_squared_pu"]
                 - to_node_model.vars["pressure_squared_pu"]

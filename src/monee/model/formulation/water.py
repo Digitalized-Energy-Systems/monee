@@ -4,6 +4,11 @@ from monee.model.node import Junction
 
 from .core import NetworkFormulation
 from .linear.water import LinearHeatExchangerFormulation
+from .nonlinear.heat_smooth import (
+    SmoothDarcyWeisbachBranchFormulation,
+    SmoothHeatExchangerFormulation,
+    SmoothPassiveHeatExchangerFormulation,
+)
 from .nonlinear.water import (
     NLDarcyWeisbachBranchFormulation,
     NLDarcyWeisbachHeatExchangerFormulation,
@@ -36,6 +41,73 @@ def make_nl_darcy_weisbach_pwl_network_formulation(
             WaterPipe: NLDarcyWeisbachPWLBranchFormulation(n_breakpoints=n_breakpoints),
             HeatExchanger: LinearHeatExchangerFormulation(),
             PassiveHeatExchanger: NLDarcyWeisbachHeatExchangerFormulation(),
+        },
+        node_type_to_formulations={
+            (Junction, WaterGrid): NLDarcyWeisbachNodeFormulation()
+        },
+    )
+
+
+def make_smooth_darcy_weisbach_network_formulation(
+    friction_model: str = "constant",
+    smoothing_eps: float = 1e-3,
+    n_breakpoints: int = 12,
+) -> NetworkFormulation:
+    """Pure-NLP Darcy-Weisbach water/heat formulation for GEKKO IPOPT/APOPT.
+
+    Binary-free smooth signed flow, smooth temperature upwinding and an active /
+    passive heat-exchanger pair with their ``direction`` binaries removed.
+    ``friction_model`` selects ``"constant"`` / ``"pwl"`` / ``"nonlinear"``.
+    Opt-in alternative to :data:`NL_DARCY_WEISBACH_NETWORK_FORMULATION`.
+    """
+    return NetworkFormulation(
+        branch_type_to_formulations={
+            WaterPipe: SmoothDarcyWeisbachBranchFormulation(
+                friction_model=friction_model,
+                smoothing_eps=smoothing_eps,
+                n_breakpoints=n_breakpoints,
+            ),
+            HeatExchanger: SmoothHeatExchangerFormulation(),
+            PassiveHeatExchanger: SmoothPassiveHeatExchangerFormulation(
+                friction_model=friction_model,
+                smoothing_eps=smoothing_eps,
+                n_breakpoints=n_breakpoints,
+            ),
+        },
+        node_type_to_formulations={
+            (Junction, WaterGrid): NLDarcyWeisbachNodeFormulation()
+        },
+    )
+
+
+SMOOTH_DARCY_WEISBACH_NETWORK_FORMULATION = (
+    make_smooth_darcy_weisbach_network_formulation()
+)
+
+
+def make_simulation_darcy_weisbach_network_formulation(
+    friction_model: str = "constant",
+    smoothing_eps: float = 1e-3,
+    n_breakpoints: int = 12,
+) -> NetworkFormulation:
+    """Square (IMODE=1-ready) Darcy-Weisbach water/heat formulation: the smooth
+    formulation with the safe phantom (``velocity``) pinned and operational flow
+    limits dropped. Use with ``GEKKOSolver(simulation=True)``."""
+    return NetworkFormulation(
+        branch_type_to_formulations={
+            WaterPipe: SmoothDarcyWeisbachBranchFormulation(
+                friction_model=friction_model,
+                smoothing_eps=smoothing_eps,
+                n_breakpoints=n_breakpoints,
+                simulation=True,
+            ),
+            HeatExchanger: SmoothHeatExchangerFormulation(),
+            PassiveHeatExchanger: SmoothPassiveHeatExchangerFormulation(
+                friction_model=friction_model,
+                smoothing_eps=smoothing_eps,
+                n_breakpoints=n_breakpoints,
+                simulation=True,
+            ),
         },
         node_type_to_formulations={
             (Junction, WaterGrid): NLDarcyWeisbachNodeFormulation()

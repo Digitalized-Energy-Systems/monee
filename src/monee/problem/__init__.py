@@ -3,10 +3,6 @@ from .economic_dispatch import (
     create_economic_dispatch_problem,
     create_multi_period_economic_dispatch_problem,
 )
-from .load_shedding import (
-    create_load_shedding_optimization_problem,
-    create_multi_period_load_shedding_optimization_problem,
-)
 from .min_load_shedding import (
     WEIGHT_DEMAND,
     WEIGHT_GENERATOR,

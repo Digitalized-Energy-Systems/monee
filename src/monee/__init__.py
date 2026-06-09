@@ -28,7 +28,6 @@ from monee.model.formulation import (
 )
 from monee.problem import (
     OptimizationProblem,
-    create_load_shedding_optimization_problem,
     create_min_load_shedding_problem,
 )
 from monee.simulation import (
@@ -145,8 +144,7 @@ def solve_load_shedding_problem(
     bounds_pressure: tuple,
     bounds_ext_el: tuple,
     bounds_ext_gas: tuple,
-    use_ext_grid_bounds=False,
-    use_ext_grid_objective=True,
+    include_ext_grids=True,
     check_lp=True,
     check_vm=True,
     check_pressure=True,
@@ -191,18 +189,17 @@ def solve_load_shedding_problem(
 
         This executes the optimization with the specified bounds and returns the results.
     """
-    optimization_problem = mp.create_load_shedding_optimization_problem(
+    optimization_problem = mp.create_min_load_shedding_problem(
         bounds_el=bounds_vm,
         bounds_heat=bounds_t,
         bounds_gas=bounds_pressure,
         ext_grid_el_bounds=bounds_ext_el,
         ext_grid_gas_bounds=bounds_ext_gas,
-        use_ext_grid_bounds=use_ext_grid_bounds,
-        use_ext_grid_objective=use_ext_grid_objective,
-        check_lp=check_lp,
+        include_ext_grids=include_ext_grids,
+        check_line_loading=check_lp,
         check_vm=check_vm,
         check_pressure=check_pressure,
-        check_t=check_t,
+        check_temperature=check_t,
         debug=debug,
     )
     return run_energy_flow_optimization(

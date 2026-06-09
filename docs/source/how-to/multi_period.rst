@@ -117,7 +117,7 @@ Solve and inspect:
    bar_colors = [C_CHG if v >= 0 else C_DIS for v in disp_vals]
    axes[1].bar(steps, disp_vals, color=bar_colors, alpha=0.8, width=0.6)
    axes[1].axhline(0, color="grey", lw=0.8)
-   axes[1].set_ylabel("Battery  [MW]\n+ charge  /  − discharge")
+   axes[1].set_ylabel("Battery  [MW]\n+ charge  /  - discharge")
    axes[1].set_title("Optimised dispatch", fontsize=10)
    axes[1].grid(axis="y", alpha=0.3)
 
@@ -312,7 +312,7 @@ Solve and query CHP dispatch:
 
    axes[2].plot(steps, chp_reg.values, marker="o", lw=2, color=C_CHP)
    axes[2].fill_between(steps, 0, chp_reg.values, alpha=0.12, color=C_CHP)
-   axes[2].set_ylabel("CHP regulation  [−]")
+   axes[2].set_ylabel("CHP regulation  [-]")
    axes[2].set_xlabel("Period")
    axes[2].set_ylim(0, 1.1)
    axes[2].set_xticks(steps)
@@ -612,7 +612,7 @@ Runner functions
    * - ``run_multi_period(..., terminal_state={...})``
      - Anchor final-step variable values, e.g. ``{(bat_id, "e_mwh"): 2.0}``
    * - ``run_multi_period(..., initial_state={...})``
-     - Override t=−1 values used by ``inter_temporal_equations``
+     - Override t=-1 values used by ``inter_temporal_equations``
    * - ``run_multi_period(..., optimization_problem=prob)``
      - Pass an ``OptimizationProblem`` to declare free variables and objectives
    * - ``run_mpc(net, td, total_steps, horizon, execution_steps, ...)``

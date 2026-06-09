@@ -65,13 +65,13 @@ Custom problem
 
 For finer control — different weights per carrier, extra constraints, or
 different bounds — use
-:func:`~monee.problem.create_load_shedding_optimization_problem` directly:
+:func:`~monee.problem.create_min_load_shedding_problem` directly:
 
 .. testcode::
 
     import monee.express as mx
     from monee import run_energy_flow_optimization
-    from monee.problem import create_load_shedding_optimization_problem
+    from monee.problem import create_min_load_shedding_problem
 
     # Build a small test network
     net = mx.create_multi_energy_network()
@@ -82,11 +82,11 @@ different bounds — use
     mx.create_power_load(net, bus_1, p_mw=0.4, q_mvar=0.0)
 
     # Create and customise the load-shedding problem
-    problem = create_load_shedding_optimization_problem(
-        load_weight=20,           # penalty per MW of shed load
-        bounds_el=(0.92, 1.08),   # tighter voltage bounds
-        check_pressure=False,     # no gas grid present
-        check_t=False,            # no heat grid present
+    problem = create_min_load_shedding_problem(
+        demand_weight=20,            # penalty per MW of shed demand
+        bounds_el=(0.92, 1.08),      # tighter voltage bounds
+        check_pressure=False,        # no gas grid present
+        check_temperature=False,     # no heat grid present
         debug=False,
     )
 
@@ -103,7 +103,7 @@ different bounds — use
    automatically excluded and their ``regulation`` is reported as ``0.0``
    (fully shed) in the result.
 
-Key parameters of ``create_load_shedding_optimization_problem``:
+Key parameters of ``create_min_load_shedding_problem``:
 
 .. list-table::
    :header-rows: 1
@@ -111,19 +111,24 @@ Key parameters of ``create_load_shedding_optimization_problem``:
 
    * - Parameter
      - Effect
-   * - ``load_weight``
-     - Penalty factor applied to each unit of shed load. Higher values push
-       the solver to avoid curtailment. Default: 10.
+   * - ``demand_weight`` / ``generator_weight``
+     - Penalty factors applied to each unit of shed demand / curtailed
+       generation. Higher demand weight pushes the solver to avoid load
+       curtailment. Defaults: ``1e3`` / ``0.1``.
    * - ``bounds_el``
      - ``(min, max)`` voltage bounds in per unit. Default: ``(0.9, 1.1)``.
    * - ``bounds_heat``
      - ``(min, max)`` temperature bounds in per unit. Default: ``(0.9, 1.1)``.
    * - ``bounds_gas``
      - ``(min, max)`` pressure bounds in per unit. Default: ``(0.9, 1.1)``.
-   * - ``check_vm`` / ``check_t`` / ``check_pressure``
+   * - ``check_vm`` / ``check_temperature`` / ``check_pressure`` / ``check_line_loading``
      - Disable individual bound checks for carriers not present in the network.
-   * - ``use_ext_grid_bounds``
-     - Enforce bounds on external grid exchanges. Default: ``True``.
+   * - ``include_ext_grids``
+     - Make external grids controllable, bound their exchange, and add a
+       quadratic slack nudging exchange toward zero. Default: ``True``.
+   * - ``auto_priority_floor``
+     - Scale ``demand_weight`` so shed cost dominates formulation-tightening
+       terms regardless of network size. Default: ``True``.
    * - ``debug``
      - Enable verbose solver output. Default: ``False``.
 

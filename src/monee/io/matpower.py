@@ -111,7 +111,14 @@ def fill_node_dict(bus_mat, node_dict_list, child_dict_list):
         node_dict["grid_id"] = "power"
         node_dict["values"] = {}
         node_dict["values"]["vm_pu"] = as_controllable(bus_row[7])
-        node_dict["values"]["va_degree"] = as_controllable(bus_row[8])
+        # Seed the angle decision variable (va_radians); va_degree stays the
+        # model's derived Intermediate (= 180/π·va_radians). Setting va_degree
+        # here would overwrite that Intermediate with a free, unconstrained Var.
+        node_dict["values"]["va_radians"] = {
+            "value": bus_row[8] * math.pi / 180,
+            "min": -math.pi,
+            "max": math.pi,
+        }
         node_dict["values"]["base_kv"] = bus_row[9]
         node_dict["model_type"] = "Bus"
         node_dict["child_ids"] = []

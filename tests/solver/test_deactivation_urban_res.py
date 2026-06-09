@@ -155,12 +155,12 @@ def _assert_converge(result):
 
 def _solve(net):
     net.apply_formulation(MISOCP_NETWORK_FORMULATION)
-    problem = mp.create_load_shedding_optimization_problem(
+    problem = mp.create_min_load_shedding_problem(
         # Force ext_grid to contribute nothing → only 1 MW generator feeds B2.
         ext_grid_el_bounds=(0, 0),
-        use_ext_grid_bounds=True,
+        include_ext_grids=True,
         # Disable non-electric checks to keep the test focused.
-        check_t=False,
+        check_temperature=False,
         check_pressure=False,
     )
 

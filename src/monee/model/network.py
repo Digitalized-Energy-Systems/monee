@@ -463,6 +463,17 @@ class Network:
             node_id = overwrite_id
 
         grid = self._or_default(grid)
+        # Apply the grid's voltage floor to the bus voltage variable so the
+        # 1/vm term in the AC current equations stays well-conditioned for NLP
+        # solvers (IPOPT). No-op for nodes without ``vm_pu`` (e.g. junctions) and
+        # for a user-customised lower bound (only the default 0 is raised).
+        vm_pu = getattr(model, "vm_pu", None)
+        if (
+            isinstance(vm_pu, Var)
+            and vm_pu.min in (0, None)
+            and hasattr(grid, "vm_pu_min")
+        ):
+            vm_pu.min = grid.vm_pu_min
         node = Node(
             node_id,
             model,

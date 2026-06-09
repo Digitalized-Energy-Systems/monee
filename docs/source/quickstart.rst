@@ -136,7 +136,7 @@ supports fully custom objectives and constraints:
 .. testcode::
 
     from monee import mx, run_energy_flow_optimization
-    from monee.problem import create_load_shedding_optimization_problem
+    from monee.problem import create_min_load_shedding_problem
 
     opt_net   = mx.create_multi_energy_network()
     opt_bus_0 = mx.create_bus(opt_net)
@@ -146,10 +146,10 @@ supports fully custom objectives and constraints:
     mx.create_ext_power_grid(opt_net, opt_bus_0)
     mx.create_power_load(opt_net, opt_bus_1, p_mw=0.5, q_mvar=0.0)
 
-    problem = create_load_shedding_optimization_problem(
+    problem = create_min_load_shedding_problem(
         bounds_el=(0.9, 1.1),
-        check_pressure=False,   # no gas grid in this network
-        check_t=False,          # no heat grid in this network
+        check_pressure=False,      # no gas grid in this network
+        check_temperature=False,   # no heat grid in this network
     )
 
     result = run_energy_flow_optimization(opt_net, problem)

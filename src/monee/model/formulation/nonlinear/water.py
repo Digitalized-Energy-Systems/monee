@@ -196,7 +196,7 @@ class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
         )
 
         # Pressure drop with φ replacing friction·m²:
-        #   (p_i − p_j) · pressure_ref · on_off == K · -(φ_pos − φ_neg)
+        #   (p_i - p_j) · pressure_ref · on_off == K · -(φ_pos - φ_neg)
         K = branch.length_m / (
             2.0 * grid.fluid_density * branch._pipe_area**2 * branch.diameter_m
         )

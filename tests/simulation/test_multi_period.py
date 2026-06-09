@@ -646,9 +646,7 @@ def test_multi_period_load_shedding():
     [-3, 3] MW) and a load that exceeds 3 MW at certain periods.  The
     solver must curtail load via the regulation variable at those periods.
     """
-    from monee.problem.load_shedding import (
-        create_multi_period_load_shedding_optimization_problem,
-    )
+    from monee.problem.min_load_shedding import create_min_load_shedding_problem
 
     net, b0, b1, load_id = _simple_power_net()
 
@@ -656,10 +654,10 @@ def test_multi_period_load_shedding():
     td = TimeseriesData()
     td.add_child_series(load_id, "p_mw", [2.0, 5.0, 2.0, 4.0])
 
-    prob = create_multi_period_load_shedding_optimization_problem(
+    prob = create_min_load_shedding_problem(
         ext_grid_el_bounds=(-3.0, 3.0),
-        use_ext_grid_objective=False,
-        check_lp=False,  # skip line loading for simplicity
+        include_ext_grids=True,
+        check_line_loading=False,  # skip line loading for simplicity
     )
 
     result = run_multi_period(net, td, steps=4, optimization_problem=prob, dt_h=1.0)
@@ -681,9 +679,7 @@ def test_multi_period_load_shedding():
 
 def test_multi_period_load_shedding_ramp():
     """Regulation ramp limit prevents abrupt shedding changes between periods."""
-    from monee.problem.load_shedding import (
-        create_multi_period_load_shedding_optimization_problem,
-    )
+    from monee.problem.min_load_shedding import create_min_load_shedding_problem
 
     net, b0, b1, load_id = _simple_power_net()
 
@@ -691,20 +687,20 @@ def test_multi_period_load_shedding_ramp():
     td.add_child_series(load_id, "p_mw", [2.0, 5.0, 2.0, 4.0])
 
     # Without ramp limit
-    prob_free = create_multi_period_load_shedding_optimization_problem(
+    prob_free = create_min_load_shedding_problem(
         ext_grid_el_bounds=(-3.0, 3.0),
-        use_ext_grid_objective=False,
-        check_lp=False,
+        include_ext_grids=True,
+        check_line_loading=False,
     )
     r_free = run_multi_period(
         net, td, steps=4, optimization_problem=prob_free, dt_h=1.0
     )
 
     # With tight ramp limit of 0.2 per period
-    prob_ramp = create_multi_period_load_shedding_optimization_problem(
+    prob_ramp = create_min_load_shedding_problem(
         ext_grid_el_bounds=(-3.0, 3.0),
-        use_ext_grid_objective=False,
-        check_lp=False,
+        include_ext_grids=True,
+        check_line_loading=False,
         regulation_ramp_limit=0.2,
     )
     r_ramp = run_multi_period(

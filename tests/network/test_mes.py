@@ -157,8 +157,8 @@ def create_large_lv_simbench(
             heat_kwargs={"node_based_heat_loads": True},
         )
         mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
-        mes.add_extension(GasLinepack())
-        mes.add_extension(LumpedThermalCapacitance(first_step_steady_state=True))
+        # mes.add_extension(GasLinepack())
+        # mes.add_extension(LumpedThermalCapacitance(first_step_steady_state=True))
         # mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=16))
         return mes
 

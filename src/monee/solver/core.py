@@ -461,6 +461,42 @@ def mark_ignored_components(network, ignored_nodes):
                     sc.ignored = True
 
 
+def mark_heat_balance_slacks(network: Network, ignored_nodes):
+    """Mark one grid-forming reference node per energized heat island so its
+    (dependent) nodal heat balance is dropped — the heat carrier's slack,
+    mirroring the free mass-flow / angle slack the other carriers already have.
+
+    The nodal heat balances over a connected island are linearly dependent (one
+    is redundant); the grid-forming node absorbs the imbalance. Islands are
+    connected components of the active water subgraph; references are
+    ``GridFormingMixin`` children, matching the islanding extension's criterion.
+    """
+    from monee.model.grid import WaterGrid
+
+    heat_ids = {
+        n.id
+        for n in network.nodes
+        if isinstance(n.grid, WaterGrid) and n.active and n.id not in ignored_nodes
+    }
+    if not heat_ids:
+        return
+    g = nx.Graph()
+    g.add_nodes_from(heat_ids)
+    for branch in network.branches:
+        if not branch.active:
+            continue
+        a, b = branch.from_node_id, branch.to_node_id
+        if a in heat_ids and b in heat_ids:
+            g.add_edge(a, b)
+    for island in nx.connected_components(g):
+        for nid in island:
+            node = network.node_by_id(nid)
+            childs = network.childs_by_ids(node.child_ids)
+            if any(isinstance(c.model, GridFormingMixin) and c.active for c in childs):
+                node.model._drop_heat_balance = True
+                break
+
+
 def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
     """Call ``inject_fn(model, component, category)`` on each active component;
     ignored components get :func:`inject_nans` instead.

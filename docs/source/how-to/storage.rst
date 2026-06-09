@@ -80,7 +80,7 @@ Prescribed dispatch in timeseries
    )
    bat_id = mx.create_el_child(net, storage, node_id=bus1, name="battery")
 
-   # ── Schedule charge (+) / discharge (−) ──────────────────────────────────
+   # ── Schedule charge (+) / discharge (-) ──────────────────────────────────
    td = TimeseriesData()
    td.add_child_series(bat_id, "p_mw", [1.0, 0.5, -1.0, -1.5, 0.0, 0.5])
 
@@ -127,7 +127,7 @@ Prescribed dispatch in timeseries
    colors = [C_CHG if v >= 0 else C_DIS for v in DISPATCH]
    ax_d.bar(steps, DISPATCH, color=colors, alpha=0.8, width=0.6)
    ax_d.axhline(0, color="grey", lw=0.8)
-   ax_d.set_ylabel("Dispatch  [MW]\n+ charge  /  − discharge")
+   ax_d.set_ylabel("Dispatch  [MW]\n+ charge  /  - discharge")
    ax_d.set_title("Prescribed battery dispatch", fontsize=10)
    ax_d.grid(axis="y", alpha=0.3)
 
@@ -247,7 +247,7 @@ charge/discharge at every period:
    bar_colors = [C_CHG if v >= 0 else C_DIS for v in disp_vals]
    axes[1].bar(steps, disp_vals, color=bar_colors, alpha=0.8, width=0.6)
    axes[1].axhline(0, color="grey", lw=0.8)
-   axes[1].set_ylabel("Battery  [MW]\n+ charge  /  − discharge")
+   axes[1].set_ylabel("Battery  [MW]\n+ charge  /  - discharge")
    axes[1].set_title("Optimised dispatch", fontsize=10)
    axes[1].grid(axis="y", alpha=0.3)
 
@@ -331,7 +331,7 @@ Prescribed discharge
 
    The SoC update is ``m_stored_kg(t) = m_stored_kg(t-1) + dt_s * mass_flow(t)``
    where ``dt_s = dt_h * 3600``.  At 1 h per step:
-   1000 − 0.1 × 3600 = 640 kg after step 1.
+   1000 - 0.1 × 3600 = 640 kg after step 1.
 
 .. plot::
    :caption: Gas storage — charge and discharge cycle over 8 hours
@@ -368,7 +368,7 @@ Prescribed discharge
    colors = [C_CHG if v > 0 else (C_DIS if v < 0 else "lightgrey") for v in DISPATCH]
    ax_d.bar(steps, DISPATCH, color=colors, alpha=0.8, width=0.6)
    ax_d.axhline(0, color="grey", lw=0.8)
-   ax_d.set_ylabel("Net flow  [kg/s]\n+ charge  /  − discharge")
+   ax_d.set_ylabel("Net flow  [kg/s]\n+ charge  /  - discharge")
    ax_d.set_title("Prescribed gas storage dispatch", fontsize=10)
    ax_d.grid(axis="y", alpha=0.3)
 

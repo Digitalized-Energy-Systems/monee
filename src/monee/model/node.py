@@ -245,9 +245,8 @@ class Junction(NodeModel):
             from_branch_models, to_branch_models, connected_node_models, grid
         )
         if mass_flow_signed_list:
-            return [
+            eqs = [
                 junction_mass_flow_balance(mass_flow_signed_list),
-                junction_mass_flow_balance(energy_flow_list),
                 IntermediateEq("t_k", self.t_pu * grid.t_ref),
                 IntermediateEq(
                     "mass_flow",
@@ -260,4 +259,11 @@ class Junction(NodeModel):
                     ),
                 ),
             ]
+            # The nodal heat balances over a connected island are linearly
+            # dependent (one is redundant). The grid-forming reference node is
+            # the heat slack — drop its balance there, exactly as the slack bus
+            # absorbs the power balance. Marked once per island by the solver.
+            if not getattr(self, "_drop_heat_balance", False):
+                eqs.insert(1, junction_mass_flow_balance(energy_flow_list))
+            return eqs
         return []

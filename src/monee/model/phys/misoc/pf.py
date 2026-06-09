@@ -62,7 +62,7 @@ def soc_rel_lorentz(
     tap=1.0,
 ):
     """Lorentz form of :func:`soc_rel`: ``s = (W/tap²+ell)/2``, ``d = (W/tap²-ell)/2``,
-    ``P² + Q² + d² ≤ s²`` (since ``s² − d² = (W/tap²)·ell``)."""
+    ``P² + Q² + d² ≤ s²`` (since ``s² - d² = (W/tap²)·ell``)."""
     Wp = var_voltage_pu_i / (tap * tap)
     return [
         var_s == 0.5 * (Wp + var_im_ij_pu),

@@ -361,10 +361,10 @@ def test_load_shedding_p2g_network():
     multi_energy_network = create_two_line_example_with_2_pipe_example_p2g(
         source_flow=1
     )
-    load_shedding_problem = mp.create_load_shedding_optimization_problem(
+    load_shedding_problem = mp.create_min_load_shedding_problem(
         ext_grid_el_bounds=(0, 0),
         ext_grid_gas_bounds=(-0.0, 0.0),
-        use_ext_grid_bounds=True,
+        include_ext_grids=True,
     )
 
     result = ms.GEKKOSolver().solve(

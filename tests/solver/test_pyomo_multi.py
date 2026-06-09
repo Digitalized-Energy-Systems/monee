@@ -36,13 +36,13 @@ def test_scaled_example_gas_incident_pyo():
 
     print(monee.run_energy_flow(net_multi, solver=PyomoSolver()))
 
-    optimization_problem = mp.create_load_shedding_optimization_problem(
+    optimization_problem = mp.create_min_load_shedding_problem(
         bounds_el=bounds_el,
         bounds_heat=bounds_heat,
         bounds_gas=bounds_gas,
         ext_grid_el_bounds=ext_grid_el_bounds,
         ext_grid_gas_bounds=ext_grid_gas_bounds,
-        use_ext_grid_bounds=False,
+        include_ext_grids=True,
         debug=True,
     )
     result = monee.run_energy_flow_optimization(

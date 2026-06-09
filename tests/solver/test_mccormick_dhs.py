@@ -124,8 +124,8 @@ def test_mccormick_dhs_heat_generator_raises_temperature():
     # corresponds to (i, i+1).  Pipe 4→5 feeds junc[5]; pipe 5→6 leaves it.
     h_in_at_n5 = pipes["H_in_mw"][4]
     h_out_of_n5 = pipes["H_out_mw"][5]
-    # Paper eq. (9a) at the junction with q_mw_heat = −q_gen (injection):
-    #   H_in − H_out == −q_gen ⇒ H_out − H_in == q_gen.
+    # Paper eq. (9a) at the junction with q_mw_heat = -q_gen (injection):
+    #   H_in - H_out == -q_gen ⇒ H_out - H_in == q_gen.
     residual = h_out_of_n5 - h_in_at_n5 - q_gen_mw
     assert math.isclose(residual, 0.0, rel_tol=1e-4, abs_tol=1e-6), (
         f"Node eq. 9a balance violated at junc[5], residual={residual}"
@@ -146,7 +146,7 @@ def test_mccormick_dhs_balanced_gen_and_load():
     # HeatLoad is at juncs[20]; pipe 19→20 feeds it, pipe 20→21 leaves.
     h_in_at_n20 = pipes["H_in_mw"][19]
     h_out_of_n20 = pipes["H_out_mw"][20]
-    # Paper eq. (9a) at the load junction:  H_in − H_out == +q.
+    # Paper eq. (9a) at the load junction:  H_in - H_out == +q.
     residual = h_in_at_n20 - h_out_of_n20 - q_mw
     assert math.isclose(residual, 0.0, rel_tol=1e-4, abs_tol=1e-6), (
         f"Node eq. 9a balance violated at junc[20], residual={residual}"

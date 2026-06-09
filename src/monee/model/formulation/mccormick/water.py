@@ -108,7 +108,7 @@ class MccDHSNodeFormulation(NodeFormulation):
         eqs = []
 
         # LTC owns its own inter-temporal heat balance using the same H_in/H_out;
-        # emitting eq. 9a here too would force T(t) ≡ T(t−1) at LTC junctions.
+        # emitting eq. 9a here too would force T(t) ≡ T(t-1) at LTC junctions.
         ltc_owns_node = getattr(node, "_ltc_active", False)
 
         if not ltc_owns_node:
@@ -158,7 +158,7 @@ class MccDHSNodeFormulation(NodeFormulation):
             ):
                 print("Warning: you are ignoring enthalpy equation.")
             else:
-                # eq. 9a: Σ H_in + Σ H_boundary − Σ H_out = Σ q_child + Σ q_branch
+                # eq. 9a: Σ H_in + Σ H_boundary - Σ H_out = Σ q_child + Σ q_branch
                 eqs.append(
                     sum(h_in_terms) + sum(boundary_enthalpy_in) - sum(h_out_terms)
                     == sum(q_child_terms) + sum(q_branch_terms)
@@ -295,7 +295,7 @@ class MccDHSBranchFormulation(BranchFormulation):
 
 def mccormick_dhs_gap_bound_mw(branch, grid, num_partitions: int = 1) -> float:
     """Worst-case ``H_out_mw`` gap [MW]:
-    ``(c·t_ref/1e6) · m_U · (τ_U − τ_L) / (4·S)``."""
+    ``(c·t_ref/1e6) · m_U · (τ_U - τ_L) / (4·S)``."""
     tpu_L, tpu_U = _t_pu_env_bounds(grid)
     m_U = _branch_m_U(branch, grid)
     return C_WATER * grid.t_ref / 1e6 * m_U * (tpu_U - tpu_L) / (4 * num_partitions)
@@ -305,7 +305,7 @@ def mccormick_dhs_gap_bound_k(
     grid, num_partitions: int = 1, branch=None, mass_flow_kgs=None
 ) -> float:
     """Worst-case gap as a sender-temperature error [K]:
-    ``t_ref·(τ_U − τ_L)/(4·S)`` at ``m = m_U``, scaling as ``m_U/m`` below."""
+    ``t_ref·(τ_U - τ_L)/(4·S)`` at ``m = m_U``, scaling as ``m_U/m`` below."""
     tpu_L, tpu_U = _t_pu_env_bounds(grid)
     base_k = grid.t_ref * (tpu_U - tpu_L) / (4 * num_partitions)
     if mass_flow_kgs is None:

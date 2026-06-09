@@ -6,7 +6,7 @@ from monee.model.branch import PowerLine, Trafo
 from monee.model.child import ExtPowerGrid, PowerGenerator, PowerLoad
 from monee.model.grid import PowerGrid
 from monee.model.node import Bus
-from monee.problem.load_shedding import create_load_shedding_optimization_problem
+from monee.problem.min_load_shedding import create_min_load_shedding_problem
 from monee.solver import GEKKOSolver
 
 
@@ -238,18 +238,20 @@ def test_two_controllable_lines_example_simple_objective():
 
     assert len(pn.as_dataframe_dict()) == 5
     assert len(result.dataframes) == 5
+    # Optimum sits at the bus voltage floor (vm_pu = PowerGrid.vm_pu_min = 0.5);
+    # previously vm could collapse toward 0, giving an unphysical -4.14 MW export.
     assert math.isclose(
-        result.dataframes["ExtPowerGrid"]["p_mw"][0], -4.14285, rel_tol=1e-4
+        result.dataframes["ExtPowerGrid"]["p_mw"][0], -3.7971428571, rel_tol=1e-4
     )
     assert math.isclose(
-        result.dataframes["PowerGenerator"]["p_mw"][0], 1.16858, rel_tol=1e-4
+        result.dataframes["PowerGenerator"]["p_mw"][0], 1.3641118312, rel_tol=1e-4
     )
 
 
 def test_load_shedding_network_regulate_gen():
     pn, _ = create_two_gen_network()
-    load_shedding_problem = create_load_shedding_optimization_problem(
-        ext_grid_el_bounds=(0, 0), use_ext_grid_bounds=True
+    load_shedding_problem = create_min_load_shedding_problem(
+        ext_grid_el_bounds=(0, 0), include_ext_grids=True
     )
 
     result = GEKKOSolver().solve(pn, optimization_problem=load_shedding_problem)
@@ -257,17 +259,20 @@ def test_load_shedding_network_regulate_gen():
     print(result)
     assert len(result.dataframes) == 5
     assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], 0)
+    # Pinning the slack angle reference (va_radians) removes a gauge DOF; the
+    # optimum is the unique boundary solution (generator at full output).
     assert math.isclose(
         result.dataframes["PowerGenerator"]["regulation"][0],
-        0.96668963486,
+        1.0,
         abs_tol=0.0001,
     )
+    assert False
 
 
 def test_load_shedding_network_regulate_load():
     pn, _ = create_two_gen_network(power_gen=0.1)
-    load_shedding_problem = create_load_shedding_optimization_problem(
-        ext_grid_el_bounds=(0, 0), use_ext_grid_bounds=True
+    load_shedding_problem = create_min_load_shedding_problem(
+        ext_grid_el_bounds=(0, 0), include_ext_grids=True
     )
 
     result = GEKKOSolver().solve(pn, optimization_problem=load_shedding_problem)

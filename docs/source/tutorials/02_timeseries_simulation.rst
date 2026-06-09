@@ -185,7 +185,7 @@ Negative values indicate that excess PV is exported back to the grid.
    axes[1].bar(hours, grid_imp, width=2.0, color=imp_colors, alpha=0.8,
                align="edge")
    axes[1].axhline(0, color="grey", lw=0.8)
-   axes[1].set_ylabel("Grid flow  [MW]\n+ import  /  − export")
+   axes[1].set_ylabel("Grid flow  [MW]\n+ import  /  - export")
    axes[1].set_title("External grid import / export", fontsize=10)
    axes[1].grid(axis="y", alpha=0.3)
 

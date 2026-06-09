@@ -7,7 +7,7 @@ from monee.model.child import ExtPowerGrid, PowerGenerator, PowerLoad
 from monee.model.formulation import MISOCP_NETWORK_FORMULATION
 from monee.model.grid import PowerGrid
 from monee.model.node import Bus
-from monee.problem.load_shedding import create_load_shedding_optimization_problem
+from monee.problem.min_load_shedding import create_min_load_shedding_problem
 from monee.solver import GEKKOSolver, PyomoSolver
 
 
@@ -83,12 +83,12 @@ def test_load_shedding_with_disconnected_bus():
     """
     pn = _build_net()
     pn.apply_formulation(MISOCP_NETWORK_FORMULATION)
-    problem = create_load_shedding_optimization_problem(
+    problem = create_min_load_shedding_problem(
         # Force ext_grid to contribute nothing → only 1 MW generator feeds B2.
         ext_grid_el_bounds=(0, 0),
-        use_ext_grid_bounds=True,
+        include_ext_grids=True,
         # Disable non-electric checks to keep the test focused.
-        check_t=False,
+        check_temperature=False,
         check_pressure=False,
     )
 

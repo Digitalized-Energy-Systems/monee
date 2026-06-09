@@ -169,7 +169,7 @@ To solve with the optimizer choosing when to charge/discharge:
    bar_colors = [C_CHG if v >= 0 else C_DIS for v in disp_vals]
    axes[1].bar(steps, disp_vals, color=bar_colors, alpha=0.8, width=0.6)
    axes[1].axhline(0, color="grey", lw=0.8)
-   axes[1].set_ylabel("Battery  [MW]\n+ charge  /  − discharge")
+   axes[1].set_ylabel("Battery  [MW]\n+ charge  /  - discharge")
    axes[1].set_title("Optimised dispatch", fontsize=10)
    axes[1].grid(axis="y", alpha=0.3)
 

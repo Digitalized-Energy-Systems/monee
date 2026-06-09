@@ -28,6 +28,7 @@ from .core import (
     ignore_compound,
     ignore_node,
     inject_vars,
+    mark_heat_balance_slacks,
     mark_ignored_components,
     persist_solution,
     withdraw_vars,
@@ -286,6 +287,12 @@ class PyomoSolver(SolverInterface):
 
         branches = network.branches
         compounds = network.compounds
+
+        # Drop each heat island's dependent nodal balance at its grid-forming
+        # node (heat slack) — result-preserving for the exact balance. Under
+        # mccormick the Junction balance is already trivial and the relaxed
+        # eq. 9a is kept, so this is a no-op there.
+        mark_heat_balance_slacks(network, ignored_nodes)
 
         inject_vars(
             lambda model, comp, cat: PyomoSolver.inject_pyomo_vars_attr(

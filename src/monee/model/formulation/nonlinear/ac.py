@@ -3,6 +3,7 @@ import math
 import numpy as np
 
 import monee.model.phys.nonlinear.ac as opfmodel
+from monee.model.core import Const, Var
 
 from ..core import BranchFormulation, NodeFormulation
 
@@ -11,6 +12,17 @@ SQRT_3 = np.sqrt(3)
 
 class ACElectricityNodeFormulation(NodeFormulation):
     pass
+
+
+class ACElectricitySimNodeFormulation(ACElectricityNodeFormulation):
+    """AC bus for a square IMODE=1 simulation: pins ``vm_pu_squared`` (declared
+    for MISOCP, unused under AC) so it does not float as a phantom degree of
+    freedom."""
+
+    def ensure_var(self, model):
+        v = getattr(model, "vm_pu_squared", None)
+        if isinstance(v, Var):
+            model.vm_pu_squared = Const(v.value)
 
 
 class ACElectricityBranchFormulation(BranchFormulation):

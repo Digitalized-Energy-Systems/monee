@@ -57,11 +57,16 @@ def _make_urban_district_timeseries(
 
 
 def _solve(network):
-    problem = mp.create_load_shedding_optimization_problem(
+    problem = mp.create_min_load_shedding_problem(
         bounds_el=BOUNDS_EL,
         bounds_heat=BOUNDS_HEAT,
         bounds_gas=BOUNDS_GAS,
-        use_ext_grid_bounds=False,
+        # The legacy formulation left the external grids unbounded
+        # (use_ext_grid_bounds=False); replicate with non-binding wide bounds.
+        ext_grid_el_bounds=(-100, 100),
+        ext_grid_gas_bounds=(-100, 100),
+        ext_grid_heat_bounds=(-100, 100),
+        include_ext_grids=True,
     )
     return run_energy_flow_optimization(
         network,

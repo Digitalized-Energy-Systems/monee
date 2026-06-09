@@ -108,11 +108,11 @@ import monee
 
 net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)
 
-problem = monee.create_load_shedding_optimization_problem(
+problem = monee.create_min_load_shedding_problem(
     bounds_el=(0.9, 1.1),    # voltage bounds (pu)
     bounds_heat=(0.9, 1.1),  # temperature bounds (pu)
     bounds_gas=(0.9, 1.1),   # pressure bounds (pu)
-    use_ext_grid_bounds=False,
+    include_ext_grids=True,
 )
 
 result = monee.run_energy_flow_optimization(

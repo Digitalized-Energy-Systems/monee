@@ -171,7 +171,7 @@ def _aux_objective_upper_bound(
             ub_pos = getattr(m_pos_sq, "max", None) or 100.0**2
             ub_neg = getattr(m_neg_sq, "max", None) or 100.0**2
             total += 1e-4 * (ub_pos + ub_neg)
-        # McCormick-DHS t_pu pull: ε·(1−t_pu), t_pu∈[0,2].
+        # McCormick-DHS t_pu pull: ε·(1-t_pu), t_pu∈[0,2].
         t_pu = getattr(m, "t_pu", None)
         if t_pu is not None:
             total += 1e-6 * 2.0
@@ -276,11 +276,11 @@ def _make_auto_priority_floor_hook(
 def _shedding_mw(model, gas_mw_factor=None, cp_rated_mw=None):
     """Unserved-energy expression for *model* in MW-equivalent.
 
-    For LinearHX branches the under-delivery gap ``|q_mw_set − q_mw_delivered|``
+    For LinearHX branches the under-delivery gap ``|q_mw_set - q_mw_delivered|``
     captures both regulation cuts and physical shortfall from a narrow ΔT,
-    which a pure ``(1−reg)`` proxy would miss. External grids return 0.
+    which a pure ``(1-reg)`` proxy would miss. External grids return 0.
     CP types (when ``include_coupling_points=True``) are penalised by
-    ``cp_rated_mw · (1 − regulation)``.
+    ``cp_rated_mw · (1 - regulation)``.
     """
     reg = getattr(model, "regulation", 1)
 
@@ -364,7 +364,7 @@ def create_min_load_shedding_problem(
     """Create a minimal load-shedding optimisation problem for multi-energy grids.
 
     Each demand/generator/coupling gets a regulation Var ∈ [0,1]; the objective
-    penalises ``(1−regulation)`` weighted per category. Gas Sink/Source shed is
+    penalises ``(1-regulation)`` weighted per category. Gas Sink/Source shed is
     energy-converted via the enclosing grid's HHV. External grids contribute
     only via ``ext_grid_*_bounds`` constraints (and an optional quadratic slack
     nudge to zero exchange when ``include_ext_grids=True``).
@@ -377,7 +377,7 @@ def create_min_load_shedding_problem(
     ``include_coupling_points`` (default False) extends the demand-side of the
     objective to coupling-point components (CHP / CHPHG / G2H / P2H control
     nodes and the HG branch variants P2G / G2P / P2H_HG / G2H_HG). Each CP is
-    penalised at ``demand_weight · cp_input_rated_mw · (1 − regulation)`` —
+    penalised at ``demand_weight · cp_input_rated_mw · (1 - regulation)`` —
     i.e. treated like a load on its input carrier (gas or power).
     """
     problem = OptimizationProblem(debug=debug, lex_objectives=lex_objectives)

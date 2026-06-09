@@ -29,12 +29,15 @@ from .core import (
     ignore_compound,
     ignore_node,
     inject_vars,
+    mark_heat_balance_slacks,
     mark_ignored_components,
     persist_solution,
     remove_cps,
     withdraw_vars,
 )
 
+# APOPT (SOLVER=1) MINLP options. IPOPT rejects the minlp_* keys, so they are
+# applied only for the APOPT path (see _solver_options).
 DEFAULT_SOLVER_OPTIONS = [
     "minlp_maximum_iterations 1000",
     "minlp_max_iter_with_int_sol 500",
@@ -49,6 +52,22 @@ DEFAULT_SOLVER_OPTIONS = [
     "objective_convergence_tolerance 1.0e-4",
     "constraint_convergence_tolerance 1.0e-4",
 ]
+
+# IPOPT (SOLVER=3) is a pure-NLP solver — the smooth gas/heat formulations target
+# it. Only IPOPT-valid option keys here.
+IPOPT_SOLVER_OPTIONS = [
+    "max_iter 3000",
+    "tol 1.0e-6",
+    "constr_viol_tol 1.0e-6",
+]
+
+
+def _solver_options(solver: int):
+    """APOPT keeps its MINLP options; IPOPT gets NLP-only options it accepts."""
+    return IPOPT_SOLVER_OPTIONS if solver == GEKKO_IPOPT else DEFAULT_SOLVER_OPTIONS
+
+
+GEKKO_IPOPT = 3
 
 
 class GekkoCubicSplineImpl:
@@ -74,8 +93,12 @@ def _process_intermediate_eqs(m, model, equations):
 
 
 class GEKKOSolver(SolverInterface):
-    def __init__(self, solver=1):
+    def __init__(self, solver=1, simulation=False):
         self.solver: int = solver
+        # simulation=True runs a plain energy flow as a square steady-state
+        # simulation (IMODE=1) — far faster than optimising the feasibility
+        # problem — and falls back to IMODE=3 if the model is not square.
+        self.simulation: bool = simulation
 
     @staticmethod
     def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel, id):
@@ -120,6 +143,19 @@ class GEKKOSolver(SolverInterface):
     def _add_equations(self, m, eqs):
         m.Equations(eqs)
 
+    @staticmethod
+    def _solve_with_fallback(m, use_sim):
+        """Solve, trying IMODE=1 first in simulation mode and falling back to
+        IMODE=3 if the model is not square (``Degrees of Freedom``) or otherwise
+        fails as a simulation. The IMODE=3 retry runs on the same model."""
+        if use_sim:
+            try:
+                m.solve(disp=False)
+                return
+            except Exception:
+                m.options.IMODE = 3
+        m.solve(disp=False)
+
     def solve(
         self,
         input_network: Network,
@@ -131,8 +167,8 @@ class GEKKOSolver(SolverInterface):
         m = GEKKO(remote=False)
         m.options.SOLVER = self.solver
         m.options.WEB = 0
-        m.options.IMODE = 3
-        m.solver_options = DEFAULT_SOLVER_OPTIONS
+        m.options.IMODE = 1 if self.simulation else 3
+        m.solver_options = _solver_options(self.solver)
         network = input_network.copy()
 
         for ext in network.extensions:
@@ -166,6 +202,11 @@ class GEKKOSolver(SolverInterface):
 
         branches = network.branches
         compounds = network.compounds
+
+        # Recognise each heat island's grid-forming node as the heat slack and
+        # drop its (dependent) nodal heat balance — removes the heat carrier's
+        # redundant constraint and is required for a square IMODE=1 solve.
+        mark_heat_balance_slacks(network, ignored_nodes)
 
         inject_vars(
             lambda model, comp, cat: GEKKOSolver.inject_gekko_vars_attr(
@@ -217,8 +258,18 @@ class GEKKOSolver(SolverInterface):
         if objs_exprs:
             m.Obj(sum(objs_exprs))
 
+        # IMODE=1 (square simulation) only applies to a plain flow: no objective
+        # of any kind (else IMODE=1 silently ignores it).
+        use_sim = (
+            self.simulation
+            and optimization_problem is None
+            and not objs_exprs
+            and not network.objectives
+        )
+        m.options.IMODE = 1 if use_sim else 3
+
         try:
-            m.solve(disp=False)
+            self._solve_with_fallback(m, use_sim)
         except Exception:
             logging.error("Solver not converged.")
             if draw_debug:
