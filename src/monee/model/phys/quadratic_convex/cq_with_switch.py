@@ -214,7 +214,7 @@ def current_soc_relax(
     p_var,
     q_var,
     v_sq_var,
-    i_var, #current magnitude I_ij of AC power line
+    i_var, #QC current-squared-like variable l_ij power line
     v_sq_ub,
     on_off=1,
 ):

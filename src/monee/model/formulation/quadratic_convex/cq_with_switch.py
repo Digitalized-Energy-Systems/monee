@@ -178,10 +178,10 @@ class QCElectricityBranchFormulation(BranchFormulation):
                 on_off=branch.on_off,
             ),
             branch.i_from_ka
-            >= (branch.p_from_mw**2 + branch.q_from_mvar**2)
+            >= kwargs["sqrt_impl"](branch.p_from_mw**2 + branch.q_from_mvar**2)
             / (from_node_model.vars["vm_pu"] * from_node_model.vars["base_kv"] * SQRT_3),
             branch.i_to_ka
-            >= (branch.p_to_mw**2 + branch.q_to_mvar**2)
+            >= kwargs["sqrt_impl"](branch.p_to_mw**2 + branch.q_to_mvar**2)
             / (to_node_model.vars["vm_pu"] * to_node_model.vars["base_kv"] * SQRT_3),
         ]
 

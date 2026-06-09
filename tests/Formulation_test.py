@@ -601,6 +601,11 @@ def compare_monee_results(result1, result2):
     lines2_mismatches = l2[cols_to_keep]
     print(f"lines 1 mismatches: {lines1_mismatches.columns} and {lines1_mismatches}")
     print(f"lines 2 mismatches: {lines2_mismatches.columns} and {lines2_mismatches}")
+    differences = lines1_mismatches-lines2_mismatches
+    avg_difference = differences.abs().mean()
+    diff_relativetoAC = avg_difference/lines2_mismatches.abs().mean()
+    print(f"average difference: {avg_difference}")
+    print(f"relative difference: {diff_relativetoAC}")
     return lines1_mismatches, lines2_mismatches
 
 def plot_column_compare(result1, result2):
@@ -618,21 +623,207 @@ def plot_column_compare(result1, result2):
         plt.legend()
         plt.grid(True)
         plt.show()
+def boxplot_comparison(lines1_mismatches, lines2_mismatches):
+    differences = lines1_mismatches-lines2_mismatches
+    relative_differences = differences / lines2_mismatches.replace(0,float('nan'))
+    #plot with absolute diference
+    plt.figure(figsize=(12, 6))
+    differences[["p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar"]].boxplot(rot=90)
+    plt.title("Boxplot of Absolute Differences")
+    plt.ylabel("Difference")
+    plt.tight_layout()
+    plt.show()
+    #plot with relative differences
+    plt.figure(figsize=(12, 6))
+    relative_differences[["p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar"]].boxplot(rot=90)
+    plt.title("Boxplot of Relative Differences to AC")
+    plt.ylabel("Relative Difference")
+    plt.tight_layout()
+    plt.ylim(-100, 100)
+    plt.show()
+
+def run_result_comparison(ac_result,qc_result,component_name, id_col="id", label_ac="AC",label_qc="QC",tol=None, exclude_cols=None,):
+    if exclude_cols is None:
+        exclude_cols = [
+            "active",
+            "independent",
+            "ignored",
+            "backup",
+            "on_off",
+        ]
+
+    ac_tables = solver_result_to_tables(ac_result)
+    print(f"AC tables for {component_name}: \n {ac_tables[component_name]}")
+    qc_tables = solver_result_to_tables(qc_result)
+    print(f"QC tables for {component_name}: \n {qc_tables[component_name]}")
+    if component_name not in ac_tables:
+        raise KeyError(f"{component_name} not found in AC result. Available: {list(ac_tables)}")
+
+    if component_name not in qc_tables:
+        raise KeyError(f"{component_name} not found in QC result. Available: {list(qc_tables)}")
+
+    ac = ac_tables[component_name].copy()
+    qc = qc_tables[component_name].copy()
+
+    if id_col in ac.columns and id_col in qc.columns:
+        ac = ac.set_index(id_col)
+        qc = qc.set_index(id_col)
+
+    ac, qc = ac.align(qc, join="inner", axis=0)
+
+    common_cols = ac.columns.intersection(qc.columns)
+
+    numeric_cols = [
+        c for c in common_cols
+        if c not in exclude_cols
+        and pd.api.types.is_numeric_dtype(ac[c])
+        and pd.api.types.is_numeric_dtype(qc[c])
+    ]
+
+    if tol is not None:
+        numeric_cols = [
+            c for c in numeric_cols
+            if ((ac[c] - qc[c]).abs() > tol).any()
+        ]
+
+    if not numeric_cols:
+        print(f"No numeric columns to plot for {component_name}.")
+        return
+
+    x = range(len(ac))
+
+    for col in numeric_cols:
+        plt.figure(figsize=(10, 5))
+        plt.scatter(x, ac[col], label=label_ac, marker="o")
+        plt.scatter(x, qc[col], label=label_qc, marker="x")
+        plt.title(f"{component_name} — {col}: {label_ac} vs {label_qc}")
+        plt.xlabel(component_name)
+        plt.ylabel(col)
+        plt.legend()
+        plt.grid(True)
+        plt.tight_layout()
+        plt.show()
+def solver_result_to_tables(result):
+    tables = {}
+
+    for name in dir(result):
+        if name.startswith("_"):
+            continue
+
+        value = getattr(result, name)
+
+        if isinstance(value, pd.DataFrame):
+            tables[name] = value
+
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if isinstance(item, pd.DataFrame):
+                    tables[str(key)] = item
+
+    if not tables:
+        raise ValueError(
+            "No pandas DataFrames found in SolverResult. "
+            "Print dir(result) and check where monee stores component tables."
+        )
+    return tables
+def find_columns_more_than_percent_different(table1, table2, tol=0.05, id_col="id"):
+    df1 = table1.copy()
+    df2 = table2.copy()
+    if id_col in df1.columns and id_col in df2.columns:
+        df1 = df1.set_index(id_col)
+        df2 = df2.set_index(id_col)
+
+    # Keep only common rows and common columns
+    df1, df2 = df1.align(df2, join="inner", axis=0)
+    df1, df2 = df1.align(df2, join="inner", axis=1)
+
+    different_cols = []
+
+    for col in df1.columns:
+        if not ( pd.api.types.is_numeric_dtype(df1[col]) and pd.api.types.is_numeric_dtype(df2[col])
+        ):
+            continue
+
+        a = df1[col]
+        b = df2[col]
+
+        abs_diff = (a - b).abs()
+
+        # Relative difference based on max(abs(a), abs(b))
+        # This is more symmetric than using only df1 as reference.
+        denom = pd.concat([a.abs(), b.abs()], axis=1).max(axis=1)
+
+        rel_diff = abs_diff / denom.replace(0, np.nan)
+
+        # If both are zero, difference is 0.
+        # If one is zero and the other is not, rel_diff becomes 1.
+        one_zero = (denom == 0) & (abs_diff > 0)
+        rel_diff = rel_diff.fillna(0)
+
+        if ((rel_diff > tol) | one_zero).any():
+            different_cols.append(col)
+
+    return different_cols
+
+
+def compare_extracted_tables_more_than_percent( AC_result,QC_result,tol=0.05,id_col="id"):
+    ac_tables = solver_result_to_tables(AC_result)
+    qc_tables = solver_result_to_tables(QC_result)
+    comparison = {}
+    common_table_names = ac_tables.keys() & qc_tables.keys()
+    for table_name in common_table_names:
+        ac_df = ac_tables[table_name]
+        qc_df = qc_tables[table_name]
+
+        different_cols = find_columns_more_than_percent_different(
+            ac_df,
+            qc_df,
+            tol=tol,
+            id_col=id_col,
+        )
+
+        if not different_cols:
+            continue
+
+        ac_aligned = ac_df.copy()
+        qc_aligned = qc_df.copy()
+
+        if id_col in ac_aligned.columns and id_col in qc_aligned.columns:
+            ac_aligned = ac_aligned.set_index(id_col)
+            qc_aligned = qc_aligned.set_index(id_col)
+
+        ac_aligned, qc_aligned = ac_aligned.align(qc_aligned, join="inner", axis=0)
+        ac_aligned, qc_aligned = ac_aligned.align(qc_aligned, join="inner", axis=1)
+
+        comparison[table_name] = {
+            "different_columns": different_cols,
+            "ac": ac_aligned[different_cols],
+            "qc": qc_aligned[different_cols],
+        }
+
+    return comparison
 #PP_net = PP_create_two_line_power_example()
 print("--------------Pandapower AC--------------------------")
-PP_net = pp_create_11bus_high_meshed()
-PP_results = PP_test_power_network(PP_net, AC = True, show_results = True)
+PP_net = pp_create_66bus_high_meshed()
+PP_results = PP_test_power_network(PP_net, AC = True, show_results = False)
 print("--------------Monee AC--------------------------")
-monee_net_AC = monee_create_11bus_high_meshed()
+monee_net_AC = monee_create_three_string_network()
 monee_net_AC.apply_formulation(AC_NETWORK_FORMULATION)
-monee_result_AC = monee_test_power_network(monee_net_AC, show_results = True)
+monee_result_AC = monee_test_power_network(monee_net_AC, show_results = False)
 #For result table comparison
 
 print("--------------Monee QC--------------------------")
-monee_net_QC = monee_create_11bus_high_meshed()
+monee_net_QC = monee_create_three_string_network()
 monee_net_QC.apply_formulation(QC_NETWORK_FORMULATION)
-monee_result_QC = monee_test_power_network(monee_net_QC, show_results = True)
+monee_result_QC = monee_test_power_network(monee_net_QC, show_results = False)
 #For result table comparison
+
+run_result_comparison(monee_result_AC, monee_result_QC, "Bus")
+run_result_comparison(monee_result_AC, monee_result_QC, "PowerLine")
+run_result_comparison(monee_result_AC, monee_result_QC, "PowerLoad")
+run_result_comparison(monee_result_AC, monee_result_QC, "PowerGenerator")
+#column_comparison = compare_extracted_tables_more_than_percent(monee_result_AC, monee_result_QC)
+#print(column_comparison)
 '''
 print("--------------Result comparison-------------------------")
 print("Pandapower AC with Monee AC")
@@ -641,7 +832,7 @@ print("Pandapower AC with Monee QC")
 compare_line_results(PP_net, monee_result_QC)
 print("Monee QC with Monee AC")
 #compare_line_results(monee_result_QC, monee_result_AC)
-'''
+
 # OPF evaluation
 print("-----------------------Monee OPF AC Grid------------------------------")
 extgrid_bounds = (-0.5,0.5) #set bounds for both problems, other bounds are set internally (pandapower problem according to monee load_shedding)
@@ -659,3 +850,12 @@ pp_opf_net = pp_opf(PP_net,AC = True, extgrid_bounds = extgrid_bounds, show_deta
 print("Compare monee results")
 lines1_mismatches , lines2_mismatches = compare_monee_results(monee_opf_result_QC, monee_opf_result_AC)
 plot_column_compare(lines1_mismatches, lines2_mismatches)
+boxplot_comparison(lines1_mismatches, lines2_mismatches)
+'''
+#todo plot voltages against each other
+#todo look at current calculation (nur untere bound definiert, ist nur untere bound im paper oder fehlt da was?) -> im paper nur untere bound
+# ggf pyomo mit gurobi statt gekko
+# Frage: branch.i_from_ka und to_ka in Ac, fehlt da nicht eine Wurzel für tatsächliche Crrent?
+# todo voltage fehlt da ein faktor? je kleiner desto näher ist QC an AC
+# in AC wird nicht mit squared gerechnet, gleich in
+# mit development mergen (da ist wurzel in current eingefügut )
