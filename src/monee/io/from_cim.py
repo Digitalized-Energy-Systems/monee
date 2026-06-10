@@ -100,20 +100,6 @@ class CimImportReport:
             logger.warning("CIM import: skipped %d x %s", count, reason)
 
 
-# --------------------------------------------------------------------------- #
-# cimpy plumbing                                                               #
-# --------------------------------------------------------------------------- #
-def _lazy_cimpy():
-    try:
-        import cimpy
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise ImportError(
-            "CIM/CGMES import needs the optional 'cimpy' package. "
-            "Install it with `pip install cimpy`."
-        ) from exc
-    return cimpy
-
-
 def _get(obj, attr, default=None):
     """Safe attribute read that also turns empty CIM references into *default*."""
     value = getattr(obj, attr, default)
@@ -392,7 +378,14 @@ def import_cim_files(file_list, cgmes_version="cgmes_v2_4_15", gen_sign=-1.0):
     (network, report):
         The electrical :class:`Network` and a :class:`CimImportReport`.
     """
-    cimpy = _lazy_cimpy()
+    try:
+        import cimpy
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ImportError(
+            "CIM/CGMES import needs the optional 'cimpy' package. "
+            "Install it with `pip install cimpy`."
+        ) from exc
+
     if isinstance(file_list, str):
         file_list = [file_list]
     imported = cimpy.cim_import(file_list, cgmes_version)
