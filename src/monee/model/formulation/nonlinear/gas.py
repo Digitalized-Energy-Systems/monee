@@ -1,13 +1,15 @@
 import monee.model.phys.core.hydraulics as hydraulicsmodel
 import monee.model.phys.nonlinear.gf as ogfmodel
-from monee.model.core import Const, Intermediate, IntermediateEq, Var
+from monee.model.core import Const, Intermediate, IntermediateEq, PostProcess, Var
 
 from ..core import BranchFormulation, NodeFormulation
 
 
 class NLWeymouthNodeFormulation(NodeFormulation):
     def ensure_var(self, model):
-        model.pressure_pa = Intermediate(1000000)
+        # pressure_pa is report-only (= pressure_pu·pressure_ref); the real
+        # closure is attached in equations() where grid.pressure_ref is known.
+        model.pressure_pa = PostProcess(lambda v: float("nan"))
         model.pressure_pu = Intermediate(1)
         model.pressure_squared_pu = Var(1, min=0, max=3, name="pressure_sq_pu")
 
@@ -20,11 +22,13 @@ class NLWeymouthNodeFormulation(NodeFormulation):
         connected_child_models,
         **kwargs,
     ):
+        node.pressure_pa = PostProcess(
+            lambda v, ref=grid.pressure_ref: v.pressure_pu * ref
+        )
         return [
             IntermediateEq(
                 "pressure_pu", kwargs["sqrt_impl"](node.pressure_squared_pu)
             ),
-            IntermediateEq("pressure_pa", lambda: node.pressure_pu * grid.pressure_ref),
         ]
 
 

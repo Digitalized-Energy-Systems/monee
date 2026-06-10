@@ -8,6 +8,7 @@ from .core import (
     Const,
     Intermediate,
     IntermediateEq,
+    PostProcess,
     Component,
     model,
     upper,

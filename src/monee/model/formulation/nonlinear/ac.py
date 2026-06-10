@@ -3,7 +3,7 @@ import math
 import numpy as np
 
 import monee.model.phys.nonlinear.ac as opfmodel
-from monee.model.core import Const, Var
+from monee.model.core import PostProcess
 
 from ..core import BranchFormulation, NodeFormulation
 
@@ -11,18 +11,24 @@ SQRT_3 = np.sqrt(3)
 
 
 class ACElectricityNodeFormulation(NodeFormulation):
-    pass
+    """AC keeps the Bus-declared ``vm_pu_squared`` Var untouched. It is unused by
+    the AC equations (only MISOCP needs it), so it floats as a harmless phantom —
+    but GEKKO's barrier method is sensitive to its presence on borderline
+    networks, so the default optimization formulation must not remove it."""
 
 
 class ACElectricitySimNodeFormulation(ACElectricityNodeFormulation):
-    """AC bus for a square IMODE=1 simulation: pins ``vm_pu_squared`` (declared
-    for MISOCP, unused under AC) so it does not float as a phantom degree of
-    freedom."""
+    """Simulation variant: demote ``vm_pu_squared`` to a :class:`PostProcess`
+    report (= vm_pu²) so it carries no solver variable. This drops the phantom
+    DOF the IMODE=1 square solve cannot tolerate, while still reporting the true
+    value. Safe here because simulation runs deactivate the coupling control
+    nodes whose convergence the default formulation must protect."""
 
     def ensure_var(self, model):
-        v = getattr(model, "vm_pu_squared", None)
-        if isinstance(v, Var):
-            model.vm_pu_squared = Const(v.value)
+        # Some multi-grid control nodes subclass Bus (so they match here) without
+        # a vm_pu attribute — only act on real voltage buses.
+        if hasattr(model, "vm_pu"):
+            model.vm_pu_squared = PostProcess(lambda v: v.vm_pu**2)
 
 
 class ACElectricityBranchFormulation(BranchFormulation):

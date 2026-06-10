@@ -41,7 +41,14 @@ import json
 import numbers
 
 from monee.model import Network
-from monee.model.core import Compound, Const, Intermediate, Var, component_list
+from monee.model.core import (
+    Compound,
+    Const,
+    Intermediate,
+    PostProcess,
+    Var,
+    component_list,
+)
 
 #: Bumped whenever the on-disk structure changes in a non-additive way.
 FORMAT_VERSION = 2
@@ -61,7 +68,7 @@ def _encodable(value):
     """Return ``True`` if *value* can be losslessly written to the native format."""
     if value is None or isinstance(value, (bool, str)):
         return True
-    if isinstance(value, (Var, Const, Intermediate)):
+    if isinstance(value, (Var, Const, Intermediate, PostProcess)):
         return True
     if isinstance(value, (list, tuple)):
         return all(_encodable(item) for item in value)
@@ -88,6 +95,10 @@ def _encode_value(value):
         return {_TYPE_KEY: "Const", "value": value.value}
     if isinstance(value, Intermediate):
         return {_TYPE_KEY: "Intermediate", "value": value.value}
+    if isinstance(value, PostProcess):
+        # Only the computed value is portable; the lambda is re-attached on the
+        # next solve (its model's equations()/__init__ recreate it).
+        return {_TYPE_KEY: "PostProcess", "value": value.value}
     if isinstance(value, dict):
         return {k: _encode_value(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -111,6 +122,11 @@ def _decode_value(value):
             return Const(value["value"])
         if tag == "Intermediate":
             return Intermediate(value["value"])
+        if tag == "PostProcess":
+            # Carry the stored value via a constant lambda; the model's next
+            # solve re-attaches the real computation.
+            stored = value["value"]
+            return PostProcess(lambda _vals, _v=stored: _v, value=stored)
         if tag is not None:
             raise PersistenceException(f"Unknown encoded value type: {tag!r}")
 
@@ -144,7 +160,7 @@ def _decode_values(values_dict):
 
 def _json_default(obj):
     """Fallback encoder for stray objects (e.g. numpy scalars) in ``values``."""
-    if isinstance(obj, (Var, Const, Intermediate)):
+    if isinstance(obj, (Var, Const, Intermediate, PostProcess)):
         return _encode_value(obj)
     if hasattr(obj, "item"):  # numpy scalar
         return obj.item()

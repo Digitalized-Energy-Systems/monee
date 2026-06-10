@@ -869,23 +869,12 @@ def create_heat_supply_return_net_for_power(
     # Create the HX-Loads (or node-based HeatLoad children).
     for supply_id, q_mw in load_specs:
         if node_based_heat_loads:
-            # Node-based HeatLoad child (uses ``q_mw_heat`` on the junction).
-            # Compatible with the McCormick-DHS formulation, which only
-            # accounts for branch enthalpy via WaterPipe ``H_in_mw/H_out_mw``
-            # and node-level ``q_mw_heat``.  Pair every HeatLoad with a
-            # water Sink that drains the consumer's design mass flow —
-            # without it the consumer junction is a hydraulic dead-end
-            # (incoming pipe pinned to zero flow by McCormick-DHS), which
-            # makes the heat-load demand structurally infeasible.
             mx.create_heat_load(target_net, supply_id, q_mw=q_mw)
             # Design flow same as the LinearHX would compute internally:
             # m = q / (c · ΔT) with c = 4180 J/(kg·K), ΔT = 30 K default.
             m_design = q_mw * 1e6 / (4180.0 * 30.0)
             mx.create_water_sink(target_net, supply_id, mass_flow=round(m_design, 6))
         else:
-            # Branch-based HeatExchanger consumer: bridges supply junction
-            # to the shared return junction.  Compatible with the default
-            # LinearHeatExchanger formulation but NOT with McCormick-DHS.
             mx.create_heat_exchanger(
                 target_net,
                 from_node_id=supply_id,
@@ -893,13 +882,6 @@ def create_heat_supply_return_net_for_power(
                 q_mw=q_mw,
             )
 
-    # Create the HX-Generators (return → supply) in non-node-based mode,
-    # scaled by ``gen_scale`` so total HX-Gen capacity matches HX-Load
-    # demand.  Per-bus heat-generator HXs are only meaningful under
-    # formulations that allow flow reversal (e.g. plain LinearHeatExchanger);
-    # under McCormick-DHS the rooted-outward supply tree pins every pipe's
-    # flow direction, so a generator HX injecting mass into an intermediate
-    # consumer junction has no path to drain.  Skip them in node-based mode.
     if not node_based_heat_loads:
         for supply_id, q_mw_raw in gen_specs:
             q_mw = q_mw_raw * gen_scale
@@ -910,13 +892,6 @@ def create_heat_supply_return_net_for_power(
                 q_mw=-q_mw,
             )
 
-    # ---- Downstream-demand sweep (used by both HG capping and m_U_design) ---
-    # Each supply junction *i* sees a mass-flow ``m_downstream[i]`` equal to
-    # the sum of all consumer demands in its rooted subtree (post-order over
-    # the supply spanning tree).  This is the *only* mass-flow that can carry
-    # heat injected at *i* downstream toward consumers in a tree-shaped DHS
-    # with pinned flow direction (McCormick-DHS), so it sets the physical
-    # limit on local heat injection: ``q ≤ c · m · ΔT_design``.
     bus_demand_kgs: dict[int, float] = {}
     subtree: dict = {}
     if node_based_heat_loads:
@@ -929,10 +904,6 @@ def create_heat_supply_return_net_for_power(
             if p in keep_nodes and c in keep_nodes:
                 children_of.setdefault(p, []).append(c)
 
-        # Post-order accumulation: each bus's subtree mass-flow demand is its
-        # own consumer share plus the sum of its children's subtree totals.
-        # Iterative DFS keeps the worklist bounded; visited-flag pattern
-        # finalises a parent only after all its children are finalised.
         stack = [(slack_root, False)]
         while stack:
             bus, visited = stack.pop()
@@ -947,20 +918,6 @@ def create_heat_supply_return_net_for_power(
                 for child_bus in children_of.get(bus, []):
                     stack.append((child_bus, False))
 
-    # Node-based HeatGenerators at PowerGenerator buses.  This is the
-    # McCormick-DHS-compatible counterpart to the gas-side ``Source``
-    # injection at generator buses: a distributed primary heat fleet whose
-    # rated output participates in the nodal heat balance and gives
-    # downstream resilience studies a finite, drainable pool (instead of
-    # routing every kJ through the unbounded supply slack).
-    #
-    # The rated output ``p_gen_mw · node_heat_gen_share`` is capped by the
-    # local transport bandwidth ``c · m_downstream · ΔT_design`` so the HG
-    # never injects more heat than the supply tree at this junction can
-    # actually carry away at the 30 K design ΔT.  Without this cap a small
-    # PowerGenerator on a low-demand branch would force the local water to
-    # overheat past any physical DHS temperature (the supply-pipe McCormick
-    # envelope rejects it; a real network would simply have undersized HX).
     if node_based_heat_loads and node_heat_gen_share > 0:
         for node in power_net_as_st.nodes:
             if node.id not in bus_index_to_supply_junction:
@@ -1001,19 +958,6 @@ def create_heat_supply_return_net_for_power(
     )
 
     if heat_plant_mode == "two_port":
-        # Cold port (return slack): anchors the return-junction pressure
-        # so circulation can be driven, but does *not* pin the return
-        # temperature.  The return T emerges from the upstream heat
-        # balance (mass-weighted average of HX-Load outlet temperatures)
-        # — pinning it to a fixed setpoint over-constrains the balance
-        # whenever pipe losses or partial HX regulation make individual
-        # HX outlets diverge from the setpoint.  The two slacks together
-        # represent the heat plant as a two-port boundary: water exits
-        # at the return slack, is reheated externally, and re-enters at
-        # the supply slack.  Mass conservation forces
-        # ``m_supply_slack ≈ -m_return_slack`` (steady-state plant pump
-        # rate); the supply/return ΔT is preserved because the manifolds
-        # are no longer hydraulically shorted by a closing pipe.
         mx.create_ext_hydr_grid(
             target_net,
             node_id=return_junction,
@@ -1024,12 +968,6 @@ def create_heat_supply_return_net_for_power(
             name="Grid Connection Heat Return",
         )
     else:
-        # Legacy closed-loop topology: a single supply slack plus a
-        # closing return pipe back to it.  Hydraulically closed, but
-        # collapses the supply/return ΔT under the t-pin at the slack —
-        # see the docstring.  Optional open-loop relaxation via a Sink
-        # at the return junction (``screening``) trades mass-flow
-        # realism for solve speed.
         mx.create_water_pipe(
             target_net,
             from_node_id=return_junction,
@@ -1053,16 +991,6 @@ def create_heat_supply_return_net_for_power(
                 name="Grid Connection Heat Return Sink",
             )
 
-    # ---- Per-pipe ``m_U_design`` (Mccormick #5) -----------------------------
-    # For the McCormick-DHS formulation each pipe's mass-flow upper bound
-    # determines the McCormick envelope width; the velocity-cap default is
-    # tens of kg/s, while the actual downstream design demand on an LV-rural
-    # tree is typically below 1 kg/s.  Reuses the ``subtree`` sweep computed
-    # above (also used to cap HG injection at the local transport bandwidth);
-    # the formulation's ``_branch_m_U`` then prefers ``m_U_design`` over the
-    # velocity cap.  Only meaningful under ``node_based_heat_loads``
-    # (branch-HX trees route flow through HXs and closing pipes, where the
-    # simple downstream sum is misleading).
     if node_based_heat_loads:
         # Per-pipe m_U_design with 5× safety on the rated 30 K ΔT estimate so
         # tighter bounds (smaller ΔT, larger m) still fit the McCormick envelope.

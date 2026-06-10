@@ -2,11 +2,11 @@ from .branch import HeatExchanger
 from .child import NoVarChildModel, PowerGenerator, PowerLoad, Sink
 from .core import (
     Intermediate,
-    IntermediateEq,
     MultiGridBranchModel,
     MultiGridCompoundModel,
     MultiGridNodeModel,
     Node,
+    PostProcess,
     Var,
     model,
 )
@@ -74,9 +74,9 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
 
         self.t_k = Var(350, min=200, max=800, name="t_k")
         self.t_pu = Var(1, min=0, max=2, name="t_pu")
-        # pressure_pa is post-solve only; keeping it Intermediate avoids a 1e-6
-        # coefficient on every junction balance row.
-        self.pressure_pa = Intermediate(1000000)
+        # pressure_pa is post-solve only (= pressure_pu·pressure_ref); compute it
+        # outside the solver. Real closure attached in equations() (needs grid).
+        self.pressure_pa = PostProcess(lambda v: float("nan"))
         self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
@@ -109,6 +109,9 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
             heat_from_branches, heat_to_branches, [], None
         )
         # MW = gas_kgps * 3.6 * hhv [kWh/kg]
+        self.pressure_pa = PostProcess(
+            lambda v, ref=grid[0].pressure_ref: v.pressure_pu * ref
+        )
         return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
@@ -120,9 +123,6 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
             * (3.6 * self._hhv),
             self.heat_mw == sub_he.q_mw,
             self.t_pu == self.t_k / grid[0].t_ref,
-            IntermediateEq(
-                "pressure_pa", lambda: self.pressure_pu * grid[0].pressure_ref
-            ),
         ]
 
 
@@ -140,10 +140,10 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         self.el_mw = load_p_mw
         self.heat_mw = Var(-1e-3, max=0, name="p2h_heat_mw")
 
-        self.t_k = Intermediate(1)
+        self.t_k = Var(350, min=200, max=800, name="t_k")
         self.t_pu = Var(1, min=0, max=2, name="t_pu")
-        self.pressure_squared_pu = Var(1, min=0, max=3, name="p_squared_pu")
-        self.pressure_pu = Var(1, min=0, max=3, name="p_pu")
+        self.pressure_squared_pu = Var(1, min=0.5, max=3, name="p_squared_pu")
+        self.pressure_pu = Var(1, min=0.5, max=3, name="p_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
         heat_to_branches = [
@@ -183,6 +183,7 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
             self.heat_mw == sub_he.q_mw,
             sum(power_eqs[0]) == 0,
             sum(power_eqs[1]) == 0,
+            self.t_k == self.t_pu * grid[1].t_ref,
         ]
 
 
@@ -217,8 +218,8 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
 
         self.t_k = Var(350, min=200, max=800, name="t_k")
         self.t_pu = Var(1, min=0, max=2, name="t_pu")
-        # pressure_pa kept as Intermediate (see GasToHeatControlNode).
-        self.pressure_pa = Intermediate(1000000)
+        # pressure_pa is post-solve only (see GasToHeatControlNode).
+        self.pressure_pa = PostProcess(lambda v: float("nan"))
         self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
@@ -256,6 +257,9 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
+        self.pressure_pa = PostProcess(
+            lambda v, ref=grid[1].pressure_ref: v.pressure_pu * ref
+        )
         return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
@@ -274,9 +278,6 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
             * (3.6 * self._hhv),
             self.heat_mw == sub_he.q_mw,
             self.t_k == self.t_pu * grid[1].t_ref,
-            IntermediateEq(
-                "pressure_pa", lambda: self.pressure_pu * grid[1].pressure_ref
-            ),
         ]
 
 
@@ -581,7 +582,8 @@ class CHPHGControlNode(MultiGridNodeModel, Junction, Bus):
 
         self.t_k = Var(350, min=200, max=800, name="t_k")
         self.t_pu = Var(1, min=0, max=2, name="t_pu")
-        self.pressure_pa = Intermediate(1000000)
+        # pressure_pa is post-solve only (see GasToHeatControlNode).
+        self.pressure_pa = PostProcess(lambda v: float("nan"))
         self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
@@ -599,6 +601,9 @@ class CHPHGControlNode(MultiGridNodeModel, Junction, Bus):
             [], gas_to_branches, [Sink(self.gas_kgps * self.regulation)]
         )
         gas_grid = _gas_grid_of(grid)
+        self.pressure_pa = PostProcess(
+            lambda v, ref=gas_grid.pressure_ref: v.pressure_pu * ref
+        )
         return [
             junction_mass_flow_balance(gas_eqs),
             power_balance_equation(power_eqs[0]),
@@ -614,9 +619,6 @@ class CHPHGControlNode(MultiGridNodeModel, Junction, Bus):
             * self.regulation
             * (3.6 * self._hhv),
             self.heat_mw == self._sub_hg.q_mw_heat,
-            IntermediateEq(
-                "pressure_pa", lambda: self.pressure_pu * gas_grid.pressure_ref
-            ),
         ]
 
 

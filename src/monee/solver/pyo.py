@@ -19,6 +19,7 @@ from monee.simulation.step_state import StepState
 from .core import (
     SolverInterface,
     SolverResult,
+    apply_post_process_all,
     as_iter,
     compute_bound_violations,
     filter_intermediate_eqs,
@@ -31,6 +32,7 @@ from .core import (
     mark_heat_balance_slacks,
     mark_ignored_components,
     persist_solution,
+    pin_floating_hydraulic_gauges,
     withdraw_vars,
 )
 
@@ -288,6 +290,10 @@ class PyomoSolver(SolverInterface):
         branches = network.branches
         compounds = network.compounds
 
+        # Pin the pressure gauge of any hydraulic island without a grid-forming
+        # source — removes a rank-deficient free DOF.
+        pin_floating_hydraulic_gauges(network, ignored_nodes)
+
         # Drop each heat island's dependent nodal balance at its grid-forming
         # node (heat slack) — result-preserving for the exact balance. Under
         # mccormick the Junction balance is already trivial and the relaxed
@@ -380,6 +386,7 @@ class PyomoSolver(SolverInterface):
         withdraw_vars(
             PyomoSolver.withdraw_pyomo_vars_attr, nodes, branches, compounds, network
         )
+        apply_post_process_all(nodes, branches, compounds, network)
         persist_solution(network, input_network)
         violations = compute_bound_violations(nodes, branches, compounds, network)
 

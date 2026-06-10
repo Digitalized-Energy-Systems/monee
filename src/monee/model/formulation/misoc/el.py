@@ -50,9 +50,6 @@ def _big_m(w_max: float) -> float:
 class MISOCPElectricityBranchFormulation(BranchFormulation):
     def ensure_var(self, branch):
         branch.current_pu = Var(1, min=0)
-        # i_*_ka / loading_*_percent are derived from current_pu (|I|² SOC) post-solve.
-        # As Intermediates they don't leak into the LP as free Vars and the sqrt
-        # conversion stays a Python expression (Gurobi's LP writer rejects sqrt).
         branch.i_from_ka = Intermediate(0)
         branch.i_to_ka = Intermediate(0)
         branch.loading_from_percent = Intermediate(0)

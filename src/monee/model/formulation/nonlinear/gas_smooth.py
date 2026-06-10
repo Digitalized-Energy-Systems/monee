@@ -124,15 +124,14 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
             ]
         eqs += [
             smoothmodel.weymouth_pressure(
-                p_sq_i=from_node_model.vars["pressure_squared_pu"]
-                * grid.pressure_ref**2,
-                p_sq_j=to_node_model.vars["pressure_squared_pu"]
-                * grid.pressure_ref**2,
+                psq_pu_i=from_node_model.vars["pressure_squared_pu"],
+                psq_pu_j=to_node_model.vars["pressure_squared_pu"],
                 drop_term=drop_term,
                 diameter_m=branch.diameter_m,
                 length_m=branch.length_m,
                 t_k=grid.t_k,
                 compressibility=grid.compressibility,
+                pressure_ref=grid.pressure_ref,
                 on_off=branch.on_off,
             ),
             branch.gas_density

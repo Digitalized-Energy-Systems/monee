@@ -37,9 +37,9 @@ def _extract_value(val):
     """Return a plain float from *val* (Var, Intermediate, float, int, or None)."""
     if val is None:
         return None
-    from monee.model.core import Intermediate, Var
+    from monee.model.core import Intermediate, PostProcess, Var
 
-    if isinstance(val, (Var, Intermediate)):
+    if isinstance(val, (Var, Intermediate, PostProcess)):
         return val.value
     if isinstance(val, (int, float)):
         return float(val)

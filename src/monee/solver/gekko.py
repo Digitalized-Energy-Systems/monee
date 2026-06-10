@@ -19,6 +19,7 @@ from monee.simulation.step_state import StepState
 from .core import (
     SolverInterface,
     SolverResult,
+    apply_post_process_all,
     as_iter,
     compute_bound_violations,
     filter_intermediate_eqs,
@@ -32,6 +33,7 @@ from .core import (
     mark_heat_balance_slacks,
     mark_ignored_components,
     persist_solution,
+    pin_floating_hydraulic_gauges,
     remove_cps,
     withdraw_vars,
 )
@@ -203,6 +205,11 @@ class GEKKOSolver(SolverInterface):
         branches = network.branches
         compounds = network.compounds
 
+        # Pin the pressure gauge of any hydraulic island without a grid-forming
+        # source (e.g. an HE-fed return loop) — removes a rank-deficient free DOF
+        # IPOPT would otherwise have to regularise.
+        pin_floating_hydraulic_gauges(network, ignored_nodes)
+
         # Recognise each heat island's grid-forming node as the heat slack and
         # drop its (dependent) nodal heat balance — removes the heat carrier's
         # redundant constraint and is required for a square IMODE=1 solve.
@@ -299,6 +306,7 @@ class GEKKOSolver(SolverInterface):
         withdraw_vars(
             GEKKOSolver.withdraw_gekko_vars_attr, nodes, branches, compounds, network
         )
+        apply_post_process_all(nodes, branches, compounds, network)
         persist_solution(network, input_network)
         violations = compute_bound_violations(nodes, branches, compounds, network)
         solver_result = SolverResult(

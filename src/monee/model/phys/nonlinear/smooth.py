@@ -25,12 +25,30 @@ def smooth_abs(signed, eps, sqrt_impl=math.sqrt):
 
 
 def weymouth_pressure(
-    p_sq_i, p_sq_j, drop_term, diameter_m, length_m, t_k, compressibility, on_off
+    psq_pu_i,
+    psq_pu_j,
+    drop_term,
+    diameter_m,
+    length_m,
+    t_k,
+    compressibility,
+    pressure_ref,
+    on_off,
 ):
-    """Signed Weymouth: ``(p_i²-p_j²)·C²·on_off == -drop_term``."""
-    return (p_sq_i - p_sq_j) * calc_C_squared(
-        diameter_m, length_m, t_k, compressibility
-    ) * on_off == -drop_term
+    """Signed Weymouth, row-normalised by the per-pipe pressure coefficient.
+
+    The raw form ``Δ(p²)·C²·on_off == -drop_term`` carries a coefficient
+    ``C²·p_ref² ∝ D⁵`` on the (dimensionless) squared-pressure difference, which
+    spans ~6 orders across a wide-diameter network — skewing IPOPT's column
+    scaling and conditioning. Dividing through by that coefficient gives every
+    pipe a unit coefficient on the pressure term (the solution is unchanged):
+
+        (p_i²-p_j²)_pu · on_off == -drop_term / (C²·p_ref²)
+    """
+    coeff = (
+        calc_C_squared(diameter_m, length_m, t_k, compressibility) * pressure_ref**2
+    )
+    return (psq_pu_i - psq_pu_j) * on_off == -drop_term / coeff
 
 
 def darcy_pressure(p_i, p_j, drop_term, length_m, diameter_m, fluid_density):

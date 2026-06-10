@@ -3,7 +3,7 @@ import math
 import monee.model.phys.core.hydraulics as hydraulicsmodel
 import monee.model.phys.nonlinear.hf as ohfmodel
 import monee.model.phys.nonlinear.wf as owfmodel
-from monee.model.core import Const, Intermediate, IntermediateEq, Var
+from monee.model.core import Const, Intermediate, PostProcess, Var
 
 from ..core import BranchFormulation, NodeFormulation
 
@@ -18,7 +18,9 @@ def _pin_friction_const(model):
 
 class NLDarcyWeisbachNodeFormulation(NodeFormulation):
     def ensure_var(self, model):
-        model.pressure_pa = Intermediate(1000000)
+        # pressure_pa is report-only (= pressure_pu·pressure_ref); the real
+        # closure is attached in equations() where grid.pressure_ref is known.
+        model.pressure_pa = PostProcess(lambda v: float("nan"))
         model.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
         model.pressure_squared_pu = Intermediate(1)
 
@@ -31,9 +33,10 @@ class NLDarcyWeisbachNodeFormulation(NodeFormulation):
         connected_child_models,
         **kwargs,
     ):
-        return [
-            IntermediateEq("pressure_pa", lambda: node.pressure_pu * grid.pressure_ref),
-        ]
+        node.pressure_pa = PostProcess(
+            lambda v, ref=grid.pressure_ref: v.pressure_pu * ref
+        )
+        return []
 
 
 class NLDarcyWeisbachBranchFormulation(BranchFormulation):

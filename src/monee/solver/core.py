@@ -1,6 +1,7 @@
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import networkx as nx
 import pandas
@@ -17,6 +18,7 @@ from monee.model import (
     MultiGridCompoundModel,
     Network,
     Node,
+    PostProcess,
     Var,
     WaterPipe,
 )
@@ -461,6 +463,74 @@ def mark_ignored_components(network, ignored_nodes):
                     sc.ignored = True
 
 
+def _carrier_node_ids(network: Network, ignored_nodes, grid_type) -> set:
+    """Active, non-ignored node ids belonging to a single hydraulic carrier."""
+    return {
+        n.id
+        for n in network.nodes
+        if isinstance(n.grid, grid_type) and n.active and n.id not in ignored_nodes
+    }
+
+
+def _carrier_islands(network: Network, node_ids: set):
+    """Connected components of the active-pipe subgraph restricted to *node_ids*
+    (pipes only ever join same-carrier nodes, so each component is one island)."""
+    g = nx.Graph()
+    g.add_nodes_from(node_ids)
+    for branch in network.branches:
+        if (
+            branch.active
+            and branch.from_node_id in node_ids
+            and branch.to_node_id in node_ids
+        ):
+            g.add_edge(branch.from_node_id, branch.to_node_id)
+    return nx.connected_components(g)
+
+
+def _island_grid_forming_node(network: Network, island):
+    """Return the id of an island node carrying an active grid-forming child, or
+    ``None`` if the island has no pressure/temperature reference."""
+    for nid in island:
+        node = network.node_by_id(nid)
+        childs = network.childs_by_ids(node.child_ids)
+        if any(isinstance(c.model, GridFormingMixin) and c.active for c in childs):
+            return nid
+    return None
+
+
+def pin_floating_hydraulic_gauges(network: Network, ignored_nodes):
+    """Pin one node's pressure per energized gas/water island that has no
+    grid-forming source.
+
+    A grid-forming child (``ExtHydrGrid`` / ``GridFormingSource``) pins an
+    absolute pressure reference via its ``overwrite``. An island with none
+    references pressure only through the (relative) pipe pressure-drop equations
+    — its absolute level is a free gauge degree of freedom, which IPOPT can only
+    resolve by regularising a rank-deficient block (slow, fragile). Such islands
+    arise routinely: e.g. a heat-exchanger-fed return loop, where the coupling HE
+    transfers mass and temperature but imposes no pressure drop.
+
+    Pinning any one node's pressure to the carrier nominal removes the
+    rank-deficiency without changing flows or pressure *differences* (only the
+    arbitrary absolute level). Temperature is left free: where present it is
+    referenced through the heat-exchanger coupling, not a nodal pin.
+    """
+    from monee.model.grid import GasGrid, WaterGrid
+
+    for grid_type in (GasGrid, WaterGrid):
+        ids = _carrier_node_ids(network, ignored_nodes, grid_type)
+        for island in _carrier_islands(network, ids):
+            if _island_grid_forming_node(network, island) is not None:
+                continue
+            node = network.node_by_id(min(island))
+            nominal = getattr(node.grid, "nominal_pressure_pu", 1.0)
+            model = node.model
+            if isinstance(getattr(model, "pressure_pu", None), Var):
+                model.pressure_pu = Const(nominal)
+            if isinstance(getattr(model, "pressure_squared_pu", None), Var):
+                model.pressure_squared_pu = Const(nominal**2)
+
+
 def mark_heat_balance_slacks(network: Network, ignored_nodes):
     """Mark one grid-forming reference node per energized heat island so its
     (dependent) nodal heat balance is dropped — the heat carrier's slack,
@@ -473,28 +543,13 @@ def mark_heat_balance_slacks(network: Network, ignored_nodes):
     """
     from monee.model.grid import WaterGrid
 
-    heat_ids = {
-        n.id
-        for n in network.nodes
-        if isinstance(n.grid, WaterGrid) and n.active and n.id not in ignored_nodes
-    }
+    heat_ids = _carrier_node_ids(network, ignored_nodes, WaterGrid)
     if not heat_ids:
         return
-    g = nx.Graph()
-    g.add_nodes_from(heat_ids)
-    for branch in network.branches:
-        if not branch.active:
-            continue
-        a, b = branch.from_node_id, branch.to_node_id
-        if a in heat_ids and b in heat_ids:
-            g.add_edge(a, b)
-    for island in nx.connected_components(g):
-        for nid in island:
-            node = network.node_by_id(nid)
-            childs = network.childs_by_ids(node.child_ids)
-            if any(isinstance(c.model, GridFormingMixin) and c.active for c in childs):
-                node.model._drop_heat_balance = True
-                break
+    for island in _carrier_islands(network, heat_ids):
+        ref = _island_grid_forming_node(network, island)
+        if ref is not None:
+            network.node_by_id(ref).model._drop_heat_balance = True
 
 
 def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
@@ -544,6 +599,31 @@ def withdraw_vars(withdraw_fn, nodes, branches, compounds, network):
             withdraw_fn(child.model)
     for compound in compounds:
         withdraw_fn(compound.model)
+
+
+def apply_post_process(model: GenericModel) -> None:
+    """Evaluate the model's :class:`PostProcess` attributes from its solved
+    values — runs after ``withdraw_vars`` and fully outside the solver. Lambdas
+    receive a namespace, so they read fields as ``v.vm_pu`` (not ``v["vm_pu"]``)."""
+    vals = SimpleNamespace(**model.values)
+    for attr in model.__dict__.values():
+        if isinstance(attr, PostProcess):
+            try:
+                attr.value = attr.fn(vals)
+            except Exception:
+                attr.value = float("nan")
+
+
+def apply_post_process_all(nodes, branches, compounds, network) -> None:
+    """Run :func:`apply_post_process` over every solved component."""
+    for branch in branches:
+        apply_post_process(branch.model)
+    for node in nodes:
+        apply_post_process(node.model)
+        for child in network.childs_by_ids(node.child_ids):
+            apply_post_process(child.model)
+    for compound in compounds:
+        apply_post_process(compound.model)
 
 
 def _copy_var_values(src, dst) -> None:

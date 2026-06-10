@@ -38,8 +38,8 @@ def lower(var_or_const):
 
 
 def value(var_or_const):
-    """Extract ``.value`` from a ``Var``/``Const``/``Intermediate``; pass through plain scalars."""
-    if isinstance(var_or_const, Const | Var | Intermediate):
+    """Extract ``.value`` from a ``Var``/``Const``/``Intermediate``/``PostProcess``; pass through plain scalars."""
+    if isinstance(var_or_const, Const | Var | Intermediate | PostProcess):
         return var_or_const.value
     return var_or_const
 
@@ -186,6 +186,32 @@ class IntermediateEq:
     def __init__(self, attr, eq):
         self.attr = attr
         self.eq = eq
+
+
+class PostProcess:
+    """A report-only quantity computed *after* the solve, outside the solver,
+    from the solved model values via ``fn(values)``, where ``values`` is a
+    namespace of the model's solved fields (read as ``values.vm_pu``).
+
+    Unlike :class:`Intermediate`, it is never injected as a solver variable nor
+    referenced by any equation — it carries no degrees of freedom and cannot
+    affect convergence or squareness. The clean home for derived reports (e.g.
+    ``vm_pu_squared = vm_pu²``): physics stays in the solver, reporting outside.
+    """
+
+    def __init__(self, fn, value=0):
+        self.fn = fn  # callable(values_namespace) -> number
+        self.value = value
+
+    def __repr__(self):
+        return f"PostProcess({self.value!r})"
+
+    def __deepcopy__(self, memo):
+        new = PostProcess.__new__(PostProcess)
+        memo[id(self)] = new
+        new.fn = self.fn  # a function is atomic — share by reference
+        new.value = self.value
+        return new
 
 
 class GenericModel(ABC):

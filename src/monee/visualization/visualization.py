@@ -7,7 +7,7 @@ import networkx as nx
 import plotly.graph_objects as go
 
 import monee.model as mm  # kept for Network type hint only
-from monee.model.core import Intermediate, IntermediateEq, Var
+from monee.model.core import Intermediate, IntermediateEq, PostProcess, Var
 
 # Import shared theme and layout helpers from result_visualization so the two
 # functions always look identical.
@@ -32,7 +32,7 @@ _SKIP_ATTRS: frozenset[str] = frozenset({"active", "independent", "ignored"})
 
 # Pyomo-like solver objects – hide these from hover text (they carry no useful
 # design-time information for the user).
-_SOLVER_TYPES = (Var, Intermediate, IntermediateEq)
+_SOLVER_TYPES = (Var, Intermediate, IntermediateEq, PostProcess)
 
 
 # Model parameter extraction

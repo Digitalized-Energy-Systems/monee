@@ -19,6 +19,7 @@ from .core import (
     GenericModel,
     Intermediate,
     Node,
+    PostProcess,
     Var,
 )
 from .formulation import (
@@ -646,7 +647,7 @@ class Network:
         }
         for k, v in model_dict.items():
             result_value = v
-            if isinstance(v, Var | Const | Intermediate):
+            if isinstance(v, Var | Const | Intermediate | PostProcess):
                 result_value = v.value
             result_dict[k] = result_value
         return result_dict

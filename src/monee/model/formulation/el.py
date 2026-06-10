@@ -17,7 +17,8 @@ AC_NETWORK_FORMULATION = NetworkFormulation(
     node_type_to_formulations={Bus: ACElectricityNodeFormulation()},
 )
 
-# AC for a square IMODE=1 simulation (pins the unused MISOCP vm_pu_squared var).
+# The simulation variant demotes vm_pu_squared to a PostProcess report (no solver
+# variable), removing the phantom DOF so an IMODE=1 square solve is feasible.
 AC_SIM_NETWORK_FORMULATION = NetworkFormulation(
     branch_type_to_formulations={GenericPowerBranch: ACElectricityBranchFormulation()},
     node_type_to_formulations={Bus: ACElectricitySimNodeFormulation()},

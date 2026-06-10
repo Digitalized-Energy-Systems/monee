@@ -1,6 +1,6 @@
 import math
 
-from .core import Intermediate, IntermediateEq, NodeModel, Var, model
+from .core import Intermediate, IntermediateEq, NodeModel, PostProcess, Var, model
 from .phys.core.hydraulics import junction_mass_flow_balance
 from .phys.nonlinear.ac import power_balance_equation
 from .phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
@@ -11,10 +11,10 @@ class Bus(NodeModel):
     def __init__(self, base_kv) -> None:
         super().__init__()
         self.base_kv = base_kv
-        self.vm_pu = Var(1, min=0, max=1.5, name="vm_pu")
-        self.vm_pu_squared = Var(1, min=0, max=2.25, name="vm_pu_squared")
+        self.vm_pu = Var(1, min=0.5, max=1.5, name="vm_pu")
+        self.vm_pu_squared = Var(1, min=0.25, max=2.25, name="vm_pu_squared")
         self.va_radians = Var(0, min=-math.pi, max=math.pi, name="va_radians")
-        self.va_degree = Intermediate()
+        self.va_degree = PostProcess(lambda v: 180 / math.pi * v.va_radians)
         self.p_mw = Intermediate()
         self.q_mvar = Intermediate()
 
@@ -84,22 +84,26 @@ class Bus(NodeModel):
         signed_ap, signed_rp = self.calc_signed_power_values(
             from_branch_models, to_branch_models, connected_node_models
         )
+        # Re-attach the report lambda each solve so it survives a native reload
+        # (which restores only the stored value, not the closure).
+        self.va_degree = PostProcess(lambda v: 180 / math.pi * v.va_radians)
         return [
             self.p_mw_equation(connected_node_models),
             self.q_mvar_equation(connected_node_models),
             power_balance_equation(signed_ap),
             power_balance_equation(signed_rp),
-            IntermediateEq("va_degree", 180 / math.pi * self.va_radians),
         ]
 
 
 @model
 class Junction(NodeModel):
     def __init__(self) -> None:
-        self.t_k = Intermediate()
-        self.t_pu = Var(1, min=0, max=2, name="t_pu")
-        self.pressure_squared_pu = Var(1, min=0, max=2, name="p_squared_pu")
-        self.pressure_pu = Var(1, min=0, max=2, name="p_pu")
+        # t_k is report-only (= t_pu·t_ref, never read by an equation); the real
+        # closure is attached in equations() where the grid t_ref is available.
+        self.t_k = PostProcess(lambda v: float("nan"))
+        self.t_pu = Var(1, min=0.3, max=2, name="t_pu")
+        self.pressure_squared_pu = Var(1, min=0.5, max=2, name="p_squared_pu")
+        self.pressure_pu = Var(1, min=0.5, max=2, name="p_pu")
         self.mass_flow = Intermediate(1)
 
     def calc_signed_mass_flow(
@@ -245,9 +249,10 @@ class Junction(NodeModel):
             from_branch_models, to_branch_models, connected_node_models, grid
         )
         if mass_flow_signed_list:
+            # Report-only nodal temperature, computed outside the solver.
+            self.t_k = PostProcess(lambda v, tref=grid.t_ref: v.t_pu * tref)
             eqs = [
                 junction_mass_flow_balance(mass_flow_signed_list),
-                IntermediateEq("t_k", self.t_pu * grid.t_ref),
                 IntermediateEq(
                     "mass_flow",
                     sum(
