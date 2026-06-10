@@ -165,6 +165,47 @@ def create_large_lv_simbench(
     return create
 
 
+def create_large_mv_simbench(
+    density,
+    *,
+    slack_budget_pct: float | None = None,
+    simbench_code: str = "1-MV-urban--1-no_sw",
+    backup_lines_per_sector: int = 0,
+    backup_seed: int | None = None,
+    cp_size_multiplier: float = 1.0,
+    replace_primary_generation: bool = False,
+):
+
+    def create():
+        net = simbench.get_simbench_net(simbench_code)
+        mn = from_pandapower_net(net)
+        mes = generate_supply_return_mes_based_on_power_net(
+            mn,
+            coupling_density=density,
+            centralized=False,
+            couplings=("chp", "p2g", "p2h"),
+            coupling_kwargs={
+                "seed": 1,
+                "use_hg_variants": True,
+                "cp_size_multiplier": cp_size_multiplier,
+                "replace_primary_generation": replace_primary_generation,
+            },
+            heat_kwargs={"node_based_heat_loads": True},
+        )
+        for branch in mes.branches:
+            model = branch.model
+            length = getattr(model, "length_m", None)
+            if length is not None and float(length) <= 0.0:
+                model.length_m = 1
+        # mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
+        # mes.add_extension(GasLinepack())
+        # mes.add_extension(LumpedThermalCapacitance(first_step_steady_state=True))
+        # mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=16))
+        return mes
+
+    return create
+
+
 @pytest.mark.pptest
 def test_generate_scare():
     net = create_large_lv_simbench(0.3)()
@@ -175,7 +216,18 @@ def test_generate_scare():
     print(time.time() - s)
 
     assert result.success
-    assert False
+
+
+@pytest.mark.pptest
+def test_generate_synapse():
+    net = create_large_mv_simbench(0.3)()
+    import time
+
+    s = time.time()
+    result = run_energy_flow(net, solver="ipopt")
+    print(time.time() - s)
+
+    assert result.success
 
 
 @pytest.mark.pptest
