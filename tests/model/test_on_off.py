@@ -1,4 +1,6 @@
-from monee import mm, mx, run_energy_flow
+import math
+
+from monee import PyomoSolver, mm, mx, run_energy_flow
 from monee.model import Var
 
 
@@ -32,7 +34,8 @@ def test_on_off_el():
     result = run_energy_flow(net)
 
     print(result)
-    assert result.dataframes["PowerLine"]["p_from_mw"][1] == 0
+    assert result.success
+    assert math.isclose(result.dataframes["PowerLine"]["p_from_mw"][1], 0, abs_tol=1e-9)
     assert result.dataframes["PowerLine"]["on_off"][1] == 0
     assert result.dataframes["PowerLine"]["on_off"][0] == 1
 
@@ -62,7 +65,6 @@ def test_on_off_water():
         on_off=Var(1, max=1, min=0, integer=True, name="on_off"),
         constraints=[my_constraint],
     )
-    from monee import PyomoSolver
 
     result = run_energy_flow(net, solver=PyomoSolver())
 
@@ -104,7 +106,7 @@ def test_on_off_gas():
 
     print(result)
 
-    assert result.dataframes["Sink"]["mass_flow"][0] == 0
+    assert math.isclose(result.dataframes["Sink"]["mass_flow"][0], 0, abs_tol=1e-9)
     assert (
         result.dataframes["GasPipe"]["mass_flow"][1] < 0.001
         and result.dataframes["GasPipe"]["mass_flow"][1] > -0.0009

@@ -34,6 +34,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+scip = [
+    "pyscipopt>=5.0"
+]
 simbench = [
     "simbench>=1.3.0",
     "pandapower>=2.9.0"

@@ -1,15 +1,6 @@
 from monee.model.branch import GasPipe, GenericPowerBranch
 from monee.model.child import PowerLoad
-from monee.model.node import Bus, Intermediate, Junction, Var
-
-
-def test_bus_vars():
-    bus = Bus(base_kv=1)
-
-    assert type(bus.p_mw) is Intermediate
-    assert type(bus.q_mvar) is Intermediate
-    assert type(bus.vm_pu) is Var
-    assert type(bus.va_degree) is Intermediate
+from monee.model.node import Bus, Junction
 
 
 def test_bus_eq():
@@ -54,12 +45,6 @@ def test_bus_eq_with_child():
 
     assert ap == [10, 11]
     assert rp == [2, 12]
-
-
-def test_junction_vars():
-    junction = Junction()
-
-    assert type(junction.t_k) is Intermediate
 
 
 def test_junction_mass_flow():

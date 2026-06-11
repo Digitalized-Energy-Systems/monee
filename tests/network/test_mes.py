@@ -1,3 +1,4 @@
+import networkx as nx
 import pytest
 import simbench
 
@@ -23,12 +24,6 @@ GAS_HHV_MJ_PER_KG = 15.3 * 3.6
 
 
 def _carrier_balance(mes):
-    """Return (deficit, load) per carrier from the un-solved MES capacities.
-
-    Deficit = max(0, demand - internal supply); load = the raw user-load
-    magnitude (PowerLoad / HeatLoad / Sink).  Self-sufficiency =
-    1 - deficit / (load + cp_internal_consumption).
-    """
     p_load = sum(c.model.p_mw for c in mes.childs if isinstance(c.model, mm.PowerLoad))
     p_gen = sum(
         abs(c.model.p_mw) for c in mes.childs if isinstance(c.model, mm.PowerGenerator)
@@ -101,46 +96,6 @@ def create_large_lv_simbench(
     cp_size_multiplier: float = 1.0,
     replace_primary_generation: bool = False,
 ):
-    """Build a simbench LV multi-energy network.
-
-    Parameters
-    ----------
-    density:
-        Coupling-point density passed straight to monee's MES generator
-        (controls how many CHP / P2G / P2H plants are placed).
-    slack_budget_pct:
-        When set, caps the external power and gas grid injections at
-        this fraction of the network's total nominal load.  Defaults
-        to ``None`` (unbounded slack - original behaviour).  Setting
-        to e.g. 0.5 forces the MAS to actually choose what to serve
-        post-failure rather than letting the slack absorb everything.
-    simbench_code:
-        simbench network code; the default ``1-LV-rural3--1-no_sw`` is
-        the established ~340-load benchmark, but smaller variants
-        (rural1, semiurb4) are useful for the scaling experiment.
-    backup_lines_per_sector:
-        If ``> 0``, augment the network with that many normally-open
-        backup branches per sector via ``add_backup_lines``.  This is
-        the test fixture for the reconfiguration pillar - without
-        them the grid is purely radial and the GridReconfigurator has
-        no alternative paths to discover.
-    backup_seed:
-        RNG seed for backup placement (reproducible test fixtures).
-    cp_size_multiplier:
-        Scales every coupling-point's rated output uniformly (1.0 =
-        monee's per-bus default; 2.0 doubles every CP capacity).
-        Larger CPs amplify the cross-sector substitution potential -
-        the headline knob for "how big do CPs need to be before
-        their contribution rises above noise?".
-    replace_primary_generation:
-        When True (default False), the rated output of every CP is
-        absorbed from the matching primary generation pool, keeping
-        total per-carrier rated production invariant.  This flips the
-        framing from CP-as-redundancy (the additive default) to
-        CP-as-cross-carrier-dependence: losing a CP now disables
-        both the unit and the primary gen it displaced, so cross-
-        sector ADMM coordination becomes load-bearing for resilience.
-    """
 
     def create():
         net = simbench.get_simbench_net(simbench_code)
@@ -415,23 +370,6 @@ def test_generate_mes_min_load_shedding():
 
 @pytest.mark.pptest
 def test_generate_mes_gas_extra_mesh_pipes_reduce_bridges():
-    """``extra_mesh_pipes`` adds tie pipes that break the gas tree's single-
-    point-of-failure structure.
-
-    By default the gas grid mirrors the power spanning tree, so every gas
-    pipe is a bridge (cut-edge): failing it isolates the downstream subtree
-    and severs the fuel path of every CHP / G2P sitting in that subtree.
-    This is the dominant reason additive coupling points are statistically
-    irrelevant under random-failure sampling - the CP's *output* capacity is
-    dwarfed by the topological cost of losing its fuel chain.
-
-    Passing ``extra_mesh_pipes=N`` adds ``N`` random tie pipes between
-    non-adjacent junctions, sized smaller and longer than primary pipes.
-    The resulting graph has ``N`` additional cycles, and the fraction of
-    bridges drops sharply, giving most CHPs an alternative gas path under
-    single-pipe failures.
-    """
-    import networkx as nx
 
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     mn = from_pandapower_net(net)
@@ -478,21 +416,12 @@ def test_generate_mes_gas_extra_mesh_pipes_reduce_bridges():
     assert cycles_mesh == 20
     assert g_mesh.number_of_edges() == g_tree.number_of_edges() + 20
     bridges_mesh = list(nx.bridges(g_mesh))
-    # Tie pipes themselves can never be bridges (they only add edges to an
-    # already-connected graph), so each tie pipe also relieves at least one
-    # primary pipe from bridge status.  Empirically on this net, 20 ties cut
-    # the bridge count to <60 % of the original tree.
+
     assert len(bridges_mesh) < 0.6 * g_tree.number_of_edges()
 
 
 @pytest.mark.pptest
 def test_generate_mes_cp_size_multiplier_scales_uniformly():
-    """``cp_size_multiplier`` is the headline knob for CP rated capacity.
-
-    Default (= 1.0) preserves legacy sizing; ``k`` scales every CHP, P2G and
-    P2H rated *output* by the same factor.  Per-type shares
-    (``chp_p_share`` etc.) act independently on top.
-    """
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     mn = from_pandapower_net(net)
     GAS_HHV_MJ_PER_KG = 15.3 * 3.6
@@ -564,31 +493,6 @@ def test_generate_mes_cp_size_multiplier_scales_uniformly():
 
 @pytest.mark.pptest
 def test_generate_mes_replace_primary_generation_invariant():
-    """``replace_primary_generation`` flips the framing of coupling points.
-
-    Default (additive) mode is the *redundancy* framing: every CP stacks on
-    top of the existing primary generators, so CPs always look beneficial -
-    losing one is recoverable by the unchanged primary fleet.  In this
-    framing, on the simbench LV-rural3 grid used by
-    :func:`test_generate_mes_min_load_shedding`, additional CPs do *not*
-    visibly improve resilience because the primary fleet is already over-
-    capacity for the loads (Σ PowerGen ≈ 0.21 MW, Σ PowerLoad ≈ 0.37 MW
-    with the simbench ext-grid covering the rest, and the heat ext-grid
-    bound is essentially infinite at ``(-100, 100)``).
-
-    ``replace_primary_generation=True`` flips this to the *cross-carrier
-    dependence* framing: each CP's rated **output** capacity is absorbed
-    from the matching primary pool (PowerGenerator for CHP/G2P, gas Source
-    for P2G, HX-Generator for CHP/P2H), keeping total rated production per
-    carrier *invariant* but making the system structurally depend on the
-    coupling fleet - losing a carrier now disables both the unit and the
-    primary capacity it displaced.
-
-    This test verifies the invariant: across both modes, total rated power
-    (PowerGen + CP power output) and total rated gas (Source + CP gas
-    output) are identical, while in replacement mode the *primary* pool is
-    strictly smaller.  No solver call needed.
-    """
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     mn = from_pandapower_net(net)
 
@@ -704,19 +608,6 @@ def test_generate_mes_replace_primary_generation_invariant():
 
 @pytest.mark.pptest
 def test_generate_mes_node_heat_gen_share_and_replacement():
-    """``node_heat_gen_share`` adds a distributed ``HeatGenerator`` fleet
-    that's actually drainable under ``replace_primary_generation``.
-
-    In ``node_based_heat_loads`` mode the default network has no node-based
-    heat sources - every kJ flows through the unbounded supply slack, which
-    makes heat-side resilience studies meaningless (bounding
-    ``max_import_kgs`` is a hydraulic, not energetic, constraint).  The
-    principled fix is to distribute :class:`~monee.model.HeatGenerator`
-    children at ``PowerGenerator`` buses via ``node_heat_gen_share``.  Under
-    ``replace_primary_generation`` that fleet is the primary pool the CP
-    heat output is absorbed from, keeping total rated heat capacity
-    invariant exactly like the power and gas sides.
-    """
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     mn = from_pandapower_net(net)
     GAS_HHV_MJ_PER_KG = 15.3 * 3.6
@@ -786,7 +677,6 @@ def test_generate_mes_node_heat_gen_share_and_replacement():
 
 @pytest.mark.pptest
 def test_generate_mes_supply_slack_t_k_parameter():
-    """``supply_slack_t_k`` propagates to the heat supply slack's ``t_k``."""
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     mn = from_pandapower_net(net)
 
@@ -815,33 +705,6 @@ def test_generate_mes_supply_slack_t_k_parameter():
 
 @pytest.mark.pptest
 def test_generate_mes_storage_capabilities_timeseries():
-    """Storage-capability study on the canonical MES timeseries.
-
-    Builds the same MES as ``test_generate_mes_min_load_shedding`` but adds
-    the two storage-flavoured network extensions monee ships with:
-
-    * :class:`~monee.model.extension.linepack.GasLinepack` - distributed
-      gas storage in pipes (linepack), so the gas grid can buffer short-term
-      supply/demand mismatches between timesteps.
-    * :class:`~monee.model.extension.ltc.LumpedThermalCapacitance` -
-      lumped thermal mass at every water-network junction, giving the heat
-      grid genuine inter-step thermal inertia rather than instantaneous
-      temperature jumps.
-
-    A short timeseries is then run with the simbench load profiles applied
-    to the underlying power loads (via
-    :func:`~monee.io.from_simbench.obtain_simbench_profile_by_pp_net`,
-    which now binds by aggregated bus name) plus a synthetic demand
-    modulation on the heat loads and gas sinks generated by
-    ``generate_supply_return_mes_based_on_power_net`` - those carriers
-    have no simbench profile of their own, so the storage extensions need
-    a manual swing to react against.
-
-    The test demonstrates that this kind of multi-energy storage study is
-    expressible in monee end-to-end; it asserts the timeseries solves and
-    that the storage variables are populated and active rather than
-    benchmarking a specific scenario.
-    """
     pp_net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     full_el_td = obtain_simbench_profile_by_pp_net(pp_net)
     mn = from_pandapower_net(pp_net)
@@ -886,10 +749,6 @@ def test_generate_mes_storage_capabilities_timeseries():
                 continue
             td.add_child_series(c.id, "mass_flow", [base * f for f in factors])
 
-    # Min-load-shedding objective with the same loose envelope as the
-    # canonical test, plus a wide ext-grid window so the optimiser is not
-    # forced to shed demand purely because of step-to-step variation -
-    # what we want to observe is whether storage absorbs the swing.
     problem = create_min_load_shedding_problem(
         bounds_el=(0.9, 1.5),
         bounds_gas=(0.9, 1.5),
@@ -918,15 +777,6 @@ def test_generate_mes_storage_capabilities_timeseries():
     )
     assert len(ts_result.step_results) == steps
 
-    # GasLinepack: the per-pipe linepack mass must be populated for every
-    # gas pipe across every step (the variable is injected by the extension),
-    # and on at least one pipe the inter-temporal packing flow ``net_pack_kgs``
-    # must be non-zero on a step > 0 - that is the direct signature of the
-    # temporal-coupling equation being honoured (in a plain steady-state
-    # solve ``net_pack_kgs`` is pinned to 0).  We do not assert a specific
-    # swing magnitude: with the wide ext-grid window above the optimiser
-    # can largely cover the demand swing from the source side, so the
-    # observed pipe response is small but non-trivial.
     gas_pipes = [b for b in mes.branches if isinstance(b.model, mm.GasPipe)]
     assert gas_pipes, "no gas pipes in generated MES"
     saw_packing = False
