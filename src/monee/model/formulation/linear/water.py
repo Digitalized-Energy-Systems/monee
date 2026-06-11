@@ -32,18 +32,24 @@ class LinearHeatExchangerFormulation(BranchFormulation):
 
     def _he_equations(self, branch, grid, from_node_model):
         cp_mw_per_kgs_K = ohfmodel.SPECIFIC_HEAT_CAP_WATER / 1e6
+
         # equations() runs after solver-var injection, when mass_flow_design_kgs
         # is no longer a monee Var - the model's construction-time flag is the
         # only reliable dynamic/fixed discriminator here.
         is_dynamic_mf = branch._calc_mass_flow
+        
+        # Set by mark_he_flow_prescription() during solver prep; defaults to
+        # the prescribing behaviour (supply/return semantics).
+        prescribed = getattr(branch, "_he_flow_prescribed", True)
 
-        if is_dynamic_mf:
-            # SubHE / dynamic: q_mw is dictated by the parent compound's control
-            # node and the mass flow by the surrounding network -
+        if is_dynamic_mf and not prescribed:
+            # SubHE whose through-flow the surrounding network already
+            # determines (e.g. a fixed-mass-flow sink fed only through the
+            # compound): q_mw is dictated by the control node and
             # mass_flow_design_kgs is only the sizing value (q_mw at the design
             # temperature spread). Pinning the flow to it would over-determine
-            # flow-through topologies, so the energy balance runs on the actual
-            # flow magnitude instead.
+            # the system, so the energy balance runs on the actual flow
+            # magnitude instead.
             flow_eqs = [
                 branch.mass_flow_mag == branch.mass_flow_pos + branch.mass_flow_neg
             ]
@@ -61,7 +67,6 @@ class LinearHeatExchangerFormulation(BranchFormulation):
             branch.t_in_pu == from_node_model.vars["t_pu"],
             branch.t_from_pu == from_node_model.vars["t_pu"],
             branch.t_to_pu == branch.t_out_pu,
-            # Energy balance in MW (cp/1e6 converts J/(kg·K) → MW·s/(kg·K)).
             branch.t_out_pu * (balance_flow_kgs * cp_mw_per_kgs_K * grid.t_ref)
             == branch.t_in_pu * (balance_flow_kgs * cp_mw_per_kgs_K * grid.t_ref)
             - branch.q_mw_delivered,

@@ -21,6 +21,7 @@ from monee.solver.core import (
     find_ignored_nodes,
     ignore_node,
     inject_vars,
+    mark_he_flow_prescription,
     mark_ignored_components,
     withdraw_vars,
 )
@@ -65,6 +66,11 @@ def _prepare_period(
         for child in net_t.childs_by_ids(node.child_ids):
             if child.active:
                 child.model.overwrite(node.model, node.grid)
+
+    # Decide per compound-internal SubHE whether the design flow prescribes
+    # the through-flow or yields to a network-determined flow (must run before
+    # var injection - the check relies on monee Var instances).
+    mark_he_flow_prescription(net_t, ignored_nodes)
 
     return net_t, ignored_nodes
 

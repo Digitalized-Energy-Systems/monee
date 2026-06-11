@@ -561,6 +561,67 @@ def mark_heat_balance_slacks(network: Network, ignored_nodes):
             network.node_by_id(ref).model._drop_heat_balance = True
 
 
+def _island_has_free_mass_flow_child(network: Network, island) -> bool:
+    """True if any active child on the island leaves its mass flow to the solver
+    (slack-like: ``ExtHydrGrid`` / ``ConsumeHydrGrid``), i.e. the island can
+    absorb an arbitrary through-flow."""
+    for nid in island:
+        node = network.node_by_id(nid)
+        for child in network.childs_by_ids(node.child_ids):
+            if child.active and isinstance(
+                getattr(child.model, "mass_flow", None), Var
+            ):
+                return True
+    return False
+
+
+def mark_he_flow_prescription(network: Network, ignored_nodes):
+    """Decide for each dynamic heat exchanger (compound-internal ``SubHE``)
+    whether it prescribes its design mass flow or yields to the network.
+
+    A SubHE bridges water islands through its multi-grid control node (the
+    islands stay separate because :func:`_carrier_islands` only spans pure
+    water nodes). In a supply/return structure every adjacent island has a
+    slack child with a free mass flow (``ExtHydrGrid`` / ``ConsumeHydrGrid``),
+    so the through-flow is otherwise undetermined and the design flow must
+    prescribe it. If any adjacent island lacks such a slack (e.g. a
+    fixed-mass-flow ``Sink`` fed only through the compound), that island's
+    balance already fixes the through-flow - pinning it to the design flow
+    would over-determine the system, so the HE yields and its energy balance
+    runs on the actual flow instead (``_he_flow_prescribed = False``)."""
+    dyn_he_branches = [
+        b
+        for b in network.branches
+        if b.active and getattr(b.model, "_calc_mass_flow", False)
+    ]
+    if not dyn_he_branches:
+        return
+    water_ids = _carrier_node_ids(network, ignored_nodes, WaterGrid)
+    node_to_island: dict = {}
+    island_free: list = []
+    for idx, island in enumerate(_carrier_islands(network, water_ids)):
+        island_free.append(_island_has_free_mass_flow_child(network, island))
+        for nid in island:
+            node_to_island[nid] = idx
+    for branch in dyn_he_branches:
+        endpoints = [branch.from_node_id, branch.to_node_id]
+        # Water-side endpoints contribute their island directly; the other
+        # endpoint is the compound's control node - collect the islands of its
+        # water neighbours (reached via the compound's transfer branches).
+        adjacent = {node_to_island[nid] for nid in endpoints if nid in node_to_island}
+        for cn_id in (nid for nid in endpoints if nid not in node_to_island):
+            for b in network.branches:
+                if not b.active:
+                    continue
+                if b.from_node_id == cn_id and b.to_node_id in node_to_island:
+                    adjacent.add(node_to_island[b.to_node_id])
+                elif b.to_node_id == cn_id and b.from_node_id in node_to_island:
+                    adjacent.add(node_to_island[b.from_node_id])
+        branch.model._he_flow_prescribed = (
+            all(island_free[i] for i in adjacent) if adjacent else True
+        )
+
+
 def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
     """Call ``inject_fn(model, component, category)`` on each active component;
     ignored components get :func:`inject_nans` instead.

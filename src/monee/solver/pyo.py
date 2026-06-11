@@ -31,6 +31,7 @@ from .core import (
     ignore_compound,
     ignore_node,
     inject_vars,
+    mark_he_flow_prescription,
     mark_heat_balance_slacks,
     mark_ignored_components,
     persist_solution,
@@ -314,6 +315,11 @@ class PyomoSolver(SolverInterface):
         # mccormick the Junction balance is already trivial and the relaxed
         # eq. 9a is kept, so this is a no-op there.
         mark_heat_balance_slacks(network, ignored_nodes)
+
+        # Decide per compound-internal SubHE whether the design flow prescribes
+        # the through-flow (supply/return islands with free-mass-flow slacks)
+        # or yields to a network-determined flow (e.g. a fixed sink downstream).
+        mark_he_flow_prescription(network, ignored_nodes)
 
         inject_vars(
             lambda model, comp, cat: PyomoSolver.inject_pyomo_vars_attr(

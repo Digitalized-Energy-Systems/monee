@@ -31,6 +31,7 @@ from .core import (
     ignore_compound,
     ignore_node,
     inject_vars,
+    mark_he_flow_prescription,
     mark_heat_balance_slacks,
     mark_ignored_components,
     persist_solution,
@@ -233,6 +234,11 @@ class GEKKOSolver(SolverInterface):
         # drop its (dependent) nodal heat balance - removes the heat carrier's
         # redundant constraint and is required for a square IMODE=1 solve.
         mark_heat_balance_slacks(network, ignored_nodes)
+
+        # Decide per compound-internal SubHE whether the design flow prescribes
+        # the through-flow (supply/return islands with free-mass-flow slacks)
+        # or yields to a network-determined flow (e.g. a fixed sink downstream).
+        mark_he_flow_prescription(network, ignored_nodes)
 
         apm_name_map: dict[str, str] = {}
         inject_vars(
