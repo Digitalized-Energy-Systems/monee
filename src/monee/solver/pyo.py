@@ -1,5 +1,8 @@
 import logging
 import math
+import os
+import shutil
+import tempfile
 import types
 
 import pyomo.environ as pyo
@@ -56,6 +59,99 @@ PER_SOLVER_OPTIONS = {
         "TimeLimit": 300,
     },
 }
+
+
+def _classic_scip_available() -> bool:
+    """True iff the standalone ``scip``/``scipampl`` executable is on PATH.
+
+    Checked via ``shutil.which`` rather than ``SolverFactory("scip").available()``
+    so we don't trigger Pyomo's noisy "Could not locate the 'scip' executable"
+    warning just to decide which backend to use.
+    """
+    return bool(shutil.which("scip") or shutil.which("scipampl"))
+
+
+def _pyscipopt_available() -> bool:
+    """True iff the ``pyscipopt`` Python bindings (PyPI ``pyscipopt``) import."""
+    try:
+        import pyscipopt  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+class PyscipoptSolver:
+    """Drive SCIP through the ``pyscipopt`` bindings when the classic ``scip``
+    executable is absent..
+    """
+
+    def __init__(self):
+        self.options: dict = {}
+
+    def warm_start_capable(self) -> bool:
+        return False
+
+    def available(self, exception_flag: bool = False) -> bool:
+        return _pyscipopt_available()
+
+    def solve(self, model, tee: bool = False, **kwargs):
+        from pyscipopt import Model as ScipModel
+
+        tmpdir = tempfile.mkdtemp(prefix="monee_scip_")
+        nl_path = os.path.join(tmpdir, "model.nl")
+        try:
+            model.write(
+                nl_path,
+                format="nl",
+                io_options={"symbolic_solver_labels": True},
+            )
+
+            sm = ScipModel()
+            if not tee:
+                sm.hideOutput()
+            sm.readProblem(nl_path)
+            for key, value in self.options.items():
+                try:
+                    sm.setParam(key, value)
+                except Exception:
+                    _log.debug("pyscipopt: ignoring unknown SCIP option %r", key)
+
+            sm.optimize()
+
+            status = sm.getStatus()
+            has_solution = sm.getNSols() > 0
+            if has_solution:
+                scip_vals = {var.name: sm.getVal(var) for var in sm.getVars()}
+                for var in model.component_data_objects(pyo.Var, active=True):
+                    val = scip_vals.get(var.name)
+                    if val is not None:
+                        var.set_value(val, skip_validation=True)
+
+            return self._build_result(status, has_solution)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    @staticmethod
+    def _build_result(status: str, has_solution: bool):
+        """Map a SCIP status string onto the ``(status, termination_condition)``
+        pair that :func:`_classify_solve_result` inspects."""
+        if status == "optimal":
+            solver_status, tc = SolverStatus.ok, TerminationCondition.optimal
+        elif status == "infeasible":
+            solver_status, tc = SolverStatus.warning, TerminationCondition.infeasible
+        elif status == "unbounded":
+            solver_status, tc = SolverStatus.warning, TerminationCondition.unbounded
+        elif has_solution:
+            # A limit was hit (time/node/gap) but SCIP has a feasible incumbent;
+            # _classify_solve_result treats this as a usable witness solution.
+            solver_status, tc = SolverStatus.aborted, TerminationCondition.maxTimeLimit
+        else:
+            # Limit hit with no incumbent -> report as infeasible so the caller
+            # surfaces a diagnostic rather than reading unset Vars as a solution.
+            solver_status, tc = SolverStatus.warning, TerminationCondition.infeasible
+        return types.SimpleNamespace(
+            solver=types.SimpleNamespace(status=solver_status, termination_condition=tc)
+        )
 
 
 class PyomoPWLImpl:
@@ -241,6 +337,27 @@ class PyomoSolver(SolverInterface):
                 setattr(pm, name, e)
                 setattr(model_obj, intermediate_eq.attr, e)
 
+    @staticmethod
+    def _make_solver(solver_name: str):
+        """Resolve ``solver_name`` to a solver object.
+
+        For ``scip``, transparently fall back to the :class:`PyscipoptSolver`
+        bridge when the standalone ``scip`` executable is missing but the
+        ``pyscipopt`` bindings are installed. Any other case defers to
+        :func:`pyo.SolverFactory` (which raises the usual informative error at
+        solve time if the solver is genuinely unavailable)."""
+        if (
+            solver_name == "scip"
+            and not _classic_scip_available()
+            and _pyscipopt_available()
+        ):
+            _log.info(
+                "Standalone 'scip' executable not found; solving via pyscipopt "
+                "(SCIP Python bindings) over an AMPL .nl round-trip."
+            )
+            return PyscipoptSolver()
+        return pyo.SolverFactory(solver_name)
+
     def solve(
         self,
         input_network: Network,
@@ -377,7 +494,7 @@ class PyomoSolver(SolverInterface):
             and len(pm.aux_obj_exprs) > 0
         )
 
-        solver = pyo.SolverFactory(solver_name)
+        solver = self._make_solver(solver_name)
         for k, v in DEFAULT_SOLVER_OPTIONS.items():
             solver.options[k] = v
         for k, v in PER_SOLVER_OPTIONS.get(solver_name, {}).items():
