@@ -139,12 +139,12 @@ def create_urban_district_net_with_ties() -> mm.Network:
 
     Same primary topology as :func:`create_urban_district_net`, plus:
 
-    * **Power tie** ``b3↔b4`` — alternative path between the two large loads
+    * **Power tie** ``b3↔b4`` - alternative path between the two large loads
       so a failure on ``b2-b3`` or ``b2-b4`` is recoverable by closing it.
-    * **Gas tie** ``g0↔g2`` — bypass around ``g1`` for failures on
+    * **Gas tie** ``g0↔g2`` - bypass around ``g1`` for failures on
       ``g0-g1`` or ``g1-g2``.
-    * **Gas tie** ``g3↔g4`` — meshes the two sink junctions.
-    * **Heat supply tie** ``s1↔s3`` — bypass around ``s2`` on the supply
+    * **Gas tie** ``g3↔g4`` - meshes the two sink junctions.
+    * **Heat supply tie** ``s1↔s3`` - bypass around ``s2`` on the supply
       chain.
     * **Second heat consumer** at ``r2`` (fed by an HE off ``s2``) so the
       heat sector has more than one load and a single HE failure does not
@@ -460,7 +460,7 @@ def create_industrial_hub_net() -> mm.Network:
     Industrial energy hub: 110 kV meshed power + high-pressure gas, no district heat.
 
     8 buses (ring + 2 cross-ties) · 7 gas junctions (ring).
-    5 CPs: 3× G2P + 2× P2G — strong gas-backup power capacity.
+    5 CPs: 3× G2P + 2× P2G - strong gas-backup power capacity.
     Suitable for: sparse-heat resilience analysis, gas-turbine backup power testing.
     """
     net = mx.create_multi_energy_network()
@@ -520,7 +520,7 @@ def create_industrial_hub_net() -> mm.Network:
     mx.create_gas_pipe(net, g3, g6, diameter_m=0.30, length_m=350)
     mx.create_gas_pipe(net, g0, g3, diameter_m=0.40, length_m=1200)  # ring closure
 
-    # G2P: gas turbines at mid-load buses — backup / peak-shaving generation
+    # G2P: gas turbines at mid-load buses - backup / peak-shaving generation
     mx.create_g2p(
         net,
         from_node_id=g1,
@@ -545,7 +545,7 @@ def create_industrial_hub_net() -> mm.Network:
         p_mw_setpoint=6,
         regulation=1,
     )
-    # P2G: electrolysers at generator buses — store surplus as hydrogen
+    # P2G: electrolysers at generator buses - store surplus as hydrogen
     mx.create_p2g(
         net,
         from_node_id=b1,
@@ -571,7 +571,7 @@ def create_regional_mes_net() -> mm.Network:
     Regional integrated MES: 120 kV ring power, gas tree, district heating.
 
     8 buses · 8 gas junctions · 6 heat junctions (3 supply + 3 return) · 5 CPs.
-    All coupling point types (CHP, G2P, P2G, P2H) — broadest carrier diversity.
+    All coupling point types (CHP, G2P, P2G, P2H) - broadest carrier diversity.
     Single cross-tie in power ring for N-1 security.
     Suitable for: comprehensive CP criticality analysis, all-carrier failure scenarios.
 
@@ -845,16 +845,16 @@ def create_balanced_urban_mes_timeseries(
     Produces ``steps`` timesteps of synthetic winter-weekday demand profiles
     for every direct consumer in ``net``:
 
-    * **Power loads** (``PowerLoad`` children) — residential/commercial
+    * **Power loads** (``PowerLoad`` children) - residential/commercial
       pattern: low overnight, morning ramp, broad daytime plateau, evening
       peak, gradual decline.  Both ``p_mw`` and ``q_mvar`` are scaled
       proportionally to preserve constant power factor.
 
-    * **Gas sinks** (``Sink`` children attached to a ``GasGrid`` node) —
+    * **Gas sinks** (``Sink`` children attached to a ``GasGrid`` node) -
       heating + cooking pattern: twin spikes at breakfast and dinner,
       lower midday, minimum at night.
 
-    * **Heat exchanger loads** (``HeatExchangerLoad`` branches) — space
+    * **Heat exchanger loads** (``HeatExchangerLoad`` branches) - space
       heating pattern, anti-correlated with outdoor temperature: highest
       in the cold night hours, lowest in the warm afternoon.
 

@@ -5,7 +5,7 @@ Tests for Pyomo infeasibility diagnostic tools.
 import pyomo.environ as pyo
 import pytest
 
-from monee.solver.infeasibility import (
+from monee.solver.infeasibility.pyo import (
     InfeasibilityReport,
     _parse_var_name,
     _var_display_name,
@@ -61,7 +61,7 @@ def _infeasible_model():
 
 def test_collect_constraint_residuals():
     m = _infeasible_model()
-    # Solve — will be infeasible, but initial values are x=3, y=3 → x+y=6
+    # Solve - will be infeasible, but initial values are x=3, y=3 → x+y=6
     solver = pyo.SolverFactory("scip")
     solver.solve(m)
 
@@ -79,7 +79,7 @@ def test_collect_variable_bound_violations():
     m.cons = pyo.ConstraintList()
     m.obj = pyo.Objective(expr=m.x, sense=pyo.minimize)
 
-    # Don't solve — just check the initial values
+    # Don't solve - just check the initial values
     violations = collect_variable_bound_violations(m, tol=1e-4)
     assert len(violations) == 1
     assert violations[0].violation == pytest.approx(5.0, abs=0.1)
@@ -144,7 +144,7 @@ def test_infeasible_monee_pyomo_solve():
     net.branch(mm.PowerLine(**_LINE), b0, b1)
 
     # Create an infeasible problem: ext-grid must supply exactly 2 MW
-    # but also be bounded to [0.1, 0.5] — impossible.
+    # but also be bounded to [0.1, 0.5] - impossible.
     prob = OptimizationProblem()
     cons = Constraints()
     cons.select_types(ExtPowerGrid).equation(lambda m: m.p_mw >= 0.1).equation(
@@ -152,7 +152,7 @@ def test_infeasible_monee_pyomo_solve():
     )
     prob.constraints = cons
 
-    # Use ipopt — it detects nonlinear infeasibility much faster than SCIP.
+    # Use ipopt - it detects nonlinear infeasibility much faster than SCIP.
     solver = PyomoSolver(solver_name="ipopt")
     result = solver.solve(net, optimization_problem=prob)
     assert not result.success
@@ -189,7 +189,7 @@ def test_infeasible_multi_period_pyomo():
     )
     prob.constraints = cons
 
-    # Use ipopt — it detects nonlinear infeasibility much faster than SCIP.
+    # Use ipopt - it detects nonlinear infeasibility much faster than SCIP.
     with pytest.raises(RuntimeError, match="Infeasibility diagnostics"):
         run_multi_period(
             net,

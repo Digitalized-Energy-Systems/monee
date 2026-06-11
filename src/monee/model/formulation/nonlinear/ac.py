@@ -11,23 +11,23 @@ SQRT_3 = np.sqrt(3)
 
 
 class ACElectricityNodeFormulation(NodeFormulation):
-    """AC keeps the Bus-declared ``vm_pu_squared`` Var untouched. It is unused by
-    the AC equations (only MISOCP needs it), so it floats as a harmless phantom —
-    but GEKKO's barrier method is sensitive to its presence on borderline
-    networks, so the default optimization formulation must not remove it."""
+    """AC bus formulation.
 
+    In optimization mode (``simulation=False``) the Bus-declared
+    ``vm_pu_squared`` Var is left untouched: it is unused by the AC equations
+    (only MISOCP needs it) so it floats as a harmless phantom, but GEKKO's
+    barrier method is sensitive to its removal on borderline networks, so the
+    optimization path must keep it.
 
-class ACElectricitySimNodeFormulation(ACElectricityNodeFormulation):
-    """Simulation variant: demote ``vm_pu_squared`` to a :class:`PostProcess`
-    report (= vm_pu²) so it carries no solver variable. This drops the phantom
-    DOF the IMODE=1 square solve cannot tolerate, while still reporting the true
-    value. Safe here because simulation runs deactivate the coupling control
-    nodes whose convergence the default formulation must protect."""
+    In simulation mode (``simulation=True``) it is demoted to a
+    :class:`PostProcess` report (= vm_pu²) carrying no solver variable, dropping
+    the phantom DOF a square IMODE=1 solve cannot tolerate while still reporting
+    the true value."""
 
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         # Some multi-grid control nodes subclass Bus (so they match here) without
-        # a vm_pu attribute — only act on real voltage buses.
-        if hasattr(model, "vm_pu"):
+        # a vm_pu attribute - only act on real voltage buses.
+        if simulation and hasattr(model, "vm_pu"):
             model.vm_pu_squared = PostProcess(lambda v: v.vm_pu**2)
 
 

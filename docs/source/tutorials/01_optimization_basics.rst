@@ -5,7 +5,7 @@
 **Scenario.** A radial feeder connects a substation (Bus 0) to two loads via
 two line segments. Bus 1 serves a small **factory** (0.6 MW); Bus 2 serves a
 **warehouse** (0.4 MW).  An upstream fault limits the substation connection to
-at most 0.6 MW — far less than the combined 1.0 MW demand.  Some load must be
+at most 0.6 MW - far less than the combined 1.0 MW demand.  Some load must be
 shed.
 
 Interrupting the factory costs **30 monetary units/MW** (critical production
@@ -62,11 +62,11 @@ Defining the optimisation problem
 
 An :class:`~monee.problem.core.OptimizationProblem` has three building blocks:
 
-- **Controllables** — which attributes the solver may vary (here: the
+- **Controllables** - which attributes the solver may vary (here: the
   ``regulation`` fraction of each load).
-- **Constraints** — additional restrictions beyond the energy-flow equations
+- **Constraints** - additional restrictions beyond the energy-flow equations
   (here: the 0.6 MW substation limit).
-- **Objective** — the scalar to minimise (here: total curtailment cost).
+- **Objective** - the scalar to minimise (here: total curtailment cost).
 
 .. testcode::
 

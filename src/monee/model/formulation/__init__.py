@@ -2,21 +2,18 @@ from .core import NetworkFormulation, Formulation
 
 from .el import (
     AC_NETWORK_FORMULATION,
-    AC_SIM_NETWORK_FORMULATION,
     MISOCP_NETWORK_FORMULATION,
 )
 from .gas import (
     NL_WEYMOUTH_NETWORK_FORMULATION,
     SMOOTH_WEYMOUTH_NETWORK_FORMULATION,
     make_nl_weymouth_pwl_network_formulation,
-    make_simulation_weymouth_network_formulation,
     make_smooth_weymouth_network_formulation,
 )
 from .water import (
     NL_DARCY_WEISBACH_NETWORK_FORMULATION,
     SMOOTH_DARCY_WEISBACH_NETWORK_FORMULATION,
     make_nl_darcy_weisbach_pwl_network_formulation,
-    make_simulation_darcy_weisbach_network_formulation,
     make_smooth_darcy_weisbach_network_formulation,
 )
 from .mccormick.water import (
@@ -25,13 +22,18 @@ from .mccormick.water import (
 )
 
 
-def make_simulation_network_formulation(friction_model: str = "constant"):
-    """Combined AC + gas + heat formulation squared for a steady-state IMODE=1
-    simulation. Apply to a network and solve with ``GEKKOSolver(simulation=True)``
-    for a fast, unique plain energy flow (falls back to IMODE=3 if not square)."""
-    el = AC_SIM_NETWORK_FORMULATION
-    gas = make_simulation_weymouth_network_formulation(friction_model)
-    heat = make_simulation_darcy_weisbach_network_formulation(friction_model)
+def make_smooth_network_formulation(friction_model: str = "constant"):
+    """Combined AC + smooth gas + smooth heat formulation in one apply.
+
+    Pure-NLP across all three carriers. Solve with ``run_energy_flow`` for a
+    fast square steady-state simulation (GEKKO IMODE=1, falls back to IMODE=3 if
+    not square), or pass an optimization problem for an IMODE=3 optimize. The
+    simulation squaring (phantom-var pinning, flow-limit drop, vm_pu_squared
+    demotion) is applied by the solver from its ``simulation`` flag - there is
+    no separate simulation formulation."""
+    el = AC_NETWORK_FORMULATION
+    gas = make_smooth_weymouth_network_formulation(friction_model)
+    heat = make_smooth_darcy_weisbach_network_formulation(friction_model)
     return NetworkFormulation(
         branch_type_to_formulations={
             **el.branch_type_to_formulations,
@@ -44,3 +46,6 @@ def make_simulation_network_formulation(friction_model: str = "constant"):
             **heat.node_type_to_formulations,
         },
     )
+
+
+SMOOTH_NETWORK_FORMULATION = make_smooth_network_formulation()

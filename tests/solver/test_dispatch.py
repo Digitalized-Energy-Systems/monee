@@ -1,5 +1,5 @@
 """
-Tests for :mod:`monee.solver.dispatch` — the (solver, backend) resolution layer.
+Tests for :mod:`monee.solver.dispatch` - the (solver, backend) resolution layer.
 
 These tests focus on the *routing* logic, not the underlying solvers.  We
 inspect the type of the returned solver instance rather than running it.
@@ -36,7 +36,7 @@ def test_auto_backend_pyomo_for_unknown_names():
     assert _auto_backend("definitely_not_a_solver") == "pyomo"
 
 
-# resolve_solver — defaults & instances
+# resolve_solver - defaults & instances
 
 
 def test_resolve_default_returns_gekko_ipopt():
@@ -55,7 +55,7 @@ def test_resolve_instance_with_backend_raises():
         resolve_solver(GEKKOSolver(), backend="pyomo")
 
 
-# resolve_solver — strings
+# resolve_solver - strings
 
 
 def test_resolve_string_apopt_routes_to_gekko():
@@ -92,7 +92,7 @@ def test_resolve_pyomo_known_but_unavailable_raises():
         and not pyo_env.SolverFactory(n).available(exception_flag=False)
     ]
     if not unavailable:
-        pytest.skip("All Pyomo solvers happen to be available — cannot test path.")
+        pytest.skip("All Pyomo solvers happen to be available - cannot test path.")
     with pytest.raises(ValueError, match="not available"):
         resolve_solver(unavailable[0], backend="pyomo")
 
@@ -112,7 +112,7 @@ def test_resolve_unknown_backend_raises():
         resolve_solver("ipopt", backend="cplex")
 
 
-# resolve_multi_period_solver — same shape
+# resolve_multi_period_solver - same shape
 
 
 def test_resolve_multi_period_default_returns_gekko():

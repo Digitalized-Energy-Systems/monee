@@ -23,6 +23,8 @@ from monee.model import (
     WaterPipe,
 )
 from monee.model.child import GridFormingMixin
+from monee.model.grid import GasGrid, PowerGrid, WaterGrid
+from monee.model.node import Junction
 from monee.problem.core import OptimizationProblem
 
 # Display helpers (also imported by simulation.timeseries)
@@ -73,6 +75,12 @@ class SolverResult:
     objective: float | None
     success: bool
     violations: dict[str, float] = field(default_factory=dict)
+    #: Which solve mode actually ran: ``"simulation"`` (square IMODE=1
+    #: steady-state) or ``"optimization"`` (IMODE=3). When a simulation was
+    #: requested but the model was not square, this reads ``"optimization"`` -
+    #: the signal that the fast steady-state path silently fell back. ``None``
+    #: when the backend doesn't distinguish the two (e.g. Pyomo).
+    mode_used: str | None = None
 
     def summary(self):
         return repr(self)
@@ -160,7 +168,7 @@ class SolverResult:
                 index=False,
                 border=0,
                 classes=[],
-                na_rep="—",
+                na_rep="-",
                 float_format=lambda x: f"{x:.5g}",
             )
             sections.append(
@@ -213,6 +221,7 @@ class SolverInterface(ABC):
         draw_debug=False,
         exclude_unconnected_nodes=False,
         step_state=None,
+        simulation=False,
     ) -> SolverResult:
         """
         Solve the energy-flow / optimisation problem for *input_network*.
@@ -224,6 +233,10 @@ class SolverInterface(ABC):
             draw_debug: If ``True``, emit debug output from the solver.
             exclude_unconnected_nodes: Legacy flag; prefer islanding config.
             step_state: Inter-step state from the previous timeseries step.
+            simulation: If ``True``, square the model (pin phantom vars, drop
+                operational flow limits) and solve it as a steady-state
+                simulation. GEKKO runs this as IMODE=1 (falling back to IMODE=3
+                if not square); backends without a simulation mode ignore it.
 
         Returns:
             A :class:`SolverResult` with updated variable values and result DataFrames.
@@ -456,7 +469,7 @@ def mark_ignored_components(network, ignored_nodes):
             compound.ignored = True
             # Children attached to *external* nodes (e.g. SubHG at the heat
             # node of a broken CHPHG) wouldn't be caught by the node-loop
-            # above — their host node may still be in the active grid.
+            # above - their host node may still be in the active grid.
             # Mark them directly so ignore_child filters them out.
             for sc in compound.subcomponents:
                 if isinstance(sc, Child):
@@ -505,7 +518,7 @@ def pin_floating_hydraulic_gauges(network: Network, ignored_nodes):
     A grid-forming child (``ExtHydrGrid`` / ``GridFormingSource``) pins an
     absolute pressure reference via its ``overwrite``. An island with none
     references pressure only through the (relative) pipe pressure-drop equations
-    — its absolute level is a free gauge degree of freedom, which IPOPT can only
+    - its absolute level is a free gauge degree of freedom, which IPOPT can only
     resolve by regularising a rank-deficient block (slow, fragile). Such islands
     arise routinely: e.g. a heat-exchanger-fed return loop, where the coupling HE
     transfers mass and temperature but imposes no pressure drop.
@@ -515,8 +528,6 @@ def pin_floating_hydraulic_gauges(network: Network, ignored_nodes):
     arbitrary absolute level). Temperature is left free: where present it is
     referenced through the heat-exchanger coupling, not a nodal pin.
     """
-    from monee.model.grid import GasGrid, WaterGrid
-
     for grid_type in (GasGrid, WaterGrid):
         ids = _carrier_node_ids(network, ignored_nodes, grid_type)
         for island in _carrier_islands(network, ids):
@@ -533,7 +544,7 @@ def pin_floating_hydraulic_gauges(network: Network, ignored_nodes):
 
 def mark_heat_balance_slacks(network: Network, ignored_nodes):
     """Mark one grid-forming reference node per energized heat island so its
-    (dependent) nodal heat balance is dropped — the heat carrier's slack,
+    (dependent) nodal heat balance is dropped - the heat carrier's slack,
     mirroring the free mass-flow / angle slack the other carriers already have.
 
     The nodal heat balances over a connected island are linearly dependent (one
@@ -541,8 +552,6 @@ def mark_heat_balance_slacks(network: Network, ignored_nodes):
     connected components of the active water subgraph; references are
     ``GridFormingMixin`` children, matching the islanding extension's criterion.
     """
-    from monee.model.grid import WaterGrid
-
     heat_ids = _carrier_node_ids(network, ignored_nodes, WaterGrid)
     if not heat_ids:
         return
@@ -603,7 +612,7 @@ def withdraw_vars(withdraw_fn, nodes, branches, compounds, network):
 
 def apply_post_process(model: GenericModel) -> None:
     """Evaluate the model's :class:`PostProcess` attributes from its solved
-    values — runs after ``withdraw_vars`` and fully outside the solver. Lambdas
+    values - runs after ``withdraw_vars`` and fully outside the solver. Lambdas
     receive a namespace, so they read fields as ``v.vm_pu`` (not ``v["vm_pu"]``)."""
     vals = SimpleNamespace(**model.values)
     for attr in model.__dict__.values():
@@ -700,7 +709,7 @@ def ignore_node(node, network: Network, ignored_nodes):
 
 def ignore_child(child, ignored_nodes):
     # ``child.ignored`` is set by ``mark_ignored_components`` when the child
-    # belongs to an ignored compound — without consulting it here, the child
+    # belongs to an ignored compound - without consulting it here, the child
     # would still appear in its host node's balance equations as a free Var
     # (e.g. SubHG.q_mw_heat absorbing arbitrary heat at the heat node).
     return (not child.active) or (child.node_id in ignored_nodes) or child.ignored
@@ -712,8 +721,8 @@ def ignore_compound(compound, ignored_nodes):
         value in ignored_nodes for value in compound.connected_to.values()
     )
     # Internal subcomponent turned off (e.g. user deactivates one of a
-    # CHPHG's internal transfer branches): the ControlNode's power balance —
-    # degenerate when its from-branches are gone — otherwise collides with
+    # CHPHG's internal transfer branches): the ControlNode's power balance -
+    # degenerate when its from-branches are gone - otherwise collides with
     # its el_mw / q_mw_heat coupling rows and the LP is infeasible.
     internal_broken = any(
         not getattr(sc, "active", True) for sc in compound.subcomponents
@@ -730,7 +739,7 @@ def ignore_compound(compound, ignored_nodes):
 
 def generate_real_topology(nx_net):
     net_copy = nx_net.copy()
-    # keys=True targets the exact parallel edge — not always key 0.
+    # keys=True targets the exact parallel edge - not always key 0.
     for u, v, key, data in nx_net.edges(keys=True, data=True):
         branch = data["internal_branch"]
         if not branch.active or (
@@ -795,8 +804,6 @@ def find_ignored_nodes(network: Network, islanding_config=None):
                 if islanding_config is not None and isinstance(
                     child.model, GridFormingMixin
                 ):
-                    from monee.model.grid import GasGrid, PowerGrid, WaterGrid
-
                     node_grid = int_node.grid
                     carrier_enabled = (
                         (
@@ -825,8 +832,6 @@ def find_ignored_nodes(network: Network, islanding_config=None):
     # Iterate to fixed point. Skipped under islanding (topology there includes
     # inactive backup branches, so degree overstates connectivity).
     if islanding_config is None:
-        from monee.model.node import Junction
-
         # Compound port children (e.g. SubHG on a CHPHG heat node) carry no
         # demand of their own; they must not keep an otherwise-isolated
         # junction alive.
@@ -848,7 +853,7 @@ def find_ignored_nodes(network: Network, islanding_config=None):
         def _has_mass_flow_anchor(int_node):
             """A Junction at degree ≤ 1 needs a mass-flow-contributing child
             (Sink / Source / ExtHydrGrid) to anchor mass conservation.
-            Heat-only children (HeatLoad / HeatGenerator) don't qualify —
+            Heat-only children (HeatLoad / HeatGenerator) don't qualify -
             with no outgoing pipe their q_mw_heat term has no enthalpy
             stream to balance against and the junction becomes infeasible."""
             for cid in int_node.child_ids:
@@ -877,7 +882,7 @@ def find_ignored_nodes(network: Network, islanding_config=None):
                     new_stubs.add(node_id)
                     continue
                 # Mass-balance dead-end: Junction at degree ≤ 1 whose only
-                # children are heat-only (q_mw_heat) — see _has_mass_flow_anchor.
+                # children are heat-only (q_mw_heat) - see _has_mass_flow_anchor.
                 if isinstance(int_node.model, Junction) and not _has_mass_flow_anchor(
                     int_node
                 ):

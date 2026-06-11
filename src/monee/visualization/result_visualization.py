@@ -58,11 +58,11 @@ _SKIP: frozenset[str] = _META_COLS | _ID_COLS | frozenset({"_type"})
 def _fmt(v) -> str:
     """Format a result value concisely for display."""
     if v is None:
-        return "—"
+        return "-"
     try:
         f = float(v)
         if math.isnan(f):
-            return "—"
+            return "-"
         return f"{f:.4g}"
     except (TypeError, ValueError):
         return str(v)
@@ -123,9 +123,9 @@ def _node_result_map(result: SolverResult) -> dict:
         if df.empty or "id" not in df.columns:
             continue
         if "node_id" in df.columns:
-            continue  # child — skip
+            continue  # child - skip
         if isinstance(df["id"].iloc[0], tuple):
-            continue  # branch — skip
+            continue  # branch - skip
         for _, row in df.iterrows():
             m[row["id"]] = {"_type": type_name, **row.to_dict()}
     return m

@@ -40,12 +40,12 @@ All three follow the **load convention**: positive dispatch = charging
 into the network).
 
 By default the dispatch attribute (``p_mw`` or ``mass_flow``) is a plain
-Python float — fixed at zero — so the model acts as an idle element in a
+Python float - fixed at zero - so the model acts as an idle element in a
 plain energy-flow solve.  Activate it in one of two ways:
 
-* **Prescribed dispatch** — register the dispatch series via
+* **Prescribed dispatch** - register the dispatch series via
   ``TimeseriesData`` and call :func:`~monee.simulation.run_timeseries`.
-* **Optimised dispatch** — call
+* **Optimised dispatch** - call
   :meth:`~monee.problem.core.OptimizationProblem.controllable_storages`
   and pass the problem to :func:`~monee.simulation.run_multi_period`.
 
@@ -93,7 +93,7 @@ Prescribed dispatch in timeseries
    SoC [MWh]: [6.0, 6.5, 5.5, 4.0, 4.0, 4.5]
 
 .. plot::
-   :caption: Battery SoC and dispatch — prescribed schedule
+   :caption: Battery SoC and dispatch - prescribed schedule
 
    import monee.model as mm
    import monee.express as mx
@@ -141,7 +141,7 @@ Prescribed dispatch in timeseries
    ax_s.legend(fontsize=8)
    ax_s.grid(axis="y", alpha=0.3)
 
-   fig.suptitle("Electric storage — prescribed dispatch", fontsize=12, fontweight="bold")
+   fig.suptitle("Electric storage - prescribed dispatch", fontsize=12, fontweight="bold")
    plt.tight_layout()
 
 Optimised dispatch
@@ -197,7 +197,7 @@ charge/discharge at every period:
       )
 
 .. plot::
-   :caption: Optimised battery dispatch — the solver charges during cheap off-peak hours and discharges during the peak
+   :caption: Optimised battery dispatch - the solver charges during cheap off-peak hours and discharges during the peak
 
    import monee.model as mm
    import monee.express as mx
@@ -261,7 +261,7 @@ charge/discharge at every period:
    axes[2].legend(fontsize=8)
    axes[2].grid(axis="y", alpha=0.3)
 
-   fig.suptitle("Electric storage — optimised dispatch", fontsize=12, fontweight="bold")
+   fig.suptitle("Electric storage - optimised dispatch", fontsize=12, fontweight="bold")
    plt.tight_layout()
 
 Round-trip efficiency
@@ -282,7 +282,7 @@ discharge variables so the efficiency is applied in the correct direction:
    )
 
 When ``p_mw`` is prescribed (plain energy flow), the efficiency is applied
-based on the sign of the fixed dispatch value — no extra variables are created.
+based on the sign of the fixed dispatch value - no extra variables are created.
 
 ----
 
@@ -334,7 +334,7 @@ Prescribed discharge
    1000 - 0.1 × 3600 = 640 kg after step 1.
 
 .. plot::
-   :caption: Gas storage — charge and discharge cycle over 8 hours
+   :caption: Gas storage - charge and discharge cycle over 8 hours
 
    import monee.model as mm
    import monee.express as mx
@@ -382,11 +382,11 @@ Prescribed discharge
    ax_s.legend(fontsize=8)
    ax_s.grid(axis="y", alpha=0.3)
 
-   fig.suptitle("Gas storage — charge / discharge cycle", fontsize=12, fontweight="bold")
+   fig.suptitle("Gas storage - charge / discharge cycle", fontsize=12, fontweight="bold")
    plt.tight_layout()
 
-Optimised dispatch
-------------------
+Optimised gas dispatch
+----------------------
 
 .. code-block:: python
 
@@ -477,6 +477,6 @@ API reference
 
 .. seealso::
 
-   * :doc:`timeseries` — timeseries simulation workflow
-   * :doc:`multi_period` — multi-period optimisation with storage dispatch
-   * :doc:`../concepts/temporal_extensions` — GasLinepack and LTC extensions
+   * :doc:`timeseries` - timeseries simulation workflow
+   * :doc:`multi_period` - multi-period optimisation with storage dispatch
+   * :doc:`../concepts/temporal_extensions` - GasLinepack and LTC extensions

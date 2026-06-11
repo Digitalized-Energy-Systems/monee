@@ -43,7 +43,7 @@ def test_min_load_shedding_no_incident():
     regs = _all_regulations(result.network)
     assert len(regs) > 0, "Expected at least one component with regulation"
     for reg in regs:
-        assert reg > 0.99, f"regulation {reg} is too low — unexpected shedding"
+        assert reg > 0.99, f"regulation {reg} is too low - unexpected shedding"
 
 
 def test_min_load_shedding_with_ext_grids():
@@ -95,4 +95,4 @@ def test_min_load_shedding_no_incident_large():
     regs = _all_regulations(result.network)
     assert len(regs) > 0, "Expected at least one component with regulation"
     for reg in regs:
-        assert reg > 0.99, f"regulation {reg} is too low — unexpected shedding"
+        assert reg > 0.99, f"regulation {reg} is too low - unexpected shedding"

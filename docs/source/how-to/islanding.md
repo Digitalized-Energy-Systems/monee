@@ -13,11 +13,11 @@ For background on the formulation see {doc}`../concepts/islanding`.
 * monee installed with a MIP-capable solver (GEKKO or Pyomo + HiGHS / CBC /
   Gurobi).
 * A `Network` object with at least one junction that has no reachable path to
-  the external grid — i.e. a second island.
+  the external grid - i.e. a second island.
 
 ---
 
-## Quick start — electricity
+## Quick start - electricity
 
 ```python
 import monee as mn
@@ -27,9 +27,9 @@ import monee.express as mx
 # 1. Build the network
 net = mm.Network()
 
-bus_0 = mx.create_bus(net)   # island A — reference
-bus_1 = mx.create_bus(net)   # island A — load bus
-bus_2 = mx.create_bus(net)   # island B — isolated
+bus_0 = mx.create_bus(net)   # island A - reference
+bus_1 = mx.create_bus(net)   # island A - load bus
+bus_2 = mx.create_bus(net)   # island B - isolated
 
 mx.create_ext_power_grid(net, bus_0)
 mx.create_power_load(net, bus_1, p_mw=0.05, q_mvar=0)
@@ -68,13 +68,14 @@ import monee as mn
 
 mn.enable_islanding(
     net,
-    electricity=mn.ElectricityIslandingMode(angle_bound=3.15, big_m_conn=50),
-    gas=mn.GasIslandingMode(big_m_conn=50),
+    electricity=mn.ElectricityIslandingMode(angle_bound=3.15),
+    gas=mn.GasIslandingMode(),
 )
 ```
 
-Set `big_m_conn` to at least the number of nodes in the carrier sub-network.
-The default of 200 is safe for most networks.
+`angle_bound` (in radians) caps the voltage angle on energised buses.  The
+big-M constant of the connectivity-flow constraints is sized automatically
+from the number of nodes in the network - you do not need to tune it.
 
 ---
 
@@ -104,7 +105,7 @@ mn.enable_islanding(net, water=True)
 
 ---
 
-## Express API reference — islanding components
+## Express API reference - islanding components
 
 | Function | Carrier | Description |
 |---|---|---|
@@ -150,17 +151,26 @@ result = mn.run_energy_flow(net, solver=mn.PyomoSolver(solver_name="highs"))
 
 ## Common pitfalls
 
-**Island not detected — bus still ignored**
+**Island not detected - bus still ignored**
 
 Check that the island's grid-forming child inherits `GridFormingMixin` and
 is marked `active=True`.  `ExtPowerGrid`, `ExtHydrGrid`, `GridFormingGenerator`,
 and `GridFormingSource` all qualify automatically.  A custom component must
 explicitly inherit `GridFormingMixin`.
 
-**`big_m_conn` too small**
+**All energization variables are zero**
 
-If the solver returns a trivially infeasible or degenerate solution, increase
-`big_m_conn` to be at least the number of carrier nodes.
+The big-M of the connectivity constraints is sized automatically from the
+node count, so an all-zero solution is never a tuning issue.  Check instead
+that a grid-forming child exists and is `active` in each island, and that the
+back-end is MIP-capable - the energization variables `e_*` are binary, so use
+GEKKO (APOPT) or Pyomo with `gurobi` or `scip`.
+
+**Islanding lost after saving and loading**
+
+The islanding configuration is registered as a network extension and is not
+persisted by {mod}`monee.io.native`.  Call `enable_islanding` again after
+loading a network from JSON.
 
 **Solver does not support integers**
 

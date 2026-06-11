@@ -1,5 +1,5 @@
 """
-Tests for GasLinepack — the pipe-storage extension for gas networks.
+Tests for GasLinepack - the pipe-storage extension for gas networks.
 
 Design properties verified:
 
@@ -24,7 +24,7 @@ from monee.simulation.timeseries import TimeseriesData, run
 
 def _gas_net():
     """
-    Simple linear gas network:  source — pipe — sink
+    Simple linear gas network:  source - pipe - sink
     Returns (net, pipe_id, sink_id).
     """
     net = mm.Network(mm.create_gas_grid("gas", type="lgas"))
@@ -69,7 +69,7 @@ def test_linepack_auto_capacity():
     """
     net, pipe_id, _ = _gas_net()
     ext = GasLinepack()
-    # Call prepare() directly — no need for a full solve.
+    # Call prepare() directly - no need for a full solve.
     ext.prepare(net)
 
     grid = net.grids[0]
@@ -145,7 +145,7 @@ def test_linepack_timeseries_mass_conservation():
 
 def test_linepack_source_flow_reduced_by_discharge():
     """
-    When linepack discharges it must *reduce* the source feed — not increase it.
+    When linepack discharges it must *reduce* the source feed - not increase it.
 
     Mass balance at source junction (outflow-positive convention):
         source_feed  +  pipe_forward_flow  +  linepack_term  ==  0
@@ -173,9 +173,9 @@ def test_linepack_source_flow_reduced_by_discharge():
     demand_1 = 0.12
 
     assert npk1 < 0, f"Linepack should discharge at step 1 (npk={npk1})"
-    # Source should provide LESS than demand — linepack covers the shortfall.
+    # Source should provide LESS than demand - linepack covers the shortfall.
     assert src_feed_1 < demand_1, (
-        f"Source over-delivers ({src_feed_1:.6f} > {demand_1}) — "
+        f"Source over-delivers ({src_feed_1:.6f} > {demand_1}) - "
         f"sign error: linepack is an anti-buffer"
     )
     # The shortfall should equal the total discharge rate |net_pack_kgs|.

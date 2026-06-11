@@ -3,7 +3,7 @@ Gas linepack extension.
 
 Pipelines act as distributed storage: ``linepack_kg = V_pipe · ρ_avg`` with
 ``ρ = p · M / (R · T)``. Between timesteps,
-``net_pack_kgs(t) · Δt = linepack_kg(t) - linepack_kg(t-1)`` — positive = charging.
+``net_pack_kgs(t) · Δt = linepack_kg(t) - linepack_kg(t-1)`` - positive = charging.
 Each endpoint junction sees ``+0.5 · net_pack_kgs`` (outflow-positive convention).
 
 Single-step solves pin ``net_pack_kgs = 0``; timeseries activates the temporal coupling.

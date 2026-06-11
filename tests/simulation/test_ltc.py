@@ -53,7 +53,7 @@ def _water_loop():
 
 def test_ltc_transparent_in_single_step():
     """
-    LTC must not change steady-state results — adding the extension to a
+    LTC must not change steady-state results - adding the extension to a
     plain single-step solve should produce identical junction temperatures.
     """
     net_base, _, _, _ = _water_loop()

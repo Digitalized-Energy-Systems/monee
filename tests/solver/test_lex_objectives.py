@@ -9,14 +9,14 @@ cap constraint pinning the phase-1 optimum.
 
 These tests exercise:
 
-1. Backwards-compat — default ``lex_objectives=False`` matches the
+1. Backwards-compat - default ``lex_objectives=False`` matches the
    pre-existing single-objective solve.
-2. Phase-1 dominance — in lex mode the user objective is *exactly* at
+2. Phase-1 dominance - in lex mode the user objective is *exactly* at
    its true optimum (i.e. independent of any aux scale).
-3. Decoupling — boosting the formulation-level aux scale ×100 leaves
+3. Decoupling - boosting the formulation-level aux scale ×100 leaves
    the lex user-objective unchanged but inflates the legacy weighted
    objective.
-4. Helper math — ``_lex_cap_slack`` respects ``MIPGap``.
+4. Helper math - ``_lex_cap_slack`` respects ``MIPGap``.
 """
 
 import pytest
@@ -93,7 +93,7 @@ def _user_obj_value(network):
         elif isinstance(m, HeatGenerator):
             total += (-_val(m.q_mw_heat)) * (1 - reg) * 0.1
         elif isinstance(m, (Sink, Source)):
-            # Skip — gas factor lookup requires the grid map; tests below
+            # Skip - gas factor lookup requires the grid map; tests below
             # don't rely on Sink/Source so this approximation is OK.
             continue
         else:  # HE / PassiveHE branches
@@ -108,7 +108,7 @@ def _user_obj_value(network):
 
 
 def _build_unstressed_net():
-    """Urban-district net at nominal loading — feasible with no shedding."""
+    """Urban-district net at nominal loading - feasible with no shedding."""
     net = create_urban_district_net()
     net.apply_formulation(MISOCP_NETWORK_FORMULATION)
     return net
@@ -121,10 +121,10 @@ def _build_unstressed_net():
 
 def test_lex_cap_slack_respects_mipgap():
     """``_lex_cap_slack`` must scale with the configured MIPGap."""
-    # Tight default — slack is tiny.
+    # Tight default - slack is tiny.
     slack_tight = _PyomoSolverCls._lex_cap_slack(100.0, {"MIPGap": 0.0})
     assert slack_tight < 1e-3
-    # Loose 1 % gap — slack should reflect that.
+    # Loose 1 % gap - slack should reflect that.
     slack_loose = _PyomoSolverCls._lex_cap_slack(100.0, {"MIPGap": 1e-2})
     assert slack_loose >= 1.0  # 1 % of 100 = 1.0 plus floor
 
@@ -199,7 +199,7 @@ def test_lex_matches_legacy_on_unstressed_network():
 
 @pytest.mark.skipif(SOLVER is None, reason="Gurobi (MISOCP) not available")
 def test_lex_user_objective_is_optimal_independent_of_aux_scale():
-    """Boost the aux tightening terms ×N — legacy drifts, lex does not.
+    """Boost the aux tightening terms ×N - legacy drifts, lex does not.
 
     The legacy weighted-sum balances ``demand_weight=1e3`` against
     ``sum(current_pu·br_r)``.  If we artificially scale the aux terms

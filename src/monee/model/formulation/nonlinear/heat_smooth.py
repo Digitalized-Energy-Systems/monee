@@ -7,14 +7,19 @@ from monee.model.core import Const, Var
 
 from ..core import BranchFormulation
 from ..linear.water import LinearHeatExchangerFormulation
-from .gas_smooth import FRICTION_MODELS, _ensure_friction_vars, _pin
+from .gas_smooth import FRICTION_MODELS, _ensure_friction_vars, _pin, _seed_mag
 
 
 def _ensure_smooth_flow_vars(model, friction_model, simulation=False):
     # mass_flow is already the signed flow (model defines it as pos − neg);
     # promote it to the decision var instead of adding a redundant one.
     model.mass_flow = Var(0.0, name="mass_flow")
-    model.mass_flow_mag = Var(0.1, min=0, name="mass_flow_mag")
+    # Seed |m| only for the square simulation solve.  In the non-sim
+    # optimisation path (flow-limit slacks + CHP/P2G/P2H couplings) the
+    # pure-demand magnitude is a worse start than the flat 0.1 - couplings
+    # redistribute flow away from the consumer-demand estimate.
+    mag0 = _seed_mag(model) if simulation else 0.1
+    model.mass_flow_mag = Var(mag0, min=0, name="mass_flow_mag")
     model.t_in_pu = Var(1, min=0.3, max=2, name="t_in_pu")
     model.t_out_pu = Var(1, min=0.3, max=2, name="t_out_pu")
     # Drop the direction binary and squared-flow aux vars.
@@ -46,16 +51,22 @@ def _flow_and_pressure_eqs(
     signed = branch.mass_flow
     mag = branch.mass_flow_mag
     drop_term, friction_eqs = smoothmodel.drop_term_and_eqs(
-        formulation.friction_model, branch, grid.dynamic_visc, area, signed, mag,
-        f_max_local, **kwargs,
+        formulation.friction_model,
+        branch,
+        grid.dynamic_visc,
+        area,
+        signed,
+        mag,
+        f_max_local,
+        **kwargs,
     )
     eqs = [
         mag == smoothmodel.smooth_abs(signed, formulation.smoothing_eps, sqrt_impl),
         branch.mass_flow_pos == 0.5 * (mag + signed),
         branch.mass_flow_neg == 0.5 * (mag - signed),
     ]
-    if not getattr(formulation, "simulation", False):
-        # Operational flow limits — dropped in simulation mode (slacks would
+    if not kwargs.get("simulation", False):
+        # Operational flow limits - dropped in simulation mode (slacks would
         # break a square IMODE=1 solve; limits are checked post-hoc).
         eqs += [
             signed <= f_max_local * branch.on_off,
@@ -116,19 +127,17 @@ class SmoothDarcyWeisbachBranchFormulation(BranchFormulation):
         friction_model="constant",
         smoothing_eps=1e-3,
         n_breakpoints=12,
-        simulation=False,
     ):
         assert friction_model in FRICTION_MODELS, friction_model
         self.friction_model = friction_model
         self.smoothing_eps = smoothing_eps
         self.n_breakpoints = n_breakpoints
-        self.simulation = simulation
 
-    def ensure_var(self, model):
-        _ensure_smooth_flow_vars(model, self.friction_model, self.simulation)
+    def ensure_var(self, model, simulation=False):
+        _ensure_smooth_flow_vars(model, self.friction_model, simulation)
         model.alpha = Var(0.01, min=0, max=1, name="alpha")
-        if self.simulation:
-            # A plain pipe injects no heat and has no fixed ΔT — pin these
+        if simulation:
+            # A plain pipe injects no heat and has no fixed ΔT - pin these
             # phantoms (the dropped GF heat balance is the island's one slack).
             _pin(model, "q_mw", "t_inc")
 
@@ -144,7 +153,9 @@ class SmoothDarcyWeisbachBranchFormulation(BranchFormulation):
             + branch.alpha * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref),
         ]
         eqs += _temperature_transport_eqs(branch, from_node_model, to_node_model)
-        if getattr(branch, "unidirectional", False) and not self.simulation:
+        if getattr(branch, "unidirectional", False) and not kwargs.get(
+            "simulation", False
+        ):
             eqs.append(signed <= 0)
         return eqs
 
@@ -158,16 +169,14 @@ class SmoothPassiveHeatExchangerFormulation(BranchFormulation):
         friction_model="constant",
         smoothing_eps=1e-3,
         n_breakpoints=12,
-        simulation=False,
     ):
         assert friction_model in FRICTION_MODELS, friction_model
         self.friction_model = friction_model
         self.smoothing_eps = smoothing_eps
         self.n_breakpoints = n_breakpoints
-        self.simulation = simulation
 
-    def ensure_var(self, model):
-        _ensure_smooth_flow_vars(model, self.friction_model, self.simulation)
+    def ensure_var(self, model, simulation=False):
+        _ensure_smooth_flow_vars(model, self.friction_model, simulation)
         model.t_inc = Var(1, min=-2, max=2, name="temperature_increase")
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
@@ -191,27 +200,9 @@ class SmoothHeatExchangerFormulation(LinearHeatExchangerFormulation):
     formulation but with the ``direction`` binary pinned to a constant (and its
     ``direction == 0`` equation dropped) so the model stays a pure NLP."""
 
-    def ensure_var(self, model):
-        super().ensure_var(model)
+    def ensure_var(self, model, simulation=False):
+        super().ensure_var(model, simulation)
         model.direction = Const(0)
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
-        cp_mw_per_kgs_K = ohfmodel.SPECIFIC_HEAT_CAP_WATER / 1e6
-        eqs = [
-            branch.mass_flow_mag == branch.mass_flow_design_kgs,
-            branch.mass_flow_pos == 0,
-            branch.mass_flow_neg == branch.mass_flow_design_kgs * branch.on_off,
-            branch.t_in_pu == from_node_model.vars["t_pu"],
-            branch.t_from_pu == from_node_model.vars["t_pu"],
-            branch.t_to_pu == branch.t_out_pu,
-            branch.t_out_pu
-            * (branch.mass_flow_design_kgs * cp_mw_per_kgs_K * grid.t_ref)
-            == branch.t_in_pu
-            * (branch.mass_flow_design_kgs * cp_mw_per_kgs_K * grid.t_ref)
-            - branch.q_mw_delivered,
-        ]
-        if branch._he_is_generator:
-            eqs.append(branch.q_mw_delivered >= branch.q_mw * branch.on_off)
-        else:
-            eqs.append(branch.q_mw_delivered <= branch.q_mw * branch.on_off)
-        return eqs
+        return self._he_equations(branch, grid, from_node_model)

@@ -57,9 +57,9 @@ def enable_islanding(
     Enable islanding for *network* and return the ``NetworkIslandingConfig``.
 
     Each carrier argument accepts:
-    * ``True``   — use the default ``IslandingMode`` for that carrier.
-    * An ``IslandingMode`` instance — use a custom mode.
-    * ``None`` (default) — islanding disabled for that carrier.
+    * ``True``   - use the default ``IslandingMode`` for that carrier.
+    * An ``IslandingMode`` instance - use a custom mode.
+    * ``None`` (default) - islanding disabled for that carrier.
 
     The resulting config is attached to ``network.islanding_config`` so that
     ``GEKKOSolver`` / ``PyomoSolver`` pick it up automatically on ``solve()``.
@@ -78,7 +78,7 @@ def enable_islanding(
     return config
 
 
-def run_energy_flow(net: mm.Network, solver=None, **kwargs):
+def run_energy_flow(net: mm.Network, solver=None, simulation: bool = True, **kwargs):
     """
     Performs a basic energy flow analysis on a network without applying optimization constraints.
 
@@ -87,6 +87,7 @@ def run_energy_flow(net: mm.Network, solver=None, **kwargs):
     Args:
         net (mm.Network): The network to analyze, represented as an `mm.Network` instance. The network must be fully defined, including all necessary nodes and parameters.
         solver (optional): The solver to use for the energy flow computation. If not specified, a default compatible solver is chosen. The solver must support the network's structure.
+        simulation (bool): When ``True`` (default), solve as a square steady-state simulation (GEKKO IMODE=1, falling back to IMODE=3 if the model is not square). Pass ``False`` to force the optimize-the-feasibility-problem path. Ignored by backends without a simulation mode (e.g. Pyomo). Check ``result.mode_used`` to see which path actually ran.
         **kwargs: Additional keyword arguments for solver configuration or analysis tuning. Refer to the solver's documentation for supported options.
 
     Returns:
@@ -103,7 +104,9 @@ def run_energy_flow(net: mm.Network, solver=None, **kwargs):
         Run analysis with additional solver options:
             result = run_energy_flow(my_network, max_iter=500, tol=1e-5)
     """
-    return run_energy_flow_optimization(net, None, solver=solver, **kwargs)
+    return run_energy_flow_optimization(
+        net, None, solver=solver, simulation=simulation, **kwargs
+    )
 
 
 def run_energy_flow_optimization(

@@ -59,8 +59,9 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
             if cp_input_rated_mw(component) is not None
         ]
 
-    def calc(self, network, inv=False, include_ext_grid=True,
-             include_coupling_points=False):
+    def calc(
+        self, network, inv=False, include_ext_grid=True, include_coupling_points=False
+    ):
         relevant_components = self.get_relevant_components(network)
         power_load_curtailed = 0
         heat_load_curtailed = 0

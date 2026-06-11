@@ -28,14 +28,14 @@ def test_from_pandapower_max_i_ka_overrides_matpower_placeholder():
     250 MVA placeholder) or the legacy ``0.319 kA`` fallback in
     :func:`monee.io.matpower.fill_branch_dict`.
 
-    The bug previously made every imported branch — LV cable, MV cable, HV
-    line, or distribution transformer — share the same 0.319 kA limit,
+    The bug previously made every imported branch - LV cable, MV cable, HV
+    line, or distribution transformer - share the same 0.319 kA limit,
     silently breaking any line-loading constraint downstream.  The fix
     overrides each *line* branch's ``max_i_ka`` from
     ``net.line.max_i_ka × parallel × df``.
 
     Transformers are intentionally not covered (the single-``max_i_ka``
-    branch model cannot represent the HV / LV side asymmetry — see the
+    branch model cannot represent the HV / LV side asymmetry - see the
     docstring of ``_pp_branch_max_i_ka_overrides``); they retain the
     legacy placeholder so the test asserts presence of line ratings only.
     """
@@ -46,7 +46,7 @@ def test_from_pandapower_max_i_ka_overrides_matpower_placeholder():
 
     # LV-rural3: 127 cables at 0.27 kA each + one transformer.  Every line
     # branch must now carry 0.27, and the legacy 0.319 must appear at most
-    # as the trafo / switch-aux placeholder — not on real lines.
+    # as the trafo / switch-aux placeholder - not on real lines.
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     monee_net = from_pandapower_net(net)
     branches = [

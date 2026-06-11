@@ -194,7 +194,7 @@ class PostProcess:
     namespace of the model's solved fields (read as ``values.vm_pu``).
 
     Unlike :class:`Intermediate`, it is never injected as a solver variable nor
-    referenced by any equation — it carries no degrees of freedom and cannot
+    referenced by any equation - it carries no degrees of freedom and cannot
     affect convergence or squareness. The clean home for derived reports (e.g.
     ``vm_pu_squared = vm_pu²``): physics stays in the solver, reporting outside.
     """
@@ -209,7 +209,7 @@ class PostProcess:
     def __deepcopy__(self, memo):
         new = PostProcess.__new__(PostProcess)
         memo[id(self)] = new
-        new.fn = self.fn  # a function is atomic — share by reference
+        new.fn = self.fn  # a function is atomic - share by reference
         new.value = self.value
         return new
 

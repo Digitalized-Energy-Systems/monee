@@ -17,7 +17,7 @@ def _pin_friction_const(model):
 
 
 class NLDarcyWeisbachNodeFormulation(NodeFormulation):
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         # pressure_pa is report-only (= pressure_pu·pressure_ref); the real
         # closure is attached in equations() where grid.pressure_ref is known.
         model.pressure_pa = PostProcess(lambda v: float("nan"))
@@ -43,7 +43,7 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
     # See NLWeymouthBranchFormulation for rationale.
     EPIGRAPH_TIGHTENING_EPS = 1e-5
 
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         model.t_in_pu = Var(1, min=0.3, max=2, name="t_in_pu")
         model.t_out_pu = Var(1, min=0.3, max=2, name="t_out_pu")
         model.mass_flow_mag = Var(1, min=0, name="mass_flow_mag")
@@ -70,7 +70,7 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
             / math.log(pipe_outside_r / pipe_inside_r)
         ) / ohfmodel.SPECIFIC_HEAT_CAP_WATER
 
-        # Per-pipe big-M tightening via π/4·D²·ρ·v_max — usually well below
+        # Per-pipe big-M tightening via π/4·D²·ρ·v_max - usually well below
         # f_max; tighter big-M shrinks the LP relaxation gap.
         f_max_local = min(
             grid.f_max,
@@ -138,7 +138,7 @@ class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
     def __init__(self, n_breakpoints: int = 12):
         self.n_breakpoints = n_breakpoints
 
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         model.t_in_pu = Var(1, min=0.3, max=2, name="t_in_pu")
         model.t_out_pu = Var(1, min=0.3, max=2, name="t_out_pu")
         model.mass_flow_mag = Var(1, min=0, name="mass_flow_mag")
@@ -236,7 +236,7 @@ class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
     -q_w / (cp · t_ref)`` sets the outlet temperature change. Pressure drop
     follows the plain water-pipe form."""
 
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         model.t_in_pu = Var(1, min=0, max=2, name="t_in_pu")
         model.t_out_pu = Var(1, min=0, max=2, name="t_out_pu")
         model.mass_flow_mag = Var(1, min=0, name="mass_flow_mag")

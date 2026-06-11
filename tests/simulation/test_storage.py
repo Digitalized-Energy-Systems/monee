@@ -63,7 +63,7 @@ def _gas_net_with_storage(flow_max=0.2, m_initial=100.0, m_max=500.0):
     return net, storage_id
 
 
-# Plain energy flow — fixed dispatch via TimeseriesData
+# Plain energy flow - fixed dispatch via TimeseriesData
 
 
 def test_electric_storage_inter_step_constraint_holds():
@@ -178,7 +178,7 @@ def test_gas_storage_soc_within_bounds():
     assert (m_series <= m_max + 1e-3).all(), "m_stored_kg exceeded m_max"
 
 
-# Optimisation mode — make_controllable / controllable_storages
+# Optimisation mode - make_controllable / controllable_storages
 
 
 def test_make_controllable_converts_p_mw_to_var():
@@ -213,7 +213,7 @@ def test_controllable_storages_via_problem():
     problem = OptimizationProblem()
     problem.controllable_storages()
 
-    # Run multi-period with the problem — p_mw must now be optimised (non-zero
+    # Run multi-period with the problem - p_mw must now be optimised (non-zero
     # SoC change is possible).
     td2 = TimeseriesData()
     result = run_multi_period(net, td2, steps=2, optimization_problem=problem)

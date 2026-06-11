@@ -520,7 +520,7 @@ def test_timeseries_with_simbench():
     print(net.as_dataframe_dict_str())
     run_energy_flow(net)
 
-    # WHEN — steps inferred from series data length, but also accepted explicitly
+    # WHEN - steps inferred from series data length, but also accepted explicitly
     result = run(net, td, steps)
 
     # THEN

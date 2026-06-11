@@ -32,6 +32,7 @@ from monee.model import (
     Source,
     Var,
 )
+from monee.model.storage import ElectricStorage, GasStorage, ThermalStorage
 
 logger = logging.getLogger(__name__)
 
@@ -337,12 +338,13 @@ class OptimizationProblem:
     """
 
     def __init__(self, debug=False, lex_objectives: bool = False) -> None:
-        """Args:
-        debug: verbose logging during variable promotion.
-        lex_objectives: Pyomo-only two-phase solve: first user objectives,
-            then formulation-tightening terms (``branch/node/child.minimize``)
-            with the phase-1 optimum pinned. Removes weight tuning. GEKKO falls
-            back to single-objective sum.
+        """
+        Args:
+            debug: verbose logging during variable promotion.
+            lex_objectives: Pyomo-only two-phase solve: first user objectives,
+                then formulation-tightening terms (``branch/node/child.minimize``)
+                with the phase-1 optimum pinned. Removes weight tuning. GEKKO
+                falls back to single-objective sum.
         """
         self._controllable_appliables: list = []
         self._controllable_to_attr: dict[GenericModel, str] = {}
@@ -374,7 +376,7 @@ class OptimizationProblem:
                             if val == 0.0:
                                 logger.warning(
                                     "Attribute '%s' on %s has value 0.0 and no "
-                                    "explicit bounds — inferred bounds [0, 0] "
+                                    "explicit bounds - inferred bounds [0, 0] "
                                     "will lock this variable. Use an "
                                     "AttributeParameter or prob.bounds() to "
                                     "set meaningful bounds.",
@@ -553,7 +555,6 @@ class OptimizationProblem:
 
     def controllable_storages(self):
         """Promote dispatch on all storage components via their ``make_controllable``."""
-        from monee.model.storage import ElectricStorage, GasStorage, ThermalStorage
 
         def _apply_storages(network: Network):
             for component in network.all_components():

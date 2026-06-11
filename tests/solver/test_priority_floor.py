@@ -32,7 +32,7 @@ SOLVER = "gurobi" if _solver_available("gurobi") else None
 
 
 # --------------------------------------------------------------------------- #
-# 1. Helper math — no solver dependency
+# 1. Helper math - no solver dependency
 # --------------------------------------------------------------------------- #
 
 
@@ -64,12 +64,12 @@ def test_aux_upper_bound_zero_on_bare_network():
 
 
 # --------------------------------------------------------------------------- #
-# 2. Plumbing — flag passthrough & opt-in default
+# 2. Plumbing - flag passthrough & opt-in default
 # --------------------------------------------------------------------------- #
 
 
 def test_auto_priority_floor_off_by_default():
-    """Default behaviour is unchanged — opt-in only.
+    """Default behaviour is unchanged - opt-in only.
 
     Compare the number of registered ``_controllable_appliables``
     between a default problem and one with ``auto_priority_floor=True``;
@@ -173,7 +173,7 @@ def test_auto_priority_floor_preserves_demand_generator_ratio():
 
 
 # --------------------------------------------------------------------------- #
-# 3. Behavioural test — auto floor protects weighted mode under aux scaling
+# 3. Behavioural test - auto floor protects weighted mode under aux scaling
 # --------------------------------------------------------------------------- #
 
 
@@ -211,7 +211,7 @@ def test_auto_floor_keeps_user_objective_optimal_under_aux_scale():
             bounds_heat=(0.5, 1.5),
             include_ext_grids=False,
             include_storages=False,
-            demand_weight=1.0,  # tiny — would be insufficient without auto
+            demand_weight=1.0,  # tiny - would be insufficient without auto
             generator_weight=1e-4,
             auto_priority_floor=True,
             priority_safety_factor=10.0,
@@ -234,7 +234,7 @@ def test_auto_floor_keeps_user_objective_optimal_under_aux_scale():
             if isinstance(m, PowerLoad) and reg_val is not None:
                 shed_total += m.p_mw * (1 - reg_val)
         assert shed_total < 1e-3, (
-            f"auto-floor failed to dominate aux×{AUX_SCALE} — "
+            f"auto-floor failed to dominate aux×{AUX_SCALE} - "
             f"shed = {shed_total}, expected ~0"
         )
     finally:

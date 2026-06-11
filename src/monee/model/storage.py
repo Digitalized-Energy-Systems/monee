@@ -6,7 +6,7 @@ timesteps; ``inter_step_equations`` couples it to the previous step.
 
 Load convention: positive = charging (consume from network), negative = discharging.
 
-Dispatch (``p_mw`` / ``mass_flow``) is a plain float by default — fixed setpoint
+Dispatch (``p_mw`` / ``mass_flow``) is a plain float by default - fixed setpoint
 in energy-flow solves. Call :meth:`make_controllable` (or
 ``OptimizationProblem.controllable_storages()``) to promote it to a Var.
 """
@@ -87,7 +87,7 @@ class ElectricStorage(ChildModel):
             prev_e = self._e_mwh_initial
         if self._lossy:
             if isinstance(self.p_mw, (int, float)):
-                # Plain energy flow: fixed p_mw — sign-based efficiency.
+                # Plain energy flow: fixed p_mw - sign-based efficiency.
                 p = float(self.p_mw)
                 delta = (
                     dt_h * self.efficiency_charge * p

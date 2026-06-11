@@ -6,6 +6,7 @@ from monee.problem.core import (
     Objectives,
     OptimizationProblem,
 )
+from monee.problem.utils import line_loading_limit
 
 
 def _gen_cost(model):
@@ -86,8 +87,6 @@ def create_economic_dispatch_problem(
     constraints = Constraints()
 
     if check_lp:
-        from monee.problem.utils import line_loading_limit
-
         constraints.select_types(GenericPowerBranch).equation(
             lambda model: line_loading_limit(model, "from", bounds_lp[1])
         ).equation(lambda model: line_loading_limit(model, "to", bounds_lp[1]))

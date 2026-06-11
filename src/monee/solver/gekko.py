@@ -13,6 +13,7 @@ from monee.model import (
     Network,
     Var,
 )
+from monee.model.extension.islanding.core import NetworkIslandingConfig
 from monee.problem.core import OptimizationProblem
 from monee.simulation.step_state import StepState
 
@@ -37,6 +38,11 @@ from .core import (
     remove_cps,
     withdraw_vars,
 )
+from .infeasibility.apm import (
+    GekkoSolveError,
+    diagnose_gekko_infeasibility,
+    sanitize_apm_name,
+)
 
 # APOPT (SOLVER=1) MINLP options. IPOPT rejects the minlp_* keys, so they are
 # applied only for the APOPT path (see _solver_options).
@@ -55,7 +61,7 @@ DEFAULT_SOLVER_OPTIONS = [
     "constraint_convergence_tolerance 1.0e-4",
 ]
 
-# IPOPT (SOLVER=3) is a pure-NLP solver — the smooth gas/heat formulations target
+# IPOPT (SOLVER=3) is a pure-NLP solver, the smooth gas/heat formulations target
 # it. Only IPOPT-valid option keys here.
 IPOPT_SOLVER_OPTIONS = [
     "max_iter 3000",
@@ -95,19 +101,22 @@ def _process_intermediate_eqs(m, model, equations):
 
 
 class GEKKOSolver(SolverInterface):
-    def __init__(self, solver=1, simulation=False):
+    def __init__(self, solver=1):
         self.solver: int = solver
-        # simulation=True runs a plain energy flow as a square steady-state
-        # simulation (IMODE=1) — far faster than optimising the feasibility
-        # problem — and falls back to IMODE=3 if the model is not square.
-        self.simulation: bool = simulation
+        # Per-solve simulation flag (set at the top of solve()); read by the
+        # equation-building passes to drop operational flow limits.
+        self._simulation: bool = False
 
     @staticmethod
-    def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel, id):
+    def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel, id, name_map=None):
         i = 0
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
                 name = f"{id}.{value.name}" if value.name is not None else f"{id}.{i}"
+                if name_map is not None:
+                    # APMonitor sanitises names irreversibly; remember the
+                    # original for the infeasibility diagnostics.
+                    name_map[sanitize_apm_name(name)] = name
                 setattr(
                     target,
                     key,
@@ -147,16 +156,21 @@ class GEKKOSolver(SolverInterface):
 
     @staticmethod
     def _solve_with_fallback(m, use_sim):
-        """Solve, trying IMODE=1 first in simulation mode and falling back to
-        IMODE=3 if the model is not square (``Degrees of Freedom``) or otherwise
-        fails as a simulation. The IMODE=3 retry runs on the same model."""
         if use_sim:
             try:
                 m.solve(disp=False)
-                return
-            except Exception:
+                return 1
+            except Exception as exc:
+                logging.warning(
+                    "Simulation (IMODE=1) solve failed; falling back to "
+                    "IMODE=3 - the fast square steady-state path was NOT used. "
+                    "The model is likely not square (check for phantom degrees "
+                    "of freedom / non-simulation formulations). Solver said: %s",
+                    exc,
+                )
                 m.options.IMODE = 3
         m.solve(disp=False)
+        return m.options.IMODE
 
     def solve(
         self,
@@ -165,18 +179,23 @@ class GEKKOSolver(SolverInterface):
         draw_debug=False,
         exclude_unconnected_nodes=False,
         step_state: StepState = None,
+        simulation=False,
     ):
+        self._simulation = simulation
         m = GEKKO(remote=False)
         m.options.SOLVER = self.solver
         m.options.WEB = 0
-        m.options.IMODE = 1 if self.simulation else 3
+        m.options.IMODE = 1 if simulation else 3
         m.solver_options = _solver_options(self.solver)
         network = input_network.copy()
 
         for ext in network.extensions:
             ext.prepare(network)
 
-        from monee.model.extension.islanding.core import NetworkIslandingConfig
+        if simulation:
+            for component in network.all_components():
+                if component.formulation is not None:
+                    component.formulation.ensure_var(component.model, simulation=True)
 
         islanding_config = next(
             (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
@@ -206,18 +225,22 @@ class GEKKOSolver(SolverInterface):
         compounds = network.compounds
 
         # Pin the pressure gauge of any hydraulic island without a grid-forming
-        # source (e.g. an HE-fed return loop) — removes a rank-deficient free DOF
+        # source (e.g. an HE-fed return loop) - removes a rank-deficient free DOF
         # IPOPT would otherwise have to regularise.
         pin_floating_hydraulic_gauges(network, ignored_nodes)
 
         # Recognise each heat island's grid-forming node as the heat slack and
-        # drop its (dependent) nodal heat balance — removes the heat carrier's
+        # drop its (dependent) nodal heat balance - removes the heat carrier's
         # redundant constraint and is required for a square IMODE=1 solve.
         mark_heat_balance_slacks(network, ignored_nodes)
 
+        apm_name_map: dict[str, str] = {}
         inject_vars(
             lambda model, comp, cat: GEKKOSolver.inject_gekko_vars_attr(
-                m, model, comp.nid if cat == "branch" else comp.tid
+                m,
+                model,
+                comp.nid if cat == "branch" else comp.tid,
+                name_map=apm_name_map,
             ),
             nodes,
             branches,
@@ -263,12 +286,13 @@ class GEKKOSolver(SolverInterface):
             m.Equations(ext.equations(network, ignored_nodes))
 
         if objs_exprs:
-            m.Obj(sum(objs_exprs))
+            for expr in objs_exprs:
+                m.Obj(expr)
 
         # IMODE=1 (square simulation) only applies to a plain flow: no objective
         # of any kind (else IMODE=1 silently ignores it).
         use_sim = (
-            self.simulation
+            simulation
             and optimization_problem is None
             and not objs_exprs
             and not network.objectives
@@ -276,9 +300,20 @@ class GEKKOSolver(SolverInterface):
         m.options.IMODE = 1 if use_sim else 3
 
         try:
-            self._solve_with_fallback(m, use_sim)
-        except Exception:
-            logging.error("Solver not converged.")
+            imode_used = self._solve_with_fallback(m, use_sim)
+        except Exception as exc:
+            # APMonitor's exception is just "@error: Solution Not Found";
+            # build a proper report from the run-directory artifacts instead.
+            report = diagnose_gekko_infeasibility(
+                m, name_map=apm_name_map, solver_message=str(exc)
+            )
+            if report is not None:
+                logging.error(
+                    "Solver not converged. Diagnostic report:\n%s",
+                    report.summary(max_items=25),
+                )
+            else:
+                logging.error("Solver not converged.")
             if draw_debug:
                 import matplotlib.pyplot as plt
 
@@ -302,6 +337,12 @@ class GEKKOSolver(SolverInterface):
                 persist_solution(network, input_network)
             except Exception:
                 pass
+            if report is not None:
+                raise GekkoSolveError(
+                    "GEKKO solve failed.\n\nDiagnostic report:\n"
+                    + report.summary(max_items=25),
+                    report=report,
+                ) from exc
             raise
         withdraw_vars(
             GEKKOSolver.withdraw_gekko_vars_attr, nodes, branches, compounds, network
@@ -315,6 +356,7 @@ class GEKKOSolver(SolverInterface):
             m.options.OBJFCNVAL,
             m.options.APPSTATUS == 1,
             violations,
+            mode_used="simulation" if imode_used == 1 else "optimization",
         )
         return solver_result
 
@@ -456,6 +498,7 @@ class GEKKOSolver(SolverInterface):
                     sqrt_impl=m.sqrt,
                     exp_impl=m.exp,
                     pwl_impl=pwl_impl,
+                    simulation=self._simulation,
                 )
             )
 

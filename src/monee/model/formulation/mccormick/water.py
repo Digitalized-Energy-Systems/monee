@@ -3,13 +3,14 @@ McCormick-tightened district-heating formulation (Deng et al., 2021,
 https://doi.org/10.1016/j.eng.2021.06.006).
 
 Heating side as a convex relaxation:
+
 * ``H_out = c·m·τ_send``, ``H_in = c·m·τ_recv`` (eq. 9c/9d) → linear nodal
   balance (eq. 9a) including ``H_G`` / ``H_L`` from HeatGenerator/HeatLoad.
 * Taylor-linearised heat loss (eq. 9b).
 * McCormick envelopes (eq. 17b-17e) relax ``H_out = c·m·τ``;
   ``num_partitions > 1`` upgrades to the piecewise MILP form (eq. 18).
 
-This is a relaxation — the bilinear is not pinned, the objective must drive
+This is a relaxation - the bilinear is not pinned, the objective must drive
 ``H_out`` toward the surface. Tighten via ``WaterGrid.t_pu_min_env`` /
 ``t_pu_max_env``. Hydraulics omitted (paper §2.1); pipes are unidirectional.
 
@@ -76,7 +77,7 @@ class MccDHSNodeFormulation(NodeFormulation):
     ):
         return [self.TPU_PULL_EPS * (1.0 - node.vars["t_pu"])]
 
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         model._mccormick_dhs_active = True
         if self.num_partitions > 1:
             # Underscore prefix hides these from result DataFrames; solver
@@ -112,7 +113,7 @@ class MccDHSNodeFormulation(NodeFormulation):
         ltc_owns_node = getattr(node, "_ltc_active", False)
 
         if not ltc_owns_node:
-            # eq. 9c/9d — sender H_out, receiver H_in.
+            # eq. 9c/9d - sender H_out, receiver H_in.
             h_out_terms = [
                 bm.vars["H_out_mw"] * bm.vars.get("on_off", 1)
                 for bm in from_branch_models
@@ -194,7 +195,7 @@ class MccDHSBranchFormulation(BranchFormulation):
     def __init__(self, num_partitions: int = 1):
         self.num_partitions = num_partitions
 
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         model.H_out_mw = Var(0, name="H_out_mw")
         model.H_in_mw = Var(0, name="H_in_mw")
         model.mass_flow_mag = Var(0, min=0, name="mass_flow_mag")

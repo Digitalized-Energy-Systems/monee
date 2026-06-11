@@ -1,5 +1,5 @@
 class Formulation:
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         pass
 
 

@@ -10,9 +10,10 @@ connected island is solved simultaneously, with each island's own slack node
 absorbing the local supply–demand imbalance.
 
 monee implements islanding as a set of **mixed-integer** (MIP) constraints
-that are added on top of the carrier's normal steady-state equations.  Any
-solver back-end that supports integer variables can be used
-(`GEKKOSolver` or `PyomoSolver`).
+that are added on top of the carrier's normal steady-state equations.  The
+per-node energisation variables (`e_el`, `e_gas`, `e_water`) are binary, so
+islanding requires a MIP-capable solver back-end (`GEKKOSolver`, or
+`PyomoSolver` with a MIP solver such as HiGHS or Gurobi).
 
 ---
 
@@ -30,7 +31,7 @@ carrier.
 | Gas / Water | `ExtHydrGrid` | External hydraulic connection (always) |
 | Gas / Water | `GridFormingSource` | Islanded compressor / source (islanding only) |
 
-`GridFormingMixin` is a pure marker mixin — it carries no equations.  Its sole
+`GridFormingMixin` is a pure marker mixin - it carries no equations.  Its sole
 purpose is to let `find_ignored_nodes` identify which nodes anchor each island.
 
 ---
@@ -79,8 +80,12 @@ For grid-forming junctions the super-source arc is counted as additional inflow.
 $$\sum_{k \in \text{GF}} c_k^{\text{src}} = \sum_i e_i$$
 
 The big-M constant $M$ must be at least as large as the number of carrier
-nodes.  The default is 200; override via `big_m_conn` when your network is
-larger.
+nodes.  monee sizes it automatically as **ten times the total node count**
+(`len(network.nodes) * 10`), so manual tuning is normally unnecessary.  The
+islanding modes also accept a `big_m_conn` parameter; it is stored on the
+mode but is currently *not* used by the connectivity constraints - treat it
+as reserved for a future release.  Of the mode parameters, only
+`ElectricityIslandingMode`'s `angle_bound` is live today.
 
 ---
 
@@ -95,11 +100,19 @@ de-energised nodes is well-defined for the solver.
 | Nodes | Constraint | Why |
 |---|---|---|
 | Grid-forming | $\theta_k = 0$ | Angle reference for each island |
-| Regular | $-M_\theta (1 - e_i) \leq \theta_i \leq M_\theta (1 - e_i)$ would force $\theta_i = 0$ when $e_i = 0$ | Numerical stability — prevents the angle from floating freely on de-energised buses |
+| Regular | $-M_\theta\, e_i \leq \theta_i \leq M_\theta\, e_i$ forces $\theta_i = 0$ when $e_i = 0$ | Numerical stability - prevents the angle from floating freely on de-energised buses |
+
+$M_\theta$ is the mode's `angle_bound` parameter (default 3.15 rad).
 
 The angle reference constraint is **strictly necessary** for multi-island DC
 flow: without it the power-flow equations become singular for each island
 beyond the first (no angle reference defined).
+
+Angle handling is **claimed by the mode**, not by the grid-forming child:
+`ElectricityIslandingMode.prepare()` sets the `_islanding_angle_managed`
+flag on every active bus, and `GridFormingGenerator.overwrite()` deliberately
+pins only `vm_pu` - *not* `va_radians` - so the mode's $\theta_k = 0$
+constraint remains the single angle reference per island.
 
 ### Gas and water
 
@@ -119,25 +132,32 @@ networks without switchable pipes the bound is a nice-to-have.
 
 ## Solver integration
 
-Islanding constraints are implemented as a `NetworkAspect` — the same
-interface used by the formulation layer — so they integrate with both solver
+Islanding constraints are implemented as a `NetworkAspect` - the same
+interface used by the formulation layer - so they integrate with both solver
 back-ends without modification.
 
-**Phase 1 — `prepare(network)`:**
+**Phase 1 - `prepare(network)`:**
 Called before the solver injects variables.  Adds binary `Var` placeholders
 (`e_el`, `e_gas`, `e_water`, etc.) to the node and branch model objects.
 These are picked up automatically by the standard variable-injection loops.
 
-**Phase 2 — `equations(network, ignored_nodes)`:**
+**Phase 2 - `equations(network, ignored_nodes)`:**
 Called after variable injection.  Returns the full list of connectivity-flow
 and physical constraint expressions.  The solver appends these to its equation
 set alongside the normal energy-flow equations.
 
 **`find_ignored_nodes` interaction:**
-When islanding is enabled, `find_ignored_nodes` uses the **complete** network
-topology (all branches, including open ones) and classifies a junction as
-non-ignored if any of its children is a `GridFormingMixin`.  This prevents
-island B's buses from being pruned before the MIP solve even starts.
+Both solvers look up the registered `NetworkIslandingConfig` and pass it to
+`find_ignored_nodes`, which then uses the **complete** network topology (all
+branches, including open ones) and keeps any island that contains a
+grid-forming child in the solve.  This prevents island B's buses from being
+pruned before the MIP solve even starts.
+
+**Persistence:**
+Like all network extensions, the islanding configuration registered by
+`enable_islanding` (or `add_extension`) is **not serialized** by the native
+JSON IO (`monee.io.native`).  After loading a network from disk, call
+`enable_islanding` again before solving.
 
 ---
 

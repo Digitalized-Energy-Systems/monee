@@ -2,8 +2,8 @@
 Multi-energy coupling
 ========================
 
-A multi-energy system (MES) combines two or more energy carriers — typically
-electricity, gas, and heat — into a single network. monee models the coupling
+A multi-energy system (MES) combines two or more energy carriers - typically
+electricity, gas, and heat - into a single network. monee models the coupling
 points between these carriers as specialised **compound** components that sit
 at the intersection of grids.
 
@@ -114,18 +114,18 @@ return pipe closes the thermal loop.
         power_node_id=bus_el,
         heat_node_id=junc_supply,
         heat_return_node_id=junc_return,
-        heat_energy_w=500_000,  # thermal output setpoint [W]
-        diameter_m=0.1,         # heat-exchange pipe diameter
-        efficiency=0.95,        # electrical-to-thermal efficiency
+        heat_energy_mw=0.5,  # thermal output setpoint [MW]
+        diameter_m=0.1,      # heat-exchange pipe diameter
+        efficiency=0.95,     # electrical-to-thermal efficiency
     )
 
 **Key parameters:**
 
-- ``heat_energy_w`` — thermal output setpoint in **watts**. The solver derives the
-  required electrical input as ``heat_energy_w / efficiency``.
-- ``efficiency`` — ratio of thermal output to electrical input (≤ 1 for
+- ``heat_energy_mw`` - thermal output setpoint in **megawatts**. The solver
+  derives the required electrical input as ``heat_energy_mw / efficiency``.
+- ``efficiency`` - ratio of thermal output to electrical input (≤ 1 for
   resistive heating, > 1 for heat pumps modelled with a fixed COP).
-- ``diameter_m`` — internal pipe diameter of the connecting heat-exchange
+- ``diameter_m`` - internal pipe diameter of the connecting heat-exchange
   branch.
 
 Power-to-Gas (P2G)
@@ -149,6 +149,10 @@ A P2G unit (electrolysis) converts electricity into gas (e.g. green hydrogen).
         mass_flow_setpoint=0.05,      # target gas production [kg/s]
     )
 
+P2G is a plain two-endpoint **branch** coupler; its conversion loss is exposed
+as :meth:`~monee.model.multi.PowerToGas.loss_percent`, which returns
+``1 - efficiency``.
+
 Gas-to-Power (G2P)
 ==================
 
@@ -170,6 +174,9 @@ A G2P unit (gas turbine, gas engine) converts gas to electricity.
         p_mw_setpoint=2.0,       # target electrical output [MW]
         q_mvar_setpoint=0.0,
     )
+
+Like P2G, G2P is a branch coupler and reports its conversion loss via
+:meth:`~monee.model.multi.GasToPower.loss_percent` (= ``1 - efficiency``).
 
 Combined Heat and Power (CHP)
 ==============================
@@ -212,12 +219,17 @@ heating (heat output).
 
 **Key parameters:**
 
-- ``efficiency_power`` and ``efficiency_heat`` — individual efficiencies for
+- ``efficiency_power`` and ``efficiency_heat`` - individual efficiencies for
   electrical and thermal output. Their sum must not exceed 1 (total fuel
   utilisation).
-- ``mass_flow_setpoint`` — gas consumption setpoint in kg/s.
-- ``regulation`` — a factor in [0, 1] that scales all outputs. Set as a
+- ``mass_flow_setpoint`` - gas consumption setpoint in kg/s.
+- ``regulation`` - a factor in [0, 1] that scales all outputs. Set as a
   :class:`~monee.model.core.Var` to let the optimiser dispatch the unit.
+
+Compound couplers such as CHP also implement ``set_active(flag)``, which
+:meth:`~monee.model.network.Network.deactivate` uses to switch the whole unit
+off cleanly (zeroing gas flow and regulation) and to restore the previous
+setpoints on reactivation.
 
 Gas-to-Heat (G2H)
 =================
@@ -238,17 +250,149 @@ A gas boiler converts gas to district heat without producing electricity.
         gas_node_id=junc_gas,
         heat_node_id=junc_heat_supply,
         heat_return_node_id=junc_heat_return,
-        heat_energy_w=500_000,  # thermal output [W]
+        heat_energy_mw=0.5,  # thermal output [MW]
         diameter_m=0.1,
         efficiency=0.90,
     )
 
+Node-based heat couplers (HG variants)
+======================================
+
+The heat-producing couplers above (CHP, G2H, P2H) deliver their thermal output
+through an internal heat-exchanger branch that bridges the supply and return
+sides of the heating network - which is why they require a
+``heat_return_node_id`` and a ``diameter_m``. Each of them has a **node-based
+"HG" variant** ("heat generator") that instead injects the thermal power
+directly at a single heat junction: the heat appears as a ``q_mw_heat`` term
+that the :class:`~monee.model.node.Junction` heat balance picks up, exactly
+like a node-level :class:`~monee.model.child.HeatGenerator` child.
+
+.. grid:: 1 2 3 3
+   :gutter: 3
+
+   .. grid-item-card:: CHP-HG
+      :shadow: sm
+
+      **Gas → EL + Water**
+
+      CHP variant. Compound with an internal control node; injects heat via a
+      hidden ``SubHG`` child at the heat node.
+
+      :func:`monee.express.create_chp_hg` →
+      :class:`~monee.model.multi.CHPHG`
+
+   .. grid-item-card:: P2H-HG
+      :shadow: sm
+
+      **EL → Water**
+
+      Power-to-Heat variant. A plain two-endpoint multi-grid branch from a bus
+      to a heat junction.
+
+      :func:`monee.express.create_p2h_hg` →
+      :class:`~monee.model.multi.PowerToHeatHG`
+
+   .. grid-item-card:: G2H-HG
+      :shadow: sm
+
+      **Gas → Water**
+
+      Gas boiler variant. A plain two-endpoint multi-grid branch from a gas
+      junction to a heat junction.
+
+      :func:`monee.express.create_g2h_hg` →
+      :class:`~monee.model.multi.GasToHeatHG`
+
+The variants differ structurally from their classic counterparts:
+
+- :class:`~monee.model.multi.CHPHG` is still a **compound** -
+  ``create(gas_node, heat_node, power_node)`` wires gas and power through an
+  internal control node, but the heat side is a subordinate ``SubHG``
+  heat-generator child placed at ``heat_node`` instead of a heat-exchanger
+  branch. It therefore needs **no** ``heat_return_node`` and **no**
+  ``diameter_m``.
+- :class:`~monee.model.multi.GasToHeatHG` (``heat_energy_mw, efficiency,
+  regulation=1``) and :class:`~monee.model.multi.PowerToHeatHG`
+  (``heat_energy_mw, efficiency, q_mvar_setpoint=0, regulation=1``) are plain
+  two-endpoint **branch** couplers, just like G2P and P2G: they withdraw gas or
+  electricity at the from-node and carry ``q_mw_heat`` directly on the branch,
+  where the junction heat balance at the to-node picks it up. Both also expose
+  ``loss_percent()`` (= ``1 - efficiency``).
+
+Prefer the HG variants when
+
+- you want **simpler wiring** - one heat junction instead of a supply/return
+  pair, no heat-exchange pipe geometry to choose; or
+- you use the **McCormick-DHS formulation**
+  (:data:`~monee.model.formulation.MCCORMICK_DHS_NETWORK_FORMULATION`) or a
+  network built with node-based heat loads (e.g.
+  ``node_based_heat_loads=True`` in the :mod:`monee.network` heat builders),
+  where they are **required**: this formulation owns the nodal heat balance and
+  only understands node-based heat injections, not heat-exchanger branches.
+
+.. testcode::
+
+    import monee.express as mx
+
+    net_hg = mx.create_multi_energy_network()
+
+    # Gas grid (fuel input)
+    junc_gas = mx.create_gas_junction(net_hg)
+    mx.create_gas_ext_grid(net_hg, junc_gas)
+
+    # Electricity grid (power output)
+    bus_el = mx.create_bus(net_hg)
+    mx.create_ext_power_grid(net_hg, bus_el)
+
+    # Heating grid - a single supply junction; no return node needed
+    junc_heat = mx.create_water_junction(net_hg)
+    mx.create_water_ext_grid(net_hg, junc_heat)
+
+    # CHP coupling, node-based heat injection
+    mx.create_chp_hg(
+        net_hg,
+        power_node_id=bus_el,
+        heat_node_id=junc_heat,
+        gas_node_id=junc_gas,
+        efficiency_power=0.35,   # gas → electricity
+        efficiency_heat=0.45,    # gas → heat
+        mass_flow_setpoint=0.1,  # gas consumption [kg/s]
+    )
+
+The single-branch variants follow the same pattern as
+:func:`~monee.express.create_g2p`:
+
+.. testcode::
+
+    mx.create_p2h_hg(
+        net_hg,
+        power_node_id=bus_el,
+        heat_node_id=junc_heat,
+        heat_energy_mw=0.5,  # thermal output setpoint [MW]
+        efficiency=0.95,
+    )
+    mx.create_g2h_hg(
+        net_hg,
+        gas_node_id=junc_gas,
+        heat_node_id=junc_heat,
+        heat_energy_mw=0.5,
+        efficiency=0.90,
+    )
+
+.. note::
+
+   The internal control-node models (``CHPControlNode``, ``CHPHGControlNode``,
+   ``GasToHeatControlNode``, ``PowerToHeatControlNode``) and the subordinate
+   ``SubHE`` / ``SubHG`` components you may encounter in result dataframes are
+   implementation details. They are wired up automatically by the compounds'
+   ``create()`` - you never instantiate them directly.
+
 Heat exchanger
 ==============
 
-A heat exchanger transfers thermal energy between two water circuits — for
+A heat exchanger transfers thermal energy between two water circuits - for
 example between a primary transmission network and a secondary distribution
-loop — without mass transfer.
+loop - without mass transfer.
 
 .. testcode::
 
@@ -262,8 +406,7 @@ loop — without mass transfer.
         net_hx,
         from_node_id=junc_primary,
         to_node_id=junc_secondary,
-        q_mw=0.2,         # heat transfer setpoint [MW]; positive = from→to
-        diameter_m=0.08,
+        q_mw=0.2,  # heat transfer setpoint [MW]; positive = from→to
     )
 
 ----

@@ -50,12 +50,23 @@ def calc_max_mass_flow(diameter_m, fluid_density, v_max_mps):
     return calc_pipe_area(diameter_m) * fluid_density * v_max_mps
 
 
+def calc_min_diameter_for_mass_flow(mass_flow, fluid_density, v_design_mps):
+    """Smallest pipe diameter [m] carrying ``mass_flow`` at ``v_design_mps``.
+
+    Inverse of :func:`calc_max_mass_flow`: ``D = sqrt(4·m / (π·ρ·v))``. Used to
+    size DHS pipes to their required capacity so the velocity cap does not bind.
+    Returns 0 for degenerate inputs (``m ≤ 0`` or non-positive ρ/v)."""
+    if mass_flow <= 0 or fluid_density <= 0 or v_design_mps <= 0:
+        return 0.0
+    return math.sqrt(4.0 * mass_flow / (math.pi * fluid_density * v_design_mps))
+
+
 def calc_nikurdse(internal_diameter_m, roughness):
     return 1 / (2 * np.log10(3.71 * internal_diameter_m / roughness)) ** 2
 
 
 # model.reynolds is stored as Re/1e6, so friction PWL breakpoints sit in [0,10]
-# rather than [0,1e7] — keeps the matrix coefficient range manageable.
+# rather than [0,1e7] - keeps the matrix coefficient range manageable.
 # Friction y-values are still computed at unscaled Re.
 REYNOLDS_SCALE = 1e6
 

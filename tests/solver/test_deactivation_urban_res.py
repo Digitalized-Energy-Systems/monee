@@ -16,7 +16,7 @@ Note on P2G / G2P
 ------------------
 P2G and G2P are MultiGridBranchModel branches and are stripped from the
 topology graph by ``remove_cps`` before connectivity is evaluated.
-Deactivating them never isolates any node — only the coupling equations are
+Deactivating them never isolates any node - only the coupling equations are
 removed.  Both domain grids remain fully connected.
 """
 

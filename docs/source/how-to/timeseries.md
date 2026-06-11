@@ -112,7 +112,12 @@ print(combined.length)
 2
 ```
 
-For duplicate `(component, attribute)` pairs the **left operand wins**.
+For duplicate `(component, attribute)` pairs the conflict rules are:
+
+- `td_a.extend(td_b)` merges in place - the **receiver** (`td_a`) **wins**.
+- `td_a + td_b` builds a new object - the **left operand** (`td_a`) **wins**.
+
+Both raise a `ValueError` if the two objects have different series lengths.
 
 ---
 
@@ -168,6 +173,32 @@ for sr in result.step_results:
 Failed steps: []
 ```
 
+```{note}
+Failed and skipped steps are excluded from all DataFrame queries
+(`get_result_for`, `get_result_for_id`, `result[id]`);
+{attr}`~monee.simulation.TimeseriesResult.failed_steps` lists the indices of
+the steps that failed.
+```
+
+---
+
+## Applying data without solving
+
+Set `solve_flag=False` to run the loop without invoking the solver.  Each step
+still copies the network, applies the timeseries data, and calls the step
+hooks - the resulting `StepResult` objects are marked `skipped=True`.  This is
+useful for dry-running profiles and hooks, or when an external process
+performs the actual solve:
+
+```{testcode}
+result_dry = run_timeseries(net, td, solve_flag=False)
+print(all(sr.skipped for sr in result_dry.step_results))
+```
+
+```{testoutput}
+True
+```
+
 ---
 
 ## Progress reporting
@@ -191,23 +222,24 @@ bar.close()
 from monee.simulation import StepHook
 
 class LogHook(StepHook):
-    def pre_run(self, net, step, step_state):
-        pass   # called before each solve
+    def pre_run(self, base_net, step, step_state):
+        pass   # called before the per-step copy and timeseries application
 
-    def post_run(self, net, step, step_state, step_result):
+    def post_run(self, net, step, step_state, step_result, base_net):
         if step_result.failed:
-            print(f"Step {step}: FAILED — {step_result.error}")
+            print(f"Step {step}: FAILED - {step_result.error}")
 ```
 
-Plain callables work as post-step hooks too:
+Plain callables in `step_hooks` are treated as post-run hooks and called with
+the same arguments as `post_run`:
 
 ```{testcode}
-def log_step(net_copy, step, step_state, step_result):
+def log_step(net_copy, step, step_state, step_result, base_net):
     pass   # net_copy is the solved network for this step
 ```
 
 ```{note}
-Both `pre_run` and `post_run` receive the live `StepState` — hooks can read
+Both `pre_run` and `post_run` receive the live `StepState` - hooks can read
 or write inter-step values directly.
 ```
 
@@ -237,7 +269,7 @@ class RampGenerator(ChildModel):
     def inter_temporal_equations(self, temporal_state, component_id, **kwargs):
         prev_p = temporal_state.get(component_id, "p_mw")
         if prev_p is None:
-            return []   # first step — no history yet
+            return []   # first step - no history yet
         return [
             self.p_mw - prev_p <= self.ramp_up,
             prev_p - self.p_mw <= self.ramp_down,
@@ -246,7 +278,7 @@ class RampGenerator(ChildModel):
 
 ```{tip}
 `inter_temporal_equations` is called in **both** timeseries and multi-period
-solves.  The same model works in both contexts without any changes — see
+solves.  The same model works in both contexts without any changes - see
 {doc}`multi_period` for the multi-period workflow.
 ```
 
@@ -254,8 +286,8 @@ solves.  The same model works in both contexts without any changes — see
 
 ## Thermal and gas storage extensions
 
-For network-wide time coupling — thermal inertia in junctions, gas stored in
-pipelines — attach a {doc}`../concepts/network_aspects` extension before the
+For network-wide time coupling - thermal inertia in junctions, gas stored in
+pipelines - attach a {doc}`../concepts/network_aspects` extension before the
 first run:
 
 ```{testcode}
@@ -288,6 +320,18 @@ See {doc}`../concepts/temporal_extensions` for step-by-step walkthroughs.
 
 ---
 
+## Externally paced simulation
+
+`run_timeseries` owns the time loop: it iterates over a fixed number of
+equally indexed steps.  When an external process drives the clock - a
+co-simulation framework, a real-time loop, an event-based scheduler - use
+{class}`~monee.simulation.Conductor` instead.  It keeps a persistent
+`StepState` and lets you call `step(dt_h)` whenever *you* decide, with a
+variable step size and per-step data overrides.  See {doc}`conductor` for the
+full workflow.
+
+---
+
 ## API reference
 
 ### TimeseriesData
@@ -307,17 +351,32 @@ See {doc}`../concepts/temporal_extensions` for step-by-step walkthroughs.
 | `td_a + td_b` | Merge two `TimeseriesData` objects (left wins on conflicts) |
 | `td.extend(other)` | In-place merge |
 
-### Running and results
+### run_timeseries
 
 | Symbol | Description |
 |---|---|
 | `run_timeseries(net, td, ...)` | Execute the timeseries simulation |
+| `steps=None` | Number of steps; defaults to `td.length`.  Raises if neither is given or `steps` exceeds the registered series length |
+| `step_hooks=None` | List of `StepHook` instances; plain callables are treated as post-run hooks |
+| `solver=None` / `backend=None` | Solver name or instance, and `'gekko'`/`'pyomo'` backend (default: GEKKO + IPOPT) |
+| `optimization_problem=None` | `OptimizationProblem` applied at every step |
+| `solve_flag=True` | If `False`, apply data and run hooks without solving; steps are marked `skipped=True` |
+| `on_step_error='raise'` | `'raise'` (default) or `'skip'` to record failures and continue |
+| `progress_callback=None` | Callable `(step, steps)` invoked after each step |
+| `datetime_index=None` | `pandas.DatetimeIndex` labelling result rows and setting `step_state.dt_h` per step |
+
+### Results
+
+| Symbol | Description |
+|---|---|
 | `result.get_result_for(ModelClass, attr)` | DataFrame (steps × component ids) |
 | `result.get_result_for_id(id, attr)` | Series: one value per successful step |
 | `result[component_id]` | DataFrame of all attributes for one component |
 | `result.failed_steps` | List of step indices that failed to converge |
-| `result.step_results` | List of `StepResult` objects (incl. failed steps) |
+| `result.step_results` | List of `StepResult` objects (incl. failed/skipped steps) |
 | `result.raw` | List of successful `SolverResult` objects (backward compat) |
+
+Failed and skipped steps are excluded from all DataFrame queries.
 
 ### StepResult
 
@@ -326,7 +385,7 @@ See {doc}`../concepts/temporal_extensions` for step-by-step walkthroughs.
 | `step` | Zero-based step index |
 | `result` | `SolverResult` for this step, or `None` if failed/skipped |
 | `failed` | `True` if the solve raised an exception |
-| `skipped` | `True` if the solve was not attempted |
+| `skipped` | `True` if the solve was not attempted (e.g. `solve_flag=False`) |
 | `error` | The exception that caused the failure, or `None` |
 
 ### StepHook
@@ -334,11 +393,11 @@ See {doc}`../concepts/temporal_extensions` for step-by-step walkthroughs.
 | Symbol | Description |
 |---|---|
 | `StepHook` | Base class for pre/post step callbacks |
-| `hook.pre_run(net, step, step_state)` | Called before each step's solve |
-| `hook.post_run(net, step, step_state, step_result)` | Called after each step's solve |
+| `hook.pre_run(base_net, step, step_state)` | Called before the per-step copy and timeseries application |
+| `hook.post_run(net, step, step_state, step_result, base_net)` | Called after each step's solve (success or failure) |
 
-Plain callables `(net, step, step_state, step_result) -> None` are accepted as
-post-step hooks without subclassing.
+Plain callables `(net, step, step_state, step_result, base_net) -> None` are
+accepted in `step_hooks` and treated as post-run hooks without subclassing.
 
 ### StepState
 

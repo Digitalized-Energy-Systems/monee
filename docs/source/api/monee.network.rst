@@ -22,10 +22,19 @@ Reference energy systems
    :show-inheritance:
 
 
-monee generate net from simbench
+Generated MES from SimBench
 -----------------------------------
 
 .. automodule:: monee.network.bench.mes_simbench
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+
+Restoration benchmark
+-----------------------------------
+
+.. automodule:: monee.network.bench.restoration
    :members:
    :undoc-members:
    :show-inheritance:

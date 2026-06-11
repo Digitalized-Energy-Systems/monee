@@ -4,6 +4,19 @@ Cross-cutting helpers used by load-shedding / dispatch problems.
 
 from __future__ import annotations
 
+from monee.model.core import Var
+from monee.model.grid import GasGrid
+from monee.model.multi import (
+    CHPControlNode,
+    CHPHGControlNode,
+    GasToHeatControlNode,
+    GasToHeatHG,
+    GasToPower,
+    PowerToGas,
+    PowerToHeatControlNode,
+    PowerToHeatHG,
+)
+
 # Fallback HHV (kWh/kg) when a gas grid is missing ``higher_heating_value``.
 _HHV_DEFAULT = 15.3
 
@@ -33,19 +46,6 @@ def cp_input_rated_mw(component):
     Used both by the resilience metric (to account CP curtailment) and by
     ``min_load_shedding`` (to treat CPs as additional loads in the objective).
     """
-    from monee.model.core import Var
-    from monee.model.grid import GasGrid
-    from monee.model.multi import (
-        CHPControlNode,
-        CHPHGControlNode,
-        GasToHeatControlNode,
-        GasToHeatHG,
-        GasToPower,
-        PowerToGas,
-        PowerToHeatControlNode,
-        PowerToHeatHG,
-    )
-
     model = component.model
     grid = getattr(component, "grid", None)
 
@@ -63,7 +63,8 @@ def cp_input_rated_mw(component):
         # Read the bound (or the value) off a Var; pass scalars through.
         if isinstance(x, Var):
             return (
-                x.max if x.max is not None
+                x.max
+                if x.max is not None
                 else (x.value if x.value is not None else 0.0)
             )
         return x if x is not None else 0.0

@@ -12,10 +12,12 @@ from monee.model.formulation import (
     MISOCP_NETWORK_FORMULATION,
     make_mccormick_dhs_formulation,
     make_nl_weymouth_pwl_network_formulation,
+    make_smooth_network_formulation,
 )
 from monee.network import generate_supply_return_mes_based_on_power_net
 from monee.problem.min_load_shedding import create_min_load_shedding_problem
 from monee.simulation.timeseries import TimeseriesData
+from monee.solver import GEKKOSolver
 
 GAS_HHV_MJ_PER_KG = 15.3 * 3.6
 
@@ -78,7 +80,7 @@ def _carrier_balance(mes):
         for b in mes.branches
         if type(b.model).__name__ == "PowerToHeatHG"
     )
-    # CP power draws — approximate via the default efficiencies the
+    # CP power draws - approximate via the default efficiencies the
     # generator function uses (p2g 0.7, p2h 0.95); good to ±5 %.
     p2g_p_in = p2g_g * GAS_HHV_MJ_PER_KG / 0.7
     p2h_p_in = p2h_q / 0.95
@@ -109,7 +111,7 @@ def create_large_lv_simbench(
     slack_budget_pct:
         When set, caps the external power and gas grid injections at
         this fraction of the network's total nominal load.  Defaults
-        to ``None`` (unbounded slack — original behaviour).  Setting
+        to ``None`` (unbounded slack - original behaviour).  Setting
         to e.g. 0.5 forces the MAS to actually choose what to serve
         post-failure rather than letting the slack absorb everything.
     simbench_code:
@@ -119,7 +121,7 @@ def create_large_lv_simbench(
     backup_lines_per_sector:
         If ``> 0``, augment the network with that many normally-open
         backup branches per sector via ``add_backup_lines``.  This is
-        the test fixture for the reconfiguration pillar — without
+        the test fixture for the reconfiguration pillar - without
         them the grid is purely radial and the GridReconfigurator has
         no alternative paths to discover.
     backup_seed:
@@ -127,7 +129,7 @@ def create_large_lv_simbench(
     cp_size_multiplier:
         Scales every coupling-point's rated output uniformly (1.0 =
         monee's per-bus default; 2.0 doubles every CP capacity).
-        Larger CPs amplify the cross-sector substitution potential —
+        Larger CPs amplify the cross-sector substitution potential -
         the headline knob for "how big do CPs need to be before
         their contribution rises above noise?".
     replace_primary_generation:
@@ -190,17 +192,17 @@ def create_large_mv_simbench(
                 "cp_size_multiplier": cp_size_multiplier,
                 "replace_primary_generation": replace_primary_generation,
             },
-            heat_kwargs={"node_based_heat_loads": True},
+            heat_kwargs={"node_based_heat_loads": True, "auto_diameter": True},
         )
         for branch in mes.branches:
             model = branch.model
             length = getattr(model, "length_m", None)
             if length is not None and float(length) <= 0.0:
                 model.length_m = 1
-        # mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
-        # mes.add_extension(GasLinepack())
-        # mes.add_extension(LumpedThermalCapacitance(first_step_steady_state=True))
-        # mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=16))
+        # Combined smooth AC + gas + water formulation. Solved via
+        # run_energy_flow (simulation=True), the solver squares it into a DOF=0
+        # IMODE=1 steady state under IPOPT.
+        mes.apply_formulation(make_smooth_network_formulation())
         return mes
 
     return create
@@ -209,24 +211,15 @@ def create_large_mv_simbench(
 @pytest.mark.pptest
 def test_generate_scare():
     net = create_large_lv_simbench(0.3)()
-    import time
-
-    s = time.time()
     result = run_energy_flow(net, solver="gurobi")
-    print(time.time() - s)
 
     assert result.success
 
 
 @pytest.mark.pptest
 def test_generate_synapse():
-    net = create_large_mv_simbench(0.3)()
-    import time
-
-    s = time.time()
-    result = run_energy_flow(net, solver="ipopt")
-    print(time.time() - s)
-
+    net = create_large_mv_simbench(0)()
+    result = run_energy_flow(net, solver=GEKKOSolver(solver=3))
     assert result.success
 
 
@@ -258,7 +251,7 @@ def test_generate_mes():
         },
     )
 
-    # (1) Per-carrier balance check — capacity-only, no solve.
+    # (1) Per-carrier balance check - capacity-only, no solve.
     (p_def, p_load), (q_def, q_load), (g_def, g_sink) = _carrier_balance(mes)
     p_self = 1 - p_def / p_load
     q_self = 1 - q_def / q_load
@@ -271,7 +264,7 @@ def test_generate_mes():
     assert q_self >= 0.90, f"heat  self-sufficiency {100 * q_self:.1f} % < 90 %"
     assert g_self >= 0.90, f"gas   self-sufficiency {100 * g_self:.1f} % < 90 %"
 
-    # (2) Baseline min-load-shedding solve must shed nothing — the
+    # (2) Baseline min-load-shedding solve must shed nothing - the
     # restoration metric is meaningful only if shed_baseline = 0.
     mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
     mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=1))
@@ -282,17 +275,17 @@ def test_generate_mes():
         bounds_heat=(0.7, 1.3),
         # Bounds sized at ~10–15 % of per-carrier nominal load.  The
         # numbers below correspond to:
-        #   power: ±0.10 MW    (~27 % of 0.374 MW load — covers baseline
+        #   power: ±0.10 MW    (~27 % of 0.374 MW load - covers baseline
         #                       shortfall ≈ 0.005 MW + worst single PowerGen
         #                       loss ≈ 30 kW + worst single CHP power loss
         #                       ≈ 25 kW + headroom for re-dispatch)
-        #   gas:   ±0.02 kg/s  (~80 % of 0.025 kg/s sink — covers baseline
+        #   gas:   ±0.02 kg/s  (~80 % of 0.025 kg/s sink - covers baseline
         #                       shortfall ≈ 0.002 kg/s + worst single Source
         #                       loss ≈ 4 g/s + worst single CHP intake loss
         #                       + headroom)
         #   heat:  ±100 kg/s   (effectively unbounded; the water slack
         #                       absorbs whatever mass flow the consumer
-        #                       sinks require — not a smooth energy dial)
+        #                       sinks require - not a smooth energy dial)
         ext_grid_el_bounds=(-0.10, 0.10),
         ext_grid_gas_bounds=(-0.02, 0.02),
         ext_grid_heat_bounds=(-100, 100),
@@ -335,7 +328,7 @@ def test_generate_mes_min_load_shedding():
     """Canonical MES min-load-shedding configuration.
 
     Uses MISOCP for electricity and McCormick-DHS for heat with the
-    HeatGenerator-style coupling-point variants — the only combination
+    HeatGenerator-style coupling-point variants - the only combination
     that delivers the full HX demand under min-load-shedding (the linear-
     HX + closing-pipe pairing collapses the supply/return ΔT and meets
     only ~25 % of design).  ``num_partitions=4`` shrinks the McCormick LP
@@ -388,7 +381,7 @@ def test_generate_mes_min_load_shedding():
     assert result.objective is not None
     print(result.objective)
     assert False
-    # Aggregate heat delivery should be ≥ 95 % of design — the
+    # Aggregate heat delivery should be ≥ 95 % of design - the
     # McCormick-DHS + node-based + HG-variants stack is the only one that
     # achieves near-full delivery.
     solved = result.network
@@ -429,7 +422,7 @@ def test_generate_mes_gas_extra_mesh_pipes_reduce_bridges():
     pipe is a bridge (cut-edge): failing it isolates the downstream subtree
     and severs the fuel path of every CHP / G2P sitting in that subtree.
     This is the dominant reason additive coupling points are statistically
-    irrelevant under random-failure sampling — the CP's *output* capacity is
+    irrelevant under random-failure sampling - the CP's *output* capacity is
     dwarfed by the topological cost of losing its fuel chain.
 
     Passing ``extra_mesh_pipes=N`` adds ``N`` random tie pipes between
@@ -574,7 +567,7 @@ def test_generate_mes_replace_primary_generation_invariant():
     """``replace_primary_generation`` flips the framing of coupling points.
 
     Default (additive) mode is the *redundancy* framing: every CP stacks on
-    top of the existing primary generators, so CPs always look beneficial —
+    top of the existing primary generators, so CPs always look beneficial -
     losing one is recoverable by the unchanged primary fleet.  In this
     framing, on the simbench LV-rural3 grid used by
     :func:`test_generate_mes_min_load_shedding`, additional CPs do *not*
@@ -588,7 +581,7 @@ def test_generate_mes_replace_primary_generation_invariant():
     from the matching primary pool (PowerGenerator for CHP/G2P, gas Source
     for P2G, HX-Generator for CHP/P2H), keeping total rated production per
     carrier *invariant* but making the system structurally depend on the
-    coupling fleet — losing a carrier now disables both the unit and the
+    coupling fleet - losing a carrier now disables both the unit and the
     primary capacity it displaced.
 
     This test verifies the invariant: across both modes, total rated power
@@ -715,7 +708,7 @@ def test_generate_mes_node_heat_gen_share_and_replacement():
     that's actually drainable under ``replace_primary_generation``.
 
     In ``node_based_heat_loads`` mode the default network has no node-based
-    heat sources — every kJ flows through the unbounded supply slack, which
+    heat sources - every kJ flows through the unbounded supply slack, which
     makes heat-side resilience studies meaningless (bounding
     ``max_import_kgs`` is a hydraulic, not energetic, constraint).  The
     principled fix is to distribute :class:`~monee.model.HeatGenerator`
@@ -827,10 +820,10 @@ def test_generate_mes_storage_capabilities_timeseries():
     Builds the same MES as ``test_generate_mes_min_load_shedding`` but adds
     the two storage-flavoured network extensions monee ships with:
 
-    * :class:`~monee.model.extension.linepack.GasLinepack` — distributed
+    * :class:`~monee.model.extension.linepack.GasLinepack` - distributed
       gas storage in pipes (linepack), so the gas grid can buffer short-term
       supply/demand mismatches between timesteps.
-    * :class:`~monee.model.extension.ltc.LumpedThermalCapacitance` —
+    * :class:`~monee.model.extension.ltc.LumpedThermalCapacitance` -
       lumped thermal mass at every water-network junction, giving the heat
       grid genuine inter-step thermal inertia rather than instantaneous
       temperature jumps.
@@ -840,7 +833,7 @@ def test_generate_mes_storage_capabilities_timeseries():
     :func:`~monee.io.from_simbench.obtain_simbench_profile_by_pp_net`,
     which now binds by aggregated bus name) plus a synthetic demand
     modulation on the heat loads and gas sinks generated by
-    ``generate_supply_return_mes_based_on_power_net`` — those carriers
+    ``generate_supply_return_mes_based_on_power_net`` - those carriers
     have no simbench profile of their own, so the storage extensions need
     a manual swing to react against.
 
@@ -895,7 +888,7 @@ def test_generate_mes_storage_capabilities_timeseries():
 
     # Min-load-shedding objective with the same loose envelope as the
     # canonical test, plus a wide ext-grid window so the optimiser is not
-    # forced to shed demand purely because of step-to-step variation —
+    # forced to shed demand purely because of step-to-step variation -
     # what we want to observe is whether storage absorbs the swing.
     problem = create_min_load_shedding_problem(
         bounds_el=(0.9, 1.5),
@@ -928,7 +921,7 @@ def test_generate_mes_storage_capabilities_timeseries():
     # GasLinepack: the per-pipe linepack mass must be populated for every
     # gas pipe across every step (the variable is injected by the extension),
     # and on at least one pipe the inter-temporal packing flow ``net_pack_kgs``
-    # must be non-zero on a step > 0 — that is the direct signature of the
+    # must be non-zero on a step > 0 - that is the direct signature of the
     # temporal-coupling equation being honoured (in a plain steady-state
     # solve ``net_pack_kgs`` is pinned to 0).  We do not assert a specific
     # swing magnitude: with the wide ext-grid window above the optimiser
@@ -957,7 +950,7 @@ def test_generate_mes_storage_capabilities_timeseries():
 
     # LTC: junction temperatures stay inside the McCormick envelope across
     # every step (the inertia term must not push them through the bounds)
-    # and the inter-step jump in t_pu must be finite — i.e. LTC actually
+    # and the inter-step jump in t_pu must be finite - i.e. LTC actually
     # produced a temporally-coupled solve.
     t_low, t_high = 0.7 - 1e-3, 1.3 + 1e-3
     water_junc_ids = [

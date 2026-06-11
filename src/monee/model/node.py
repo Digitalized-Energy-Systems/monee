@@ -266,7 +266,7 @@ class Junction(NodeModel):
             ]
             # The nodal heat balances over a connected island are linearly
             # dependent (one is redundant). The grid-forming reference node is
-            # the heat slack — drop its balance there, exactly as the slack bus
+            # the heat slack - drop its balance there, exactly as the slack bus
             # absorbs the power balance. Marked once per island by the solver.
             if not getattr(self, "_drop_heat_balance", False):
                 eqs.insert(1, junction_mass_flow_balance(energy_flow_list))

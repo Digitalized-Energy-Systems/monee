@@ -178,7 +178,7 @@ def test_step_state_prior_solve_wins_over_initial():
     bid = mx.create_bus(net, base_kv=20.0)
     mx.create_ext_power_grid(net, bid, p_mw=0, q_mvar=0)
     bus = net.node_by_id(bid)
-    # The default Bus carries a Var(1) for vm_pu — pin it to 1.02 by hand.
+    # The default Bus carries a Var(1) for vm_pu - pin it to 1.02 by hand.
     bus.model.vm_pu.value = 1.02
 
     # The state.get lookup keys on node.id (which equals bid here).

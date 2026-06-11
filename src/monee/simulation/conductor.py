@@ -1,4 +1,4 @@
-"""Conductor — externally-paced co-simulation driver.
+"""Conductor - externally-paced co-simulation driver.
 
 Steps a network forward in time at user-supplied dt_h values, maintaining
 inter-step state (linepack, LTC, storage SoC, …) via the shared StepState

@@ -6,12 +6,18 @@ from ..core import BranchFormulation, NodeFormulation
 
 
 class NLWeymouthNodeFormulation(NodeFormulation):
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         # pressure_pa is report-only (= pressure_pu·pressure_ref); the real
         # closure is attached in equations() where grid.pressure_ref is known.
         model.pressure_pa = PostProcess(lambda v: float("nan"))
         model.pressure_pu = Intermediate(1)
         model.pressure_squared_pu = Var(1, min=0, max=3, name="pressure_sq_pu")
+        if simulation:
+            # Gas carries no temperature; pin the unused t_pu so it doesn't
+            # float as a phantom DOF in a square IMODE=1 solve.
+            t = getattr(model, "t_pu", None)
+            if isinstance(t, Var):
+                model.t_pu = Const(t.value)
 
     def equations(
         self,
@@ -38,7 +44,7 @@ class NLWeymouthBranchFormulation(BranchFormulation):
     # large enough that Gurobi can tighten the LP relaxation.
     EPIGRAPH_TIGHTENING_EPS = 1e-5
 
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         # Pin friction to its turbulent asymptote (Swamee-Jain, Re→∞). Const
         # collapses at injection so friction / reynolds / friction-PWL / the
         # friction·m² bilinear all drop out. Under-estimates pressure drop for
@@ -66,7 +72,7 @@ class NLWeymouthBranchFormulation(BranchFormulation):
         p_avg = 0.5 * (p_from + p_to)
 
         # Per-pipe big-M via π/4·D²·ρ·v_max (ideal-gas ρ at reference conditions,
-        # v_max defaults to 20 m/s — erosional cap for gas pipelines). Mirrors
+        # v_max defaults to 20 m/s - erosional cap for gas pipelines). Mirrors
         # what NLDarcyWeisbachBranchFormulation does for water.
         gas_density = (
             grid.pressure_ref
@@ -126,7 +132,7 @@ class NLWeymouthPWLBranchFormulation(BranchFormulation):
     def __init__(self, n_breakpoints: int = 12):
         self.n_breakpoints = n_breakpoints
 
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         # φ = friction · m² per direction; replaces squared-mf / Reynolds / friction.
         model.phi_pwl_pos = Var(0, min=0, name="phi_pwl_pos")
         model.phi_pwl_neg = Var(0, min=0, name="phi_pwl_neg")

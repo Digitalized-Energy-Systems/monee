@@ -13,7 +13,7 @@ Because plain McCormick is loose, these tests use:
 * **Piecewise McCormick** (``num_partitions >= 20``) to shrink the
   envelope gap.
 * **Tight envelope bounds** on the node temperature
-  (``t_pu_min_env = 0.82``, ``t_pu_max_env = 1.15``) — a reasonable
+  (``t_pu_min_env = 0.82``, ``t_pu_max_env = 1.15``) - a reasonable
   physical range for 293-409 K district-heating operation with some
   headroom for boundary heat injection.
 
@@ -34,7 +34,7 @@ import monee.solver as ms
 
 NUM_PARTITIONS = 40
 T_PU_MIN_ENV = 0.82  # ~292 K (slightly above ambient)
-T_PU_MAX_ENV = 1.15  # ~409 K — room for boundary heat injection
+T_PU_MAX_ENV = 1.15  # ~409 K - room for boundary heat injection
 
 
 def _build_series_dhs(q_gen_mw: float = 0.0, q_load_mw: float = 0.0):
@@ -84,7 +84,7 @@ def test_mccormick_dhs_passive_line_temperature_decays():
     sink.  The partition granularity allows small non-monotonic wiggles
     inside one piece, so we only require the end-points to respect the
     physical ordering."""
-    # Tiny heat injection — pipe losses dominate so the supply end stays hotter
+    # Tiny heat injection - pipe losses dominate so the supply end stays hotter
     # than the sink end (the assertion below checks physical decay).
     net = _build_series_dhs(0.001, 0.001)
 
@@ -110,7 +110,7 @@ def test_mccormick_dhs_passive_line_temperature_decays():
 
 
 def test_mccormick_dhs_heat_generator_raises_temperature():
-    """HeatGenerator at junc[5] injects 0.1 MW — the linear nodal balance
+    """HeatGenerator at junc[5] injects 0.1 MW - the linear nodal balance
     (paper eq. 9a) must hold exactly at that junction."""
     q_gen_mw = 0.1
     net = _build_series_dhs(q_gen_mw=q_gen_mw)
@@ -134,7 +134,7 @@ def test_mccormick_dhs_heat_generator_raises_temperature():
 
 def test_mccormick_dhs_balanced_gen_and_load():
     """HeatGenerator at junc[5] (+0.1 MW) and HeatLoad at junc[20] (+0.1 MW)
-    balance — the nodal balance (paper eq. 9a) must hold exactly at the
+    balance - the nodal balance (paper eq. 9a) must hold exactly at the
     HeatLoad node."""
     q_mw = 0.1
     net = _build_series_dhs(q_gen_mw=q_mw, q_load_mw=q_mw)

@@ -429,7 +429,7 @@ def test_when_period_constraint():
     assert abs(p.iloc[2] - 1.0) < 0.1, (
         f"Period 2 battery dispatch should be ~1.0 MW, got {p.iloc[2]:.4f}"
     )
-    # At other periods the battery is free — it should NOT be forced to 1.0
+    # At other periods the battery is free - it should NOT be forced to 1.0
     # (with a uniform load the optimizer has no reason to charge at exactly 1.0)
     # We just verify the constraint was respected at t=2; other periods are free.
 
@@ -443,7 +443,7 @@ def test_when_period_single_period():
     prob = _storage_problem()
     cons = Constraints()
     # This filter says "only at period 5" but we only have 1 period (t=0).
-    # The constraint should simply not fire — solve should succeed.
+    # The constraint should simply not fire - solve should succeed.
     cons.select(lambda c: isinstance(c.model, ElectricStorage)).equation(
         lambda m: m.p_mw == 999  # impossible if it fires
     ).when_period({5})
@@ -468,7 +468,7 @@ def test_controllable_to_attr_no_leak():
     n_entries = len(prob._controllable_to_attr)
     # A single storage component → at most a few entries, not 4x.
     assert n_entries <= 5, (
-        f"_controllable_to_attr has {n_entries} entries — "
+        f"_controllable_to_attr has {n_entries} entries - "
         f"expected it to be bounded, not growing with T"
     )
 
@@ -484,7 +484,7 @@ def test_objective_data_via_timeseries():
 
     td_cheap_first = TimeseriesData()
     td_cheap_first.add_child_series(load_id, "p_mw", loads)
-    # ext grid is child 0 on node b0 — find its id
+    # ext grid is child 0 on node b0 - find its id
     ext_id = None
     for node in net.nodes:
         for child in net.childs_by_ids(node.child_ids):
@@ -513,7 +513,7 @@ def test_objective_data_via_timeseries():
         net, td_expensive_first, steps=4, optimization_problem=prob, dt_h=1.0
     )
 
-    # The objectives should differ — different price schedules yield
+    # The objectives should differ - different price schedules yield
     # different total costs.
     assert r1.objective != r2.objective, (
         "Different price schedules should produce different objectives"
@@ -669,11 +669,11 @@ def test_multi_period_load_shedding():
 
     # Period 0 (load=2.0): no shedding needed
     assert reg.iloc[0] > 0.95, f"Period 0: expected ~1.0, got {reg.iloc[0]:.3f}"
-    # Period 1 (load=5.0): must shed — regulation < 1.0
+    # Period 1 (load=5.0): must shed - regulation < 1.0
     assert reg.iloc[1] < 0.95, f"Period 1: expected shedding, got {reg.iloc[1]:.3f}"
     # Period 2 (load=2.0): no shedding needed
     assert reg.iloc[2] > 0.95, f"Period 2: expected ~1.0, got {reg.iloc[2]:.3f}"
-    # Period 3 (load=4.0): must shed — regulation < 1.0
+    # Period 3 (load=4.0): must shed - regulation < 1.0
     assert reg.iloc[3] < 0.95, f"Period 3: expected shedding, got {reg.iloc[3]:.3f}"
 
 

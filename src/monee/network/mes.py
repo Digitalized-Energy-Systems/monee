@@ -1,9 +1,11 @@
 import random
 
+import networkx as nx
 from geopy import distance
 
 import monee.express as mx
 import monee.model as mm
+import monee.model.phys.core.hydraulics as hyd
 
 REF_PA = 1000000
 REF_TEMP = 356
@@ -657,7 +659,7 @@ def create_gas_tree_net_for_power(
         # Add resilience tie pipes: pick non-adjacent junction pairs uniformly
         # at random and connect them with a smaller-diameter / longer pipe.
         # The point is to give every junction more than one path to the
-        # slack so single pipe failures don't isolate large subtrees — the
+        # slack so single pipe failures don't isolate large subtrees - the
         # main reason additive CPs underperform on a tree layout.
         rng = random.Random(mesh_seed) if mesh_seed is not None else random
         junctions = list(bus_index_to_junction_index.values())
@@ -716,6 +718,10 @@ def create_heat_supply_return_net_for_power(
     return_pin_temperature=False,
     node_heat_gen_share=1.0,
     supply_slack_t_k=REF_TEMP,
+    auto_diameter=False,
+    auto_diameter_v_mps=None,
+    auto_diameter_headroom=1.5,
+    auto_min_diameter_m=None,
 ):
     """Build a supply/return DHS grid on the spanning tree of ``power_net``.
 
@@ -724,12 +730,12 @@ def create_heat_supply_return_net_for_power(
     bridge supply and return.
 
     ``heat_plant_mode``:
-      * ``"closing_pipe"`` (default) — single supply slack + return-to-supply
+      * ``"closing_pipe"`` (default) - single supply slack + return-to-supply
         closing pipe. Robust under the LinearHeatExchanger formulation but the
         slack t-pin collapses some supply/return ΔT.
-      * ``"two_port"`` — second slack at the return junction. Cleaner physics
+      * ``"two_port"`` - second slack at the return junction. Cleaner physics
         but needs McCormick-DHS (``node_based_heat_loads=True``).
-      * ``"screening"`` — closing pipe plus an oversized return Sink; faster
+      * ``"screening"`` - closing pipe plus an oversized return Sink; faster
         but mass flow is no longer physical.
 
     Capacities scale from electrical magnitudes via ``heat_load_share`` /
@@ -737,13 +743,26 @@ def create_heat_supply_return_net_for_power(
     In node-based mode ``node_heat_gen_share`` distributes :class:`HeatGenerator`
     children at every PowerGenerator bus (set to 0.0 for slack-only).
 
+    ``auto_diameter`` (default off) sizes each supply pipe - and the return /
+    closing pipe - to the mass flow it must carry instead of the flat
+    ``default_diameter_m``.  The required flow is the cumulative downstream
+    consumer demand (the same per-pipe ``subtree`` total used for the
+    McCormick-DHS envelopes), so trunk pipes near the slack come out wider than
+    leaf pipes.  Each diameter is the smallest that keeps the design velocity at
+    ``auto_diameter_v_mps`` (defaults to the grid's ``v_max_mps``) after a
+    ``auto_diameter_headroom`` margin on the flow, floored at
+    ``auto_min_diameter_m`` (defaults to ``default_diameter_m`` so leaf pipes are
+    never thinned below the flat default).  Without it, a large radial DHS (e.g.
+    simbench MV-urban: ~256 kg/s through 0.12 m pipes) is physically infeasible -
+    the trunk flow exceeds the velocity cap and the Darcy pressure drop blows up.
+
     Returns ``({power_node_id → supply_junction_id}, return_junction_id)``.
     """
     heat_grid = mm.create_water_grid("water")
     heat_grid.t_ref = REF_TEMP
     heat_grid.pressure_ref = REF_PA
     if node_based_heat_loads:
-        # Tighten McCormick-DHS envelopes — τ ∈ [0.75, 1.15] covers loaded
+        # Tighten McCormick-DHS envelopes - τ ∈ [0.75, 1.15] covers loaded
         # consumers (τ_L≈0.76 empirically at S=20) and HG-injecting CPs
         # (τ_U up to ~1.05); v=2 m/s is the typical DHS design velocity.
         heat_grid.t_pu_min_env = 0.75
@@ -751,12 +770,30 @@ def create_heat_supply_return_net_for_power(
         heat_grid.v_max_mps = 2.0
     target_net.set_default_grid("water", heat_grid)
 
+    # Design velocity for capacity-based sizing: the grid's operational cap
+    # unless overridden, so the sized pipe stays within v_max at design flow.
+    auto_v = (
+        auto_diameter_v_mps if auto_diameter_v_mps is not None else heat_grid.v_max_mps
+    )
+
+    # Never thin a pipe below the flat default - auto_diameter only widens the
+    # trunks that need capacity.  Thinner leaves would inflate their Darcy drop
+    # (∝ 1/D⁵) for no capacity gain.
+    auto_floor_m = (
+        auto_min_diameter_m if auto_min_diameter_m is not None else default_diameter_m
+    )
+
+    def _auto_diameter(mass_flow_kgs):
+        """Capacity-sized diameter [m] for ``mass_flow_kgs``, floored."""
+        d = hyd.calc_min_diameter_for_mass_flow(
+            mass_flow_kgs * auto_diameter_headroom, heat_grid.fluid_density, auto_v
+        )
+        return max(d, auto_floor_m)
+
     power_net_as_st = mm.to_spanning_tree(power_net)
 
     # Orient supply pipes outward from the slack via BFS so every supply
     # junction has an incoming pipe (McCormick-DHS pins direction).
-    import networkx as nx
-
     slack_root = (
         slack_node_id if slack_node_id is not None else power_net_as_st.first_node()
     )
@@ -769,7 +806,7 @@ def create_heat_supply_return_net_for_power(
     bfs_edges = list(nx.bfs_edges(undirected, source=slack_root))
 
     if node_based_heat_loads:
-        # Prune to the Steiner subtree on consumer buses — McCormick-DHS forces
+        # Prune to the Steiner subtree on consumer buses - McCormick-DHS forces
         # ``mass_flow=H_in=H_out=0`` at dead-end junctions, pinning τ to ambient
         # and propagating cold back along the tree.
         consumer_buses = {
@@ -894,7 +931,10 @@ def create_heat_supply_return_net_for_power(
 
     bus_demand_kgs: dict[int, float] = {}
     subtree: dict = {}
-    if node_based_heat_loads:
+    # The per-pipe cumulative downstream demand feeds both the McCormick-DHS
+    # envelopes (node-based mode) and capacity-based pipe sizing (auto_diameter),
+    # so compute it whenever either is requested.
+    if node_based_heat_loads or auto_diameter:
         for supply_id, q_mw in load_specs:
             m_design = q_mw * 1e6 / (4180.0 * 30.0)
             bus_demand_kgs[supply_id] = bus_demand_kgs.get(supply_id, 0.0) + m_design
@@ -931,7 +971,7 @@ def create_heat_supply_return_net_for_power(
             if q_cap_mw > 0:
                 q_mw = min(q_mw, q_cap_mw)
             elif q_cap_mw == 0:
-                # No downstream consumers — no heat can be transported.
+                # No downstream consumers - no heat can be transported.
                 continue
             mx.create_heat_generator(
                 target_net,
@@ -968,13 +1008,18 @@ def create_heat_supply_return_net_for_power(
             name="Grid Connection Heat Return",
         )
     else:
+        if return_diameter_m is not None:
+            closing_diameter_m = return_diameter_m
+        elif auto_diameter:
+            # The closing pipe returns the whole network's flow to the slack.
+            closing_diameter_m = _auto_diameter(subtree.get(slack_root, 0.0))
+        else:
+            closing_diameter_m = default_diameter_m * 1.5
         mx.create_water_pipe(
             target_net,
             from_node_id=return_junction,
             to_node_id=slack_supply_junction,
-            diameter_m=return_diameter_m
-            if return_diameter_m is not None
-            else default_diameter_m * 1.5,
+            diameter_m=closing_diameter_m,
             length_m=return_length_m
             if return_length_m is not None
             else default_length * length_scale,
@@ -1000,12 +1045,26 @@ def create_heat_supply_return_net_for_power(
             if m_design > 0:
                 pipe = target_net.branch_by_id(pipe_id)
                 pipe.model.m_U_design = m_design * SAFETY
+                # Warm-start seed for the smooth/simulation NLP: the design flow
+                # magnitude this pipe carries.  Seeding mass_flow_mag from it cuts
+                # IPOPT from ~600 to ~30 iterations on this MV network (a good
+                # |m| fixes the Darcy/temperature-transport conditioning; the
+                # flat |m|≈0 start is far from the solution).  See the smooth
+                # formulations' ensure_var, which reads this attribute.
+                pipe.model.mass_flow_nominal = m_design
+
+    if auto_diameter:
+        # Widen each supply pipe to carry its cumulative downstream demand at
+        # the design velocity; trunk pipes near the slack end up widest.
+        for (p, c), pipe_id in supply_pipe_for_edge.items():
+            pipe = target_net.branch_by_id(pipe_id)
+            pipe.model.diameter_m = _auto_diameter(subtree.get(c, 0.0))
 
     return bus_index_to_supply_junction, return_junction
 
 
 def _drain_power_gen_capacity(net: mm.Network, total_mw: float) -> float:
-    """Drain ``total_mw`` from PowerGenerator (skips ExtPowerGrid — slack). Returns the unabsorbed remainder."""
+    """Drain ``total_mw`` from PowerGenerator (skips ExtPowerGrid - slack). Returns the unabsorbed remainder."""
     remaining = float(total_mw)
     if remaining <= 0:
         return 0.0
@@ -1185,7 +1244,7 @@ def create_coupling_points_for_mes(
 
         # Sizing handle: prefer local generation magnitude, fall back to local
         # load magnitude.  A bus with no power activity at all (transit /
-        # bare slack) provides no basis for sizing — skip it instead of
+        # bare slack) provides no basis for sizing - skip it instead of
         # using a system-scale fallback that would oversize the unit by
         # orders of magnitude on LV grids.
         node = mes_net.node_by_id(power_node_id)

@@ -1,4 +1,5 @@
 import logging
+import math
 import types
 
 import pyomo.environ as pyo
@@ -15,6 +16,7 @@ from monee.model import (
 from monee.model.extension.islanding.core import NetworkIslandingConfig
 from monee.problem.core import OptimizationProblem
 from monee.simulation.step_state import StepState
+from monee.solver.infeasibility import diagnose_infeasibility
 
 from .core import (
     SolverInterface,
@@ -41,9 +43,9 @@ _log = logging.getLogger(__name__)
 DEFAULT_SOLVER_OPTIONS = {}
 
 # Gurobi defaults tuned for McCormick-DHS + MISOCP electrical:
-#   ScaleFlag=2 — aggressive geometric scaling for the SOC/bilinear blocks;
-#   MIPFocus=2  — close the gap (the LP root bound is already at the optimum);
-#   MIPGap=1e-3 — ~kW precision at MW scale (default 1e-4 wastes B&B).
+#   ScaleFlag=2 - aggressive geometric scaling for the SOC/bilinear blocks;
+#   MIPFocus=2  - close the gap (the LP root bound is already at the optimum);
+#   MIPGap=1e-3 - ~kW precision at MW scale (default 1e-4 wastes B&B).
 # NumericFocus stays at 0: was net-negative once Reynolds/pressure_pa scaling fixed.
 PER_SOLVER_OPTIONS = {
     "gurobi": {
@@ -96,8 +98,6 @@ def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
     if status == SolverStatus.ok:
         return True, None
     if tc == TerminationCondition.infeasible:
-        from monee.solver.infeasibility import diagnose_infeasibility
-
         report = diagnose_infeasibility(
             pm, solver_name=solver_name, compute_mis_flag=True, tol=0.001
         )
@@ -124,6 +124,9 @@ class PyomoSolver(SolverInterface):
 
     def __init__(self, solver_name: str = "scip"):
         self._solver_name = solver_name
+        # Per-solve simulation flag (set at the top of solve()); read by the
+        # equation-building passes to drop operational flow limits.
+        self._simulation: bool = False
 
     @staticmethod
     def inject_pyomo_vars_attr(
@@ -131,8 +134,6 @@ class PyomoSolver(SolverInterface):
     ):
         """Replace Var/Const with Pyomo Var / numeric. Clamps stale ``initialize``
         into ``[min, max]`` (suppresses W1002 when bounds tightened since last solve)."""
-        import math
-
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
                 init = value.value
@@ -162,8 +163,6 @@ class PyomoSolver(SolverInterface):
     def withdraw_pyomo_vars_attr(target: GenericModel):
         """Pyomo Var → :class:`Var`. Restores ``integer``, snaps bound-noise to
         bounds, replaces NaN/None with 0 so the next solve's warmstart survives."""
-        import math
-
         for key, value in target.__dict__.items():
             if isinstance(value, pyo.Var):
                 lb, ub = value.bounds if value.bounds is not None else (None, None)
@@ -249,7 +248,9 @@ class PyomoSolver(SolverInterface):
         solver_name: str | None = None,
         debug=False,
         step_state: StepState = None,
+        simulation: bool = False,
     ):
+        self._simulation = simulation
         if solver_name is None:
             solver_name = self._solver_name
         pm = pyo.ConcreteModel()
@@ -262,6 +263,20 @@ class PyomoSolver(SolverInterface):
 
         for ext in network.extensions:
             ext.prepare(network)
+
+        # Re-declare each formulation's vars in simulation mode so the model is
+        # squared (phantom DOFs pinned to Const, |m| warm-started, vm_pu_squared
+        # demoted to a PostProcess). Pyomo has no IMODE=1; a square system simply
+        # solves as the objective-free feasibility problem, yielding the same
+        # unique steady state GEKKO gets via IMODE=1 - kept consistent across
+        # backends so pyomo+ipopt is an equivalent NLP path. Runs on the copy
+        # only, and BEFORE pin_floating_hydraulic_gauges / mark_heat_balance_slacks
+        # (which set pressure Consts a re-declare would overwrite). No-op for
+        # formulations that don't square.
+        if simulation:
+            for component in network.all_components():
+                if component.formulation is not None:
+                    component.formulation.ensure_var(component.model, simulation=True)
 
         islanding_config = next(
             (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
@@ -291,11 +306,11 @@ class PyomoSolver(SolverInterface):
         compounds = network.compounds
 
         # Pin the pressure gauge of any hydraulic island without a grid-forming
-        # source — removes a rank-deficient free DOF.
+        # source - removes a rank-deficient free DOF.
         pin_floating_hydraulic_gauges(network, ignored_nodes)
 
         # Drop each heat island's dependent nodal balance at its grid-forming
-        # node (heat slack) — result-preserving for the exact balance. Under
+        # node (heat slack) - result-preserving for the exact balance. Under
         # mccormick the Junction balance is already trivial and the relaxed
         # eq. 9a is kept, so this is a no-op there.
         mark_heat_balance_slacks(network, ignored_nodes)
@@ -632,6 +647,7 @@ class PyomoSolver(SolverInterface):
                     log_impl=log_impl,
                     sqrt_impl=sqrt_impl,
                     pwl_impl=pwl_impl,
+                    simulation=self._simulation,
                 )
             )
 

@@ -4,7 +4,7 @@ Multi-period optimization
 
 Multi-period optimization builds a **single large problem** that jointly
 optimizes over *T* time periods in one shot.  All periods share the same solver
-model, so the optimizer can trade off actions across time — charging a battery
+model, so the optimizer can trade off actions across time - charging a battery
 cheaply now to discharge it at a more expensive future hour.
 
 .. note::
@@ -31,7 +31,7 @@ Timeseries vs. multi-period
      - Constants (previous step's floats)
      - Coupled solver variables
    * - **Optimality**
-     - Greedy — locally optimal per step
+     - Greedy - locally optimal per step
      - Global across all T periods
    * - **Scalability**
      - Linear in T
@@ -53,7 +53,7 @@ In a timeseries solve, ``StepState.get(id, "e_mwh")`` returns a **float**.
 In a multi-period solve, ``PeriodState.get(id, "e_mwh")`` returns a **live
 solver variable** from the previous period's network copy.  The constraint
 ``e_mwh[t] == prev_e + dt * p_mw[t]`` therefore ties two solver variables
-together — creating a genuine coupling constraint.
+together - creating a genuine coupling constraint.
 
 .. code-block:: text
 
@@ -69,7 +69,7 @@ Both ``StepState`` and ``PeriodState`` implement the
 
 ----
 
-Quick start — battery dispatch
+Quick start - battery dispatch
 ================================
 
 .. testcode::
@@ -118,7 +118,7 @@ To solve with the optimizer choosing when to charge/discharge:
    print(result)
 
 .. plot::
-   :caption: Battery optimal dispatch — the solver charges during off-peak hours and discharges during the midday peak
+   :caption: Battery optimal dispatch - the solver charges during off-peak hours and discharges during the midday peak
 
    import monee.model as mm
    import monee.express as mx
@@ -271,7 +271,7 @@ Force the optimizer to reach a target value at the last period:
    result = run_multi_period(
        net, td,
        initial_state ={(bat, "e_mwh"): 2.0},
-       terminal_state={(bat, "e_mwh"): 2.0},  # cyclic — return to start
+       terminal_state={(bat, "e_mwh"): 2.0},  # cyclic - return to start
    )
 
 ----
@@ -349,7 +349,7 @@ Solver backends
          result = run_multi_period(net, td, solver=GekkoMultiPeriodSolver())
 
       Best for smooth NLP problems without integer variables.  Ships with
-      its own IPOPT binaries — no extra installation needed.
+      its own IPOPT binaries - no extra installation needed.
 
    .. tab-item:: Pyomo
 
@@ -373,12 +373,12 @@ the joint problem efficiently:
 
 .. code-block:: text
 
-   Pass 1 — variable injection
+   Pass 1 - variable injection
      for t in 0 … T-1:
        ext.prepare(net_t)          # inject Var placeholders
        inject_vars(solver, net_t)  # register with the shared model
 
-   Pass 2 — equation assembly
+   Pass 2 - equation assembly
      for t in 0 … T-1:
        period_state = PeriodState(all_nets, current_t=t, ...)
        equations(net_t, ...)
@@ -386,7 +386,7 @@ the joint problem efficiently:
        inter_period_equations(net_t, ..., period_state)
 
 At pass-2 time, ``PeriodState`` has access to **all** T period networks, so
-``get()`` can reference any period — past or future — without any special
+``get()`` can reference any period - past or future - without any special
 handling in the model code.
 
 ----
@@ -409,7 +409,7 @@ See also
       :link-type: doc
       :shadow: sm
 
-      ``LumpedThermalCapacitance`` and ``GasLinepack`` — step-by-step
+      ``LumpedThermalCapacitance`` and ``GasLinepack`` - step-by-step
       walkthroughs for both timeseries and multi-period use.
 
    .. grid-item-card:: NetworkAspect

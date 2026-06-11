@@ -1,7 +1,6 @@
 from .branch import HeatExchanger
 from .child import NoVarChildModel, PowerGenerator, PowerLoad, Sink
 from .core import (
-    Intermediate,
     MultiGridBranchModel,
     MultiGridCompoundModel,
     MultiGridNodeModel,
@@ -306,7 +305,7 @@ class CHP(MultiGridCompoundModel):
     def set_active(self, activation_flag):
         if activation_flag:
             # Don't overwrite when controllable_cps has promoted the attr to a
-            # Var — restore only the case where set_active(False) zeroed it.
+            # Var - restore only the case where set_active(False) zeroed it.
             if isinstance(self._control_node.gas_kgps, (int, float)) and not isinstance(
                 self._control_node.gas_kgps, bool
             ):
@@ -367,7 +366,7 @@ class GasToHeat(MultiGridCompoundModel):
 
     def set_active(self, activation_flag):
         if activation_flag:
-            # See CHP.set_active — skip restore when attr is already an LP Var.
+            # See CHP.set_active - skip restore when attr is already an LP Var.
             if isinstance(
                 self._control_node.regulation, (int, float)
             ) and not isinstance(self._control_node.regulation, bool):
@@ -426,7 +425,7 @@ class PowerToHeat(MultiGridCompoundModel):
 
     def set_active(self, activation_flag):
         if activation_flag:
-            # See ``CHP.set_active`` — skip restore when the attribute is
+            # See ``CHP.set_active`` - skip restore when the attribute is
             # already an LP variable.
             if isinstance(
                 self._control_node.regulation, (int, float)
@@ -534,7 +533,7 @@ class SubHG(NoVarChildModel):
 
     Like HeatGenerator but with q_mw_heat as a Var constrained by the parent
     compound's control-node equations. Two-endpoint HG variants
-    (GasToHeatHG / PowerToHeatHG) don't use this — they carry q_mw_heat
+    (GasToHeatHG / PowerToHeatHG) don't use this - they carry q_mw_heat
     directly on the branch.
     """
 

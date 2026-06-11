@@ -12,8 +12,6 @@ import monee.express as mx
 import monee.model as mm
 import monee.solver as ms
 from monee.model.formulation import (
-    make_simulation_darcy_weisbach_network_formulation,
-    make_simulation_weymouth_network_formulation,
     make_smooth_darcy_weisbach_network_formulation,
     make_smooth_weymouth_network_formulation,
 )
@@ -142,8 +140,8 @@ def test_simulation_gas_only_matches_default():
     ref_res = ms.GEKKOSolver(solver=IPOPT).solve(ref)
 
     sim = _gas_only_net()
-    sim.apply_formulation(make_simulation_weymouth_network_formulation())
-    sim_res = ms.GEKKOSolver(solver=IPOPT, simulation=True).solve(sim)
+    sim.apply_formulation(make_smooth_weymouth_network_formulation())
+    sim_res = ms.GEKKOSolver(solver=IPOPT).solve(sim, simulation=True)
 
     assert sim_res.success
     assert math.isclose(
@@ -161,8 +159,8 @@ def test_simulation_heat_only_matches_default():
     ref_res = ms.GEKKOSolver(solver=IPOPT).solve(ref)
 
     sim = _heat_only_net()
-    sim.apply_formulation(make_simulation_darcy_weisbach_network_formulation())
-    sim_res = ms.GEKKOSolver(solver=IPOPT, simulation=True).solve(sim)
+    sim.apply_formulation(make_smooth_darcy_weisbach_network_formulation())
+    sim_res = ms.GEKKOSolver(solver=IPOPT).solve(sim, simulation=True)
 
     assert sim_res.success
     assert math.isclose(
@@ -179,14 +177,14 @@ def test_simulation_falls_back_to_imode3_with_objective():
     net.apply_formulation(make_smooth_weymouth_network_formulation())
     net.apply_formulation(make_smooth_darcy_weisbach_network_formulation())
 
-    result = ms.GEKKOSolver(solver=IPOPT, simulation=True).solve(net)
+    result = ms.GEKKOSolver(solver=IPOPT).solve(net, simulation=True)
 
     assert result.success
 
 
 def _simbench_mes():
     """Full multi-energy network (power + gas + heat + CHP/P2G/P2H couplings)
-    built from the simbench LV-rural3 grid — ~390 nodes."""
+    built from the simbench LV-rural3 grid - ~390 nodes."""
     import simbench
 
     from monee.io.from_pandapower import from_pandapower_net
@@ -207,7 +205,7 @@ def _simbench_mes():
 @pytest.mark.pptest
 def test_smooth_simbench_mes_solves_under_ipopt():
     """The smooth gas/heat stack + the bus voltage floor make a full ~390-node
-    multi-energy simbench network converge under GEKKO IPOPT — the headline
+    multi-energy simbench network converge under GEKKO IPOPT - the headline
     scenario the formulations target. Before both changes this did not converge."""
     mes = _simbench_mes()
     assert len(mes.nodes) > 200
@@ -222,7 +220,7 @@ def test_smooth_simbench_mes_solves_under_ipopt():
     buses = result.dataframes["Bus"]
     assert (buses["vm_pu"] >= 0.7 - 1e-6).all()
     # Gas/heat pipes carry unidirectional flow (smooth complementarity holds).
-    # Skip pipes on unconnected/ignored nodes (NaN — not part of the solve).
+    # Skip pipes on unconnected/ignored nodes (NaN - not part of the solve).
     for carrier in ("GasPipe", "WaterPipe"):
         pipes = result.dataframes[carrier]
         for pos, neg in zip(pipes["mass_flow_pos"], pipes["mass_flow_neg"]):
@@ -234,7 +232,7 @@ def test_smooth_simbench_mes_solves_under_ipopt():
 @pytest.mark.pptest
 def test_smooth_simbench_sectors_solve_standalone_under_ipopt():
     """Each carrier converges as a single-carrier grid under IPOPT once coupling
-    points and the other carriers are removed — the per-sector precondition for
+    points and the other carriers are removed - the per-sector precondition for
     a decoupled energy flow."""
     mes = _simbench_mes()
     mes.apply_formulation(make_smooth_weymouth_network_formulation())
@@ -250,7 +248,5 @@ def test_smooth_simbench_sectors_solve_standalone_under_ipopt():
         for node in list(sub.nodes):
             if type(node.grid) is not grid_type:
                 sub.deactivate(node)
-        result = ms.GEKKOSolver(solver=IPOPT).solve(
-            sub, exclude_unconnected_nodes=True
-        )
+        result = ms.GEKKOSolver(solver=IPOPT).solve(sub, exclude_unconnected_nodes=True)
         assert result.success, f"{carrier} sector failed to converge"

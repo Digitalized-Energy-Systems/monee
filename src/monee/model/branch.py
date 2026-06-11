@@ -364,7 +364,7 @@ class GasPipe(BranchModel):
 @model
 class GasCompressor(BranchModel):
     """
-    Ideal compressor — fixed pressure ratio, unidirectional (suction → discharge).
+    Ideal compressor - fixed pressure ratio, unidirectional (suction → discharge).
     Forward flow lives in ``mass_flow_neg`` to match GasPipe's Weymouth convention.
     """
 

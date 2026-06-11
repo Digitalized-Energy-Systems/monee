@@ -5,7 +5,7 @@ from ..core import BranchFormulation
 
 
 class LinearHeatExchangerFormulation(BranchFormulation):
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         model.t_in_pu = Var(1, min=0, max=2, name="t_in_pu")
         model.t_out_pu = Var(1, min=0, max=2, name="t_out_pu")
         if isinstance(model.mass_flow_design_kgs, Var):
@@ -26,34 +26,44 @@ class LinearHeatExchangerFormulation(BranchFormulation):
         return [-branch.q_mw_delivered]
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
+        eqs = [branch.direction == 0]
+        eqs += self._he_equations(branch, grid, from_node_model)
+        return eqs
+
+    def _he_equations(self, branch, grid, from_node_model):
         cp_mw_per_kgs_K = ohfmodel.SPECIFIC_HEAT_CAP_WATER / 1e6
-        is_dynamic_mf = isinstance(branch.mass_flow_design_kgs, Var)
+        # equations() runs after solver-var injection, when mass_flow_design_kgs
+        # is no longer a monee Var - the model's construction-time flag is the
+        # only reliable dynamic/fixed discriminator here.
+        is_dynamic_mf = branch._calc_mass_flow
 
         if is_dynamic_mf:
-            # SubHE / dynamic: mass_flow_design_kgs is a Var set by the parent compound.
-            mf_eq = branch.mass_flow_mag == branch.mass_flow_design_kgs
-            mf_neg_eq = (
-                branch.mass_flow_neg == branch.mass_flow_design_kgs * branch.on_off
-            )
+            # SubHE / dynamic: q_mw is dictated by the parent compound's control
+            # node and the mass flow by the surrounding network -
+            # mass_flow_design_kgs is only the sizing value (q_mw at the design
+            # temperature spread). Pinning the flow to it would over-determine
+            # flow-through topologies, so the energy balance runs on the actual
+            # flow magnitude instead.
+            flow_eqs = [
+                branch.mass_flow_mag == branch.mass_flow_pos + branch.mass_flow_neg
+            ]
+            balance_flow_kgs = branch.mass_flow_mag
         else:
-            mf_eq = branch.mass_flow_mag == branch.mass_flow_design_kgs
-            mf_neg_eq = (
-                branch.mass_flow_neg == branch.mass_flow_design_kgs * branch.on_off
-            )
+            flow_eqs = [
+                branch.mass_flow_mag == branch.mass_flow_design_kgs,
+                branch.mass_flow_neg
+                == branch.mass_flow_design_kgs * branch.on_off,
+            ]
+            balance_flow_kgs = branch.mass_flow_design_kgs
 
-        eqs = [
-            mf_eq,
-            branch.direction == 0,
+        eqs = flow_eqs + [
             branch.mass_flow_pos == 0,
-            mf_neg_eq,
             branch.t_in_pu == from_node_model.vars["t_pu"],
             branch.t_from_pu == from_node_model.vars["t_pu"],
             branch.t_to_pu == branch.t_out_pu,
             # Energy balance in MW (cp/1e6 converts J/(kg·K) → MW·s/(kg·K)).
-            branch.t_out_pu
-            * (branch.mass_flow_design_kgs * cp_mw_per_kgs_K * grid.t_ref)
-            == branch.t_in_pu
-            * (branch.mass_flow_design_kgs * cp_mw_per_kgs_K * grid.t_ref)
+            branch.t_out_pu * (balance_flow_kgs * cp_mw_per_kgs_K * grid.t_ref)
+            == branch.t_in_pu * (balance_flow_kgs * cp_mw_per_kgs_K * grid.t_ref)
             - branch.q_mw_delivered,
         ]
         if branch._he_is_generator:

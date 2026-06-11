@@ -3,14 +3,23 @@ import monee.model.phys.nonlinear.smooth as smoothmodel
 from monee.model.core import Const, Var
 
 from ..core import BranchFormulation
-from .gas import NLWeymouthNodeFormulation
 
 FRICTION_MODELS = ("constant", "pwl", "nonlinear")
 
 
+def _seed_mag(model):
+    """Warm-start magnitude for ``mass_flow_mag``: the design flow the network
+    generator stored on the pipe (``mass_flow_nominal``), else the flat 0.1.
+    A good |m| seed alone cuts the smooth-NLP iteration count by ~20× - the sign
+    of the signed flow is recovered cheaply, the magnitude is what conditions the
+    Darcy/Weymouth and temperature-transport rows."""
+    seed = getattr(model, "mass_flow_nominal", None)
+    return seed if seed and seed > 0 else 0.1
+
+
 def _pin(model, *names):
     """Pin model Vars the active formulation never constrains to a Const so no
-    phantom degrees of freedom are injected — required for a square IMODE=1
+    phantom degrees of freedom are injected - required for a square IMODE=1
     simulation solve. Only used in ``simulation`` mode; the default (IMODE=3)
     path leaves them free, where IPOPT parks them harmlessly."""
     for name in names:
@@ -55,26 +64,26 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         friction_model="constant",
         smoothing_eps=1e-3,
         n_breakpoints=12,
-        simulation=False,
     ):
         assert friction_model in FRICTION_MODELS, friction_model
         self.friction_model = friction_model
         self.smoothing_eps = smoothing_eps
         self.n_breakpoints = n_breakpoints
-        # simulation=True squares the model for an IMODE=1 steady-state solve:
-        # pins phantom vars and drops the operational flow-limit inequalities.
-        self.simulation = simulation
 
-    def ensure_var(self, model):
+    def ensure_var(self, model, simulation=False):
         # mass_flow is already the signed flow (model defines it as pos − neg);
         # promote it to the decision var instead of adding a redundant one.
         model.mass_flow = Var(0.0, name="mass_flow")
-        model.mass_flow_mag = Var(0.1, min=0, name="mass_flow_mag")
+        # Seed |m| only for the square simulation solve (see heat_smooth).
+        # simulation=True also squares the model for an IMODE=1 steady-state
+        # solve: pins phantom vars (and equations() drops the flow limits).
+        mag0 = _seed_mag(model) if simulation else 0.1
+        model.mass_flow_mag = Var(mag0, min=0, name="mass_flow_mag")
         # Neutralise the MISOCP-only vars so no integer/aux vars get injected.
         model.direction = Const(1)
         model.mass_flow_pos_squared = Const(0.0)
         model.mass_flow_neg_squared = Const(0.0)
-        if self.simulation:
+        if simulation:
             _pin(model, "velocity")
         _ensure_friction_vars(model, self.friction_model)
 
@@ -106,8 +115,14 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         signed = branch.mass_flow
         mag = branch.mass_flow_mag
         drop_term, friction_eqs = smoothmodel.drop_term_and_eqs(
-            self.friction_model, branch, grid.dynamic_visc, area, signed, mag,
-            f_max_local, **kwargs,
+            self.friction_model,
+            branch,
+            grid.dynamic_visc,
+            area,
+            signed,
+            mag,
+            f_max_local,
+            **kwargs,
         )
 
         eqs = [
@@ -115,8 +130,8 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
             branch.mass_flow_pos == 0.5 * (mag + signed),
             branch.mass_flow_neg == 0.5 * (mag - signed),
         ]
-        if not self.simulation:
-            # Operational flow limits — dropped in simulation mode (their slacks
+        if not kwargs.get("simulation", False):
+            # Operational flow limits - dropped in simulation mode (their slacks
             # would break a square IMODE=1 solve; limits are checked post-hoc).
             eqs += [
                 signed <= f_max_local * branch.on_off,
@@ -141,12 +156,3 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
             / (grid.universal_gas_constant * grid.t_k),
         ]
         return eqs + friction_eqs
-
-
-class SmoothWeymouthSimNodeFormulation(NLWeymouthNodeFormulation):
-    """Gas junction for a square IMODE=1 simulation: pins the unused ``t_pu``
-    (gas carries no temperature, so it would otherwise float as a phantom)."""
-
-    def ensure_var(self, model):
-        super().ensure_var(model)
-        _pin(model, "t_pu")

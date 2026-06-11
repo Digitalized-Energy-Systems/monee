@@ -1,4 +1,5 @@
 import monee.model as mm
+from monee.model.extension.islanding import GridFormingGenerator, GridFormingSource
 
 
 def create_bus(
@@ -917,8 +918,6 @@ def create_grid_forming_generator(
 ):
     """Attach a :class:`GridFormingGenerator` (island slack bus). Requires
     ``enable_islanding(net, electricity=True)``."""
-    from monee.model.extension.islanding import GridFormingGenerator
-
     return create_el_child(
         network,
         GridFormingGenerator(p_mw_max=p_mw_max, q_mvar_max=q_mvar_max, vm_pu=vm_pu),
@@ -942,8 +941,6 @@ def create_grid_forming_source(
 ):
     """Attach a :class:`GridFormingSource` (island pressure reference). Requires
     ``enable_islanding`` for the relevant carrier."""
-    from monee.model.extension.islanding import GridFormingSource
-
     return network.child_to(
         GridFormingSource(
             pressure_pu=pressure_pu, t_k=t_k, mass_flow_max=mass_flow_max

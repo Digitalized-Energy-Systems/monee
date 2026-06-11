@@ -22,7 +22,7 @@ api/index
 
 **Modular Network-based Energy Grid Optimization**
 
-Model, simulate, and optimize interconnected electricity, gas, and heat networks —
+Model, simulate, and optimize interconnected electricity, gas, and heat networks -
 in one unified Python framework.
 
 
@@ -67,7 +67,7 @@ pip install monee
 **Multi-energy networks**
 ^^^
 Electricity, gas, and water/heat in **one model**. Networks are represented
-as directed graphs — any topology is supported.
+as directed graphs - any topology is supported.
 :::
 
 :::{grid-item-card}
@@ -86,7 +86,7 @@ Connect carriers with built-in units:
 **Steady-state simulation**
 ^^^
 Run energy-flow calculations across all carriers simultaneously.
-Results come back as typed dataframes — one row per component.
+Results come back as typed dataframes - one row per component.
 :::
 
 :::{grid-item-card}
@@ -126,7 +126,7 @@ formats. One function call in each direction.
 ## Quick look
 
 Build a multi-energy network coupling an electricity grid to a district
-heating loop — and solve it — in under 25 lines:
+heating loop - and solve it - in under 25 lines:
 
 ```{code-block} python
 from monee import mx, run_energy_flow
@@ -151,7 +151,7 @@ mx.create_sink(net, j_return, mass_flow=1)
 
 # ── Couple: electric bus drives a heat pump feeding the heating loop ──
 mx.create_p2h(net, bus_1, j_mid, j_return,
-              heat_energy_w=100_000, diameter_m=0.1, efficiency=0.9)
+              heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9)
 
 result = run_energy_flow(net)
 print(result.dataframes["Bus"][["id", "vm_pu", "va_degree"]])

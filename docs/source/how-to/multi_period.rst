@@ -8,7 +8,7 @@ rolling-horizon MPC.  For the architectural background see
 
 ----
 
-Battery dispatch — 6-hour horizon
+Battery dispatch - 6-hour horizon
 ==================================
 
 .. testcode::
@@ -67,7 +67,7 @@ Solve and inspect:
    Disp [MW]: [...]
 
 .. plot::
-   :caption: Battery optimal dispatch — the solver shifts charge to off-peak hours to serve the midday peak
+   :caption: Battery optimal dispatch - the solver shifts charge to off-peak hours to serve the midday peak
 
    import monee.model as mm
    import monee.express as mx
@@ -131,7 +131,7 @@ Solve and inspect:
    axes[2].legend(fontsize=8)
    axes[2].grid(axis="y", alpha=0.3)
 
-   fig.suptitle("Battery — optimal dispatch over 6-hour horizon",
+   fig.suptitle("Battery - optimal dispatch over 6-hour horizon",
                 fontsize=12, fontweight="bold")
    plt.tight_layout()
 
@@ -247,7 +247,7 @@ Solve and query CHP dispatch:
    (6, 1)
 
 .. plot::
-   :caption: CHP multi-period dispatch — regulation tracks the combined electrical and heat demand
+   :caption: CHP multi-period dispatch - regulation tracks the combined electrical and heat demand
 
    import monee.model as mm
    import monee.express as mx
@@ -359,7 +359,7 @@ required feed-source capacity:
                                    [0.3, 0.3, 0.6, 0.9, 0.8, 0.4])
 
 .. plot::
-   :caption: Gas linepack buffers the demand peak — stored mass rises at low demand, drains during the peak
+   :caption: Gas linepack buffers the demand peak - stored mass rises at low demand, drains during the peak
 
    import monee.model as mm
    import monee.express as mx
@@ -518,7 +518,7 @@ Cross-period constraints (temporal_equation)
 =============================================
 
 Use ``temporal_equation`` to define constraints that couple variables across
-periods — ramp rates, custom storage dynamics, look-ahead limits, etc.
+periods - ramp rates, custom storage dynamics, look-ahead limits, etc.
 
 The lambda receives ``(model, component_id, temporal_state)`` where
 *temporal_state* provides access to variables from other periods via
@@ -548,7 +548,7 @@ The lambda receives ``(model, component_id, temporal_state)`` where
 .. note::
 
    ``temporal_state.get()`` returns ``None`` when the requested period is
-   before the horizon start (t < 0).  Always guard against this — return
+   before the horizon start (t < 0).  Always guard against this - return
    an empty list to skip the constraint at the first period.
 
 ``temporal_equation`` composes with ``when_period``:
@@ -678,7 +678,7 @@ PeriodState
 
 ``PeriodState`` is passed to ``inter_temporal_equations`` in multi-period solves.
 Unlike ``StepState`` (which returns floats), ``PeriodState.get()`` returns
-**live solver variables** — so equations that read from it become algebraic
+**live solver variables** - so equations that read from it become algebraic
 cross-period constraints inside the joint solve.
 
 .. list-table::

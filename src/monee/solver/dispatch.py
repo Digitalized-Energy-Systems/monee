@@ -1,4 +1,4 @@
-"""Solver dispatch — resolve ``(solver, backend)`` to a concrete solver.
+"""Solver dispatch - resolve ``(solver, backend)`` to a concrete solver.
 
 Concrete instances pass through unchanged. GEKKO names (APOPT/BPOPT/IPOPT)
 route to GEKKO; anything else is forwarded to Pyomo. Default is GEKKO+IPOPT.
@@ -16,7 +16,7 @@ GEKKO_SOLVERS: dict[str, int] = {
     "ipopt": 3,
 }
 
-# Names in both backends — default to GEKKO (bundled IPOPT, faster on NLPs).
+# Names in both backends - default to GEKKO (bundled IPOPT, faster on NLPs).
 _DUAL_AVAILABLE = frozenset({"ipopt"})
 
 

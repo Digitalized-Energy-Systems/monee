@@ -12,7 +12,7 @@ Weighting convention used in the bench
 --------------------------------------
 
 For the head-to-head columns we *keep both modes at the same
-weights* (``demand_weight=1e3``, ``generator_weight=0.1``) — that is
+weights* (``demand_weight=1e3``, ``generator_weight=0.1``) - that is
 an apples-to-apples solve on the same problem definition.  We also
 report a separate row for ``lex_O1`` that uses ``demand_weight=1.0``,
 ``generator_weight=1e-4`` to show what lex looks like at its
@@ -171,9 +171,9 @@ def _fmt_stats(s: dict[str, float]) -> str:
 def test_benchmark_lex_vs_weighted(_network_factory):
     """Compare wall-clock across three variants on each network:
 
-    - weighted (1e3 / 0.1)       — production baseline
-    - lex      (1e3 / 0.1)       — apples-to-apples on the same problem
-    - lex_O1   (1.0 / 1e-4)      — lex at its natural (no-floor) scale
+    - weighted (1e3 / 0.1)       - production baseline
+    - lex      (1e3 / 0.1)       - apples-to-apples on the same problem
+    - lex_O1   (1.0 / 1e-4)      - lex at its natural (no-floor) scale
     """
     name, factory, kwargs = _network_factory
     repeats = 3
@@ -181,7 +181,7 @@ def test_benchmark_lex_vs_weighted(_network_factory):
     # Variant tuple: (label, lex, weights, auto_floor).
     # ``weighted_auto`` shows the cost of using the deterministic
     # priority-floor bound instead of the magic ``demand_weight=1e3``
-    # default — same algorithm, just safer coefficient choice.
+    # default - same algorithm, just safer coefficient choice.
     variants = [
         ("weighted", False, (1e3, 0.1), False),
         ("weighted_auto", False, (1.0, 1e-4), True),
@@ -220,16 +220,16 @@ def test_benchmark_lex_vs_weighted(_network_factory):
         f"lex_O1/weighted={lex_o1_med / base_med:.2f}×"
     )
 
-    # Sanity guard only — catches outright bugs (model rebuilt,
+    # Sanity guard only - catches outright bugs (model rebuilt,
     # infinite loop) rather than grading performance.  Real lex
     # overhead is workload-dependent: nearly free on unstressed
     # networks (1–2×) but several × on heavily-stressed problems
     # where phase 2 must re-optimise in a tight degenerate region.
-    # Threshold scaled with problem size — generous, intentionally.
+    # Threshold scaled with problem size - generous, intentionally.
     SANITY_FACTOR = 50.0
     for label in ("weighted_auto", "lex_1e3", "lex_O1"):
         med = statistics.median(results[label][0])
         assert med < SANITY_FACTOR * base_med, (
             f"{label} wall-clock {med:.1f}s >> {SANITY_FACTOR}× baseline "
-            f"{base_med:.1f}s on '{name}' — likely a bug, not a workload effect"
+            f"{base_med:.1f}s on '{name}' - likely a bug, not a workload effect"
         )

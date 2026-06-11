@@ -2,14 +2,17 @@
 Lumped Thermal Capacitance (LTC) extension for water junctions.
 
 Each junction gets thermal mass ``ρ · Σ V_pipe/2`` from connected pipes.
-The inertia equation
+The inertia equation::
+
     ρ·V · (T_pu(t) - T_pu(t-1))/Δt  =  net_convective_heat_in
+
 replaces the degenerate ``T_n · mass_balance = 0`` heat balance at LTC nodes.
 No-op in single-step solves.
 """
 
 import math
 
+from monee.model.child import GridFormingMixin
 from monee.model.core import Var
 from monee.model.grid import WaterGrid
 from monee.model.node import Junction
@@ -21,7 +24,7 @@ from .core import NetworkAspect
 class LumpedThermalCapacitance(NetworkAspect):
     """LTC extension. Nodes with a GridFormingMixin child are excluded.
 
-    First-step anchor precedence (anchored mode, the default — required for NLP
+    First-step anchor precedence (anchored mode, the default - required for NLP
     solvers like GEKKO/IPOPT): ``t_init_overrides[node_id]`` → ``default_t_init``
     → the junction's own ``t_pu`` Var initialiser. Pass ``default_t_init`` near
     the operating mean to skip the warm-up transient.
@@ -49,8 +52,6 @@ class LumpedThermalCapacitance(NetworkAspect):
         self._ltc_rho_v = {}
         self._ltc_initial_t_pu = {}
         self._ltc_constrained = set()
-
-        from monee.model.child import GridFormingMixin
 
         # Identify water junctions without a fixed-T supply (e.g. ExtHydrGrid).
         for node in network.nodes:
@@ -144,7 +145,7 @@ class LumpedThermalCapacitance(NetworkAspect):
 
             t_prev = temporal_state.get(node.id, "t_pu")
             if t_prev is None and self._first_step_steady_state:
-                # MIP-only steady-state mode — see class docstring.
+                # MIP-only steady-state mode - see class docstring.
                 eqs.append(net_heat == 0)
             else:
                 if t_prev is None:

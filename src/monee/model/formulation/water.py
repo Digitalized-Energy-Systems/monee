@@ -83,33 +83,3 @@ def make_smooth_darcy_weisbach_network_formulation(
 SMOOTH_DARCY_WEISBACH_NETWORK_FORMULATION = (
     make_smooth_darcy_weisbach_network_formulation()
 )
-
-
-def make_simulation_darcy_weisbach_network_formulation(
-    friction_model: str = "constant",
-    smoothing_eps: float = 1e-3,
-    n_breakpoints: int = 12,
-) -> NetworkFormulation:
-    """Square (IMODE=1-ready) Darcy-Weisbach water/heat formulation: the smooth
-    formulation with the safe phantom (``velocity``) pinned and operational flow
-    limits dropped. Use with ``GEKKOSolver(simulation=True)``."""
-    return NetworkFormulation(
-        branch_type_to_formulations={
-            WaterPipe: SmoothDarcyWeisbachBranchFormulation(
-                friction_model=friction_model,
-                smoothing_eps=smoothing_eps,
-                n_breakpoints=n_breakpoints,
-                simulation=True,
-            ),
-            HeatExchanger: SmoothHeatExchangerFormulation(),
-            PassiveHeatExchanger: SmoothPassiveHeatExchangerFormulation(
-                friction_model=friction_model,
-                smoothing_eps=smoothing_eps,
-                n_breakpoints=n_breakpoints,
-                simulation=True,
-            ),
-        },
-        node_type_to_formulations={
-            (Junction, WaterGrid): NLDarcyWeisbachNodeFormulation()
-        },
-    )

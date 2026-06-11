@@ -38,6 +38,13 @@ add a load, and run the energy-flow calculation:
 
     result = run_energy_flow(net)
 
+By default :func:`~monee.run_energy_flow` runs in **simulation mode**
+(``simulation=True``): a square steady-state solve (GEKKO ``IMODE=1``) that
+automatically falls back to optimisation mode when the model is not square -
+``result.mode_used`` tells you which path actually ran. You can also pick a
+solver by name, e.g. ``run_energy_flow(net, solver="ipopt")`` or
+``solver="gurobi"``; see :doc:`concepts/solvers` for the available back-ends.
+
 Inspecting the result
 ---------------------
 
@@ -96,12 +103,12 @@ heating grid via a **power-to-heat (P2H)** unit:
     j_return = mx.create_water_junction(net)  # return header
 
     mx.create_ext_hydr_grid(net, j_supply)
-    mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.3, length_m=100)
+    mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.12, length_m=100)
     mx.create_sink(net, j_return, mass_flow=1)
 
     # ── Couple the two grids ──────────────────────────────────────────────
     mx.create_p2h(net, bus_1, j_mid, j_return,
-                  heat_energy_w=10_000, diameter_m=0.1, efficiency=0.9)
+                  heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9)
 
     result = run_energy_flow(net)
 
@@ -116,10 +123,10 @@ heating grid via a **power-to-heat (P2H)** unit:
 
 .. tip::
 
-   Other coupling units — :func:`~monee.express.create_g2p` (gas-to-power),
+   Other coupling units - :func:`~monee.express.create_g2p` (gas-to-power),
    :func:`~monee.express.create_p2g` (power-to-gas),
    :func:`~monee.express.create_g2h` (gas-to-heat), and
-   :func:`~monee.express.create_chp` (combined heat and power) — follow the
+   :func:`~monee.express.create_chp` (combined heat and power) - follow the
    same pattern.  See :doc:`concepts/multi_energy` for details on all
    supported coupling types.
 
@@ -185,7 +192,7 @@ subclass the appropriate model base class and implement ``equations``:
             super().__init__(mm.Var(c, min=0, max=c), mm.Var(0), **kwargs)
             self._c = c
 
-        def equations(self, grid, node, **kwargs):
+        def equations(self, grid, node_model, **kwargs):
             return [
                 self.p_mw <= self._c,
                 self.q_mvar == 0,
@@ -202,6 +209,7 @@ subclass the appropriate model base class and implement ``equations``:
     print(run_energy_flow(pn))
 
 .. testoutput::
+   :options: +SKIP
 
     SolverResult
 
@@ -226,6 +234,9 @@ subclass the appropriate model base class and implement ``equations``:
              id  tap  shift  br_r  br_x  g_fr  b_fr  g_to  b_to  max_i_ka  backup  on_off  p_from_mw  q_from_mvar  i_from_ka  loading_from_percent   p_to_mw  q_to_mvar   i_to_ka  loading_to_percent  length_m  r_ohm_per_m  x_ohm_per_m  parallel
       (0, 1, 0)    1      0  0.01  0.01     0     0     0     0      3.19   False       1   0.003774    1.424e-07  8.222e-06             2.577e-06 -0.003773          0 8.221e-06           2.577e-06       100       0.0001       0.0001         1
 
+The :func:`~monee.model.core.model` decorator (``@mm.model``) registers the
+class in monee's component registry, which is required for the model to
+round-trip through the native OMEF serialisation (:mod:`monee.io.native`).
 Read the :doc:`concepts/data_model` concept page for the full model contract
 and how to implement custom branches and nodes.
 
@@ -256,7 +267,7 @@ Next steps
       :link-type: doc
       :shadow: sm
 
-      All coupling components — P2H, G2P, CHP, G2H — in detail.
+      All coupling components - P2H, G2P, CHP, G2H - in detail.
 
    .. grid-item-card:: Formulations
       :link: concepts/formulations

@@ -27,12 +27,12 @@ Both the public, solver-visible attributes of a model *and* its JSON-encodable
 private attributes (e.g. a storage's ``_p_max`` / ``_lossy``) are serialized, so
 models whose behaviour is configured through private state round-trip faithfully.
 Private attributes holding object references (grids, sub-models) are skipped on
-purpose — they are rebuilt by the compound ``create()`` / branch ``init()`` hooks.
+purpose - they are rebuilt by the compound ``create()`` / branch ``init()`` hooks.
 
 Known limitations (not represented in the native format): user-supplied
 ``network.constraint`` / ``network.objective`` callables, network-level
 extensions registered via ``add_extension`` (linepack, LTC, islanding), and
-non-default formulations applied with ``apply_formulation`` — the latter are
+non-default formulations applied with ``apply_formulation`` - the latter are
 re-derived from the default formulation rules on load.
 """
 
@@ -73,9 +73,7 @@ def _encodable(value):
     if isinstance(value, (list, tuple)):
         return all(_encodable(item) for item in value)
     if isinstance(value, dict):
-        return all(
-            isinstance(k, str) and _encodable(v) for k, v in value.items()
-        )
+        return all(isinstance(k, str) and _encodable(v) for k, v in value.items())
     # numbers.Number also covers numpy integer/float scalars.
     return isinstance(value, numbers.Number)
 
@@ -231,9 +229,7 @@ def native_dict_to_network(dict_struct) -> Network:
             network.deactivate_by_id(type(network.child_by_id(child_id)), child_id)
 
     for node_dict in dict_struct["nodes"]:
-        model = init_model(
-            node_dict["model_type"], _decode_values(node_dict["values"])
-        )
+        model = init_model(node_dict["model_type"], _decode_values(node_dict["values"]))
         position = node_dict.get("position")
         node_id = network.node(
             model,

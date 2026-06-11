@@ -271,7 +271,7 @@ def create_restoration_benchmark(
     ]:
         mx.create_heat_exchanger(net, hs[i], hr, q_mw, name=f"HE_{i}")
 
-    # CHP 1: industrial — gas at A2, power at Ind_1, heat at position 1
+    # CHP 1: industrial - gas at A2, power at Ind_1, heat at position 1
     mx.create_chp_hg(
         net,
         power_node_id=ring_a[1],
@@ -281,7 +281,7 @@ def create_restoration_benchmark(
         efficiency_heat=0.40,
         mass_flow_setpoint=0.008,
     )
-    # # CHP 2: commercial — gas at B3, power at Com_2, heat at position 3
+    # # CHP 2: commercial - gas at B3, power at Com_2, heat at position 3
     mx.create_chp_hg(
         net,
         power_node_id=ring_b[2],

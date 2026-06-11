@@ -2,9 +2,9 @@
 
 The MISOCP-shaped models in :mod:`gf`/:mod:`wf` rely on a ``direction`` binary,
 a ``mass_flow_pos``/``mass_flow_neg`` split and an epigraph relaxation kept tight
-by an objective term — none of which survive an NLP relaxation. The helpers here
+by an objective term - none of which survive an NLP relaxation. The helpers here
 express the same physics with a single signed mass flow and the smooth identity
-``f_pos² - f_neg² = m · |m|`` (|m| ≈ √(m²+ε²)), so the pressure drop is C∞,
+``f_pos² - f_neg² = m · |m|`` (with ``|m| ≈ √(m²+ε²)``), so the pressure drop is C∞,
 monotonic and odd in the flow.
 
 A pipe's pressure drop is written as ``Δp == -drop_term`` (in the carrier's units),
@@ -39,15 +39,13 @@ def weymouth_pressure(
 
     The raw form ``Δ(p²)·C²·on_off == -drop_term`` carries a coefficient
     ``C²·p_ref² ∝ D⁵`` on the (dimensionless) squared-pressure difference, which
-    spans ~6 orders across a wide-diameter network — skewing IPOPT's column
+    spans ~6 orders across a wide-diameter network - skewing IPOPT's column
     scaling and conditioning. Dividing through by that coefficient gives every
     pipe a unit coefficient on the pressure term (the solution is unchanged):
 
         (p_i²-p_j²)_pu · on_off == -drop_term / (C²·p_ref²)
     """
-    coeff = (
-        calc_C_squared(diameter_m, length_m, t_k, compressibility) * pressure_ref**2
-    )
+    coeff = calc_C_squared(diameter_m, length_m, t_k, compressibility) * pressure_ref**2
     return (psq_pu_i - psq_pu_j) * on_off == -drop_term / coeff
 
 
@@ -71,7 +69,7 @@ def smooth_friction_blend(
     """Darcy friction factor as a single smooth function of Reynolds.
 
     Sigmoid blend of the laminar law ``64/Re`` and the turbulent Swamee-Jain
-    correlation around ``re_crit`` — replaces the non-smooth ``if Re < 2300``
+    correlation around ``re_crit`` - replaces the non-smooth ``if Re < 2300``
     switch so IPOPT sees a continuously differentiable friction. ``reynolds_scaled``
     is ``Re / REYNOLDS_SCALE`` (see :data:`hyd.REYNOLDS_SCALE`).
     """
@@ -86,7 +84,7 @@ def signed_psi_breakpoints(
     diameter_m, roughness, dynamic_visc, area, m_max, n_breakpoints=12
 ):
     """Odd breakpoints for ``ψ(m) = friction(Re(|m|)) · m · |m|`` on
-    ``m ∈ [-m_max, m_max]`` — the full Darcy/Weymouth drop term as one spline."""
+    ``m ∈ [-m_max, m_max]`` - the full Darcy/Weymouth drop term as one spline."""
     if m_max <= 0:
         return [-1e-6, 0.0, 1e-6], [0.0, 0.0, 0.0]
     mags = hyd.logspace(max(m_max * 1e-4, 1e-9), m_max, max(2, n_breakpoints - 1))

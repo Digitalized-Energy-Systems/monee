@@ -20,13 +20,13 @@ coordination across the entire topology.
    .. grid-item-card:: Lumped Thermal Capacitance
       :shadow: sm
 
-      Thermal inertia in district heating junctions — slows temperature
+      Thermal inertia in district heating junctions - slows temperature
       propagation between consecutive timesteps.
 
    .. grid-item-card:: Gas Linepack
       :shadow: sm
 
-      Stored gas mass in pipeline segments — enables the pipeline itself to
+      Stored gas mass in pipeline segments - enables the pipeline itself to
       act as a short-term storage buffer.
 
    .. grid-item-card:: Your extension
@@ -42,14 +42,14 @@ Why not a formulation?
 
 Formulations (:class:`~monee.model.formulation.core.BranchFormulation`,
 :class:`~monee.model.formulation.core.NodeFormulation`, …) define *how a single
-component type behaves* — the equations for a gas pipe, the variables for a
+component type behaves* - the equations for a gas pipe, the variables for a
 bus.  A ``NetworkAspect`` is different:
 
 * It touches **many components at once** (e.g. all water junctions).
 * It needs to **inject variables onto existing models** that were not designed
   for the feature (e.g. adding a ``linepack_kg`` variable to every
   ``GasPipe`` that carries linepack).
-* It may need to **activate or suppress behaviour conditionally** — for
+* It may need to **activate or suppress behaviour conditionally** - for
   example, replacing the static ``to_mass_flow == from_mass_flow`` constraint
   with a dynamic balance only when a timeseries solve is running.
 
@@ -80,7 +80,7 @@ Every ``NetworkAspect`` participates in up to four phases of the solver pipeline
                   inter_period_equations(...)    # multi-period only
          ↳ Return time-coupling constraints.
 
-Only implement the phases you need — every phase has a no-op default.
+Only implement the phases you need - every phase has a no-op default.
 
 ----
 
@@ -138,7 +138,7 @@ called in different contexts:
      - Typical use
    * - ``inter_temporal_equations``
      - timeseries **and** multi-period
-     - Storage SoC, linepack balance, LTC — anything that should work in both
+     - Storage SoC, linepack balance, LTC - anything that should work in both
    * - ``inter_step_equations``
      - timeseries only
      - Logic that only makes sense step-by-step (e.g. clamp from a controller)
@@ -157,7 +157,7 @@ The ``temporal_state`` argument implements
    # In a multi-period solve: temporal_state is PeriodState
    #   → .get() returns a live solver variable (GEKKO GKVariable / Pyomo Var)
    #
-   # Both expose the same .get() and .dt_h API — your code is identical.
+   # Both expose the same .get() and .dt_h API - your code is identical.
 
    def inter_temporal_equations(self, network, ignored_nodes, temporal_state):
        eqs = []
@@ -210,7 +210,7 @@ across all subsequent single-step, timeseries, and multi-period solves:
 
    2
 
-Multiple aspects compose without conflict — each operates on its own
+Multiple aspects compose without conflict - each operates on its own
 variable subset.
 
 ----
@@ -251,4 +251,4 @@ See also
       :shadow: sm
 
       How ``PeriodState`` replaces ``StepState`` in a single-shot joint
-      solve — and why existing aspect code works unchanged.
+      solve - and why existing aspect code works unchanged.

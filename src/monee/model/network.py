@@ -723,11 +723,11 @@ class Network:
         new._compound_dict = {
             k: copy.deepcopy(v, memo) for k, v in self._compound_dict.items()
         }
-        # Constraints/objectives are stateless lambdas — share by reference.
+        # Constraints/objectives are stateless lambdas - share by reference.
         new._constraints = list(self._constraints)
         new._objectives = list(self._objectives)
         new._extensions = copy.deepcopy(self._extensions, memo)
-        # Compound-construction transients — deepcopy preserves consistency
+        # Compound-construction transients - deepcopy preserves consistency
         # if the copy ever lands mid-build.
         new._Network__blacklist = copy.deepcopy(self._Network__blacklist, memo)
         new._Network__collected_components = copy.deepcopy(
@@ -736,10 +736,10 @@ class Network:
         new._Network__force_blacklist = self._Network__force_blacklist
         new._Network__collect_components = self._Network__collect_components
         new._Network__current_grid = copy.deepcopy(self._Network__current_grid, memo)
-        # Default formulations are module-level singletons — share by reference.
+        # Default formulations are module-level singletons - share by reference.
         new._Network__default_formulation = dict(self._Network__default_formulation)
 
-        # Manual MultiGraph rebuild — networkx generic deepcopy is much slower.
+        # Manual MultiGraph rebuild - networkx generic deepcopy is much slower.
         g = nx.MultiGraph()
         new._network_internal = g
         for node_id, data in self._network_internal.nodes(data=True):

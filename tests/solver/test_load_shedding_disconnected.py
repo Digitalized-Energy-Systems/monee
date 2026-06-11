@@ -15,25 +15,25 @@ def _build_net():
     """Four-bus power network with one deactivated line disconnecting B3."""
     pn = Network(PowerGrid(name="power", sn_mva=1))
 
-    # B0 — generator
+    # B0 - generator
     pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(PowerGenerator(p_mw=1, q_mvar=0))],
         grid=mm.EL,
     )
-    # B1 — slack (ext_grid)
+    # B1 - slack (ext_grid)
     pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(ExtPowerGrid(p_mw=0, q_mvar=0, vm_pu=1, va_degree=0))],
         grid=mm.EL,
     )
-    # B2 — connected load, 1.5 MW
+    # B2 - connected load, 1.5 MW
     pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(PowerLoad(p_mw=1.5, q_mvar=0))],
         grid=mm.EL,
     )
-    # B3 — disconnected load, 2 MW (line to B2 is deactivated)
+    # B3 - disconnected load, 2 MW (line to B2 is deactivated)
     pn.node(
         Bus(base_kv=1),
         child_ids=[pn.child(PowerLoad(p_mw=2.0, q_mvar=0))],

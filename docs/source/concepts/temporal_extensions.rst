@@ -12,7 +12,7 @@ that cannot be captured in a steady-state solve:
       :shadow: sm
 
       Thermal inertia of the water mass in district heating junctions.
-      Smooths temperature propagation — a supply-temperature step-change
+      Smooths temperature propagation - a supply-temperature step-change
       arrives at downstream junctions with a delay and a rounded wavefront.
 
    .. grid-item-card:: GasLinepack
@@ -23,8 +23,29 @@ that cannot be captured in a steady-state solve:
       without requiring immediate upstream response.
 
 Both extensions work identically in :doc:`timeseries` simulation and
-:doc:`multi_period` optimization — the same ``net.add_extension()`` call
+:doc:`multi_period` optimization - the same ``net.add_extension()`` call
 activates them for any solve mode.
+
+Under the hood both are plain :class:`~monee.model.formulation.core.NetworkAspect`
+subclasses and rely only on the standard temporal hooks (explained in detail in
+:doc:`network_aspects` - they are not re-explained here):
+
+* ``prepare`` - inject ``Var`` placeholders before solver variable injection.
+* ``activate_timeseries`` - flag the coupled solve and warm-start variables
+  from the previous step's ``step_state``.
+* ``inter_temporal_equations`` - the actual time-coupling constraint, applied
+  in **both** timeseries and multi-period solves.
+* ``inter_step_equations`` / ``inter_period_equations`` - mode-specific
+  variants; not used by the built-in extensions but available to yours.
+
+.. note::
+
+   Extensions registered via ``network.add_extension()`` - including
+   ``LumpedThermalCapacitance``, ``GasLinepack``, and the islanding
+   configuration from :doc:`islanding` - are **not serialized** by the native
+   JSON format (:mod:`monee.io.native`).  After
+   :func:`~monee.io.native.load_to_network` you must re-register every
+   extension before solving.
 
 ----
 
@@ -51,8 +72,10 @@ where :math:`V_\text{node} = \sum_\text{pipes} \frac{\pi}{4} d^2 L / 2`.
 Without this term, junction temperatures jump instantaneously.  With it,
 large-diameter or long pipes create appreciable thermal lag.
 
-Junctions with a fixed-temperature supply child (``ExtHydrGrid``) are
-excluded automatically — they are driven externally.
+The extension applies only to water-grid junctions **without** a
+:class:`~monee.model.child.GridFormingMixin` child - fixed-temperature
+supplies such as ``ExtHydrGrid`` or a grid-forming source are excluded
+automatically, because their temperature is driven externally.
 
 Step-by-step walkthrough
 ------------------------
@@ -79,7 +102,7 @@ Step-by-step walkthrough
    mx.create_water_pipe(net, j_mid, j_load,
                         diameter_m=0.2, length_m=300)
 
-**Attach the extension — one line**
+**Attach the extension - one line**
 
 .. testcode::
 
@@ -100,12 +123,12 @@ topology, computes nodal volumes, and patches each eligible junction's
 
 **Comparison: with vs. without LTC**
 
-The plot below runs the same network twice — with and without the extension
-— and overlays the junction temperatures at ``j_mid`` to show the inertia
+The plot below runs the same network twice - with and without the extension
+- and overlays the junction temperatures at ``j_mid`` to show the inertia
 effect.
 
 .. plot::
-   :caption: LTC thermal inertia — supply step-change at step 4
+   :caption: LTC thermal inertia - supply step-change at step 4
 
    import monee.model as mm
    import monee.express as mx
@@ -157,7 +180,7 @@ effect.
        ax.legend(fontsize=8)
 
    axes[0].set_ylabel("Temperature  [pu]")
-   fig.suptitle("Thermal inertia — supply step-change at t = 4",
+   fig.suptitle("Thermal inertia - supply step-change at t = 4",
                 fontsize=11, fontweight="bold")
    plt.tight_layout()
 
@@ -167,10 +190,59 @@ gradually, reflecting the thermal mass of the water stored in the pipes.
 
 .. tip::
 
-   The extension is transparent in single-step solves — results are identical
-   whether or not it is attached.  Thermal inertia only activates when
-   ``step_state`` is passed (i.e. inside ``run_timeseries`` or
-   ``run_multi_period``).
+   The extension is a **no-op in single-step solves** - its static
+   ``equations()`` hook returns an empty list, so results are identical
+   whether or not it is attached.  Thermal inertia only enters through
+   ``inter_temporal_equations``, i.e. inside ``run_timeseries`` or
+   ``run_multi_period``.
+
+First-step anchoring
+--------------------
+
+The inertia equation needs a previous temperature :math:`T(t-1)`.  On the very
+first step there is none, so the extension anchors each junction to an initial
+value.  All three constructor arguments control this anchor:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 70
+
+   * - Argument
+     - Effect
+   * - ``default_t_init``
+     - First-step temperature anchor (in ``t_pu``) for **all** LTC junctions.
+   * - ``t_init_overrides``
+     - ``{node_id: t_pu}`` - per-junction anchors that take precedence over
+       ``default_t_init``.
+   * - ``first_step_steady_state``
+     - If ``True``, the first step emits ``net_heat == 0`` (a steady-state
+       heat balance) instead of anchoring.  **MIP backends only.**
+
+The anchor for each junction is resolved with this precedence:
+
+1. ``t_init_overrides[node_id]`` - explicit per-junction value,
+2. ``default_t_init`` - network-wide fallback,
+3. the junction's own ``t_pu`` initializer.
+
+.. testcode::
+
+   net.add_extension(LumpedThermalCapacitance(
+       default_t_init=0.95,             # anchor all junctions at 0.95 pu
+       t_init_overrides={j_mid: 0.97},  # ... except j_mid
+   ))
+
+.. tip::
+
+   Set ``default_t_init`` close to the expected operating mean.  Otherwise
+   the first steps of the simulation are spent heating (or cooling) the
+   thermal mass from the anchor towards the operating point - a warm-up
+   transient that distorts early results.
+
+.. note::
+
+   The default anchored mode is **required** for the NLP solvers
+   (GEKKO/IPOPT).  ``first_step_steady_state=True`` is supported on MIP
+   backends only - use it exclusively with a MIP-capable Pyomo solver.
 
 ----
 
@@ -189,8 +261,35 @@ A pipeline of volume *V* and gas density *ρ* stores mass:
 
 The density *ρ* is derived from the average of the two endpoint pressures via
 the ideal-gas equation of state.  ``GasLinepack`` constrains ``linepack_kg``
-to equal this product at every step — so stored mass automatically follows
+to equal this product at every step - so stored mass automatically follows
 pipeline pressure as demand varies over a timeseries or multi-period run.
+
+Single-step behaviour and temporal coupling
+-------------------------------------------
+
+The extension injects two variables on every ``GasPipe``: ``linepack_kg``
+(stored mass) and ``net_pack_kgs`` (charging rate, positive = mass flowing
+*into* storage).  Their behaviour depends on the solve mode:
+
+* **Single-step solves** pin ``net_pack_kgs == 0`` - the pipe neither charges
+  nor discharges, and the solve is a pure steady state.  ``linepack_kg``
+  still reports the stored mass implied by the solved pressures.
+* **Timeseries and multi-period solves** call ``activate_timeseries``, which
+  lifts the pin and warm-starts ``linepack_kg`` from the previous step's
+  state.  The temporal coupling then enforces
+
+  .. math::
+
+     \text{net\_pack\_kgs}(t) \cdot \Delta t
+     \;=\; \text{linepack\_kg}(t) - \text{linepack\_kg}(t-1)
+
+  with :math:`\Delta t` in seconds; the first step measures against the
+  initial linepack.
+
+On the node side, each endpoint junction's mass balance receives
+``0.5 * net_pack_kgs`` (outflow-positive) - the charged mass is split equally
+between the two ends of the pipe, so charging draws gas from both endpoint
+junctions and discharging releases it to both.
 
 Linepack walkthrough
 --------------------
@@ -213,13 +312,13 @@ Linepack walkthrough
    mx.create_gas_ext_grid(net_gas, j0)
    mx.create_gas_sink(net_gas, j2, mass_flow=0.3, name="industry")
 
-   # Long transmission pipe — large volume = significant linepack
+   # Long transmission pipe - large volume = significant linepack
    long_pipe_id = mx.create_gas_pipe(net_gas, j0, j1,
                                      diameter_m=0.5, length_m=50_000)
    mx.create_gas_pipe(net_gas, j1, j2,
                       diameter_m=0.3, length_m=10_000)
 
-**Attach GasLinepack — one line for all pipes**
+**Attach GasLinepack - one line for all pipes**
 
 .. testcode::
 
@@ -273,18 +372,18 @@ in ``overrides`` always use auto-computed values.
    result = run_multi_period(net_gas, td_gas, dt_h=1.0)
    lp = result.get_result_for_id(long_pipe_id, "linepack_kg")
 
-**Plot: linepack as a buffer — with vs. without**
+**Plot: linepack as a buffer - with vs. without**
 
 The key insight is that linepack *decouples* the source from instant demand
 changes.  Without linepack the source must match demand exactly at every step.
 With linepack the pipeline absorbs or releases the difference, so the source
 responds more gradually.
 
-The plot below runs the same network twice — with and without the extension
-— and overlays the source feed rate alongside the consumer demand profile.
+The plot below runs the same network twice - with and without the extension
+- and overlays the source feed rate alongside the consumer demand profile.
 
 .. plot::
-   :caption: Gas linepack — source is buffered from demand peaks
+   :caption: Gas linepack - source is buffered from demand peaks
 
    import monee.model as mm
    import monee.express as mx
@@ -302,7 +401,7 @@ The plot below runs the same network twice — with and without the extension
        j2  = mx.create_gas_junction(net)
        src_id  = mx.create_gas_ext_grid(net, j0)
        mx.create_gas_sink(net, j2, mass_flow=0.20, name="consumer")
-       # Long high-pressure pipe — significant stored volume
+       # Long high-pressure pipe - significant stored volume
        pipe_id = mx.create_gas_pipe(net, j0, j1, diameter_m=0.6, length_m=40_000)
        mx.create_gas_pipe(net, j1, j2, diameter_m=0.3, length_m=8_000)
 
@@ -373,7 +472,7 @@ The plot below runs the same network twice — with and without the extension
    ax_lp.axhline(0, color="grey", linestyle="--", alpha=0.5,
                   label=f"initial  ({lp0:,.0f} kg)")
    ax_lp.set_ylabel("Δ stored mass  [kg]")
-   ax_lp.set_title("Linepack — stored mass deviation from initial", fontsize=10)
+   ax_lp.set_title("Linepack - stored mass deviation from initial", fontsize=10)
    ax_lp.set_xlabel("Hour")
    ax_lp.set_xticks(list(steps))
    ax_lp.legend(fontsize=8)
@@ -426,7 +525,8 @@ Override reference
      - Override initial stored mass in kg; seeds the first-step constraint and
        the solver's starting value.
    * - ``linepack_kg_max``
-     - Override upper bound on stored mass; must be ≥ ``linepack_kg_initial``.
+     - Override upper bound on stored mass.  Values below
+       ``1.05 × linepack_kg_initial`` are raised to that floor automatically.
 
 ----
 
@@ -482,7 +582,7 @@ See also
       :link-type: doc
       :shadow: sm
 
-      The general extension mechanism — four phases, how to write your own.
+      The general extension mechanism - four phases, how to write your own.
 
    .. grid-item-card:: Timeseries simulation
       :link: timeseries

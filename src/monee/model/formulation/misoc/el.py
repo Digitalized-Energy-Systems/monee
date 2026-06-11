@@ -13,7 +13,7 @@ SQRT_3 = math.sqrt(3.0)
 
 
 class MISOCPElectricityNodeFormulation(NodeFormulation):
-    def ensure_var(self, node):
+    def ensure_var(self, node, simulation=False):
         node.vm_pu_squared = Var(1, min=0, max=2.25)
         node.vm_pu = Intermediate(1)
 
@@ -48,7 +48,7 @@ def _big_m(w_max: float) -> float:
 
 
 class MISOCPElectricityBranchFormulation(BranchFormulation):
-    def ensure_var(self, branch):
+    def ensure_var(self, branch, simulation=False):
         branch.current_pu = Var(1, min=0)
         branch.i_from_ka = Intermediate(0)
         branch.i_to_ka = Intermediate(0)

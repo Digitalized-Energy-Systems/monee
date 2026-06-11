@@ -1,54 +1,3 @@
-"""CIM / CGMES import for monee (electricity only).
-
-.. warning::
-
-   **EXPERIMENTAL.** This importer is an early sketch: the mapping is incomplete
-   (see "Not handled yet" below) and has not been validated against a conformity
-   model. The API may change. It is intentionally *not* exported from any package
-   ``__init__`` — import it explicitly via ``monee.io.from_cim``.
-
-Reads an ENTSO-E **CGMES** grid model (CIM16 / CGMES 2.4.15, or CGMES 3.0) and
-builds a monee electrical :class:`~monee.model.network.Network`.
-
-Why electricity only
---------------------
-CIM/CGMES is an *electricity* standard (IEC 61970 / 61968). There is **no
-standardized gas or heat profile** — only academic CIM extensions with no public
-data or tooling. So this importer maps the electrical carrier and leaves monee's
-gas/water grids empty; multi-energy coupling stays a monee-native step applied
-*after* import.
-
-Scope (phase 1 — bus-branch)
-----------------------------
-Reads the merged EQ + TP + SSH profiles and maps::
-
-    TopologicalNode          -> Bus               (base_kv from BaseVoltage)
-    ACLineSegment            -> GenericPowerBranch (r, x, b charging in p.u.)
-    PowerTransformer (2-wdg) -> GenericPowerBranch (lumped series impedance)
-    EnergyConsumer*          -> PowerLoad          (p, q from SSH)
-    SynchronousMachine       -> PowerGenerator     (p, q from SSH)
-    ExternalNetworkInjection -> ExtPowerGrid       (slack: pinned vm_pu/va)
-
-Anything else is counted and reported (see the returned ``CimImportReport``),
-never silently dropped.
-
-Not handled yet (explicit TODOs)
---------------------------------
-* node-breaker topology (ConnectivityNode -> bus reduction)
-* tap changers (RatioTapChanger / PhaseTapChanger) — taps default to neutral
-* 3-winding transformers, shunt compensators, switches as impedances
-* operational current limits (line ratings default to effectively unbounded)
-* SV initialization and GL/DL geographic positions
-
-Dependency
-----------
-Needs the optional `cimpy <https://github.com/sogno-platform/cimpy>`_ package
-(``pip install cimpy``). It is imported lazily, so monee does not depend on it.
-The exact attribute names below follow CIMpy's CGMES object model; they are read
-defensively so minor version differences degrade to a counted "skip" rather than
-a crash.
-"""
-
 import logging
 import warnings
 from dataclasses import dataclass, field
@@ -348,7 +297,7 @@ def cim_objects_to_network(objects, gen_sign=-1.0):
 
     if report.ext_grids == 0:
         logger.warning(
-            "CIM import: no ExternalNetworkInjection found — the network has no "
+            "CIM import: no ExternalNetworkInjection found - the network has no "
             "slack. Designate one with create_ext_power_grid before solving."
         )
     report.log()
@@ -366,7 +315,7 @@ def import_cim_files(file_list, cgmes_version="cgmes_v2_4_15", gen_sign=-1.0):
     Parameters
     ----------
     file_list:
-        Path(s) accepted by ``cimpy.cim_import`` — the EQ/TP/SSH (and optionally
+        Path(s) accepted by ``cimpy.cim_import`` - the EQ/TP/SSH (and optionally
         SV) profile files of one CGMES model.
     cgmes_version:
         CIMpy version tag, e.g. ``"cgmes_v2_4_15"`` or ``"cgmes_v3_0_0"``.

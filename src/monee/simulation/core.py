@@ -17,7 +17,7 @@ def solve(
         optimization_problem: Optional optimisation problem.
         solver: Either a solver-name string (``"ipopt"``, ``"gurobi"``,
             ``"scip"``, …), a concrete :class:`SolverInterface` instance, or
-            ``None`` (default — GEKKO+IPOPT).
+            ``None`` (default - GEKKO+IPOPT).
         backend: ``"gekko"`` / ``"pyomo"`` to force the modelling backend.  When
             ``None`` (default), the backend is auto-routed from *solver*.
         **kwargs: Forwarded to ``solver.solve(...)``.

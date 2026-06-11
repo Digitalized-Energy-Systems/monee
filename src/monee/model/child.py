@@ -35,11 +35,11 @@ class PowerGenerator(NoVarChildModel):
     """Fixed-setpoint active/reactive generator. Constructor takes positive magnitudes; sign is internal."""
 
     def __init__(self, p_mw, q_mvar, **kwargs) -> None:
-        # Compound models pass solver Vars for p_mw — only validate plain numerics.
+        # Compound models pass solver Vars for p_mw - only validate plain numerics.
         if isinstance(p_mw, (int, float)) and p_mw < 0:
             raise ValueError(
                 f"PowerGenerator expects a positive generation magnitude; "
-                f"got p_mw={p_mw}.  Pass the absolute value — the sign is "
+                f"got p_mw={p_mw}.  Pass the absolute value - the sign is "
                 f"handled internally (load convention)."
             )
         super().__init__(**kwargs)
@@ -82,7 +82,7 @@ class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
         node_model.vm_pu_squared = Const(self.vm_pu * self.vm_pu)
         node_model.va_degree = Const(self.va_degree)
         # The slack bus is the angle reference: pin the angle decision variable
-        # (va_degree is a derived Intermediate) — removes the free global-gauge
+        # (va_degree is a derived Intermediate) - removes the free global-gauge
         # DOF, improving conditioning and squareness. Skipped when electricity
         # islanding manages bus angles itself (energisation-gated), which it
         # flags in its prepare() before this runs.
@@ -105,11 +105,11 @@ class Source(NoVarChildModel):
     """Fixed-setpoint mass-flow source. Constructor takes positive magnitude; sign is internal."""
 
     def __init__(self, mass_flow, **kwargs) -> None:
-        # Internal callers may pass solver Vars — only validate plain numerics.
+        # Internal callers may pass solver Vars - only validate plain numerics.
         if isinstance(mass_flow, (int, float)) and mass_flow < 0:
             raise ValueError(
                 f"Source expects a positive injection magnitude; "
-                f"got mass_flow={mass_flow}.  Pass the absolute value — the "
+                f"got mass_flow={mass_flow}.  Pass the absolute value - the "
                 f"sign is handled internally (load convention)."
             )
         super().__init__(**kwargs)
@@ -176,7 +176,7 @@ class HeatGenerator(NoVarChildModel):
         if isinstance(q_mw, (int, float)) and q_mw < 0:
             raise ValueError(
                 f"HeatGenerator expects a positive heat-generation magnitude; "
-                f"got q_mw={q_mw}.  Pass the absolute value — the sign is "
+                f"got q_mw={q_mw}.  Pass the absolute value - the sign is "
                 f"handled internally (load convention)."
             )
         super().__init__(**kwargs)

@@ -1,5 +1,5 @@
-"""State carriers for timeseries (StepState — floats) and multi-period
-(PeriodState — live solver vars). Both expose the same ``get(comp_id, attr)`` /
+"""State carriers for timeseries (StepState - floats) and multi-period
+(PeriodState - live solver vars). Both expose the same ``get(comp_id, attr)`` /
 ``dt_h`` API so ``inter_step_equations`` works in both modes unchanged."""
 
 from __future__ import annotations

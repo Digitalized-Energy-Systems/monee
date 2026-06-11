@@ -423,7 +423,9 @@ def test_storage_private_state_preserved():
     # attributes derived from required constructor args; these must round-trip
     # so make_controllable() and the SoC dynamics behave identically.
     pn = mm.Network(mm.create_power_grid("power"))
-    n0 = pn.node(mm.Bus(base_kv=1), child_ids=[pn.child(mm.ExtPowerGrid(p_mw=0, q_mvar=0))])
+    n0 = pn.node(
+        mm.Bus(base_kv=1), child_ids=[pn.child(mm.ExtPowerGrid(p_mw=0, q_mvar=0))]
+    )
     n1 = pn.node(
         mm.Bus(base_kv=1),
         child_ids=[

@@ -4,6 +4,7 @@ Minimises total unserved energy across electrical, gas, and thermal carriers
 (single- or multi-period).
 """
 
+import logging
 import math
 
 from monee.model.branch import (
@@ -44,7 +45,7 @@ from monee.problem.core import (
     OptimizationProblem,
     nan_to_zero,
 )
-from monee.problem.utils import cp_input_rated_mw
+from monee.problem.utils import cp_input_rated_mw, line_loading_limit
 
 WEIGHT_DEMAND = 1e3
 WEIGHT_GENERATOR = 0.1
@@ -121,7 +122,7 @@ def _aux_objective_upper_bound(
     total = 0.0
     for component in network.all_components():
         m = component.model
-        # br_r/br_x on PowerLine/Trafo are computed in equations() — at
+        # br_r/br_x on PowerLine/Trafo are computed in equations() - at
         # _apply time they are still 0, so call calc_r_x to read them now.
         br_r = getattr(m, "br_r", None)
         br_x = getattr(m, "br_x", None)
@@ -198,11 +199,9 @@ def _make_auto_priority_floor_hook(
     and, if it is below the floor, scales every weight up by
     ``floor / min_w``.  Generator weights and the per-load callback's
     returns are both lifted by the same scale via the ``weights["scale"]``
-    multiplier consulted in ``weight_fn`` — the user-set load-priority
+    multiplier consulted in ``weight_fn`` - the user-set load-priority
     *ratios* are preserved.
     """
-    import logging
-
     _log = logging.getLogger(__name__)
 
     def _hook(network):
@@ -228,20 +227,25 @@ def _make_auto_priority_floor_hook(
             if min_w is not None and min_w < floor:
                 scale = floor / min_w if min_w > 0 else 1.0
                 # ``weights['scale']`` multiplies BOTH the callback return
-                # AND the default ``weights['demand']`` — see ``weight_fn``.
+                # AND the default ``weights['demand']`` - see ``weight_fn``.
                 weights["scale"] = weights.get("scale", 1.0) * scale
                 weights["generator"] = weights["generator"] * scale
                 if debug:
                     _log.warning(
                         "Auto priority floor (per-load): A_max=%.3g, α=%.3g, "
                         "min_w=%.3g → scale ×%.3g (generator weight scaled too)",
-                        a_max, alpha, min_w, scale,
+                        a_max,
+                        alpha,
+                        min_w,
+                        scale,
                     )
             elif debug:
                 _log.warning(
                     "Auto priority floor (per-load): A_max=%.3g, α·A_max=%.3g "
-                    "already covered by per-load min_w=%.3g — no change.",
-                    a_max, floor, min_w or 0.0,
+                    "already covered by per-load min_w=%.3g - no change.",
+                    a_max,
+                    floor,
+                    min_w or 0.0,
                 )
             return
 
@@ -264,7 +268,7 @@ def _make_auto_priority_floor_hook(
         elif debug:
             _log.warning(
                 "Auto priority floor: A_max=%.3g, α·A_max=%.3g already "
-                "covered by user-supplied demand_weight=%.3g — no change.",
+                "covered by user-supplied demand_weight=%.3g - no change.",
                 a_max,
                 floor,
                 old_demand,
@@ -377,7 +381,7 @@ def create_min_load_shedding_problem(
     ``include_coupling_points`` (default False) extends the demand-side of the
     objective to coupling-point components (CHP / CHPHG / G2H / P2H control
     nodes and the HG branch variants P2G / G2P / P2H_HG / G2H_HG). Each CP is
-    penalised at ``demand_weight · cp_input_rated_mw · (1 - regulation)`` —
+    penalised at ``demand_weight · cp_input_rated_mw · (1 - regulation)`` -
     i.e. treated like a load on its input carrier (gas or power).
     """
     problem = OptimizationProblem(debug=debug, lex_objectives=lex_objectives)
@@ -385,7 +389,7 @@ def create_min_load_shedding_problem(
     # Mutable so the auto-priority-floor hook can retune at _apply time.
     # ``scale`` is a multiplicative factor applied on top of both the
     # default ``demand`` weight AND any per-load weight returned by
-    # ``weight_for_load`` — the auto-floor hook uses it to lift every
+    # ``weight_for_load`` - the auto-floor hook uses it to lift every
     # demand-side weight uniformly when the minimum effective per-load
     # weight would otherwise fall below ``α·A_max``.  Default 1.0 makes
     # it a no-op for legacy (no callback) usage.
@@ -428,7 +432,7 @@ def create_min_load_shedding_problem(
 
     # Lookups go through _weights so the auto-priority-floor can retune.
     # When ``weight_for_load`` is set and applicable, the per-load
-    # weight it returns takes precedence — multiplied by the auto-
+    # weight it returns takes precedence - multiplied by the auto-
     # floor scale so per-load weights and the legacy demand weight
     # share the same aux-dominance lift.
     def weight_fn(model):
@@ -445,7 +449,7 @@ def create_min_load_shedding_problem(
         if isinstance(model, _DEMAND_TYPES):
             return _weights["demand"] * scale
         # CPs are penalised at the demand weight when include_coupling_points
-        # is on — the input draw is treated as a load on its input carrier.
+        # is on - the input draw is treated as a load on its input carrier.
         if isinstance(model, _COUPLING_POINT_TYPES):
             return _weights["demand"] * scale
         # Bare HeatExchanger / PassiveHeatExchanger: route by sign of q_mw_set.
@@ -477,8 +481,8 @@ def create_min_load_shedding_problem(
         )
 
     # Populated by _objective_models, read by _data_attacher.
-    #   model_to_grid  — Sink/Source HHV lookup (gas grid only).
-    #   model_to_cp_mw — CP nameplate input MW (when include_coupling_points).
+    #   model_to_grid  - Sink/Source HHV lookup (gas grid only).
+    #   model_to_cp_mw - CP nameplate input MW (when include_coupling_points).
     model_to_grid: dict = {}
     model_to_cp_mw: dict = {}
 
@@ -496,7 +500,7 @@ def create_min_load_shedding_problem(
                 continue
             # CP control nodes also surface via all_models_with_grid, but we
             # need ``component`` (not just ``model``) to compute the rated MW
-            # via cp_input_rated_mw — handled in the dedicated loop below.
+            # via cp_input_rated_mw - handled in the dedicated loop below.
             if isinstance(model, _COUPLING_POINT_TYPES):
                 continue
             out.append(model)
@@ -564,8 +568,6 @@ def create_min_load_shedding_problem(
     constraints = Constraints()
 
     if check_line_loading:
-        from monee.problem.utils import line_loading_limit
-
         constraints.select_types(GenericPowerBranch).equation(
             lambda m: line_loading_limit(m, "from", max_line_loading)
         ).equation(lambda m: line_loading_limit(m, "to", max_line_loading))

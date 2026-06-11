@@ -2,6 +2,8 @@
 ``child_3__p_mw`` back to monee component descriptions and wraps the
 Pyomo analysis utilities."""
 
+import contextlib
+import io
 import logging
 import re
 from dataclasses import dataclass, field
@@ -201,9 +203,6 @@ def compute_mis(pm: pyo.ConcreteModel, solver_name: str = "scip") -> list[str]:
     """Names/indices of constraints/bounds forming a Minimal Infeasible Subsystem.
     Needs SCIP/Gurobi/CPLEX.  Each internal solve is capped at
     ``_MIS_TIME_LIMIT_S`` so a hard MIS computation can't stall the caller."""
-    import contextlib
-    import io
-
     from pyomo.contrib.iis import compute_infeasibility_explanation
 
     log_capture = io.StringIO()

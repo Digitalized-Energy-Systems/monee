@@ -9,6 +9,7 @@ import logging
 import pandas
 
 from monee.model import Network
+from monee.model.core import Var
 from monee.model.extension.islanding.core import NetworkIslandingConfig
 from monee.simulation.step_state import PeriodState
 from monee.simulation.timeseries import TimeseriesData
@@ -88,8 +89,6 @@ def _find_component_var(net_t: Network, comp_id, attr: str):
 def _extract_terminal_state(net_t: Network) -> dict:
     """``{(comp_id, attr): value}`` for all Var/numeric attributes; used by
     :func:`run_mpc` to seed the next horizon's ``initial_state``."""
-    from monee.model.core import Var
-
     state: dict = {}
 
     def _scan(comp_id, model):
@@ -318,7 +317,7 @@ class MultiPeriodResult:
                     row += "  │  " + "  ·  ".join(parts[:4])
                 lines.append(row)
 
-        # Temporal evolution section — only shown when there are varying attrs
+        # Temporal evolution section - only shown when there are varying attrs
         temporal = self._temporal_lines()
         if temporal:
             lines.append(SEP)
@@ -416,7 +415,7 @@ class GekkoMultiPeriodSolver:
         """
         from gekko import GEKKO
 
-        from monee.solver.gekko import DEFAULT_SOLVER_OPTIONS, GEKKOSolver
+        from monee.solver.gekko import GEKKOSolver, _solver_options
 
         steps = _resolve_steps(steps, timeseries_data)
         dt_h_list = _resolve_dt_h(dt_h, datetime_index, steps)
@@ -425,7 +424,7 @@ class GekkoMultiPeriodSolver:
         m.options.SOLVER = self._solver_int
         m.options.WEB = 0
         m.options.IMODE = 3
-        m.solver_options = DEFAULT_SOLVER_OPTIONS
+        m.solver_options = _solver_options(self._solver_int)
 
         _single = GEKKOSolver(solver=self._solver_int)
 
@@ -532,7 +531,7 @@ class GekkoMultiPeriodSolver:
                 f"  • Problem is physically infeasible (conflicting bounds or "
                 f"insufficient supply).\n"
                 f"{terminal_hint}"
-                f"  • Numerical scaling — try normalising loads to per-unit or "
+                f"  • Numerical scaling - try normalising loads to per-unit or "
                 f"reducing T.\n"
                 f"Tip: set steps=1 and increase incrementally to isolate the "
                 f"first infeasible period."
