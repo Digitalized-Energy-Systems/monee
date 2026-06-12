@@ -1082,95 +1082,92 @@ def create_heat_supply_return_net_for_power(
     return bus_index_to_supply_junction, return_junction
 
 
-def _drain_power_gen_capacity(net: mm.Network, total_mw: float) -> float:
-    """Drain ``total_mw`` from PowerGenerator (skips ExtPowerGrid - slack). Returns the unabsorbed remainder."""
-    remaining = float(total_mw)
+def _drain_proportionally(items, get_mag, set_mag, remove, total) -> float:
+    """Drain ``total`` from *items* by scaling every item with one common
+    factor ``(pool − absorbed) / pool``.
+
+    Proportional draining preserves the spatial distribution of the
+    remaining capacity — which generators carry the replaced output is then
+    independent of child insertion order, so CP-replacement variants differ
+    from their no-CP baseline only by the CP routing, not by an arbitrary
+    set of deleted generators. Items scaled to ~0 are removed entirely.
+
+    Returns the unabsorbed remainder (> 0 iff ``total`` exceeds the pool).
+    """
+    remaining = float(total)
     if remaining <= 0:
         return 0.0
-    for child in list(net.childs):
-        if remaining <= 1e-12:
-            break
-        if isinstance(child.model, mm.PowerGenerator):
-            current = abs(float(child.model.p_mw))
-            if current <= 0:
-                continue
-            absorb = min(current, remaining)
-            new_mag = current - absorb
-            if new_mag <= 1e-12:
-                net.remove_child(child.id)
-            else:
-                child.model.p_mw = -new_mag
-            remaining -= absorb
-    return remaining
+    items = [i for i in items if get_mag(i) > 0]
+    pool = sum(get_mag(i) for i in items)
+    if pool <= 0:
+        return remaining
+    absorb = min(pool, remaining)
+    factor = (pool - absorb) / pool
+    for item in items:
+        new_mag = get_mag(item) * factor
+        if new_mag <= 1e-12:
+            remove(item)
+        else:
+            set_mag(item, new_mag)
+    return remaining - absorb
+
+
+def _drain_power_gen_capacity(net: mm.Network, total_mw: float) -> float:
+    """Drain ``total_mw`` proportionally from PowerGenerator children
+    (skips ExtPowerGrid - slack). Returns the unabsorbed remainder."""
+    return _drain_proportionally(
+        [c for c in net.childs if isinstance(c.model, mm.PowerGenerator)],
+        get_mag=lambda c: abs(float(c.model.p_mw)),
+        set_mag=lambda c, v: setattr(c.model, "p_mw", -v),
+        remove=lambda c: net.remove_child(c.id),
+        total=total_mw,
+    )
 
 
 def _drain_gas_source_capacity(net: mm.Network, total_kgs: float) -> float:
-    """Drain ``total_kgs`` from gas-side Sources only. Returns the unabsorbed remainder."""
-    remaining = float(total_kgs)
-    if remaining <= 0:
-        return 0.0
-    for child in list(net.childs):
-        if remaining <= 1e-12:
-            break
-        if not isinstance(child.model, mm.Source):
-            continue
-        if not isinstance(child.grid, mm.GasGrid):
-            continue
-        current = abs(float(child.model.mass_flow))
-        if current <= 0:
-            continue
-        absorb = min(current, remaining)
-        new_mag = current - absorb
-        if new_mag <= 1e-12:
-            net.remove_child(child.id)
-        else:
-            child.model.mass_flow = -new_mag
-        remaining -= absorb
-    return remaining
+    """Drain ``total_kgs`` proportionally from gas-side Sources only.
+    Returns the unabsorbed remainder."""
+    return _drain_proportionally(
+        [
+            c
+            for c in net.childs
+            if isinstance(c.model, mm.Source) and isinstance(c.grid, mm.GasGrid)
+        ],
+        get_mag=lambda c: abs(float(c.model.mass_flow)),
+        set_mag=lambda c, v: setattr(c.model, "mass_flow", -v),
+        remove=lambda c: net.remove_child(c.id),
+        total=total_kgs,
+    )
 
 
 def _drain_heat_gen_capacity(net: mm.Network, total_mw: float) -> float:
-    """Drain ``total_mw`` from HeatGenerator children, then HX-Gen branches.
+    """Drain ``total_mw`` proportionally from HeatGenerator children, then
+    (only if their pool is exhausted) proportionally from HX-Gen branches.
     Returns the unabsorbed remainder; no slack fallback by design."""
-    remaining = float(total_mw)
-    if remaining <= 0:
-        return 0.0
+    remaining = _drain_proportionally(
+        [c for c in net.childs if isinstance(c.model, mm.HeatGenerator)],
+        get_mag=lambda c: abs(float(c.model.q_mw_heat)),
+        set_mag=lambda c, v: setattr(c.model, "q_mw_heat", -v),
+        remove=lambda c: net.remove_child(c.id),
+        total=total_mw,
+    )
+    if remaining <= 1e-12:
+        return remaining
 
-    for child in list(net.childs):
-        if remaining <= 1e-12:
-            break
-        if not isinstance(child.model, mm.HeatGenerator):
-            continue
-        current = abs(float(child.model.q_mw_heat))
-        if current <= 0:
-            continue
-        absorb = min(current, remaining)
-        new_mag = current - absorb
-        if new_mag <= 1e-12:
-            net.remove_child(child.id)
-        else:
-            child.model.q_mw_heat = -new_mag
-        remaining -= absorb
-
-    for branch in list(net.branches):
-        if remaining <= 1e-12:
-            break
-        if not isinstance(branch.model, mm.HeatExchanger):
-            continue
-        q_set = float(getattr(branch.model, "q_mw_set", 0.0) or 0.0)
-        if q_set <= 0:
-            continue
-        absorb = min(q_set, remaining)
-        new_q = q_set - absorb
-        if new_q <= 1e-12:
-            net.remove_branch_between(
-                branch.from_node_id, branch.to_node_id, branch.id[2]
-            )
-        else:
-            branch.model.q_mw_set = new_q
-        remaining -= absorb
-
-    return remaining
+    return _drain_proportionally(
+        [
+            b
+            for b in net.branches
+            if isinstance(b.model, mm.HeatExchanger)
+            and float(getattr(b.model, "q_mw_set", 0.0) or 0.0) > 0
+        ],
+        get_mag=lambda b: float(getattr(b.model, "q_mw_set", 0.0) or 0.0),
+        set_mag=lambda b, v: setattr(b.model, "q_mw_set", v),
+        remove=lambda b: net.remove_branch_between(
+            b.from_node_id, b.to_node_id, b.id[2]
+        ),
+        total=remaining,
+    )
 
 
 def create_coupling_points_for_mes(
@@ -1353,10 +1350,16 @@ def create_coupling_points_for_mes(
             ("heat (HeatGenerator + HX-Gen)", cp_heat_out_mw, unabsorbed_h),
         ):
             if left > 1e-9 and asked > 0:
-                print(
-                    f"[create_coupling_points_for_mes] replace_primary_generation: "
-                    f"{label} pool absorbed {asked - left:g} of {asked:g} requested; "
-                    f"{left:g} unabsorbed (likely no remaining primary capacity)."
+                # Hard error by design: an unabsorbed remainder means the CP
+                # output exceeds the primary pool, so total rated capacity is
+                # NOT invariant any more and every density-sweep comparison
+                # built on that invariance is silently biased.
+                raise ValueError(
+                    f"replace_primary_generation: {label} pool absorbed "
+                    f"{asked - left:g} of {asked:g} requested; {left:g} "
+                    f"unabsorbed. CP output exceeds the primary pool — "
+                    f"capacity invariance would break. Reduce CP density / "
+                    f"size (or raise the primary generation share)."
                 )
 
     return created
