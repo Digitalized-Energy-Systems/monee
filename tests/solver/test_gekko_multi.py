@@ -1,4 +1,4 @@
-import math
+﻿import math
 
 import monee.model as mm
 import monee.problem as mp
@@ -365,9 +365,9 @@ def test_simple_g2h():
     # GIVEN
     multi_energy_network = create_g2h_net()
 
-    from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+    from monee.model.formulation import EL_MISOCP_FORMULATION
 
-    multi_energy_network.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    multi_energy_network.apply_formulation(EL_MISOCP_FORMULATION)
 
     # WHEN
     result = ms.PyomoSolver().solve(multi_energy_network)

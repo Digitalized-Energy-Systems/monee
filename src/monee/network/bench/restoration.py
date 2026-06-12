@@ -325,9 +325,9 @@ def create_restoration_benchmark(
         net.add_extension(LumpedThermalCapacitance())
 
     if misocp:
-        from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+        from monee.model.formulation import EL_MISOCP_FORMULATION
 
-        net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+        net.apply_formulation(EL_MISOCP_FORMULATION)
 
     return net
 

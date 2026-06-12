@@ -1,6 +1,6 @@
 """
 McCormick-tightened district-heating formulation (Deng et al., 2021,
-https://doi.org/10.1016/j.eng.2021.06.006).
+https://doi.org/10.1016/j.eng.2021.06.006) plus the fixed-flow heat exchanger.
 
 Heating side as a convex relaxation:
 
@@ -15,20 +15,103 @@ This is a relaxation - the bilinear is not pinned, the objective must drive
 ``t_pu_max_env``. Hydraulics omitted (paper §2.1); pipes are unidirectional.
 
 Boundary children contribute ``c·m·τ_node·t_ref`` using the node's own τ.
+
+The heat-exchanger pair (:class:`McCormickHeatExchangerFormulation` /
+:class:`McCormickPassiveHeatExchangerFormulation`) extends the same H-space
+balance to HE branches so a network with HEs stays convex end to end.
 """
 
 import math
 
 import monee.model.phys.nonlinear.hf as ohfmodel
-from monee.model.branch import WaterPipe
 from monee.model.core import Const, Var
-from monee.model.grid import WaterGrid
-from monee.model.node import Junction
 from monee.model.phys.core.hydraulics import calc_max_mass_flow
 
-from ..core import BranchFormulation, NetworkFormulation, NodeFormulation
+from ..core import BranchFormulation, NodeFormulation
 
 C_WATER = ohfmodel.SPECIFIC_HEAT_CAP_WATER
+
+
+class FixedFlowHeatExchangerFormulation(BranchFormulation):
+    """Active heat exchanger driven by a prescribed (design) mass flow.
+
+    LP while the through-flow is prescribed - the energy balance
+    ``t_out·(m·c·t_ref) == t_in·(m·c·t_ref) - q_delivered`` is linear in that
+    case. When the surrounding network determines the flow instead
+    (``_he_flow_prescribed == False``), the balance runs on the actual flow
+    magnitude and turns bilinear.
+    """
+
+    def ensure_var(self, model, simulation=False, grid=None):
+        model.t_in_pu = Var(1, min=0, max=2, name="t_in_pu")
+        model.t_out_pu = Var(1, min=0, max=2, name="t_out_pu")
+        if isinstance(model.mass_flow_design_kgs, Var):
+            model.mass_flow_mag = Var(0, min=0)
+        else:
+            model.mass_flow_mag = Var(0, min=0, max=model.mass_flow_design_kgs)
+
+        if model.q_mw_set <= 0 or isinstance(model.q_mw_set, Var):
+            model._he_is_generator = True
+            model.q_mw_delivered = Var(0, max=0, name="q_mw_delivered")
+        elif model.q_mw_set > 0:
+            model._he_is_generator = False
+            model.q_mw_delivered = Var(0, min=0, name="q_mw_delivered")
+
+    def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
+        if branch._he_is_generator:
+            return [branch.q_mw_delivered]
+        return [-branch.q_mw_delivered]
+
+    def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
+        eqs = [branch.direction == 0]
+        eqs += self._he_equations(branch, grid, from_node_model)
+        return eqs
+
+    def _he_equations(self, branch, grid, from_node_model):
+        cp_mw_per_kgs_K = ohfmodel.SPECIFIC_HEAT_CAP_WATER / 1e6
+
+        # equations() runs after solver-var injection, when mass_flow_design_kgs
+        # is no longer a monee Var - the model's construction-time flag is the
+        # only reliable dynamic/fixed discriminator here.
+        is_dynamic_mf = branch._calc_mass_flow
+
+        # Set by mark_he_flow_prescription() during solver prep; defaults to
+        # the prescribing behaviour (supply/return semantics).
+        prescribed = getattr(branch, "_he_flow_prescribed", True)
+
+        if is_dynamic_mf and not prescribed:
+            # SubHE whose through-flow the surrounding network already
+            # determines (e.g. a fixed-mass-flow sink fed only through the
+            # compound): q_mw is dictated by the control node and
+            # mass_flow_design_kgs is only the sizing value (q_mw at the design
+            # temperature spread). Pinning the flow to it would over-determine
+            # the system, so the energy balance runs on the actual flow
+            # magnitude instead.
+            flow_eqs = [
+                branch.mass_flow_mag == branch.mass_flow_pos + branch.mass_flow_neg
+            ]
+            balance_flow_kgs = branch.mass_flow_mag
+        else:
+            flow_eqs = [
+                branch.mass_flow_mag == branch.mass_flow_design_kgs,
+                branch.mass_flow_neg == branch.mass_flow_design_kgs * branch.on_off,
+            ]
+            balance_flow_kgs = branch.mass_flow_design_kgs
+
+        eqs = flow_eqs + [
+            branch.mass_flow_pos == 0,
+            branch.t_in_pu == from_node_model.vars["t_pu"],
+            branch.t_from_pu == from_node_model.vars["t_pu"],
+            branch.t_to_pu == branch.t_out_pu,
+            branch.t_out_pu * (balance_flow_kgs * cp_mw_per_kgs_K * grid.t_ref)
+            == branch.t_in_pu * (balance_flow_kgs * cp_mw_per_kgs_K * grid.t_ref)
+            - branch.q_mw_delivered,
+        ]
+        if branch._he_is_generator:
+            eqs.append(branch.q_mw_delivered >= branch.q_mw * branch.on_off)
+        else:
+            eqs.append(branch.q_mw_delivered <= branch.q_mw * branch.on_off)
+        return eqs
 
 
 def _branch_m_U(branch, grid):
@@ -53,7 +136,7 @@ def _t_pu_env_bounds(grid):
     )
 
 
-class MccDHSNodeFormulation(NodeFormulation):
+class McCormickHeatNodeFormulation(NodeFormulation):
     """Linear nodal heat balance (eq. 9a) plus piecewise-McCormick τ
     disaggregation (eq. 18c/18e/18g). Sets ``_mccormick_dhs_active`` so
     :meth:`Junction.calc_signed_heat_flow` skips its degenerate balance."""
@@ -77,7 +160,7 @@ class MccDHSNodeFormulation(NodeFormulation):
     ):
         return [self.TPU_PULL_EPS * (1.0 - node.vars["t_pu"])]
 
-    def ensure_var(self, model, simulation=False):
+    def ensure_var(self, model, simulation=False, grid=None):
         model._mccormick_dhs_active = True
         if self.num_partitions > 1:
             # Underscore prefix hides these from result DataFrames; solver
@@ -186,7 +269,7 @@ class MccDHSNodeFormulation(NodeFormulation):
         return eqs
 
 
-class MccDHSBranchFormulation(BranchFormulation):
+class McCormickHeatBranchFormulation(BranchFormulation):
     """Per-pipe McCormick-tightened DH formulation. ``H_out = c·m·τ`` is
     relaxed by the four McCormick inequalities (eq. 17b-17e); with
     ``num_partitions > 1`` it becomes piecewise (eq. 18b). Heat loss is
@@ -195,7 +278,7 @@ class MccDHSBranchFormulation(BranchFormulation):
     def __init__(self, num_partitions: int = 1):
         self.num_partitions = num_partitions
 
-    def ensure_var(self, model, simulation=False):
+    def ensure_var(self, model, simulation=False, grid=None):
         model.H_out_mw = Var(0, name="H_out_mw")
         model.H_in_mw = Var(0, name="H_in_mw")
         model.mass_flow_mag = Var(0, min=0, name="mass_flow_mag")
@@ -211,7 +294,8 @@ class MccDHSBranchFormulation(BranchFormulation):
                     Var(0, min=0, name=f"m_piece_{s}"),
                 )
 
-    def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
+    def _heat_balance_eqs(self, branch, grid, from_node_model):
+        """eq. 9b: Taylor-linearised insulation heat loss along the pipe."""
         # vL = 2π·λ·L / ln(r_out/r_in) [W/K] · 1e-6 → MW.
         pipe_outside_r = branch.diameter_m / 2 + branch.insulation_thickness_m
         pipe_inside_r = branch.diameter_m / 2
@@ -223,13 +307,19 @@ class MccDHSBranchFormulation(BranchFormulation):
             / math.log(pipe_outside_r / pipe_inside_r)
             / 1e6
         )
+        t_a_pu = branch.temperature_ext_k / grid.t_ref
+        t_pu_send = from_node_model.vars["t_pu"]
+        return [
+            branch.H_in_mw
+            == branch.H_out_mw - vL_mw_per_k * grid.t_ref * (t_pu_send - t_a_pu),
+        ]
 
+    def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         m_U = _branch_m_U(branch, grid)
         m_L = 0.0
         tpu_L, tpu_U = _t_pu_env_bounds(grid)
 
         scale_mw = C_WATER * grid.t_ref / 1e6
-        t_a_pu = branch.temperature_ext_k / grid.t_ref
 
         t_pu_send = from_node_model.vars["t_pu"]
         m = branch.mass_flow_neg
@@ -237,12 +327,10 @@ class MccDHSBranchFormulation(BranchFormulation):
         eqs = [
             branch.mass_flow_neg <= m_U * branch.on_off,
             branch.mass_flow_mag == branch.mass_flow_neg,
-            # eq. 9b: Taylor-linearised heat loss.
-            branch.H_in_mw
-            == branch.H_out_mw - vL_mw_per_k * grid.t_ref * (t_pu_send - t_a_pu),
             branch.H_out_mw <= scale_mw * m_U * tpu_U * branch.on_off,
             branch.H_in_mw <= scale_mw * m_U * tpu_U * branch.on_off,
         ]
+        eqs += self._heat_balance_eqs(branch, grid, from_node_model)
 
         if self.num_partitions <= 1:
             # eq. 17b-17e: McCormick envelopes.
@@ -294,6 +382,44 @@ class MccDHSBranchFormulation(BranchFormulation):
         return eqs
 
 
+class McCormickPassiveHeatExchangerFormulation(McCormickHeatBranchFormulation):
+    """Passive HE in the McCormick H-space: free (unidirectional) mass flow,
+    fixed ``q_mw`` deducted exactly from the enthalpy flow instead of the
+    pipe's Taylor heat loss. Same algebra as the bilinear formulation's
+    ``H_in = H_out - q_mw``, but the ``H = c·m·τ`` surface is McCormick-relaxed,
+    so the branch stays LP/MILP."""
+
+    def _heat_balance_eqs(self, branch, grid, from_node_model):
+        return [branch.H_in_mw == branch.H_out_mw - branch.q_mw]
+
+
+class McCormickHeatExchangerFormulation(FixedFlowHeatExchangerFormulation):
+    """Active fixed-flow HE feeding the McCormick nodal heat balance.
+
+    Adds ``H_out_mw = c·m_design·τ_send`` (linear - the flow is a constant) and
+    ``H_in_mw = H_out_mw - q_delivered`` so the HE's extraction/injection shows
+    up in eq. 9a; without these the McCormick junctions would not see the HE at
+    all. ``direction`` is pinned to Const so no binary survives; ``on_off``
+    switching of the HE flow itself is not modelled here (an off HE degrades to
+    a zero-q pass-through at design flow)."""
+
+    def ensure_var(self, model, simulation=False, grid=None):
+        super().ensure_var(model, simulation, grid=grid)
+        model.H_out_mw = Var(0, name="H_out_mw")
+        model.H_in_mw = Var(0, name="H_in_mw")
+        model.direction = Const(0)
+
+    def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
+        scale_mw = C_WATER * grid.t_ref / 1e6
+        eqs = self._he_equations(branch, grid, from_node_model)
+        eqs += [
+            branch.H_out_mw
+            == scale_mw * branch.mass_flow_design_kgs * branch.t_in_pu,
+            branch.H_in_mw == branch.H_out_mw - branch.q_mw_delivered,
+        ]
+        return eqs
+
+
 def mccormick_dhs_gap_bound_mw(branch, grid, num_partitions: int = 1) -> float:
     """Worst-case ``H_out_mw`` gap [MW]:
     ``(c·t_ref/1e6) · m_U · (τ_U - τ_L) / (4·S)``."""
@@ -315,20 +441,3 @@ def mccormick_dhs_gap_bound_k(
         raise ValueError("branch is required when mass_flow_kgs is provided")
     m_U = _branch_m_U(branch, grid)
     return base_k * m_U / mass_flow_kgs
-
-
-def make_mccormick_dhs_formulation(num_partitions: int = 1) -> NetworkFormulation:
-    """``num_partitions=1`` → plain McCormick LP (eq. 17). ``>1`` → piecewise
-    MILP (eq. 18). Raise only when :func:`mccormick_dhs_gap_bound_k` shows the
-    LP corner is non-physical on the network at hand."""
-    return NetworkFormulation(
-        branch_type_to_formulations={
-            WaterPipe: MccDHSBranchFormulation(num_partitions=num_partitions),
-        },
-        node_type_to_formulations={
-            (Junction, WaterGrid): MccDHSNodeFormulation(num_partitions=num_partitions),
-        },
-    )
-
-
-MCCORMICK_DHS_NETWORK_FORMULATION = make_mccormick_dhs_formulation(num_partitions=1)

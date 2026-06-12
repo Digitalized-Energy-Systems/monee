@@ -1,10 +1,10 @@
-import math
+﻿import math
 
 import monee
 import monee.model as mm
 import monee.problem as mp
 import monee.solver as ms
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.network.mes import create_monee_benchmark_net
 from monee.solver import PyomoSolver
 
@@ -36,7 +36,7 @@ ext_grid_heat_bounds = (-100, 100)
 def test_scaled_example_gas_incident_pyo():
     # GIVEN
     net_multi: mm.Network = create_monee_benchmark_net()
-    net_multi.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net_multi.apply_formulation(EL_MISOCP_FORMULATION)
     optimization_problem = mp.create_min_load_shedding_problem(
         bounds_el=bounds_el,
         bounds_heat=bounds_heat,
@@ -169,7 +169,7 @@ def create_multi_chp():
 def test_simple_chp():
     # GIVEN
     multi_energy_network = create_multi_chp()
-    multi_energy_network.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    multi_energy_network.apply_formulation(EL_MISOCP_FORMULATION)
 
     # WHEN
     result = ms.PyomoSolver().solve(multi_energy_network)
@@ -197,7 +197,7 @@ def test_monee_visu():
 
     # GIVEN
     net_multi: mm.Network = create_monee_benchmark_net()
-    net_multi.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net_multi.apply_formulation(EL_MISOCP_FORMULATION)
     result = monee.run_energy_flow(net_multi, solver=PyomoSolver())
 
     from monee.visualization import plot_result

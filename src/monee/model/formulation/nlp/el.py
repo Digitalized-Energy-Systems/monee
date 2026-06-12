@@ -1,3 +1,6 @@
+"""Polar AC power flow: a smooth non-convex NLP (sin/cos in the flow
+equations). The exact model - no relaxation involved."""
+
 import math
 
 import numpy as np
@@ -16,28 +19,16 @@ SQRT_3 = np.sqrt(3)
 CURRENT_SMOOTHING_EPS_MW = 1e-4
 
 
-class ACElectricityNodeFormulation(NodeFormulation):
-    """AC bus formulation.
+class AcPolarNlpNodeFormulation(NodeFormulation):
 
-    In optimization mode (``simulation=False``) the Bus-declared
-    ``vm_pu_squared`` Var is left untouched: it is unused by the AC equations
-    (only MISOCP needs it) so it floats as a harmless phantom, but GEKKO's
-    barrier method is sensitive to its removal on borderline networks, so the
-    optimization path must keep it.
-
-    In simulation mode (``simulation=True``) it is demoted to a
-    :class:`PostProcess` report (= vm_pu²) carrying no solver variable, dropping
-    the phantom DOF a square IMODE=1 solve cannot tolerate while still reporting
-    the true value."""
-
-    def ensure_var(self, model, simulation=False):
+    def ensure_var(self, model, simulation=False, grid=None):
         # Some multi-grid control nodes subclass Bus (so they match here) without
         # a vm_pu attribute - only act on real voltage buses.
         if simulation and hasattr(model, "vm_pu"):
             model.vm_pu_squared = PostProcess(lambda v: v.vm_pu**2)
 
 
-class ACElectricityBranchFormulation(BranchFormulation):
+class AcPolarNlpBranchFormulation(BranchFormulation):
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         y = np.linalg.pinv([[branch.br_r + branch.br_x * 1j]])[0][0]
         g, b = (np.real(y), np.imag(y))

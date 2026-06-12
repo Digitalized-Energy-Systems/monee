@@ -1,4 +1,4 @@
-"""
+﻿"""
 Tests for :class:`monee.simulation.stepper.Stepper`.
 
 Covers the externally-paced co-simulation API: variable ``dt_h``,
@@ -17,9 +17,6 @@ import monee.model as mm
 from monee.simulation import Stepper, StepState, TimeseriesData, run_timeseries
 from tests.util import child_id_by_type
 
-# â”€â”€ fixtures: a minimal power network and a battery+gas net for storage â”€â”€
-
-
 def _power_net(p_load: float = 1.0):
     net = mm.Network()
     b1 = mx.create_bus(net, base_kv=20.0)
@@ -36,10 +33,6 @@ def _power_net(p_load: float = 1.0):
         parallel=1,
     )
     return net
-
-
-# â”€â”€ basic stepping â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
 
 def test_Stepper_default_constructs_and_steps():
     stepper = Stepper(_power_net())
@@ -85,9 +78,6 @@ def test_Stepper_base_network_not_mutated():
     assert repr(net.as_result_dataframe_dict()) == original_repr
 
 
-# â”€â”€ data_overrides â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
 def test_Stepper_data_overrides_apply_per_step():
     """Override changes drive the solve; the base net is untouched."""
     net = _power_net(p_load=1.0)
@@ -117,9 +107,6 @@ def test_Stepper_overrides_unknown_attr_raises():
     stepper = Stepper(net)
     with pytest.raises(AttributeError, match="attribute"):
         stepper.step(dt_h=1.0, data_overrides={(load_id, "bogus_attr"): 0.5})
-
-
-# â”€â”€ TimeseriesData integration â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_Stepper_ts_index_applies_profile():
@@ -158,9 +145,6 @@ def test_Stepper_overrides_win_over_ts_data():
     assert math.isclose(p, 1.5, rel_tol=5e-2), f"override should win, got p={p}"
 
 
-# â”€â”€ initial_state seeding â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
 def test_step_state_returns_initial_when_no_prior_solve():
     """The extended ``StepState`` falls back to initial_state on the first step."""
     state = StepState(initial_state={(42, "soc_mwh"): 7.5})
@@ -185,10 +169,6 @@ def test_step_state_prior_solve_wins_over_initial():
     # The state.get lookup keys on node.id (which equals bid here).
     state.push(net)
     assert math.isclose(state.get(bid, "vm_pu"), 1.02, rel_tol=1e-9)
-
-
-# â”€â”€ error handling â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
 
 def test_Stepper_on_step_error_skip_records_failure():
     """``on_step_error='skip'`` swallows solver exceptions and records them."""
@@ -225,9 +205,6 @@ def test_Stepper_invalid_on_step_error_value():
         Stepper(_power_net(), on_step_error="silent")
 
 
-# â”€â”€ reset & context manager â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
 def test_Stepper_reset_clears_history_and_state():
     stepper = Stepper(_power_net())
     stepper.step(dt_h=1.0)
@@ -256,9 +233,6 @@ def test_Stepper_context_manager():
         assert stepper.step_count == 1
     # Should exit cleanly; no resource leak assertion possible without
     # introspection of the solver backend.
-
-
-# â”€â”€ parity with run_timeseries â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
 
 
 def test_Stepper_matches_run_timeseries_on_fixed_grid():
@@ -295,18 +269,12 @@ def test_Stepper_to_timeseries_result():
     assert len(p_series) == 3
 
 
-# â”€â”€ repr â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
-
-
 def test_Stepper_repr_shows_progress():
     stepper = Stepper(_power_net())
     assert "steps=0" in repr(stepper)
     stepper.step(dt_h=0.5)
     assert "steps=1" in repr(stepper)
     assert "t_h=0.5" in repr(stepper)
-
-
-# ── max_history retention & get() ───────────────────────────────────────
 
 
 def test_stepper_max_history_caps_retention():

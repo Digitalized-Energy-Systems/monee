@@ -1,3 +1,5 @@
+"""Smooth Weymouth gas formulation: a non-convex NLP, binary-free."""
+
 import monee.model.phys.core.hydraulics as hydraulicsmodel
 import monee.model.phys.nonlinear.smooth as smoothmodel
 from monee.model.core import Const, Var
@@ -70,16 +72,16 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         self.smoothing_eps = smoothing_eps
         self.n_breakpoints = n_breakpoints
 
-    def ensure_var(self, model, simulation=False):
+    def ensure_var(self, model, simulation=False, grid=None):
         # mass_flow is already the signed flow (model defines it as pos − neg);
         # promote it to the decision var instead of adding a redundant one.
         model.mass_flow = Var(0.0, name="mass_flow")
-        # Seed |m| only for the square simulation solve (see heat_smooth).
+        # Seed |m| only for the square simulation solve (see nlp.heat).
         # simulation=True also squares the model for an IMODE=1 steady-state
         # solve: pins phantom vars (and equations() drops the flow limits).
         mag0 = _seed_mag(model) if simulation else 0.1
         model.mass_flow_mag = Var(mag0, min=0, name="mass_flow_mag")
-        # Neutralise the MISOCP-only vars so no integer/aux vars get injected.
+        # Neutralise the MIQCQP-only vars so no integer/aux vars get injected.
         model.direction = Const(1)
         model.mass_flow_pos_squared = Const(0.0)
         model.mass_flow_neg_squared = Const(0.0)

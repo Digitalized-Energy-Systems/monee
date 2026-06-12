@@ -1160,5 +1160,5 @@ if __name__ == "__main__":
     import monee
 
     net = create_resilient_urban_mes_net()
-    net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(monee.EL_MISOCP_FORMULATION)
     print(monee.run_energy_flow(net, solver="gurobi"))

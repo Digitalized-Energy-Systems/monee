@@ -230,7 +230,7 @@ Setting ``node_based_heat_loads=True`` switches consumers and producers
 from two-port heat-exchanger branches to node-level
 :class:`~monee.model.child.HeatLoad` / :class:`~monee.model.child.HeatGenerator`
 children, as required by
-:data:`~monee.model.formulation.MCCORMICK_DHS_NETWORK_FORMULATION`.
+:data:`~monee.model.formulation.HEAT_CONVEX_MILP_FORMULATION`.
 In this mode the builder additionally:
 
 - prunes the heat grid to the **Steiner subtree** of consumer buses

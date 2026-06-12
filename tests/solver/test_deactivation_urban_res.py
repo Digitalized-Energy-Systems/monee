@@ -4,7 +4,7 @@ import math
 
 import monee.model as mm
 import monee.problem as mp
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.network import create_urban_district_net
 from monee.solver import PyomoSolver
 from tests.util import assert_junction_nan as _assert_jct_nan
@@ -110,7 +110,7 @@ def _assert_converge(result):
 
 
 def _solve(net):
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     problem = mp.create_min_load_shedding_problem(
         # Force ext_grid to contribute nothing → only 1 MW generator feeds B2.
         ext_grid_el_bounds=(0, 0),

@@ -113,7 +113,7 @@ A concrete instance also works as the ``solver=`` argument of
 
       - MILP and MIQCP problems, e.g. optimal power flow with binary switching
         decisions using
-        :data:`~monee.model.formulation.MISOCP_NETWORK_FORMULATION`.
+        :data:`~monee.model.formulation.EL_MISOCP_FORMULATION`.
       - Lexicographic objective ordering
         (``OptimizationProblem(lex_objectives=True)``).
       - Situations where a specific commercial or open-source solver is
@@ -297,16 +297,16 @@ Choosing a solver
      - Formulation
    * - AC power flow (simulation)
      - GEKKO (``"ipopt"``)
-     - ``AC_NETWORK_FORMULATION``
+     - ``EL_NLP_FORMULATION``
    * - Gas flow (simulation)
      - GEKKO (``"ipopt"``)
-     - ``NL_WEYMOUTH_NETWORK_FORMULATION``
+     - ``GAS_CONVEX_MIQCQP_FORMULATION``
    * - Water / heat flow (simulation)
      - GEKKO (``"ipopt"``)
-     - ``NL_DARCY_WEISBACH_NETWORK_FORMULATION``
+     - ``HEAT_NONCONVEX_MIQCQP_FORMULATION``
    * - AC optimal power flow (convex relaxation)
      - Pyomo (``"gurobi"`` / ``"highs"``)
-     - ``MISOCP_NETWORK_FORMULATION``
+     - ``EL_MISOCP_FORMULATION``
    * - Custom MILP problem
      - Pyomo + MILP solver
      - custom formulation

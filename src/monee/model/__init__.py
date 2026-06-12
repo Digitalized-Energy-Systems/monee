@@ -104,7 +104,7 @@ from .extension import (
     GridFormingSource,
     WaterIslandingMode,
 )
-from .formulation.mccormick.water import (
-    MCCORMICK_DHS_NETWORK_FORMULATION,
-    make_mccormick_dhs_formulation,
+from .formulation import (
+    HEAT_CONVEX_MILP_FORMULATION,
+    make_heat_convex_milp_formulation,
 )

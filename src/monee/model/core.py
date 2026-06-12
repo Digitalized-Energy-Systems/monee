@@ -393,7 +393,7 @@ class Component(ABC):
         self._formulation = formulation
 
         if self._formulation is not None:
-            self._formulation.ensure_var(self.model)
+            self._formulation.ensure_var(self.model, grid=getattr(self, "grid", None))
 
     def __deepcopy__(self, memo):
         new = self.__class__.__new__(self.__class__)

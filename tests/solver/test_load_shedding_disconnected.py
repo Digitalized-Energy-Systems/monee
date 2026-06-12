@@ -4,7 +4,7 @@ import monee.model as mm
 from monee.model import Network
 from monee.model.branch import PowerLine
 from monee.model.child import ExtPowerGrid, PowerGenerator, PowerLoad
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.model.grid import PowerGrid
 from monee.model.node import Bus
 from monee.problem.min_load_shedding import create_min_load_shedding_problem
@@ -82,7 +82,7 @@ def test_plain_solve_disconnected_bus_is_nan():
 def test_load_shedding_with_disconnected_bus():
     # GIVEN
     pn = _build_net()
-    pn.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    pn.apply_formulation(EL_MISOCP_FORMULATION)
     problem = create_min_load_shedding_problem(
         ext_grid_el_bounds=(0, 0),
         include_ext_grids=True,

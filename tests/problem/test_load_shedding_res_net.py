@@ -1,9 +1,9 @@
-import numpy as np
+﻿import numpy as np
 
 import monee.model as mm
 import monee.problem as mp
 from monee import TimeseriesData, run_energy_flow_optimization
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.network import create_urban_district_net
 
 BOUNDS_EL = (0.9, 1.1)
@@ -74,7 +74,7 @@ def _solve(network):
 def test_res_with_load_shedding():
     # GIVEN
     net = create_urban_district_net()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     td = _make_urban_district_timeseries(net, n_steps=TIME_STEPS, seed=SEED)
     td.apply_to_network(net, 0)
 

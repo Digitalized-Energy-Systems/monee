@@ -1,10 +1,10 @@
-"""Tests for the CHP compound and CHPControlNode."""
+﻿"""Tests for the CHP compound and CHPControlNode."""
 
 import math
 
 import monee.model as mm
 import monee.solver as ms
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.model.formulation import EL_MISOCP_FORMULATION
 
 
 def _build_chp_network(
@@ -106,7 +106,7 @@ def _build_chp_network(
 def test_chp_basic_solve():
     """Solve with Pyomo MISOCP and verify voltages, power direction, thermal output, and gas pressures."""
     net = _build_chp_network()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     result = ms.PyomoSolver().solve(net)
 
     assert result.success
@@ -230,7 +230,7 @@ def test_chp_absolute_values():
 def test_chp_misocp_formulation():
     """MISOCP formulation produces consistent vm_pu/vm_pu_squared, energy balance, and matches GEKKO voltages."""
     net = _build_chp_network(mass_flow_setpoint=0.001)
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     result = ms.PyomoSolver().solve(net)
 
     assert len(result.dataframes) == 15

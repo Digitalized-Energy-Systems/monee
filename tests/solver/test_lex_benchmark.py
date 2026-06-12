@@ -8,8 +8,8 @@ import time
 import pytest
 
 from monee.model.formulation import (
-    MISOCP_NETWORK_FORMULATION,
-    make_mccormick_dhs_formulation,
+    EL_MISOCP_FORMULATION,
+    make_heat_convex_milp_formulation,
 )
 from monee.network import (
     create_restoration_benchmark,
@@ -47,8 +47,8 @@ def _simbench_mes_net():
             coupling_kwargs={"seed": 1, "use_hg_variants": True},
             heat_kwargs={"node_based_heat_loads": True},
         )
-        mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
-        mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=1))
+        mes.apply_formulation(EL_MISOCP_FORMULATION)
+        mes.apply_formulation(make_heat_convex_milp_formulation(num_partitions=1, include_heat_exchangers=False))
         _SIMBENCH_TEMPLATE = mes
     return copy.deepcopy(_SIMBENCH_TEMPLATE)
 
@@ -75,7 +75,7 @@ def _fresh_net(factory, kwargs):
     net = factory(**kwargs)
     if not getattr(net, "_formulation_applied", False):
         try:
-            net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+            net.apply_formulation(EL_MISOCP_FORMULATION)
         except Exception:
             pass
     return net

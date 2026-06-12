@@ -1,3 +1,6 @@
+"""Branch-flow MISOCP electricity formulation: convex SOC relaxation
+``P² + Q² ≤ (W/tap²)·ell`` plus big-M switching binaries."""
+
 import math
 
 from monee.model.core import Intermediate, IntermediateEq, Var
@@ -13,7 +16,7 @@ SQRT_3 = math.sqrt(3.0)
 
 
 class MISOCPElectricityNodeFormulation(NodeFormulation):
-    def ensure_var(self, node, simulation=False):
+    def ensure_var(self, node, simulation=False, grid=None):
         node.vm_pu_squared = Var(1, min=0, max=2.25)
         node.vm_pu = Intermediate(1)
 
@@ -69,7 +72,7 @@ def _big_m(w_max: float) -> float:
 
 
 class MISOCPElectricityBranchFormulation(BranchFormulation):
-    def ensure_var(self, branch, simulation=False):
+    def ensure_var(self, branch, simulation=False, grid=None):
         branch.current_pu = Var(1, min=0)
         branch.i_from_ka = Intermediate(0)
         branch.i_to_ka = Intermediate(0)
@@ -77,7 +80,21 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         branch.loading_to_percent = Intermediate(0)
 
     def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
+        # r·ell loss term doubles as the relaxation-tightening incentive.
         return [branch.current_pu * branch.br_r]
+
+    def _soc_constraints(self, branch, grid, from_node_model, tap):
+        """SOC relaxation; the exact (non-convex) sibling overrides this with
+        the equality form."""
+        return [
+            soc_rel(
+                from_node_model.vars["vm_pu_squared"],
+                branch.vars["p_from_mw"] / grid.sn_mva,
+                branch.vars["q_from_mvar"] / grid.sn_mva,
+                branch.current_pu,
+                tap=tap,
+            ),
+        ]
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         w_max = grid.vm_pu_max**2
@@ -117,13 +134,7 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
                 tap=tap,
             )
             >= -big_m * (1 - branch.on_off),
-            soc_rel(
-                from_node_model.vars["vm_pu_squared"],
-                branch.vars["p_from_mw"] / grid.sn_mva,
-                branch.vars["q_from_mvar"] / grid.sn_mva,
-                branch.current_pu,
-                tap=tap,
-            ),
+            *self._soc_constraints(branch, grid, from_node_model, tap),
             active_power_loss(
                 branch.vars["p_from_mw"] / grid.sn_mva,
                 branch.vars["p_to_mw"] / grid.sn_mva,

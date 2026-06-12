@@ -2,7 +2,7 @@
 
 import pytest
 
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.network import create_restoration_benchmark, create_urban_district_net
 from monee.problem.min_load_shedding import (
     _aux_objective_upper_bound,
@@ -22,7 +22,7 @@ SOLVER = "gurobi" if _solver_available("gurobi") else None
 def test_aux_upper_bound_finite_and_positive_on_urban():
     # GIVEN
     net = create_urban_district_net()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
 
     # WHEN
     a_max = _aux_objective_upper_bound(net)
@@ -35,7 +35,7 @@ def test_aux_upper_bound_finite_and_positive_on_urban():
 def test_aux_upper_bound_scales_with_network_size():
     # GIVEN
     small = create_urban_district_net()
-    small.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    small.apply_formulation(EL_MISOCP_FORMULATION)
     big = create_restoration_benchmark(misocp=True)
 
     # WHEN
@@ -85,7 +85,7 @@ def test_auto_priority_floor_on_by_default():
 def test_auto_priority_floor_raises_low_user_weight():
     # GIVEN
     net = create_urban_district_net()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     # The hook caps the bound with the problem's default max_line_loading
     # (1.5, active because check_line_loading defaults to True); the capped
     # bound stays valid since the loading constraint bounds current_pu.
@@ -115,7 +115,7 @@ def test_auto_priority_floor_raises_low_user_weight():
 def test_auto_priority_floor_honours_user_floor_when_higher():
     # GIVEN
     net = create_urban_district_net()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     a_max = _aux_objective_upper_bound(net)
     user_demand = 100.0 * a_max  # well above α·A_max=10·A_max
     prob = create_min_load_shedding_problem(
@@ -141,7 +141,7 @@ def test_auto_priority_floor_honours_user_floor_when_higher():
 def test_auto_priority_floor_preserves_demand_generator_ratio():
     # GIVEN
     net = create_urban_district_net()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     user_ratio = 1e-4  # generator / demand
     prob = create_min_load_shedding_problem(
         demand_weight=1.0,
@@ -176,7 +176,7 @@ def test_auto_floor_keeps_user_objective_optimal_under_aux_scale():
     # GIVEN
     AUX_SCALE = 50.0
 
-    from monee.model.formulation.misoc.el import (
+    from monee.model.formulation.miqcqp.convex.el import (
         MISOCPElectricityBranchFormulation,
     )
 
@@ -191,7 +191,7 @@ def test_auto_floor_keeps_user_objective_optimal_under_aux_scale():
     MISOCPElectricityBranchFormulation.minimize = scaled_minimize
     try:
         net = create_urban_district_net()
-        net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+        net.apply_formulation(EL_MISOCP_FORMULATION)
         prob = create_min_load_shedding_problem(
             bounds_el=(0.5, 1.5),
             bounds_gas=(0.5, 1.5),

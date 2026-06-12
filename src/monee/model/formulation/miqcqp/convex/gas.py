@@ -1,0 +1,89 @@
+"""Epigraph-relaxed Weymouth gas formulation: a convex MIQCQP (MISOCP-shaped).
+
+Weymouth is linear in pressure-squared space; the only quadratics are the
+convex epigraph relaxations ``m·m ≤ m_sq``, kept tight by a small ε objective
+term, plus the ``direction``/``on_off`` binaries.
+"""
+
+import monee.model.phys.core.hydraulics as hydraulicsmodel
+import monee.model.phys.nonlinear.gf as ogfmodel
+from monee.model.core import Const
+
+from ...core import BranchFormulation
+
+
+class RelaxedWeymouthBranchFormulation(BranchFormulation):
+    EPIGRAPH_TIGHTENING_EPS = 1e-5
+
+    def ensure_var(self, model, simulation=False, grid=None):
+        f_const = hydraulicsmodel.friction_at_high_re(model.diameter_m, model.roughness)
+
+        model.friction = Const(f_const)
+        model.reynolds = Const(0.0)
+
+    def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
+        return [
+            self.EPIGRAPH_TIGHTENING_EPS
+            * (branch.mass_flow_pos_squared + branch.mass_flow_neg_squared)
+        ]
+
+    def _epigraph_eqs(self, branch):
+        """Convex epigraph relaxation ``m² ≤ m_sq``; the exact sibling
+        overrides this with the equality form."""
+        return [
+            branch.mass_flow_pos * branch.mass_flow_pos <= branch.mass_flow_pos_squared,
+            branch.mass_flow_neg * branch.mass_flow_neg <= branch.mass_flow_neg_squared,
+        ]
+
+    def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
+        branch._pipe_area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
+
+        # linearize sqrt(p) around nominal pressure
+        p0 = grid.nominal_pressure_pu
+        x0 = p0**2
+        p_from = p0 + (1 / (2 * p0)) * (
+            from_node_model.vars["pressure_squared_pu"] - x0
+        )
+        p_to = p0 + (1 / (2 * p0)) * (to_node_model.vars["pressure_squared_pu"] - x0)
+        p_avg = 0.5 * (p_from + p_to)
+
+        gas_density = (
+            grid.pressure_ref
+            * grid.molar_mass
+            / (grid.universal_gas_constant * grid.t_k)
+        )
+        f_max_local = min(
+            grid.f_max,
+            hydraulicsmodel.calc_max_mass_flow(
+                branch.diameter_m,
+                gas_density,
+                getattr(grid, "v_max_mps", 20.0),
+            ),
+        )
+
+        return self._epigraph_eqs(branch) + [
+            branch.mass_flow_pos_squared <= f_max_local**2 * branch.direction,
+            branch.mass_flow_neg_squared <= f_max_local**2 * (1 - branch.direction),
+            branch.mass_flow_pos_squared <= f_max_local**2 * branch.on_off,
+            branch.mass_flow_neg_squared <= f_max_local**2 * branch.on_off,
+            ogfmodel.pipe_weymouth(
+                p_squared_i=from_node_model.vars["pressure_squared_pu"]
+                * grid.pressure_ref**2,
+                p_squared_j=to_node_model.vars["pressure_squared_pu"]
+                * grid.pressure_ref**2,
+                f_a_pos_sq=branch.mass_flow_pos_squared,
+                f_a_neg_sq=branch.mass_flow_neg_squared,
+                diameter_m=branch.diameter_m,
+                length_m=branch.length_m,
+                t_k=grid.t_k,
+                compressibility=grid.compressibility,
+                on_off=branch.on_off,
+                friction=branch.friction,
+                **kwargs,
+            ),
+            branch.gas_density
+            == grid.pressure_ref
+            * p_avg
+            * grid.molar_mass
+            / (grid.universal_gas_constant * grid.t_k),
+        ]

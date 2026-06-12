@@ -34,7 +34,7 @@ nodal admittance matrix **Y**.
 
 ## MISOCP Branch-Flow relaxation
 
-The **MISOCP relaxation** (`MISOCP_NETWORK_FORMULATION`) uses the Branch-Flow
+The **MISOCP relaxation** (`EL_MISOCP_FORMULATION`) uses the Branch-Flow
 Model: the bilinear voltage products are replaced by the lifted variables
 *W* = *V*² (squared voltage) and *ℓ* = |*I*|² (squared current), and the
 nonlinear coupling is relaxed into the **rotated second-order cone**
@@ -84,7 +84,7 @@ using the average pressure between the two endpoints.
 > and easier for NLP solvers; the SI value is recovered after the solve as a
 > report-only quantity.
 
-In the **MISOCP-shaped default** (`NL_WEYMOUTH_NETWORK_FORMULATION`) the flow
+In the **MISOCP-shaped default** (`GAS_CONVEX_MIQCQP_FORMULATION`) the flow
 is split into two non-negative variables $\dot{m}_{ij}$ / $\dot{m}_{ji}$
 (`mass_flow_pos` / `mass_flow_neg`) gated by a **direction binary**; by
 convention `direction == 0` means *forward* flow, carried by
@@ -104,7 +104,7 @@ for gas pipelines. This per-pipe bound tightens every big-M constraint.
 
 The direction binary and the pos/neg split do not survive a pure NLP
 relaxation. The **smooth Weymouth variant**
-(`SMOOTH_WEYMOUTH_NETWORK_FORMULATION`) therefore uses a single *signed* mass
+(`GAS_NLP_FORMULATION`) therefore uses a single *signed* mass
 flow *ṁ* and the smooth identity
 
 $$\dot{m}_{ij}^2 - \dot{m}_{ji}^2 = \dot{m} \, |\dot{m}|, \qquad |\dot{m}| \approx \sqrt{\dot{m}^2 + \varepsilon^2}$$
@@ -187,7 +187,7 @@ formulations only.
 ## Smooth (binary-free) hydraulics
 
 As in the gas domain, the **smooth Darcy–Weisbach variant**
-(`SMOOTH_DARCY_WEISBACH_NETWORK_FORMULATION`) replaces the pos/neg split and
+(`HEAT_NLP_FORMULATION`) replaces the pos/neg split and
 the direction binary with one signed flow *ṁ* and the smooth identity
 
 $$\dot{m}_{ij}^2 - \dot{m}_{ji}^2 = \dot{m} \, |\dot{m}|, \qquad |\dot{m}| \approx \sqrt{\dot{m}^2 + \varepsilon^2}$$

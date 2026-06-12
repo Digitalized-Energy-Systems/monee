@@ -809,23 +809,15 @@ def create_heat_supply_return_net_for_power(
     heat_grid.t_ref = REF_TEMP
     heat_grid.pressure_ref = REF_PA
     if node_based_heat_loads:
-        # Tighten McCormick-DHS envelopes - τ ∈ [0.75, 1.15] covers loaded
-        # consumers (τ_L≈0.76 empirically at S=20) and HG-injecting CPs
-        # (τ_U up to ~1.05); v=2 m/s is the typical DHS design velocity.
+        # Tighten McCormick-DHS envelopes
         heat_grid.t_pu_min_env = 0.75
         heat_grid.t_pu_max_env = 1.15
         heat_grid.v_max_mps = 2.0
     target_net.set_default_grid("water", heat_grid)
 
-    # Design velocity for capacity-based sizing: the grid's operational cap
-    # unless overridden, so the sized pipe stays within v_max at design flow.
     auto_v = (
         auto_diameter_v_mps if auto_diameter_v_mps is not None else heat_grid.v_max_mps
     )
-
-    # Never thin a pipe below the flat default - auto_diameter only widens the
-    # trunks that need capacity.  Thinner leaves would inflate their Darcy drop
-    # (∝ 1/D⁵) for no capacity gain.
     auto_floor_m = (
         auto_min_diameter_m if auto_min_diameter_m is not None else default_diameter_m
     )
@@ -853,9 +845,6 @@ def create_heat_supply_return_net_for_power(
     bfs_edges = list(nx.bfs_edges(undirected, source=slack_root))
 
     if node_based_heat_loads:
-        # Prune to the Steiner subtree on consumer buses - McCormick-DHS forces
-        # ``mass_flow=H_in=H_out=0`` at dead-end junctions, pinning τ to ambient
-        # and propagating cold back along the tree.
         consumer_buses = {
             node.id
             for node in power_net_as_st.nodes
@@ -914,15 +903,6 @@ def create_heat_supply_return_net_for_power(
         )
         supply_pipe_for_edge[(p, c)] = pipe_id
 
-    # Two-pass HX construction so HX-Generator capacities can be scaled to
-    # match the total HX-Load demand.  Without this scaling the network is
-    # systematically heat-deficient on grids where load_share > gen_share or
-    # where the per-bus floors push loads above gens (e.g. simbench LV-rural3
-    # has Σload_p ≈ 0.37 MW, Σgen_p ≈ 0.21 MW).  In the closed supply/return
-    # loop with slack mass = 0 this caps q_delivered at ≈ Σ HX-Gen, so the
-    # consumers under-deliver even at regulation = 1.  With the scaling, the
-    # generator side has enough heat-injection capacity that an active
-    # economic / shedding objective can drive each consumer to its design.
     load_specs = []  # list of (supply_id, q_mw)
     gen_specs = []  # list of (supply_id, q_mw_raw)
     for node in power_net_as_st.nodes:
@@ -1084,20 +1064,12 @@ def create_heat_supply_return_net_for_power(
             )
 
     if node_based_heat_loads:
-        # Per-pipe m_U_design with 5× safety on the rated 30 K ΔT estimate so
-        # tighter bounds (smaller ΔT, larger m) still fit the McCormick envelope.
         SAFETY = 5.0
         for (p, c), pipe_id in supply_pipe_for_edge.items():
             m_design = subtree.get(c, 0.0)
             if m_design > 0:
                 pipe = target_net.branch_by_id(pipe_id)
                 pipe.model.m_U_design = m_design * SAFETY
-                # Warm-start seed for the smooth/simulation NLP: the design flow
-                # magnitude this pipe carries.  Seeding mass_flow_mag from it cuts
-                # IPOPT from ~600 to ~30 iterations on this MV network (a good
-                # |m| fixes the Darcy/temperature-transport conditioning; the
-                # flat |m|≈0 start is far from the solution).  See the smooth
-                # formulations' ensure_var, which reads this attribute.
                 pipe.model.mass_flow_nominal = m_design
 
     if auto_diameter:
@@ -1279,9 +1251,7 @@ def create_coupling_points_for_mes(
         target_nodes = [nid for nid in candidate_node_ids if rng.random() < density]
 
     created = []
-    # Tracks the cumulative rated *output* capacity of every CP we add, so we
-    # can absorb the same amount from primary generation when
-    # ``replace_primary_generation`` is set (see end of function).
+    
     cp_power_out_mw = 0.0
     cp_gas_out_kgs = 0.0
     cp_heat_out_mw = 0.0
@@ -1289,11 +1259,6 @@ def create_coupling_points_for_mes(
         gas_junc = bus_to_gas_junc[power_node_id]
         heat_supply_junc = bus_to_heat_supply_junc[power_node_id]
 
-        # Sizing handle: prefer local generation magnitude, fall back to local
-        # load magnitude.  A bus with no power activity at all (transit /
-        # bare slack) provides no basis for sizing - skip it instead of
-        # using a system-scale fallback that would oversize the unit by
-        # orders of magnitude on LV grids.
         node = mes_net.node_by_id(power_node_id)
         p_ref_mw = _node_power_gen_mw(mes_net, node) or _node_power_load_mw(
             mes_net, node
@@ -1304,9 +1269,6 @@ def create_coupling_points_for_mes(
         unit_type = rng.choice(sorted(coupling_set))
 
         if unit_type == "chp":
-            # Fuel mass flow chosen so the electrical output covers
-            # ``chp_p_share · cp_size_multiplier · p_ref_mw`` at the configured
-            # electrical efficiency.
             chp_p_target_mw = chp_p_share * cp_size_multiplier * p_ref_mw
             mass_flow = round(
                 chp_p_target_mw / max(chp_efficiency_power, 1e-3) / GAS_HHV_MJ_PER_KG,
@@ -1315,10 +1277,6 @@ def create_coupling_points_for_mes(
             cp_power_out_mw += mass_flow * GAS_HHV_MJ_PER_KG * chp_efficiency_power
             cp_heat_out_mw += mass_flow * GAS_HHV_MJ_PER_KG * chp_efficiency_heat
             if use_hg_variants:
-                # HeatGenerator-based CHP: heat injection via q_mw_heat at the
-                # supply junction, no return-side branch.  Required for the
-                # McCormick-DHS formulation, which only sees node-level heat
-                # injection (q_mw_heat) and pipe enthalpy (H_in_mw/H_out_mw).
                 uid = mx.create_chp_hg(
                     mes_net,
                     power_node_id=power_node_id,

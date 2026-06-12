@@ -1,6 +1,11 @@
 class Formulation:
-    def ensure_var(self, model, simulation=False):
-        pass
+    def ensure_var(self, model, simulation=False, grid=None):
+        """Declare/adjust the model's Vars for this formulation.
+
+        ``grid`` is the component's grid (None for grid-less components); it
+        lets formulations express grid-derived bounds on the Var abstraction
+        itself instead of mutating backend variables in ``equations()``.
+        """
 
 
 class BranchFormulation(Formulation):

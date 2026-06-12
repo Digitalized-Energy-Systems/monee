@@ -10,10 +10,10 @@ from monee.io.from_simbench import obtain_simbench_profile_by_pp_net
 from monee.model import GasLinepack, LumpedThermalCapacitance
 from monee.model.core import value as mvalue
 from monee.model.formulation import (
-    MISOCP_NETWORK_FORMULATION,
-    make_mccormick_dhs_formulation,
-    make_nl_weymouth_pwl_network_formulation,
-    make_smooth_network_formulation,
+    EL_MISOCP_FORMULATION,
+    make_gas_milp_pwl_formulation,
+    make_heat_convex_milp_formulation,
+    make_smooth_nlp_formulation,
 )
 from monee.network import generate_supply_return_mes_based_on_power_net
 from monee.problem.min_load_shedding import create_min_load_shedding_problem
@@ -249,7 +249,7 @@ def create_large_lv_simbench(
             },
             heat_kwargs={"node_based_heat_loads": True},
         )
-        mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
+        mes.apply_formulation(EL_MISOCP_FORMULATION)
         return mes
 
     return create
@@ -287,7 +287,7 @@ def create_large_mv_simbench(
             length = getattr(model, "length_m", None)
             if length is not None and float(length) <= 0.0:
                 model.length_m = 1
-        mes.apply_formulation(make_smooth_network_formulation())
+        mes.apply_formulation(make_smooth_nlp_formulation())
         return mes
 
     return create
@@ -350,8 +350,8 @@ def test_generate_mes():
 
     # WHEN
     (p_def, p_load), (q_def, q_load), (g_def, g_sink) = _carrier_balance(mes)
-    mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
-    mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=1))
+    mes.apply_formulation(EL_MISOCP_FORMULATION)
+    mes.apply_formulation(make_heat_convex_milp_formulation(num_partitions=1, include_heat_exchangers=False))
     problem = create_min_load_shedding_problem(
         bounds_el=(0.9, 1.1),
         bounds_gas=(0.9, 1.1),
@@ -402,11 +402,11 @@ def test_generate_mes_min_load_shedding():
         coupling_kwargs={"seed": 1, "use_hg_variants": True},
         heat_kwargs={"node_based_heat_loads": True},
     )
-    mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    mes.apply_formulation(EL_MISOCP_FORMULATION)
     # num_partitions=4 tightens the piecewise-McCormick relaxation enough to keep
     # junction temperatures inside the [0.75, 1.15] envelope asserted below; with
     # num_partitions=1 the LP corner legitimately drops to the 0.7 problem bound.
-    mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=4))
+    mes.apply_formulation(make_heat_convex_milp_formulation(num_partitions=4, include_heat_exchangers=False))
     problem = create_min_load_shedding_problem(
         bounds_el=(0.9, 1.5),
         bounds_gas=(0.9, 1.5),
@@ -701,9 +701,9 @@ def test_generate_mes_storage_capabilities_timeseries():
         coupling_kwargs={"seed": 1, "use_hg_variants": True},
         heat_kwargs={"node_based_heat_loads": True},
     )
-    mes.apply_formulation(MISOCP_NETWORK_FORMULATION)
-    mes.apply_formulation(make_mccormick_dhs_formulation(num_partitions=1))
-    mes.apply_formulation(make_nl_weymouth_pwl_network_formulation())
+    mes.apply_formulation(EL_MISOCP_FORMULATION)
+    mes.apply_formulation(make_heat_convex_milp_formulation(num_partitions=1, include_heat_exchangers=False))
+    mes.apply_formulation(make_gas_milp_pwl_formulation())
     mes.add_extension(GasLinepack())
     mes.add_extension(LumpedThermalCapacitance())
 

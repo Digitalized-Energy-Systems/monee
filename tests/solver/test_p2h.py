@@ -4,7 +4,7 @@ import math
 
 import monee.model as mm
 import monee.solver as ms
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.model.formulation import EL_MISOCP_FORMULATION
 
 
 def _build_p2h_network(
@@ -199,7 +199,7 @@ def test_p2h_absolute_values():
 def test_p2h_misocp_formulation():
     # GIVEN
     net = _build_p2h_network()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     net_ref = _build_p2h_network()
 
     # WHEN

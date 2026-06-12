@@ -1,6 +1,6 @@
-import monee
+﻿import monee
 from monee.model.core import Var
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.model.multi import (
     CHPControlNode,
     CHPHGControlNode,
@@ -54,7 +54,7 @@ def _all_regulations(network):
 def test_min_load_shedding_no_incident():
     # GIVEN
     net = create_urban_district_net()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     problem = create_min_load_shedding_problem(
         bounds_el=(0.5, 1.5),
         bounds_gas=(0.5, 1.5),
@@ -85,7 +85,7 @@ def test_min_load_shedding_no_incident():
 def test_min_load_shedding_with_ext_grids():
     # GIVEN
     net = create_urban_district_net()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     problem = create_min_load_shedding_problem(
         bounds_el=(0.5, 1.5),
         bounds_gas=(0.5, 1.5),

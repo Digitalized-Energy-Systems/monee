@@ -279,7 +279,7 @@ The keyword-only flags select optional features:
 * ``ltc=True`` attaches :class:`~monee.model.LumpedThermalCapacitance`
   (thermal inertia at heat junctions),
 * ``misocp=True`` (the default) applies
-  :data:`~monee.model.formulation.MISOCP_NETWORK_FORMULATION` to the power
+  :data:`~monee.model.formulation.EL_MISOCP_FORMULATION` to the power
   grid, replacing the nonlinear AC formulation.
 
 Both extensions only take effect in multi-period runs - see
@@ -324,7 +324,7 @@ experiments because it exercises all coupling types simultaneously:
     from monee.network import create_regional_mes_net
 
     net = create_regional_mes_net()
-    net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(monee.EL_MISOCP_FORMULATION)
 
     problem = monee.create_min_load_shedding_problem(
         bounds_el=(0.9, 1.1),

@@ -1,11 +1,11 @@
-====================
+﻿====================
 Use the Pyomo solver
 ====================
 
 The Pyomo solver interface lets you back monee with any solver that Pyomo
 supports - including Gurobi, HiGHS, SCIP, GLPK, CBC, and CPLEX. Use it when
 you need a MILP or MIQCP back-end, for example to solve an AC optimal power
-flow with the :data:`~monee.model.formulation.MISOCP_NETWORK_FORMULATION`.
+flow with the :data:`~monee.model.formulation.EL_MISOCP_FORMULATION`.
 
 ----
 
@@ -112,7 +112,7 @@ optimal power flow using the MISOCP relaxation and HiGHS:
     mx.create_power_load(net, bus_1, p_mw=0.1, q_mvar=0.0)
 
     # Switch to the MISOCP formulation
-    net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(monee.EL_MISOCP_FORMULATION)
 
     # Solve with Pyomo + HiGHS
     result = monee.solve(net, solver="highs")
@@ -253,7 +253,7 @@ formulation tries to use them.
 
    For the Pyomo back-end, prefer:
 
-   - :data:`~monee.model.formulation.MISOCP_NETWORK_FORMULATION` for
+   - :data:`~monee.model.formulation.EL_MISOCP_FORMULATION` for
      electricity optimal power flow.
    - Custom formulations written with standard Pyomo / monee expressions.
 

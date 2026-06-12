@@ -324,7 +324,7 @@ Prefer the HG variants when
 - you want **simpler wiring** - one heat junction instead of a supply/return
   pair, no heat-exchange pipe geometry to choose; or
 - you use the **McCormick-DHS formulation**
-  (:data:`~monee.model.formulation.MCCORMICK_DHS_NETWORK_FORMULATION`) or a
+  (:data:`~monee.model.formulation.HEAT_CONVEX_MILP_FORMULATION`) or a
   network built with node-based heat loads (e.g.
   ``node_based_heat_loads=True`` in the :mod:`monee.network` heat builders),
   where they are **required**: this formulation owns the nodal heat balance and

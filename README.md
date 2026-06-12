@@ -111,7 +111,7 @@ Solve minimum-curtailment problems with per-carrier operational bounds:
 ```python
 import monee
 
-net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)
+net.apply_formulation(monee.EL_MISOCP_FORMULATION)
 
 problem = monee.create_min_load_shedding_problem(
     bounds_el=(0.9, 1.1),    # voltage bounds (pu)
@@ -136,24 +136,27 @@ print(result.dataframes["PowerLoad"][["regulation"]])
 
 monee separates the **physical equations** from the **network topology** through a `NetworkFormulation` layer. A formulation maps component types to a set of equations - most cover a **single energy domain**. Calling `apply_formulation()` overwrites the equations for only the component types included in that formulation, leaving all other domains untouched.
 
-Every new `Network` starts with three single-domain defaults (AC, NL Weymouth, NL Darcy-Weisbach); the others are opt-in alternatives:
+Formulations are named by **optimization class** (`NLP`, `MILP`, convex/non-convex `MIQCQP`). Every new `Network` starts with `DEFAULT_SIMULATION_FORMULATION` - a deliberate per-domain hybrid; the others are opt-in alternatives:
 
 | Formulation constant | Domain | Equations | Applied |
 |---|---|---|---|
-| `AC_NETWORK_FORMULATION` | Electricity | Nonlinear AC power flow (voltage magnitude + angle) | default |
-| `NL_WEYMOUTH_NETWORK_FORMULATION` | Gas | Weymouth equation (*p*² formulation) | default |
-| `NL_DARCY_WEISBACH_NETWORK_FORMULATION` | Water / Heat | Darcy–Weisbach + temperature propagation | default |
-| `MISOCP_NETWORK_FORMULATION` | Electricity | MISOCP relaxation (lifted voltages, SOC constraints) | opt-in |
-| `SMOOTH_NETWORK_FORMULATION` | All three | Binary-free smooth NLP (AC + smooth Weymouth + smooth Darcy–Weisbach) | opt-in |
+| `EL_NLP_FORMULATION` | Electricity | Nonlinear polar AC power flow (voltage magnitude + angle) | default |
+| `GAS_CONVEX_MIQCQP_FORMULATION` | Gas | Weymouth equation (*p*² formulation, convex epigraph relaxation) | default |
+| `HEAT_NONCONVEX_MIQCQP_FORMULATION` | Water / Heat | Darcy–Weisbach + bilinear temperature propagation | default |
+| `EL_MISOCP_FORMULATION` | Electricity | MISOCP relaxation (lifted voltages, SOC constraints) | opt-in |
+| `HEAT_CONVEX_MILP_FORMULATION` | Water / Heat | McCormick district-heating relaxation (LP/MILP) | opt-in |
+| `SMOOTH_NLP_FORMULATION` | All three | Binary-free smooth NLP (AC + smooth Weymouth + smooth Darcy–Weisbach) | opt-in bundle |
+| `CONVEX_MIQCQP_FORMULATION` | All three | Certifiable convex relaxations (MISOCP + relaxed Weymouth + McCormick heat) | opt-in bundle |
+| `NONCONVEX_MIQCQP_FORMULATION` | All three | Exact quadratic models for global solvers (exact branch flow + exact Weymouth + bilinear heat) | opt-in bundle |
 
-The smooth bundle replaces all direction binaries with smooth approximations, making the full multi-energy system tractable for pure NLP solvers such as IPOPT; import it (or its factory `make_smooth_network_formulation()`) from `monee.model.formulation`.
+The smooth bundle replaces all direction binaries with smooth approximations, making the full multi-energy system tractable for pure NLP solvers such as IPOPT; import it (or its factory `make_smooth_nlp_formulation()`) from `monee.model.formulation`.
 
 To use the convex MISOCP relaxation for electricity optimal power flow, apply it over the defaults - gas and heat equations remain unchanged:
 
 ```python
 import monee
 
-net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)   # replaces electricity equations only
+net.apply_formulation(monee.EL_MISOCP_FORMULATION)   # replaces electricity equations only
 ```
 
 Custom formulations follow the same pattern - subclass the appropriate base class and register it for the target component types:

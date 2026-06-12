@@ -1,8 +1,8 @@
-"""Tests for the lexicographic (two-phase) objective solve in PyomoSolver."""
+﻿"""Tests for the lexicographic (two-phase) objective solve in PyomoSolver."""
 
 import pytest
 
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.network import create_urban_district_net
 from monee.problem.core import OptimizationProblem
 from monee.problem.min_load_shedding import (
@@ -78,7 +78,7 @@ def _user_obj_value(network):
 def _build_unstressed_net():
     """Urban-district net at nominal loading - feasible with no shedding."""
     net = create_urban_district_net()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     return net
 
 
@@ -96,7 +96,7 @@ def _make_shedding_problem(lex_objectives=False):
 
 def _solve_with_scaled_aux(lex: bool, aux_scale: float):
     """Solve the unstressed net with the MISOCP el-branch aux terms scaled by aux_scale."""
-    from monee.model.formulation.misoc.el import (
+    from monee.model.formulation.miqcqp.convex.el import (
         MISOCPElectricityBranchFormulation,
     )
 

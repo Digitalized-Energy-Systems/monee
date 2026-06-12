@@ -23,9 +23,7 @@ from .core import (
     Var,
 )
 from .formulation import (
-    AC_NETWORK_FORMULATION,
-    NL_DARCY_WEISBACH_NETWORK_FORMULATION,
-    NL_WEYMOUTH_NETWORK_FORMULATION,
+    DEFAULT_SIMULATION_FORMULATION,
     Formulation,
     NetworkFormulation,
 )
@@ -61,10 +59,9 @@ class Network:
         self.__current_grid = active_grid
         self.__default_formulation: dict[tuple[type, type], Formulation] = {}
 
-        # default formulations
-        self.apply_formulation(AC_NETWORK_FORMULATION)
-        self.apply_formulation(NL_WEYMOUTH_NETWORK_FORMULATION)
-        self.apply_formulation(NL_DARCY_WEISBACH_NETWORK_FORMULATION)
+        # Default: the deliberate hybrid (polar-AC NLP + relaxed Weymouth +
+        # bilinear Darcy-Weisbach) documented in formulation.bundles.
+        self.apply_formulation(DEFAULT_SIMULATION_FORMULATION)
 
     def apply_formulation(self, network_formulation: NetworkFormulation):
         for type_or_tuple, formulation in (

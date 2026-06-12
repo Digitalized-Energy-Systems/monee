@@ -196,7 +196,7 @@ class GEKKOSolver(SolverInterface):
         if simulation:
             for component in network.all_components():
                 if component.formulation is not None:
-                    component.formulation.ensure_var(component.model, simulation=True)
+                    component.formulation.ensure_var(component.model, simulation=True, grid=component.grid)
 
         islanding_config = next(
             (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),

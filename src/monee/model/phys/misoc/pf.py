@@ -52,6 +52,22 @@ def soc_rel(
     )
 
 
+def soc_eq(
+    var_voltage_pu_i,
+    var_active_power_ij_pu,
+    var_reactive_power_ij_pu,
+    var_im_ij_pu,
+    tap=1.0,
+):
+    """Exact (non-convex) form of :func:`soc_rel`: ``P² + Q² == (W/tap²)·ell``.
+    Pins the branch-flow model to the physical surface; requires a global
+    MIQCQP solver (SCIP, Gurobi)."""
+    return (
+        var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2
+        == (var_voltage_pu_i / (tap * tap)) * var_im_ij_pu
+    )
+
+
 def soc_rel_lorentz(
     var_voltage_pu_i,
     var_active_power_ij_pu,

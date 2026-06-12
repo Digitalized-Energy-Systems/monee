@@ -17,15 +17,47 @@ from monee.model.extension import (
     WaterIslandingMode,
 )
 from monee.model.formulation import (
-    AC_NETWORK_FORMULATION,
-    MISOCP_NETWORK_FORMULATION,
-    MCCORMICK_DHS_NETWORK_FORMULATION,
-    NL_DARCY_WEISBACH_NETWORK_FORMULATION,
-    NL_WEYMOUTH_NETWORK_FORMULATION,
-    make_mccormick_dhs_formulation,
-    make_nl_darcy_weisbach_pwl_network_formulation,
-    make_nl_weymouth_pwl_network_formulation,
+    CONVEX_MIQCQP_FORMULATION,
+    DEFAULT_SIMULATION_FORMULATION,
+    EL_MISOCP_FORMULATION,
+    EL_NLP_FORMULATION,
+    EL_NONCONVEX_MIQCQP_FORMULATION,
+    GAS_CONVEX_MIQCQP_FORMULATION,
+    GAS_NLP_FORMULATION,
+    GAS_NONCONVEX_MIQCQP_FORMULATION,
+    HEAT_CONVEX_MILP_FORMULATION,
+    HEAT_NLP_FORMULATION,
+    HEAT_NONCONVEX_MIQCQP_FORMULATION,
+    NONCONVEX_MIQCQP_FORMULATION,
+    SMOOTH_NLP_FORMULATION,
+    make_convex_miqcqp_formulation,
+    make_gas_milp_pwl_formulation,
+    make_gas_nlp_formulation,
+    make_heat_convex_milp_formulation,
+    make_heat_nlp_formulation,
+    make_heat_nonconvex_pwl_formulation,
+    make_smooth_nlp_formulation,
 )
+
+# Deprecated pre-restructure aliases (kept warning-free at the top level so
+# `import monee` stays quiet; the canonical deprecation path is
+# monee.model.formulation.<old name>). The mccormick aliases keep the legacy
+# pipes-only behaviour - heat exchangers retain their previous formulation.
+AC_NETWORK_FORMULATION = EL_NLP_FORMULATION
+MISOCP_NETWORK_FORMULATION = EL_MISOCP_FORMULATION
+NL_WEYMOUTH_NETWORK_FORMULATION = GAS_CONVEX_MIQCQP_FORMULATION
+NL_DARCY_WEISBACH_NETWORK_FORMULATION = HEAT_NONCONVEX_MIQCQP_FORMULATION
+make_nl_weymouth_pwl_network_formulation = make_gas_milp_pwl_formulation
+make_nl_darcy_weisbach_pwl_network_formulation = make_heat_nonconvex_pwl_formulation
+
+
+def make_mccormick_dhs_formulation(num_partitions: int = 1):
+    return make_heat_convex_milp_formulation(
+        num_partitions=num_partitions, include_heat_exchangers=False
+    )
+
+
+MCCORMICK_DHS_NETWORK_FORMULATION = make_mccormick_dhs_formulation(num_partitions=1)
 from monee.problem import (
     OptimizationProblem,
     create_min_load_shedding_problem,

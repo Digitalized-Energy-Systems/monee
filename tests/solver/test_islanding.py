@@ -3,7 +3,7 @@ import math
 import pytest
 
 from monee import (
-    MISOCP_NETWORK_FORMULATION,
+    EL_MISOCP_FORMULATION,
     GridFormingGenerator,
     PyomoSolver,
     enable_islanding,
@@ -83,12 +83,12 @@ def test_islanding_disabled_bus2_ignored():
 def test_islanding_monee_benchmark():
     # GIVEN
     net_islanding: mm.Network = create_monee_benchmark_net()
-    net_islanding.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net_islanding.apply_formulation(EL_MISOCP_FORMULATION)
     net_islanding.deactivate(net_islanding.get_branch_between(2, 3))
     enable_islanding(net_islanding, electricity=True)
 
     net_legacy: mm.Network = create_monee_benchmark_net()
-    net_legacy.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net_legacy.apply_formulation(EL_MISOCP_FORMULATION)
     net_legacy.deactivate(net_legacy.get_branch_between(2, 3))
 
     # WHEN

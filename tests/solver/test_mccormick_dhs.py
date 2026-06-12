@@ -37,7 +37,7 @@ def _build_series_dhs(q_gen_mw: float = 0.0, q_load_mw: float = 0.0):
     grid.t_pu_max_env = T_PU_MAX_ENV
 
     # num_partitions=4 enforces a monotonically-decaying temperature profile.
-    net.apply_formulation(mm.make_mccormick_dhs_formulation(num_partitions=4))
+    net.apply_formulation(mm.make_heat_convex_milp_formulation(num_partitions=4))
     return net
 
 
@@ -128,7 +128,7 @@ def test_mccormick_dhs_plain_envelope_reduces_to_lp():
         mx.create_water_pipe(
             net, from_node_id=a, to_node_id=b, diameter_m=0.15, length_m=200.0
         )
-    net.apply_formulation(mm.MCCORMICK_DHS_NETWORK_FORMULATION)
+    net.apply_formulation(mm.HEAT_CONVEX_MILP_FORMULATION)
 
     # WHEN
     result = ms.PyomoSolver().solve(net)

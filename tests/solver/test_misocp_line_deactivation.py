@@ -1,4 +1,4 @@
-"""Inactive branches (on_off=0) in the MISOCP formulation must carry zero current and power."""
+﻿"""Inactive branches (on_off=0) in the MISOCP formulation must carry zero current and power."""
 
 import math
 
@@ -6,7 +6,7 @@ import monee.model as mm
 from monee.model import Network
 from monee.model.branch import PowerLine
 from monee.model.child import ExtPowerGrid, PowerLoad
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.model.grid import PowerGrid
 from monee.model.node import Bus
 from monee.solver import PyomoSolver
@@ -37,7 +37,7 @@ def create_ring_with_backup() -> Network:
     pn.branch(PowerLine(length_m=500, **line_kw), b1, b2)
     pn.branch(PowerLine(length_m=500, backup=True, on_off=0, **line_kw), b2, b0)
 
-    pn.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    pn.apply_formulation(EL_MISOCP_FORMULATION)
     return pn
 
 

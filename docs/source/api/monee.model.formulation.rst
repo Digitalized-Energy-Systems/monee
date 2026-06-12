@@ -1,6 +1,18 @@
 monee.model.formulation
 =======================
 
+The package is organised by **optimization class** first, sector second:
+
+* :mod:`~monee.model.formulation.nlp` — smooth non-convex NLPs
+  (polar AC, smooth Weymouth, smooth Darcy–Weisbach) for IPOPT/APOPT.
+* :mod:`~monee.model.formulation.milp` — LP/MILP models (PWL Weymouth,
+  McCormick district heating, fixed-flow heat exchanger).
+* :mod:`~monee.model.formulation.miqcqp.convex` — certifiable relaxations
+  (branch-flow MISOCP, epigraph-relaxed Weymouth).
+* :mod:`~monee.model.formulation.miqcqp.nonconvex` — exact quadratic models
+  for global solvers (exact branch flow, exact Weymouth, bilinear
+  Darcy–Weisbach).
+
 Core
 ----
 
@@ -9,132 +21,125 @@ Core
    :undoc-members:
    :show-inheritance:
 
-Ready-to-use network formulations
-----------------------------------
+Bundles & sector constants
+--------------------------
 
-The following constants are importable directly from ``monee.model.formulation``:
+Sector constants (``EL_*``, ``GAS_*``, ``HEAT_*``), the sector-complete
+bundles (:data:`~monee.model.formulation.bundles.SMOOTH_NLP_FORMULATION`,
+:data:`~monee.model.formulation.bundles.CONVEX_MIQCQP_FORMULATION`,
+:data:`~monee.model.formulation.bundles.NONCONVEX_MIQCQP_FORMULATION`) and
+the :func:`~monee.model.formulation.bundles.combine` helper. All of them are
+importable directly from ``monee.model.formulation``.
 
-.. automodule:: monee.model.formulation
+.. automodule:: monee.model.formulation.bundles
    :members:
    :undoc-members:
-   :no-index:
 
-Electricity
------------
+Shared node formulations
+------------------------
 
-Nonlinear AC
-~~~~~~~~~~~~
-
-.. automodule:: monee.model.formulation.nonlinear.ac
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-MISOCP relaxation
-~~~~~~~~~~~~~~~~~
-
-.. automodule:: monee.model.formulation.misoc.el
+.. automodule:: monee.model.formulation.common
    :members:
    :undoc-members:
    :show-inheritance:
 
-Electricity wiring
-~~~~~~~~~~~~~~~~~~
+Smooth NLP (``nlp``)
+--------------------
 
-Prebuilt electricity bundles
-(:data:`~monee.model.formulation.el.AC_NETWORK_FORMULATION`,
-:data:`~monee.model.formulation.el.MISOCP_NETWORK_FORMULATION`).
+Polar AC electricity
+~~~~~~~~~~~~~~~~~~~~
 
-.. automodule:: monee.model.formulation.el
+.. automodule:: monee.model.formulation.nlp.el
    :members:
    :undoc-members:
    :show-inheritance:
 
-Gas
----
-
-Nonlinear Weymouth
-~~~~~~~~~~~~~~~~~~
-
-.. automodule:: monee.model.formulation.nonlinear.gas
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Smooth Weymouth (pure NLP)
-~~~~~~~~~~~~~~~~~~~~~~~~~~
+Smooth Weymouth gas
+~~~~~~~~~~~~~~~~~~~
 
 Binary-free smooth Weymouth physics for pure-NLP solves (IPOPT/APOPT).
 
-.. automodule:: monee.model.formulation.nonlinear.gas_smooth
+.. automodule:: monee.model.formulation.nlp.gas
    :members:
    :undoc-members:
    :show-inheritance:
 
-Gas wiring & factories
-~~~~~~~~~~~~~~~~~~~~~~
-
-Prebuilt gas bundles and the factories
-:func:`~monee.model.formulation.gas.make_nl_weymouth_pwl_network_formulation`
-and
-:func:`~monee.model.formulation.gas.make_smooth_weymouth_network_formulation`.
-
-.. automodule:: monee.model.formulation.gas
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Water / district heating
-------------------------
-
-Nonlinear Darcy–Weisbach
-~~~~~~~~~~~~~~~~~~~~~~~~~
-
-.. automodule:: monee.model.formulation.nonlinear.water
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-Smooth Darcy–Weisbach & heat (pure NLP)
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+Smooth Darcy–Weisbach heat
+~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Binary-free smooth pipe and heat-exchanger formulations for pure-NLP solves.
 
-.. automodule:: monee.model.formulation.nonlinear.heat_smooth
+.. automodule:: monee.model.formulation.nlp.heat
    :members:
    :undoc-members:
    :show-inheritance:
 
-Linear heat exchanger
-~~~~~~~~~~~~~~~~~~~~~
+LP / MILP (``milp``)
+--------------------
 
-.. automodule:: monee.model.formulation.linear.water
+PWL Weymouth gas
+~~~~~~~~~~~~~~~~
+
+.. automodule:: monee.model.formulation.milp.gas
    :members:
    :undoc-members:
    :show-inheritance:
 
-McCormick district heating relaxation
-~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+McCormick district heating & fixed-flow heat exchanger
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 LP/MILP relaxation of district heating including the gap-bound diagnostics
-:func:`~monee.model.formulation.mccormick.water.mccormick_dhs_gap_bound_mw`
+:func:`~monee.model.formulation.milp.heat.mccormick_dhs_gap_bound_mw`
 and
-:func:`~monee.model.formulation.mccormick.water.mccormick_dhs_gap_bound_k`.
+:func:`~monee.model.formulation.milp.heat.mccormick_dhs_gap_bound_k`.
 
-.. automodule:: monee.model.formulation.mccormick.water
+.. automodule:: monee.model.formulation.milp.heat
    :members:
    :undoc-members:
    :show-inheritance:
 
-Water wiring & factories
-~~~~~~~~~~~~~~~~~~~~~~~~
+Convex MIQCQP (``miqcqp.convex``)
+---------------------------------
 
-Prebuilt water/heat bundles and the factories
-:func:`~monee.model.formulation.water.make_nl_darcy_weisbach_pwl_network_formulation`
-and
-:func:`~monee.model.formulation.water.make_smooth_darcy_weisbach_network_formulation`.
+Branch-flow MISOCP electricity
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-.. automodule:: monee.model.formulation.water
+.. automodule:: monee.model.formulation.miqcqp.convex.el
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Epigraph-relaxed Weymouth gas
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: monee.model.formulation.miqcqp.convex.gas
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Non-convex MIQCQP (``miqcqp.nonconvex``)
+----------------------------------------
+
+Exact branch-flow electricity
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: monee.model.formulation.miqcqp.nonconvex.el
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Exact Weymouth gas
+~~~~~~~~~~~~~~~~~~
+
+.. automodule:: monee.model.formulation.miqcqp.nonconvex.gas
+   :members:
+   :undoc-members:
+   :show-inheritance:
+
+Bilinear Darcy–Weisbach heat
+~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+.. automodule:: monee.model.formulation.miqcqp.nonconvex.heat
    :members:
    :undoc-members:
    :show-inheritance:

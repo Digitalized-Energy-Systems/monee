@@ -1,4 +1,4 @@
-"""Smooth (binary-free) gas/heat NLP formulations under GEKKO IPOPT."""
+﻿"""Smooth (binary-free) gas/heat NLP formulations under GEKKO IPOPT."""
 
 import math
 
@@ -7,8 +7,8 @@ import pytest
 import monee.model as mm
 import monee.solver as ms
 from monee.model.formulation import (
-    make_smooth_darcy_weisbach_network_formulation,
-    make_smooth_weymouth_network_formulation,
+    make_heat_nlp_formulation,
+    make_gas_nlp_formulation,
 )
 from tests.util import create_g2h_net
 
@@ -40,10 +40,10 @@ def _heat_only_net():
 
 def _apply_smooth(network, friction_model):
     network.apply_formulation(
-        make_smooth_weymouth_network_formulation(friction_model=friction_model)
+        make_gas_nlp_formulation(friction_model=friction_model)
     )
     network.apply_formulation(
-        make_smooth_darcy_weisbach_network_formulation(friction_model=friction_model)
+        make_heat_nlp_formulation(friction_model=friction_model)
     )
 
 
@@ -121,9 +121,9 @@ def test_smooth_gas_signed_pressure_drop():
 def test_simulation_gas_only_matches_default():
     # GIVEN
     ref = _gas_only_net()
-    ref.apply_formulation(make_smooth_weymouth_network_formulation())
+    ref.apply_formulation(make_gas_nlp_formulation())
     sim = _gas_only_net()
-    sim.apply_formulation(make_smooth_weymouth_network_formulation())
+    sim.apply_formulation(make_gas_nlp_formulation())
 
     # WHEN
     ref_res = ms.GEKKOSolver(solver=IPOPT).solve(ref)
@@ -144,9 +144,9 @@ def test_simulation_gas_only_matches_default():
 def test_simulation_heat_only_matches_default():
     # GIVEN
     ref = _heat_only_net()
-    ref.apply_formulation(make_smooth_darcy_weisbach_network_formulation())
+    ref.apply_formulation(make_heat_nlp_formulation())
     sim = _heat_only_net()
-    sim.apply_formulation(make_smooth_darcy_weisbach_network_formulation())
+    sim.apply_formulation(make_heat_nlp_formulation())
 
     # WHEN
     ref_res = ms.GEKKOSolver(solver=IPOPT).solve(ref)
@@ -167,8 +167,8 @@ def test_simulation_heat_only_matches_default():
 def test_simulation_falls_back_to_imode3_with_objective():
     # GIVEN
     net = create_g2h_net()
-    net.apply_formulation(make_smooth_weymouth_network_formulation())
-    net.apply_formulation(make_smooth_darcy_weisbach_network_formulation())
+    net.apply_formulation(make_gas_nlp_formulation())
+    net.apply_formulation(make_heat_nlp_formulation())
 
     # WHEN
     result = ms.GEKKOSolver(solver=IPOPT).solve(net, simulation=True)
@@ -182,8 +182,8 @@ def test_simulation_falls_back_to_imode3_with_objective():
 def test_smooth_simbench_mes_solves_under_ipopt():
     # GIVEN
     mes = _simbench_mes()
-    mes.apply_formulation(make_smooth_weymouth_network_formulation())
-    mes.apply_formulation(make_smooth_darcy_weisbach_network_formulation())
+    mes.apply_formulation(make_gas_nlp_formulation())
+    mes.apply_formulation(make_heat_nlp_formulation())
 
     # WHEN
     result = ms.GEKKOSolver(solver=IPOPT).solve(mes, exclude_unconnected_nodes=True)
@@ -210,8 +210,8 @@ def test_smooth_simbench_mes_solves_under_ipopt():
 def test_smooth_simbench_sectors_solve_standalone_under_ipopt():
     # GIVEN
     mes = _simbench_mes()
-    mes.apply_formulation(make_smooth_weymouth_network_formulation())
-    mes.apply_formulation(make_smooth_darcy_weisbach_network_formulation())
+    mes.apply_formulation(make_gas_nlp_formulation())
+    mes.apply_formulation(make_heat_nlp_formulation())
     carrier_grid = {"power": mm.PowerGrid, "gas": mm.GasGrid, "heat": mm.WaterGrid}
 
     # WHEN

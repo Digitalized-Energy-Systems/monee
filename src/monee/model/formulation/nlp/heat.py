@@ -1,3 +1,5 @@
+"""Smooth Darcy-Weisbach water/heat formulations: non-convex NLPs, binary-free."""
+
 import math
 
 import monee.model.phys.core.hydraulics as hydraulicsmodel
@@ -6,29 +8,20 @@ import monee.model.phys.nonlinear.smooth as smoothmodel
 from monee.model.core import Const, Var
 
 from ..core import BranchFormulation
-from ..linear.water import LinearHeatExchangerFormulation
-from .gas_smooth import FRICTION_MODELS, _ensure_friction_vars, _pin, _seed_mag
+from ..milp.heat import FixedFlowHeatExchangerFormulation
+from .gas import FRICTION_MODELS, _ensure_friction_vars, _pin, _seed_mag
 
 
 def _ensure_smooth_flow_vars(model, friction_model, simulation=False):
-    # mass_flow is already the signed flow (model defines it as pos − neg);
-    # promote it to the decision var instead of adding a redundant one.
     model.mass_flow = Var(0.0, name="mass_flow")
-    # Seed |m| only for the square simulation solve.  In the non-sim
-    # optimisation path (flow-limit slacks + CHP/P2G/P2H couplings) the
-    # pure-demand magnitude is a worse start than the flat 0.1 - couplings
-    # redistribute flow away from the consumer-demand estimate.
     mag0 = _seed_mag(model) if simulation else 0.1
     model.mass_flow_mag = Var(mag0, min=0, name="mass_flow_mag")
     model.t_in_pu = Var(1, min=0.3, max=2, name="t_in_pu")
     model.t_out_pu = Var(1, min=0.3, max=2, name="t_out_pu")
-    # Drop the direction binary and squared-flow aux vars.
     model.direction = Const(1)
     model.mass_flow_pos_squared = Const(0.0)
     model.mass_flow_neg_squared = Const(0.0)
     if simulation:
-        # velocity is the only universally-safe phantom to pin here; q_mw/t_inc
-        # are entangled (pinning them over-determines the system).
         _pin(model, "velocity")
     _ensure_friction_vars(model, friction_model)
 
@@ -66,8 +59,6 @@ def _flow_and_pressure_eqs(
         branch.mass_flow_neg == 0.5 * (mag - signed),
     ]
     if not kwargs.get("simulation", False):
-        # Operational flow limits - dropped in simulation mode (slacks would
-        # break a square IMODE=1 solve; limits are checked post-hoc).
         eqs += [
             signed <= f_max_local * branch.on_off,
             -signed <= f_max_local * branch.on_off,
@@ -87,7 +78,7 @@ def _flow_and_pressure_eqs(
 
 
 def _temperature_transport_eqs(branch, from_node_model, to_node_model):
-    """Smooth upwinding: the ``direction`` binary of the MISOCP model is replaced
+    """Smooth upwinding: the ``direction`` binary of the MIQCQP model is replaced
     by the ``mass_flow_pos/neg`` weights (multiplied form avoids dividing by mag)."""
     mag = branch.mass_flow_mag
     mpos = branch.mass_flow_pos
@@ -118,7 +109,7 @@ class SmoothDarcyWeisbachBranchFormulation(BranchFormulation):
 
     Smooth signed flow + smooth temperature upwinding; insulation losses via the
     ``alpha`` attenuation factor. No ``direction`` binary. See
-    :class:`monee.model.formulation.nonlinear.gas_smooth.SmoothWeymouthBranchFormulation`
+    :class:`monee.model.formulation.nlp.gas.SmoothWeymouthBranchFormulation`
     for the ``friction_model`` options.
     """
 
@@ -133,12 +124,10 @@ class SmoothDarcyWeisbachBranchFormulation(BranchFormulation):
         self.smoothing_eps = smoothing_eps
         self.n_breakpoints = n_breakpoints
 
-    def ensure_var(self, model, simulation=False):
+    def ensure_var(self, model, simulation=False, grid=None):
         _ensure_smooth_flow_vars(model, self.friction_model, simulation)
         model.alpha = Var(0.01, min=0, max=1, name="alpha")
         if simulation:
-            # A plain pipe injects no heat and has no fixed ΔT - pin these
-            # phantoms (the dropped GF heat balance is the island's one slack).
             _pin(model, "q_mw", "t_inc")
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
@@ -175,7 +164,7 @@ class SmoothPassiveHeatExchangerFormulation(BranchFormulation):
         self.smoothing_eps = smoothing_eps
         self.n_breakpoints = n_breakpoints
 
-    def ensure_var(self, model, simulation=False):
+    def ensure_var(self, model, simulation=False, grid=None):
         _ensure_smooth_flow_vars(model, self.friction_model, simulation)
         model.t_inc = Var(1, min=-2, max=2, name="temperature_increase")
 
@@ -195,13 +184,14 @@ class SmoothPassiveHeatExchangerFormulation(BranchFormulation):
         return eqs
 
 
-class SmoothHeatExchangerFormulation(LinearHeatExchangerFormulation):
-    """Active HE driven by a fixed design mass flow. Same balance as the linear
-    formulation but with the ``direction`` binary pinned to a constant (and its
-    ``direction == 0`` equation dropped) so the model stays a pure NLP."""
+class SmoothHeatExchangerFormulation(FixedFlowHeatExchangerFormulation):
+    """Active HE driven by a fixed design mass flow. Same balance as the
+    fixed-flow formulation but with the ``direction`` binary pinned to a
+    constant (and its ``direction == 0`` equation dropped) so the model stays
+    a pure NLP."""
 
-    def ensure_var(self, model, simulation=False):
-        super().ensure_var(model, simulation)
+    def ensure_var(self, model, simulation=False, grid=None):
+        super().ensure_var(model, simulation, grid=grid)
         model.direction = Const(0)
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):

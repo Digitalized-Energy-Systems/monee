@@ -1,11 +1,18 @@
+"""Bilinear Darcy-Weisbach water/heat formulations: non-convex MIQCQPs.
+
+The hydraulics mirror the gas-side epigraph relaxation, but the temperature
+side carries true continuous bilinears (``alpha·mag``, ``alpha·t_in``,
+``direction·t``), so the model needs a global MIQCQP solver.
+"""
+
 import math
 
 import monee.model.phys.core.hydraulics as hydraulicsmodel
 import monee.model.phys.nonlinear.hf as ohfmodel
 import monee.model.phys.nonlinear.wf as owfmodel
-from monee.model.core import Const, Intermediate, PostProcess, Var
+from monee.model.core import Const, Var
 
-from ..core import BranchFormulation, NodeFormulation
+from ...core import BranchFormulation
 
 
 def _pin_friction_const(model):
@@ -16,34 +23,11 @@ def _pin_friction_const(model):
     model.reynolds = Const(0.0)
 
 
-class NLDarcyWeisbachNodeFormulation(NodeFormulation):
-    def ensure_var(self, model, simulation=False):
-        # pressure_pa is report-only (= pressure_pu·pressure_ref); the real
-        # closure is attached in equations() where grid.pressure_ref is known.
-        model.pressure_pa = PostProcess(lambda v: float("nan"))
-        model.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
-        model.pressure_squared_pu = Intermediate(1)
-
-    def equations(
-        self,
-        node,
-        grid,
-        from_branch_models,
-        to_branch_models,
-        connected_child_models,
-        **kwargs,
-    ):
-        node.pressure_pa = PostProcess(
-            lambda v, ref=grid.pressure_ref: v.pressure_pu * ref
-        )
-        return []
-
-
-class NLDarcyWeisbachBranchFormulation(BranchFormulation):
-    # See NLWeymouthBranchFormulation for rationale.
+class BilinearDarcyWeisbachBranchFormulation(BranchFormulation):
+    # See RelaxedWeymouthBranchFormulation for rationale.
     EPIGRAPH_TIGHTENING_EPS = 1e-5
 
-    def ensure_var(self, model, simulation=False):
+    def ensure_var(self, model, simulation=False, grid=None):
         model.t_in_pu = Var(1, min=0.3, max=2, name="t_in_pu")
         model.t_out_pu = Var(1, min=0.3, max=2, name="t_out_pu")
         model.mass_flow_mag = Var(1, min=0, name="mass_flow_mag")
@@ -126,19 +110,21 @@ class NLDarcyWeisbachBranchFormulation(BranchFormulation):
         return eqs
 
 
-class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
+class PwlDarcyWeisbachBranchFormulation(BranchFormulation):
     """Variable-friction Darcy-Weisbach via a PWL of φ(m) = friction(Re(m))·m².
 
-    Opt-in alternative to :class:`NLDarcyWeisbachBranchFormulation` for
+    Opt-in alternative to :class:`BilinearDarcyWeisbachBranchFormulation` for
     laminar-heavy networks (Re < 2300) where the turbulent asymptote
     under-estimates pressure drop by 5–50×. Two PWLs (one per direction)
-    preserve bidirectional flow gated by ``direction``.
+    preserve bidirectional flow gated by ``direction``. The hydraulics turn
+    MILP-shaped, but the temperature bilinears keep the model a non-convex
+    MIQCQP.
     """
 
     def __init__(self, n_breakpoints: int = 12):
         self.n_breakpoints = n_breakpoints
 
-    def ensure_var(self, model, simulation=False):
+    def ensure_var(self, model, simulation=False, grid=None):
         model.t_in_pu = Var(1, min=0.3, max=2, name="t_in_pu")
         model.t_out_pu = Var(1, min=0.3, max=2, name="t_out_pu")
         model.mass_flow_mag = Var(1, min=0, name="mass_flow_mag")
@@ -151,6 +137,22 @@ class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
         model.mass_flow_neg_squared = Const(0.0)
         model.reynolds = Const(0.0)
         model.friction = Const(0.0)
+        if hasattr(grid, "f_max"):
+            # Pyomo Piecewise requires bounded x; 1.001x slack avoids endpoint
+            # tightness. Declared on the Var abstraction so every backend gets
+            # the bound natively - the previous Var.setub() in equations() was
+            # pyomo-only and crashed the GEKKO path.
+            m_ub = (
+                min(
+                    grid.f_max,
+                    hydraulicsmodel.calc_max_mass_flow(
+                        model.diameter_m, grid.fluid_density, grid.v_max_mps
+                    ),
+                )
+                * 1.001
+            )
+            model.mass_flow_pos.max = m_ub
+            model.mass_flow_neg.max = m_ub
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         branch._pipe_area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
@@ -172,11 +174,8 @@ class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
             ),
         )
 
-        # Pyomo Piecewise requires bounded x.
-        branch.mass_flow_pos.setub(m_max * 1.001)
-        branch.mass_flow_neg.setub(m_max * 1.001)
-
         # Two φ(m) PWLs; 0-anchor collapses the inactive side's φ to 0.
+        # (mass_flow_pos/neg upper bounds are declared in ensure_var.)
         xs, ys = hydraulicsmodel.phi_pwl_breakpoints(
             branch.diameter_m,
             branch.roughness,
@@ -198,8 +197,6 @@ class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
             ys=ys,
         )
 
-        # Pressure drop with φ replacing friction·m²:
-        #   (p_i - p_j) · pressure_ref · on_off == K · -(φ_pos - φ_neg)
         K = branch.length_m / (
             2.0 * grid.fluid_density * branch._pipe_area**2 * branch.diameter_m
         )
@@ -231,12 +228,12 @@ class NLDarcyWeisbachPWLBranchFormulation(BranchFormulation):
         ]
 
 
-class NLDarcyWeisbachHeatExchangerFormulation(NLDarcyWeisbachBranchFormulation):
+class BilinearPassiveHeatExchangerFormulation(BilinearDarcyWeisbachBranchFormulation):
     """Passive HE: free mass flow, fixed q_mw. ``mass_flow_mag * t_inc =
     -q_w / (cp · t_ref)`` sets the outlet temperature change. Pressure drop
     follows the plain water-pipe form."""
 
-    def ensure_var(self, model, simulation=False):
+    def ensure_var(self, model, simulation=False, grid=None):
         model.t_in_pu = Var(1, min=0, max=2, name="t_in_pu")
         model.t_out_pu = Var(1, min=0, max=2, name="t_out_pu")
         model.mass_flow_mag = Var(1, min=0, name="mass_flow_mag")
