@@ -374,7 +374,13 @@ class Component(ABC):
         self.independent = independent
         self.ignored = False
 
+        # Declarative only - which equations to use. Variable declaration
+        # (ensure_var) is deferred to the solver's attach_formulations() pass,
+        # which runs on the solve-time network copy.
         self.formulation = formulation
+        # Set by the Network builders when an explicit formulation= was passed;
+        # pinned formulations survive a solver-level formulation override.
+        self.formulation_pinned = False
 
     @property
     def tid(self):
@@ -383,17 +389,6 @@ class Component(ABC):
     @property
     def nid(self):
         return f"{self.model.__class__.__name__}-{self.id}".lower()
-
-    @property
-    def formulation(self):
-        return self._formulation
-
-    @formulation.setter
-    def formulation(self, formulation):
-        self._formulation = formulation
-
-        if self._formulation is not None:
-            self._formulation.ensure_var(self.model, grid=getattr(self, "grid", None))
 
     def __deepcopy__(self, memo):
         new = self.__class__.__new__(self.__class__)

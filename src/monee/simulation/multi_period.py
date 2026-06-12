@@ -11,6 +11,7 @@ import pandas
 from monee.model import Network
 from monee.model.core import Var
 from monee.model.extension.islanding.core import NetworkIslandingConfig
+from monee.model.formulation.registry import attach_formulations
 from monee.simulation.step_state import PeriodState
 from monee.simulation.timeseries import TimeseriesData
 from monee.solver.core import (
@@ -35,6 +36,7 @@ def _prepare_period(
     timeseries_data: TimeseriesData | None,
     t: int,
     optimization_problem,
+    formulation=None,
 ) -> tuple[Network, set]:
     """Copy net, apply timeseries for *t*, run extension prepare(), compute
     ignored nodes. Returns ``(net_t, ignored_nodes)`` ready for injection."""
@@ -45,6 +47,10 @@ def _prepare_period(
 
     for ext in net_t.extensions:
         ext.prepare(net_t)
+
+    # Attach formulations and declare their vars on the period copy (same
+    # position as the single-period solvers: after prepare, before _apply).
+    attach_formulations(net_t, formulation)
 
     islanding_config = next(
         (e for e in net_t.extensions if isinstance(e, NetworkIslandingConfig)),
@@ -412,6 +418,7 @@ class GekkoMultiPeriodSolver:
         datetime_index: pandas.DatetimeIndex | None = None,
         initial_state: dict | None = None,
         terminal_state: dict | None = None,
+        formulation=None,
     ) -> MultiPeriodResult:
         """Build and solve a multi-period optimization in one GEKKO model.
 
@@ -443,7 +450,7 @@ class GekkoMultiPeriodSolver:
         for t in range(steps):
             _log.debug("Preparing period %d/%d", t + 1, steps)
             net_t, ignored_t = _prepare_period(
-                network, timeseries_data, t, optimization_problem
+                network, timeseries_data, t, optimization_problem, formulation
             )
             inject_vars(
                 lambda model, comp, cat, _t=t: GEKKOSolver.inject_gekko_vars_attr(
@@ -580,6 +587,7 @@ class PyomoMultiPeriodSolver:
         datetime_index: pandas.DatetimeIndex | None = None,
         initial_state: dict | None = None,
         terminal_state: dict | None = None,
+        formulation=None,
     ) -> MultiPeriodResult:
         """Build and solve a multi-period optimization in a single Pyomo model."""
         import pyomo.environ as pyo
@@ -608,7 +616,7 @@ class PyomoMultiPeriodSolver:
         for t in range(steps):
             _log.debug("Preparing period %d/%d", t + 1, steps)
             net_t, ignored_t = _prepare_period(
-                network, timeseries_data, t, optimization_problem
+                network, timeseries_data, t, optimization_problem, formulation
             )
             inject_vars(
                 lambda model, comp, cat, _t=t: PyomoSolver.inject_pyomo_vars_attr(
@@ -831,6 +839,7 @@ def run_multi_period(
     datetime_index: pandas.DatetimeIndex | None = None,
     initial_state: dict | None = None,
     terminal_state: dict | None = None,
+    formulation=None,
 ) -> MultiPeriodResult:
     """Run a single-shot multi-period optimisation. Cross-period coupling goes
     through the standard ``inter_step_equations`` protocol; ``TimeseriesData``
@@ -849,6 +858,7 @@ def run_multi_period(
         datetime_index=datetime_index,
         initial_state=initial_state,
         terminal_state=terminal_state,
+        formulation=formulation,
     )
 
 
@@ -865,6 +875,7 @@ def run_mpc(
     datetime_index: pandas.DatetimeIndex | None = None,
     initial_state: dict | None = None,
     terminal_state: dict | None = None,
+    formulation=None,
 ) -> MultiPeriodResult:
     """Rolling-horizon MPC. Each iteration solves a *horizon*-period problem,
     accepts the first *execution_steps* periods, advances and reseeds initial
@@ -927,6 +938,7 @@ def run_mpc(
             datetime_index=window_idx,
             initial_state=current_initial_state,
             terminal_state=terminal_state,
+            formulation=formulation,
         )
 
         n_execute = min(execution_steps, actual_window)

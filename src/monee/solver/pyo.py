@@ -17,6 +17,7 @@ from monee.model import (
     Var,
 )
 from monee.model.extension.islanding.core import NetworkIslandingConfig
+from monee.model.formulation.registry import attach_formulations
 from monee.problem.core import OptimizationProblem
 from monee.simulation.step_state import StepState
 from monee.solver.infeasibility import diagnose_infeasibility
@@ -407,6 +408,7 @@ class PyomoSolver(SolverInterface):
         debug=False,
         step_state: StepState = None,
         simulation: bool = False,
+        formulation=None,
     ):
         self._simulation = simulation
         if solver_name is None:
@@ -422,19 +424,16 @@ class PyomoSolver(SolverInterface):
         for ext in network.extensions:
             ext.prepare(network)
 
-        # Re-declare each formulation's vars in simulation mode so the model is
-        # squared (phantom DOFs pinned to Const, |m| warm-started, vm_pu_squared
-        # demoted to a PostProcess). Pyomo has no IMODE=1; a square system simply
-        # solves as the objective-free feasibility problem, yielding the same
-        # unique steady state GEKKO gets via IMODE=1 - kept consistent across
-        # backends so pyomo+ipopt is an equivalent NLP path. Runs on the copy
-        # only, and BEFORE pin_floating_hydraulic_gauges / mark_heat_balance_slacks
-        # (which set pressure Consts a re-declare would overwrite). No-op for
-        # formulations that don't square.
-        if simulation:
-            for component in network.all_components():
-                if component.formulation is not None:
-                    component.formulation.ensure_var(component.model, simulation=True, grid=component.grid)
+        # Attach the effective formulations and declare their vars on the copy.
+        # In simulation mode this also squares the model (phantom DOFs pinned to
+        # Const, |m| warm-started, vm_pu_squared demoted to a PostProcess).
+        # Pyomo has no IMODE=1; a square system simply solves as the
+        # objective-free feasibility problem, yielding the same unique steady
+        # state GEKKO gets via IMODE=1 - kept consistent across backends so
+        # pyomo+ipopt is an equivalent NLP path. Runs BEFORE
+        # pin_floating_hydraulic_gauges / mark_heat_balance_slacks (which set
+        # pressure Consts a re-declare would overwrite).
+        attach_formulations(network, formulation, simulation=simulation)
 
         islanding_config = next(
             (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),

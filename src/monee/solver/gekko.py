@@ -14,6 +14,7 @@ from monee.model import (
     Var,
 )
 from monee.model.extension.islanding.core import NetworkIslandingConfig
+from monee.model.formulation.registry import attach_formulations
 from monee.problem.core import OptimizationProblem
 from monee.simulation.step_state import StepState
 
@@ -181,6 +182,7 @@ class GEKKOSolver(SolverInterface):
         exclude_unconnected_nodes=False,
         step_state: StepState = None,
         simulation=False,
+        formulation=None,
     ):
         self._simulation = simulation
         m = GEKKO(remote=False)
@@ -193,10 +195,10 @@ class GEKKOSolver(SolverInterface):
         for ext in network.extensions:
             ext.prepare(network)
 
-        if simulation:
-            for component in network.all_components():
-                if component.formulation is not None:
-                    component.formulation.ensure_var(component.model, simulation=True, grid=component.grid)
+        # Attach the effective formulations and declare their vars on the
+        # solve-time copy (simulation=True additionally squares the model:
+        # phantom DOFs pinned, |m| warm-started, vm_pu_squared demoted).
+        attach_formulations(network, formulation, simulation=simulation)
 
         islanding_config = next(
             (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),

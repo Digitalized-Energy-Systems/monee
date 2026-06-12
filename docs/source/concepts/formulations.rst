@@ -50,13 +50,14 @@ Each formulation object participates in three phases:
 
 ``ensure_var(model, simulation=False)``
     Declares (or replaces) solver variables on the component model - ``Var``,
-    ``Const``, ``Intermediate`` or ``PostProcess`` attributes. It is called
-    once when the formulation is attached to a component, and the solvers
-    **re-call it with** ``simulation=True`` at solve time to *square* the
-    model: phantom degrees of freedom are pinned to constants or demoted to
-    post-solve reports so that a steady-state simulation can run as a square
-    equation system. See :doc:`solvers` for how the solver's ``simulation``
-    flag drives this.
+    ``Const``, ``Intermediate`` or ``PostProcess`` attributes. The solver
+    calls it on its solve-time network copy when it attaches the effective
+    formulations (``attach_formulations``), right before variable injection.
+    With ``simulation=True`` it additionally *squares* the model: phantom
+    degrees of freedom are pinned to constants or demoted to post-solve
+    reports so that a steady-state simulation can run as a square equation
+    system. See :doc:`solvers` for how the solver's ``simulation`` flag
+    drives this.
 
 ``equations(...)``
     Returns the list of constraint expressions for one component. The solver
@@ -72,36 +73,60 @@ Each formulation object participates in three phases:
     example the ε-tightening terms that keep a convex epigraph relaxation
     tight at the optimum, or the loss term that tightens the MISOCP cone.
 
-Attaching formulations
-----------------------
+Choosing formulations at solve time
+-----------------------------------
 
-Every :class:`~monee.model.network.Network` starts with
-:data:`~monee.model.formulation.bundles.DEFAULT_SIMULATION_FORMULATION` - a
-deliberate hybrid of the polar-AC NLP (electricity), the epigraph-relaxed
-Weymouth (gas) and the bilinear Darcy-Weisbach (water/heat). To switch, call
-:meth:`~monee.model.network.Network.apply_formulation`: it retro-applies the
-mapping to all existing components *and* stores it as the network default, so
-components added afterwards pick it up too.
+The formulation is a property of the **solve**, not of the network data. The
+solver backends attach the effective formulation to every component of their
+internal network copy right before model assembly - the network you build
+stays pristine, and the same network can be solved under different
+formulations without mutation:
 
-Registration keys may be a plain model type (``GasPipe``) or a
-``(model_type, grid_type)`` tuple - the latter is needed when a model is
-shared between carriers, e.g. ``Junction`` is used by both gas and water
-grids, so the node formulations are keyed ``(Junction, GasGrid)`` and
-``(Junction, WaterGrid)``.
+.. code-block:: python
 
-For a single component, pass the ``formulation=`` keyword to any of the
-``Network`` builder methods (:meth:`~monee.model.network.Network.node`,
-:meth:`~monee.model.network.Network.branch`,
-:meth:`~monee.model.network.Network.child`,
-:meth:`~monee.model.network.Network.compound`) to override the network-wide
-choice.
+    import monee
+
+    # Registry-key shortcut - no imports needed
+    monee.run_energy_flow(net, formulation="smooth_nlp")
+    result = monee.run_energy_flow_optimization(
+        net, problem, solver="gurobi", formulation="convex_miqcqp"
+    )
+
+    # NetworkFormulation objects and mixes work too (merged left to right)
+    monee.run_energy_flow(net, formulation=("smooth_nlp", EL_MISOCP_FORMULATION))
+
+Available registry keys live in
+:data:`~monee.model.formulation.registry.FORMULATIONS` (``"smooth_nlp"``,
+``"convex_miqcqp"``, ``"nonconvex_miqcqp"``, plus every sector constant such
+as ``"el_misocp"`` or ``"gas_nlp"``); register your own with
+:func:`~monee.model.formulation.registry.register_formulation`.
+
+The effective formulation per component is resolved most-specific-first:
+
+1. a formulation pinned via the ``formulation=`` keyword of the ``Network``
+   builder methods (:meth:`~monee.model.network.Network.node`,
+   :meth:`~monee.model.network.Network.branch`, …),
+2. the ``formulation`` argument of the solve call,
+3. the network-level choice recorded by
+   :meth:`~monee.model.network.Network.apply_formulation` (declarative - it
+   no longer touches model variables),
+4. :data:`~monee.model.formulation.bundles.DEFAULT_SIMULATION_FORMULATION` -
+   a deliberate hybrid of the polar-AC NLP (electricity), the
+   epigraph-relaxed Weymouth (gas) and the bilinear Darcy-Weisbach
+   (water/heat).
+
+Registration keys in a ``NetworkFormulation`` may be a plain model type
+(``GasPipe``) or a ``(model_type, grid_type)`` tuple - the latter is needed
+when a model is shared between carriers, e.g. ``Junction`` is used by both
+gas and water grids, so the node formulations are keyed
+``(Junction, GasGrid)`` and ``(Junction, WaterGrid)``.
 
 .. note::
 
    Native IO (:func:`~monee.io.native.write_omef_network` /
-   :func:`~monee.io.native.load_to_network`) does **not** persist non-default
-   formulations. After loading a network from disk, re-apply your formulation
-   with ``net.apply_formulation(...)``.
+   :func:`~monee.io.native.load_to_network`) does **not** persist
+   formulation choices - they are solve parameters. Pass ``formulation=`` to
+   the solve (or re-run ``apply_formulation``) after loading from disk.
 
 ----
 

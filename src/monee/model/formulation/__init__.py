@@ -47,11 +47,22 @@ from .bundles import (
 )
 from .core import Formulation, NetworkFormulation
 from .milp.heat import mccormick_dhs_gap_bound_k, mccormick_dhs_gap_bound_mw
+from .registry import (
+    FORMULATIONS,
+    attach_formulations,
+    register_formulation,
+    resolve_formulation,
+)
 
 __all__ = [
     "Formulation",
     "NetworkFormulation",
     "combine",
+    # registry / solve-time attachment
+    "FORMULATIONS",
+    "register_formulation",
+    "resolve_formulation",
+    "attach_formulations",
     # electricity
     "EL_NLP_FORMULATION",
     "EL_MISOCP_FORMULATION",

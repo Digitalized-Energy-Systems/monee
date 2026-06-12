@@ -23,7 +23,6 @@ from .core import (
     Var,
 )
 from .formulation import (
-    DEFAULT_SIMULATION_FORMULATION,
     Formulation,
     NetworkFormulation,
 )
@@ -57,13 +56,21 @@ class Network:
         self.__force_blacklist = False
         self.__collect_components = False
         self.__current_grid = active_grid
+        # Declarative network-level formulation choice. No default is seeded
+        # here: components without an explicit choice fall back to
+        # DEFAULT_SIMULATION_FORMULATION when the solver attaches formulations
+        # (see monee.model.formulation.registry.attach_formulations).
         self.__default_formulation: dict[tuple[type, type], Formulation] = {}
 
-        # Default: the deliberate hybrid (polar-AC NLP + relaxed Weymouth +
-        # bilinear Darcy-Weisbach) documented in formulation.bundles.
-        self.apply_formulation(DEFAULT_SIMULATION_FORMULATION)
-
     def apply_formulation(self, network_formulation: NetworkFormulation):
+        """Record *network_formulation* as the network-level default and assign
+        it to matching existing components.
+
+        Declarative only - variables and equations materialise when a solver
+        runs ``attach_formulations`` on its solve-time copy. A ``formulation``
+        argument passed to the solver overrides this choice; per-component
+        formulations passed to the builder methods override both.
+        """
         for type_or_tuple, formulation in (
             list(network_formulation.branch_type_to_formulations.items())
             + list(network_formulation.child_type_to_formulations.items())
@@ -385,6 +392,7 @@ class Network:
             name=name,
             independent=not self.__collect_components,
         )
+        child.formulation_pinned = formulation is not None
         self.__insert_to_blacklist_if_forced(child)
         self.__insert_to_container_if_collect_toggled(child)
         self._child_dict[child_id] = child
@@ -483,6 +491,7 @@ class Network:
             position=position,
             independent=not self.__collect_components,
         )
+        node.formulation_pinned = formulation is not None
         if child_ids is not None:
             for child_id in child_ids:
                 child = self.child_by_id(child_id)
@@ -535,6 +544,7 @@ class Network:
             independent=not self.__collect_components,
             **kwargs,
         )
+        branch.formulation_pinned = formulation is not None
         self.__insert_to_blacklist_if_forced(branch)
         self.__insert_to_container_if_collect_toggled(branch)
         branch_id = (
@@ -587,6 +597,7 @@ class Network:
             connected_to=connected_node_ids,
             subcomponents=self.__collected_components,
         )
+        compound.formulation_pinned = formulation is not None
         self._compound_dict[compound_id] = compound
         self.__collected_components = []
         return compound_id

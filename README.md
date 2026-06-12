@@ -136,7 +136,7 @@ print(result.dataframes["PowerLoad"][["regulation"]])
 
 monee separates the **physical equations** from the **network topology** through a `NetworkFormulation` layer. A formulation maps component types to a set of equations - most cover a **single energy domain**. Calling `apply_formulation()` overwrites the equations for only the component types included in that formulation, leaving all other domains untouched.
 
-Formulations are named by **optimization class** (`NLP`, `MILP`, convex/non-convex `MIQCQP`). Every new `Network` starts with `DEFAULT_SIMULATION_FORMULATION` - a deliberate per-domain hybrid; the others are opt-in alternatives:
+Formulations are named by **optimization class** (`NLP`, `MILP`, convex/non-convex `MIQCQP`) and are a property of the **solve**, not the network: pass `formulation=` to any solve call (a registry key string, a `NetworkFormulation`, or a mix), or record a network-level choice with `apply_formulation()`. Components without a choice fall back to `DEFAULT_SIMULATION_FORMULATION` - a deliberate per-domain hybrid:
 
 | Formulation constant | Domain | Equations | Applied |
 |---|---|---|---|
@@ -151,12 +151,15 @@ Formulations are named by **optimization class** (`NLP`, `MILP`, convex/non-conv
 
 The smooth bundle replaces all direction binaries with smooth approximations, making the full multi-energy system tractable for pure NLP solvers such as IPOPT; import it (or its factory `make_smooth_nlp_formulation()`) from `monee.model.formulation`.
 
-To use the convex MISOCP relaxation for electricity optimal power flow, apply it over the defaults - gas and heat equations remain unchanged:
+To use the convex MISOCP relaxation for electricity optimal power flow, select it at solve time - gas and heat equations remain on their defaults:
 
 ```python
 import monee
 
-net.apply_formulation(monee.EL_MISOCP_FORMULATION)   # replaces electricity equations only
+result = monee.run_energy_flow(net, solver="gurobi", formulation="el_misocp", simulation=False)
+
+# or record it as the network-level choice for all subsequent solves
+net.apply_formulation(monee.EL_MISOCP_FORMULATION)
 ```
 
 Custom formulations follow the same pattern - subclass the appropriate base class and register it for the target component types:

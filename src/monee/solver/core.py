@@ -222,6 +222,7 @@ class SolverInterface(ABC):
         exclude_unconnected_nodes=False,
         step_state=None,
         simulation=False,
+        formulation=None,
     ) -> SolverResult:
         """
         Solve the energy-flow / optimisation problem for *input_network*.
@@ -237,6 +238,12 @@ class SolverInterface(ABC):
                 operational flow limits) and solve it as a steady-state
                 simulation. GEKKO runs this as IMODE=1 (falling back to IMODE=3
                 if not square); backends without a simulation mode ignore it.
+            formulation: Solve-time formulation override - a registry key
+                string (``"smooth_nlp"``, ``"convex_miqcqp"``, …), a
+                :class:`~monee.model.formulation.core.NetworkFormulation`, or a
+                sequence of either (merged left to right). Overrides the
+                network-level ``apply_formulation`` choice; components without
+                any choice fall back to ``DEFAULT_SIMULATION_FORMULATION``.
 
         Returns:
             A :class:`SolverResult` with updated variable values and result DataFrames.

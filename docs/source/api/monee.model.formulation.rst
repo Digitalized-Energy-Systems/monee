@@ -35,6 +35,18 @@ importable directly from ``monee.model.formulation``.
    :members:
    :undoc-members:
 
+Registry & solve-time attachment
+--------------------------------
+
+String shortcuts for the solve-call ``formulation=`` parameter
+(:data:`~monee.model.formulation.registry.FORMULATIONS`) and the
+:func:`~monee.model.formulation.registry.attach_formulations` pass the solver
+backends run on their network copy.
+
+.. automodule:: monee.model.formulation.registry
+   :members:
+   :undoc-members:
+
 Shared node formulations
 ------------------------
 

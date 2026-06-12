@@ -38,6 +38,11 @@ from monee.model.formulation import (
     make_heat_nonconvex_pwl_formulation,
     make_smooth_nlp_formulation,
 )
+from monee.model.formulation import (
+    FORMULATIONS,
+    register_formulation,
+    resolve_formulation,
+)
 
 # Deprecated pre-restructure aliases (kept warning-free at the top level so
 # `import monee` stays quiet; the canonical deprecation path is
