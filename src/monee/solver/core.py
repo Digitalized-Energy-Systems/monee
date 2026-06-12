@@ -903,6 +903,19 @@ def find_ignored_nodes(network: Network, islanding_config=None):
             if isinstance(sub, Child)
         }
 
+        # Attachment ports of active multi-grid compounds: remove_cps strips
+        # the compound's transfer branches from the pruning copy, so these
+        # nodes look like childless dead-ends here - but in the real solve the
+        # compound re-attaches and carries flow through them. Ports whose grid
+        # connection is genuinely gone are still caught by the
+        # connected-component check above.
+        compound_attachment_node_ids = {
+            node_id
+            for compound in network.compounds
+            if compound.active and isinstance(compound.model, MultiGridCompoundModel)
+            for node_id in compound.connected_to.values()
+        }
+
         def _has_real_active_child(int_node):
             for cid in int_node.child_ids:
                 if cid in compound_port_child_ids:
@@ -931,6 +944,8 @@ def find_ignored_nodes(network: Network, islanding_config=None):
             new_stubs = set()
             for node_id in topology.nodes:
                 if node_id in ignored_nodes:
+                    continue
+                if node_id in compound_attachment_node_ids:
                     continue
                 int_node: Node = topology.nodes[node_id]["internal_node"]
                 active_degree = sum(

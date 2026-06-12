@@ -1,4 +1,4 @@
-
+﻿
 # Timeseries simulation
 
 Drive a multi-energy network through a sequence of timesteps with time-varying
@@ -325,9 +325,9 @@ See {doc}`../concepts/temporal_extensions` for step-by-step walkthroughs.
 `run_timeseries` owns the time loop: it iterates over a fixed number of
 equally indexed steps.  When an external process drives the clock - a
 co-simulation framework, a real-time loop, an event-based scheduler - use
-{class}`~monee.simulation.Conductor` instead.  It keeps a persistent
+{class}`~monee.simulation.Stepper` instead.  It keeps a persistent
 `StepState` and lets you call `step(dt_h)` whenever *you* decide, with a
-variable step size and per-step data overrides.  See {doc}`conductor` for the
+variable step size and per-step data overrides.  See {doc}`stepper` for the
 full workflow.
 
 ---
@@ -369,7 +369,7 @@ full workflow.
 
 | Symbol | Description |
 |---|---|
-| `result.get_result_for(ModelClass, attr)` | DataFrame (steps × component ids) |
+| `result.get_result_for(ModelClass, attr)` | DataFrame (steps Ã— component ids) |
 | `result.get_result_for_id(id, attr)` | Series: one value per successful step |
 | `result[component_id]` | DataFrame of all attributes for one component |
 | `result.failed_steps` | List of step indices that failed to converge |

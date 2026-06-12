@@ -110,33 +110,59 @@ def create_branching_gas_net():
 
 
 def test_two_pipes_gas_network():
+    # GIVEN
     gas_net = create_two_pipes_gas_example()
+
+    # WHEN
     result = ms.GEKKOSolver().solve(gas_net)
 
-    print(result)
+    # THEN
+    assert result.success
+
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2)
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999887.91473)
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][0], 999998.1367)
+
+    # analytic constant-friction (Swamee-Jain Re->inf) Weymouth solution;
+    # wider tolerance on node 2 absorbs the documented epigraph relaxation slack
+    assert math.isclose(
+        result.dataframes["Junction"]["pressure_pa"][2], 999801.6, abs_tol=5.0
+    )
+    assert math.isclose(
+        result.dataframes["Junction"]["pressure_pa"][0], 999999.05941, abs_tol=0.01
+    )
+
     assert len(result.dataframes) == 5
 
 
 def test_two_pipes_line_gas_network():
+    # GIVEN
     gas_net = create_two_pipes_no_branching()
+
+    # WHEN
     result = ms.GEKKOSolver().solve(gas_net)
+
+    # THEN
+    assert result.success
 
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2)
     assert math.isclose(
-        result.dataframes["Junction"]["pressure_pa"][2], 999992.2388, abs_tol=0.001
+        result.dataframes["Junction"]["pressure_pa"][2], 999995.60081, abs_tol=0.001
     )
+
     assert len(result.dataframes) == 4
 
 
 def test_branching_gas_network():
+    # GIVEN
     gas_net = create_branching_gas_net()
+
+    # WHEN
     result = ms.GEKKOSolver().solve(gas_net)
 
-    print(result)
+    # THEN
+    assert result.success
+
     assert math.isclose(
-        result.dataframes["Junction"]["pressure_pa"][2], 999998.8892, abs_tol=0.01
+        result.dataframes["Junction"]["pressure_pa"][2], 999998.78758, abs_tol=0.01
     )
+
     assert len(result.dataframes) == 5

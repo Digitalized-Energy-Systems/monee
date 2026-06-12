@@ -62,22 +62,39 @@ class InterStepState(ABC):
 class StepState(InterStepState):
     """All previously-solved network copies (sequential timeseries). ``get`` returns floats.
 
-    ``initial_state`` falls back when no prior solve has written the attribute."""
+    ``initial_state`` falls back when no prior solve has written the attribute.
+    ``max_steps`` caps how many solved networks are retained (``None`` =
+    unlimited): each network is a full copy, so an open-ended run (e.g. a
+    :class:`~monee.simulation.Stepper` paced by a co-simulation framework)
+    would otherwise grow memory without bound. Absolute ``step`` indices keep
+    their meaning when old networks are dropped; reading a dropped step falls
+    back to ``initial_state``."""
 
-    def __init__(self, initial_state: dict | None = None) -> None:
+    def __init__(
+        self, initial_state: dict | None = None, max_steps: int | None = None
+    ) -> None:
+        if max_steps is not None and max_steps < 1:
+            raise ValueError(f"max_steps must be >= 1 or None, got {max_steps}")
         self._networks: list = []
+        self._dropped: int = 0
+        self._max_steps = max_steps
         self.dt_h: float = 1.0
         self._initial_state: dict = dict(initial_state) if initial_state else {}
 
     def push(self, net) -> None:
         self._networks.append(net)
+        if self._max_steps is not None and len(self._networks) > self._max_steps:
+            del self._networks[0]
+            self._dropped += 1
 
     def get(self, component_id, attr: str, step: int = -1):
         if self._networks:
-            try:
-                net = self._networks[step]
-            except IndexError:
-                net = None
+            if step < 0:
+                net = self._networks[step] if -step <= len(self._networks) else None
+            else:
+                # Absolute index: shift by dropped prefix; dropped → fallback.
+                idx = step - self._dropped
+                net = self._networks[idx] if 0 <= idx < len(self._networks) else None
             if net is not None:
                 model = _find_model(net, component_id, attr)
                 if model is not None:
@@ -87,10 +104,11 @@ class StepState(InterStepState):
         return self._initial_state.get((component_id, attr))
 
     def __len__(self) -> int:
-        return len(self._networks)
+        """Logical number of solved steps (including dropped ones)."""
+        return self._dropped + len(self._networks)
 
     def __repr__(self) -> str:
-        n = len(self._networks)
+        n = len(self)
         return f"StepState({n} step{'s' if n != 1 else ''})"
 
 

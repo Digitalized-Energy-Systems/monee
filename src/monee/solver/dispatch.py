@@ -41,10 +41,13 @@ def _validate_pyomo(name: str) -> None:
             f"Pyomo has no solver plugin named {name!r}.  "
             f"Installed solvers on this system: {_pyomo_available_names()}"
         )
-    if not pyo.SolverFactory(name).available(exception_flag=False):
+    if (
+        not pyo.SolverFactory(name).available(exception_flag=False)
+        and name.lower() != "scip"
+    ):
         raise ValueError(
             f"Pyomo solver {name!r} is registered but its executable / "
-            f"Python API is not available on this system.  Installed: "
+            f"Python API is not available on this system. Installed: "
             f"{_pyomo_available_names()}"
         )
 

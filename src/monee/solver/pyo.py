@@ -58,6 +58,14 @@ PER_SOLVER_OPTIONS = {
         "MIPGap": 1e-3,
         "TimeLimit": 300,
     },
+    # Dual presolve reductions make SCIP spuriously prove infeasibility on the
+    # ill-conditioned MISOCP load-shedding models (verified: identical model
+    # optimal with these off and with Gurobi, 'infeasible' with them on).
+    "scip": {
+        "misc/allowstrongdualreds": False,
+        "misc/allowweakdualreds": False,
+        "limits/time": 300,
+    },
 }
 
 
@@ -121,11 +129,22 @@ class PyscipoptSolver:
             status = sm.getStatus()
             has_solution = sm.getNSols() > 0
             if has_solution:
-                scip_vals = {var.name: sm.getVal(var) for var in sm.getVars()}
+                # Strip whitespace from SCIP variable names: on Windows the
+                # pyomo-written .col label file has CRLF line endings, so
+                # SCIP's NL reader keeps a trailing '\r' in every name.
+                scip_vals = {var.name.strip(): sm.getVal(var) for var in sm.getVars()}
+                matched = 0
                 for var in model.component_data_objects(pyo.Var, active=True):
                     val = scip_vals.get(var.name)
                     if val is not None:
                         var.set_value(val, skip_validation=True)
+                        matched += 1
+                if matched == 0 and scip_vals:
+                    _log.warning(
+                        "pyscipopt bridge: no SCIP variable names matched the "
+                        "pyomo model; solution write-back failed and the "
+                        "reported values are the variable initializations."
+                    )
 
             return self._build_result(status, has_solution)
         finally:
@@ -206,14 +225,35 @@ def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
             report.summary(max_items=50),
         )
         return False, report
-    _log.warning(
-        "%s returned non-ok status (status=%s, termination=%s); "
-        "using witness solution.",
+    # Only limit-type terminations come with a feasible incumbent worth using.
+    # Anything else (infeasibleOrUnbounded, unbounded, error, solverFailure...)
+    # has no witness: declaring success there means downstream code reads the
+    # variable *initializations* as a solution.
+    witness_terminations = {
+        TerminationCondition.maxTimeLimit,
+        TerminationCondition.maxIterations,
+        TerminationCondition.maxEvaluations,
+        TerminationCondition.feasible,
+        TerminationCondition.optimal,
+        TerminationCondition.locallyOptimal,
+        TerminationCondition.globallyOptimal,
+    }
+    if tc in witness_terminations:
+        _log.warning(
+            "%s returned non-ok status (status=%s, termination=%s); "
+            "using witness solution.",
+            phase_label,
+            status,
+            tc,
+        )
+        return True, None
+    _log.error(
+        "%s failed without a usable solution (status=%s, termination=%s).",
         phase_label,
         status,
         tc,
     )
-    return True, None
+    return False, None
 
 
 class PyomoSolver(SolverInterface):

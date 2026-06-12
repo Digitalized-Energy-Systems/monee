@@ -72,9 +72,7 @@ class GasLinepack(NetworkAspect):
             lp_initial = overrides.get("linepack_kg_initial", auto_initial)
             lp_max = overrides.get("linepack_kg_max", auto_max)
             lp_max = max(lp_max, lp_initial * 1.05)
-            bm.linepack_kg = Var(
-                lp_initial, min=0, max=lp_max * 1.5, name="linepack_kg"
-            )
+            bm.linepack_kg = Var(lp_initial, min=0, max=lp_max, name="linepack_kg")
             bm.net_pack_kgs = Var(
                 0, min=-grid.f_max, max=grid.f_max, name="net_pack_kgs"
             )

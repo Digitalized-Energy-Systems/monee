@@ -23,32 +23,21 @@ def test_from_pandapower_net():
 
 @pytest.mark.pptest
 def test_from_pandapower_max_i_ka_overrides_matpower_placeholder():
-    """``max_i_ka`` for lines must come from ``net.line``, not from
-    matpower's apparent-power ``rateA`` (which the converter drops to a
-    250 MVA placeholder) or the legacy ``0.319 kA`` fallback in
-    :func:`monee.io.matpower.fill_branch_dict`.
-
-    The bug previously made every imported branch - LV cable, MV cable, HV
-    line, or distribution transformer - share the same 0.319 kA limit,
-    silently breaking any line-loading constraint downstream.  The fix
-    overrides each *line* branch's ``max_i_ka`` from
-    ``net.line.max_i_ka × parallel × df``.
-
-    Transformers are intentionally not covered (the single-``max_i_ka``
-    branch model cannot represent the HV / LV side asymmetry - see the
-    docstring of ``_pp_branch_max_i_ka_overrides``); they retain the
-    legacy placeholder so the test asserts presence of line ratings only.
-    """
     import simbench
 
     import monee.model as mm
     from monee.io.from_pandapower import from_pandapower_net
 
-    # LV-rural3: 127 cables at 0.27 kA each + one transformer.  Every line
-    # branch must now carry 0.27, and the legacy 0.319 must appear at most
-    # as the trafo / switch-aux placeholder - not on real lines.
+    # GIVEN
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
+    net_mv = simbench.get_simbench_net("1-MV-rural--0-no_sw")
+
+    # WHEN
     monee_net = from_pandapower_net(net)
+    monee_mv = from_pandapower_net(net_mv)
+
+    # THEN
+    # line max_i_ka must come from net.line, not the 0.319 kA matpower placeholder
     branches = [
         b for b in monee_net.branches if isinstance(b.model, mm.GenericPowerBranch)
     ]
@@ -58,11 +47,7 @@ def test_from_pandapower_max_i_ka_overrides_matpower_placeholder():
         f"{nb_at_line_rating}"
     )
 
-    # MV-rural: every distinct value in ``net.line.max_i_ka`` must show up
-    # on at least one imported branch (modulo switch-auxiliary branches
-    # documented in ``_pp_branch_max_i_ka_overrides``).
-    net_mv = simbench.get_simbench_net("1-MV-rural--0-no_sw")
-    monee_mv = from_pandapower_net(net_mv)
+    # every distinct MV line rating must appear on at least one imported branch
     mv_branches = [
         b for b in monee_mv.branches if isinstance(b.model, mm.GenericPowerBranch)
     ]

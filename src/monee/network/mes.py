@@ -59,6 +59,7 @@ def create_heat_net_for_power(
     length_scale=1,
     default_length=DEFAULT_LENGTH,
     power_scale=1,
+    design_flow_headroom=1.5,
 ):
     heat_grid = mm.create_water_grid("water")
     heat_grid.t_ref = REF_TEMP
@@ -68,13 +69,16 @@ def create_heat_net_for_power(
     power_net_as_st = mm.to_spanning_tree(power_net)
     bus_index_to_junction_index = {}
     bus_index_to_end_junction_index = {}
+    node_demand_kgs = {}
 
     for node in power_net_as_st.nodes:
         junc_id = mx.create_junction(target_net, position=node.position, grid=heat_grid)
+        sink_mass_flow = mass_flow_rate + random.random() * mass_flow_rate / 10
+        node_demand_kgs[node.id] = sink_mass_flow
         mx.create_sink(
             target_net,
             junc_id,
-            mass_flow=mass_flow_rate + random.random() * mass_flow_rate / 10,
+            mass_flow=sink_mass_flow,
         )
         bus_index_to_junction_index[node.id] = junc_id
         bus_index_to_end_junction_index[node.id] = junc_id
@@ -83,7 +87,10 @@ def create_heat_net_for_power(
             bus_index_to_end_junction_index[node.id] = mx.create_junction(
                 target_net, position=node.position, grid=heat_grid
             )
-            mx.create_heat_exchanger(
+            # Passive: an in-line device on the distribution run - the tree
+            # flow is already fixed by the downstream sinks, so a design-flow
+            # prescribing HeatExchanger would over-determine the hydraulics.
+            mx.create_passive_heat_exchanger(
                 target_net,
                 from_node_id=bus_index_to_junction_index[node.id],
                 to_node_id=bus_index_to_end_junction_index[node.id],
@@ -91,20 +98,54 @@ def create_heat_net_for_power(
                 * -0.1
                 * random.random()
                 * power_scale,
+                diameter_m=default_diameter_m,
             )
+            end_sink_mass_flow = mass_flow_rate + random.random() * mass_flow_rate / 10
+            node_demand_kgs[node.id] += end_sink_mass_flow
             mx.create_sink(
                 target_net,
                 bus_index_to_end_junction_index[node.id],
-                mass_flow=mass_flow_rate + random.random() * mass_flow_rate / 10,
+                mass_flow=end_sink_mass_flow,
             )
+
+    # Capacity-based trunk sizing (same design as the auto_diameter mode of
+    # create_heat_supply_return_net_for_power): every tree pipe must carry the
+    # cumulative downstream sink demand, so size its diameter for that flow at
+    # the grid's design velocity - floored at default_diameter_m so leaf pipes
+    # are never thinned. Without this, a flat default diameter (or the grid
+    # f_max) caps the slack trunk below total demand and the net is infeasible
+    # by construction.
+    root = power_net_as_st.first_node()
+    parent = {root: None}
+    undirected = nx.Graph(power_net_as_st.graph)
+    for p, c in nx.bfs_edges(undirected, source=root):
+        parent[c] = p
+    subtree_kgs = dict(node_demand_kgs)
+    for c in reversed(list(nx.topological_sort(nx.bfs_tree(undirected, root)))):
+        if parent.get(c) is not None:
+            subtree_kgs[parent[c]] += subtree_kgs[c]
+
+    def _trunk_diameter(downstream_kgs):
+        d = hyd.calc_min_diameter_for_mass_flow(
+            downstream_kgs * design_flow_headroom,
+            heat_grid.fluid_density,
+            heat_grid.v_max_mps,
+        )
+        return max(d, default_diameter_m)
+
     for branch in power_net_as_st.branches:
+        # The endpoint whose tree-parent is the other endpoint sits downstream.
+        if parent.get(branch.to_node_id) == branch.from_node_id:
+            downstream = subtree_kgs[branch.to_node_id]
+        else:
+            downstream = subtree_kgs[branch.from_node_id]
         from_node_id = bus_index_to_end_junction_index[branch.from_node_id]
         to_node_id = bus_index_to_junction_index[branch.to_node_id]
         mx.create_water_pipe(
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=default_diameter_m,
+            diameter_m=_trunk_diameter(downstream),
             length_m=get_length(
                 target_net,
                 branch,
@@ -119,10 +160,14 @@ def create_heat_net_for_power(
         )
     mx.create_ext_hydr_grid(
         target_net,
-        node_id=bus_index_to_junction_index[power_net_as_st.first_node()],
+        node_id=bus_index_to_junction_index[root],
         t_k=REF_TEMP,
         name="Grid Connection Heat",
     )
+    # f_max is the grid-level per-branch cap: it must at least admit the slack
+    # trunk's design flow or the sized diameters are moot. Leaf pipes stay
+    # tightly capped through their velocity-based per-pipe bound.
+    heat_grid.f_max = max(heat_grid.f_max, design_flow_headroom * subtree_kgs[root])
     return (bus_index_to_junction_index, bus_index_to_end_junction_index)
 
 
@@ -421,11 +466,12 @@ def create_monee_benchmark_net():
         new_water_junc_2,
         mass_flow=0.05,
     )
-    mx.create_heat_exchanger(
+    mx.create_passive_heat_exchanger(
         new_mes,
         from_node_id=new_water_junc,
         to_node_id=new_water_junc_2,
         q_mw=0.03,
+        diameter_m=0.16,
     )
     new_water_junc_3 = mx.create_water_junction(new_mes)
     mx.create_sink(
@@ -433,11 +479,12 @@ def create_monee_benchmark_net():
         new_water_junc_3,
         mass_flow=0.06,
     )
-    mx.create_heat_exchanger(
+    mx.create_passive_heat_exchanger(
         new_mes,
         from_node_id=new_water_junc_2,
         to_node_id=new_water_junc_3,
         q_mw=0.03,
+        diameter_m=0.16,
     )
     mx.create_p2g(
         new_mes,

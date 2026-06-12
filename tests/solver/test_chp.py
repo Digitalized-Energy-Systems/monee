@@ -108,6 +108,9 @@ def test_chp_basic_solve():
     net = _build_chp_network()
     net.apply_formulation(MISOCP_NETWORK_FORMULATION)
     result = ms.PyomoSolver().solve(net)
+
+    assert result.success
+
     assert len(result.dataframes) == 15
 
     bus_df = result.dataframes["Bus"]

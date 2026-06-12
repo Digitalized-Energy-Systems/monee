@@ -9,10 +9,7 @@ from monee.simulation.timeseries import TimeseriesData, run
 
 
 def _el_net_with_storage(p_max_mw=2.0, e_initial=5.0, e_max=10.0):
-    """
-    3-bus power network:
-      ext-grid (slack) ──line── bus0 ──line── bus1 (storage)
-    """
+    """3-bus power network: ext-grid (slack) --line-- bus0 --line-- bus1 (storage)."""
     net = Network(mm.PowerGrid(name="power", sn_mva=1))
     n_slack = net.node(
         Bus(base_kv=1),
@@ -37,10 +34,7 @@ def _el_net_with_storage(p_max_mw=2.0, e_initial=5.0, e_max=10.0):
 
 
 def _gas_net_with_storage(flow_max=0.2, m_initial=100.0, m_max=500.0):
-    """
-    3-junction gas network:
-      ext-grid (slack) ──pipe── jct0 ──pipe── jct1 (storage)
-    """
+    """3-junction gas network: ext-grid (slack) --pipe-- jct0 --pipe-- jct1 (storage)."""
     from monee.model.child import Source
 
     net = Network()
@@ -67,23 +61,23 @@ def _gas_net_with_storage(flow_max=0.2, m_initial=100.0, m_max=500.0):
 
 
 def test_electric_storage_inter_step_constraint_holds():
-    """
-    In plain energy flow, p_mw is a fixed dispatch (set via timeseries).
-    The inter-step invariant must hold for steps 2+:
-        e_mwh[t] == e_mwh[t-1] + dt_h * p_mw[t]   (dt_h = 1.0)
-    """
+    # GIVEN
     net, storage_id = _el_net_with_storage(p_max_mw=2.0, e_initial=5.0, e_max=10.0)
-
-    # Prescribe a non-trivial dispatch schedule so SoC actually changes.
     td = TimeseriesData()
     td.add_child_series(storage_id, "p_mw", [1.0, -0.5, 0.8])
+
+    # WHEN
     ts_result = run(net, td, steps=3)
+
+    # THEN
+    assert not ts_result.failed_steps
 
     e_series = ts_result.get_result_for_id(storage_id, "e_mwh")
     p_series = ts_result.get_result_for_id(storage_id, "p_mw")
     assert e_series is not None and p_series is not None
     assert len(e_series) == 3
 
+    # Inter-step invariant: e_mwh[t] == e_mwh[t-1] + dt_h * p_mw[t] (dt_h = 1.0)
     dt_h = 1.0
     for t in range(1, 3):
         expected = e_series.iloc[t - 1] + dt_h * p_series.iloc[t]
@@ -95,11 +89,16 @@ def test_electric_storage_inter_step_constraint_holds():
 
 
 def test_electric_storage_fixed_zero_dispatch_no_soc_change():
-    """With p_mw=0 (default), SoC must stay constant across all steps."""
+    # GIVEN
     net, storage_id = _el_net_with_storage(p_max_mw=2.0, e_initial=5.0, e_max=10.0)
 
+    # WHEN
     ts_result = run(net, steps=3)
 
+    # THEN
+    assert not ts_result.failed_steps
+
+    # With p_mw=0 (default), SoC stays constant across all steps.
     e_series = ts_result.get_result_for_id(storage_id, "e_mwh")
     assert len(e_series) == 3
     for t in range(3):
@@ -109,27 +108,35 @@ def test_electric_storage_fixed_zero_dispatch_no_soc_change():
 
 
 def test_electric_storage_soc_recorded_first_step():
-    """First step records e_mwh correctly with zero default dispatch."""
+    # GIVEN
     net, storage_id = _el_net_with_storage(p_max_mw=1.0, e_initial=5.0, e_max=10.0)
 
+    # WHEN
     ts_result = run(net, steps=1)
+
+    # THEN
+    assert not ts_result.failed_steps
 
     e_series = ts_result.get_result_for_id(storage_id, "e_mwh")
     assert e_series is not None
     assert len(e_series) == 1
+
     # With p_mw=0 and initial SoC=5.0, t=0 SoC must be 5.0.
     assert abs(e_series.iloc[0] - 5.0) < 1e-3
 
 
 def test_electric_storage_soc_within_bounds():
-    """e_mwh must stay within [0, e_max] even with prescribed dispatch."""
+    # GIVEN
     e_max = 8.0
     net, storage_id = _el_net_with_storage(p_max_mw=2.0, e_initial=4.0, e_max=e_max)
-
-    # Prescribe a dispatch that stays within capacity.
     td = TimeseriesData()
     td.add_child_series(storage_id, "p_mw", [1.0, -1.0, 0.5, -0.5])
+
+    # WHEN
     ts_result = run(net, td, steps=4)
+
+    # THEN
+    assert not ts_result.failed_steps
 
     e_series = ts_result.get_result_for_id(storage_id, "e_mwh")
     assert e_series is not None
@@ -138,22 +145,23 @@ def test_electric_storage_soc_within_bounds():
 
 
 def test_gas_storage_inter_step_constraint_holds():
-    """
-    In plain energy flow, mass_flow is a fixed dispatch (set via timeseries).
-    The inter-step invariant must hold for steps 2+:
-        m_stored_kg[t] == m_stored_kg[t-1] + dt_s * mass_flow[t]
-    """
+    # GIVEN
     net, storage_id = _gas_net_with_storage(flow_max=0.2, m_initial=100.0, m_max=500.0)
-
     td = TimeseriesData()
     td.add_child_series(storage_id, "mass_flow", [0.02, 0.01, -0.01])
+
+    # WHEN
     ts_result = run(net, td, steps=3)
+
+    # THEN
+    assert not ts_result.failed_steps
 
     m_series = ts_result.get_result_for_id(storage_id, "m_stored_kg")
     f_series = ts_result.get_result_for_id(storage_id, "mass_flow")
     assert m_series is not None and f_series is not None
     assert len(m_series) == 3
 
+    # Inter-step invariant: m_stored_kg[t] == m_stored_kg[t-1] + dt_s * mass_flow[t]
     dt_s = 1.0 * 3600.0  # dt_h=1.0 default
     for t in range(1, 3):
         expected = m_series.iloc[t - 1] + dt_s * f_series.iloc[t]
@@ -164,13 +172,17 @@ def test_gas_storage_inter_step_constraint_holds():
 
 
 def test_gas_storage_soc_within_bounds():
-    """m_stored_kg must stay within [0, m_max] with prescribed dispatch."""
+    # GIVEN
     m_max = 300.0
     net, storage_id = _gas_net_with_storage(flow_max=0.15, m_initial=150.0, m_max=m_max)
-
     td = TimeseriesData()
     td.add_child_series(storage_id, "mass_flow", [0.02, -0.01, 0.01, -0.01])
+
+    # WHEN
     ts_result = run(net, td, steps=4)
+
+    # THEN
+    assert not ts_result.failed_steps
 
     m_series = ts_result.get_result_for_id(storage_id, "m_stored_kg")
     assert m_series is not None
@@ -182,43 +194,39 @@ def test_gas_storage_soc_within_bounds():
 
 
 def test_make_controllable_converts_p_mw_to_var():
-    """make_controllable() must convert p_mw from float to Var."""
     from monee.model.core import Var
 
+    # GIVEN
     model = ElectricStorage(e_mwh_initial=5.0, e_mwh_max=10.0, p_max_mw=2.0)
     assert isinstance(model.p_mw, (int, float)), (
         "p_mw should be float before make_controllable"
     )
 
+    # WHEN
     model.make_controllable()
+
+    # THEN
     assert isinstance(model.p_mw, Var), "p_mw should be Var after make_controllable"
     assert model.p_mw.min == -2.0
     assert model.p_mw.max == 2.0
 
 
 def test_controllable_storages_via_problem():
-    """OptimizationProblem.controllable_storages() makes storage dispatch a Var."""
     from monee.problem import OptimizationProblem
     from monee.simulation.multi_period import run_multi_period
 
+    # GIVEN
     net, storage_id = _el_net_with_storage(p_max_mw=2.0, e_initial=4.0, e_max=8.0)
-
-    td = TimeseriesData()
-    td.add_child_series(
-        net.child_by_id(storage_id).id if hasattr(net, "child_by_id") else storage_id,
-        "p_mw",
-        [0.0, 0.0],
-    ) if False else None  # no external dispatch; let solver optimise
-
     problem = OptimizationProblem()
     problem.controllable_storages()
+    td = TimeseriesData()
 
-    # Run multi-period with the problem - p_mw must now be optimised (non-zero
-    # SoC change is possible).
-    td2 = TimeseriesData()
-    result = run_multi_period(net, td2, steps=2, optimization_problem=problem)
+    # WHEN
+    result = run_multi_period(net, td, steps=2, optimization_problem=problem)
+
+    # THEN
     assert result.success
 
+    # Storage participated in the solve.
     p_df = result.get_result_for(ElectricStorage, "p_mw")
-    # The result p_mw columns should be present (storage participated in solve).
     assert storage_id in p_df.columns

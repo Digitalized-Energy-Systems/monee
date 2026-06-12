@@ -508,6 +508,38 @@ def create_heat_exchanger(
     )
 
 
+def create_passive_heat_exchanger(
+    network: mm.Network,
+    from_node_id,
+    to_node_id,
+    q_mw,
+    diameter_m,
+    temperature_ext_k=293,
+    constraints=None,
+    grid=None,
+    name=None,
+):
+    """Add a passive heat-exchanger branch: a fixed ``q_mw`` injected into or
+    extracted from the free-flowing water stream, with the temperature change
+    following from the actual mass flow (the surrounding hydraulics determine
+    the flow). Use this for in-line consumers/sources on a distribution run;
+    use :func:`create_heat_exchanger` for supply/return exchangers that drive
+    their design mass flow. ``q_mw > 0`` → :class:`PassiveHeatExchangerLoad`;
+    ``q_mw < 0`` → :class:`PassiveHeatExchangerGenerator`."""
+    return network.branch(
+        mm.PassiveHeatExchangerLoad(q_mw, diameter_m, temperature_ext_k)
+        if q_mw > 0
+        else mm.PassiveHeatExchangerGenerator(q_mw, diameter_m, temperature_ext_k),
+        from_node_id=from_node_id,
+        to_node_id=to_node_id,
+        constraints=constraints,
+        grid=grid,
+        name=name,
+        auto_node_creator=mm.Junction,
+        auto_grid_key=mm.WATER_KEY,
+    )
+
+
 def create_p2g(
     network: mm.Network,
     from_node_id,

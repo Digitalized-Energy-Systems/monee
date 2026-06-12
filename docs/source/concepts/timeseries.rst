@@ -1,11 +1,11 @@
-=====================
+﻿=====================
 Timeseries simulation
 =====================
 
 The timeseries runner drives a network through a sequence of timesteps, solving
 each independently while passing scalar state values between steps.  It is the
 right choice when you want to **replay known profiles** or when inter-step
-coupling is one-directional (past → future).
+coupling is one-directional (past â†’ future).
 
 .. note::
 
@@ -21,14 +21,14 @@ Each timestep follows a fixed four-phase cycle:
 
 .. code-block:: text
 
-   ┌─────────────────────────────────────────────────────────────┐
-   │  for step k in 0 … T-1:                                     │
-   │                                                             │
-   │  1. net_copy = net.copy()          (base net never touched) │
-   │  2. timeseries_data.apply(net_copy, k)  (inject values)     │
-   │  3. result = solve(net_copy, step_state=state)              │
-   │  4. state.push(result.network)     (record solved values)   │
-   └─────────────────────────────────────────────────────────────┘
+   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
+   â”‚  for step k in 0 â€¦ T-1:                                     â”‚
+   â”‚                                                             â”‚
+   â”‚  1. net_copy = net.copy()          (base net never touched) â”‚
+   â”‚  2. timeseries_data.apply(net_copy, k)  (inject values)     â”‚
+   â”‚  3. result = solve(net_copy, step_state=state)              â”‚
+   â”‚  4. state.push(result.network)     (record solved values)   â”‚
+   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
 
 **Copy** - a fresh ``Network.copy()`` is taken each step so solved attributes
 from step *k* never bleed into step *k+1*.
@@ -390,20 +390,20 @@ Externally paced steps
 ``run_timeseries`` owns the loop: it decides the number of steps and marches
 through them at a fixed cadence.  In **co-simulation** settings an external
 framework decides *when* and *how far* to advance - with a possibly different
-``dt_h`` on every call.  For this, use :class:`~monee.simulation.conductor.Conductor`
-(``monee.Conductor``), which keeps a persistent ``StepState`` across
+``dt_h`` on every call.  For this, use :class:`~monee.simulation.stepper.Stepper`
+(``monee.Stepper``), which keeps a persistent ``StepState`` across
 user-driven ``step()`` calls:
 
 .. code-block:: python
 
-   c = monee.Conductor(net, timeseries_data=td)
+   c = monee.Stepper(net, timeseries_data=td)
    c.step(0.25, data_overrides={(load_id, "p_mw"): 0.3})
    result = c.to_timeseries_result()
    # ... query like any TimeseriesResult
 
 Each ``step(dt_h)`` solves one snapshot on a fresh copy of the base network;
 ``data_overrides`` inject values received from the co-simulation partner.
-See :doc:`../how-to/conductor` for the full recipe.
+See :doc:`../how-to/stepper` for the full recipe.
 
 ----
 
@@ -440,7 +440,7 @@ Scalability
    * - Steps
      - Linear - each step is one independent solve
    * - Network size
-     - Same as single-step; memory ∝ steps × result size
+     - Same as single-step; memory âˆ steps Ã— result size
    * - Inter-step constraints
      - O(coupled vars) extra constraints per step; negligible overhead
    * - Failed steps (``on_step_error='skip'``)

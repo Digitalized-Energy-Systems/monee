@@ -42,6 +42,27 @@ def _ell_physics_max(branch, w_max: float) -> float:
     return 4 * w_max / (branch.br_r**2 + branch.br_x**2)
 
 
+# Headroom factor on the thermal rating for the current_pu bound. The bound is
+# a big-M tightening device, not the operational loading constraint (that one
+# is line_loading_limit()); 3x rating is far above any acceptable steady-state
+# loading while keeping the bound finite on near-zero-impedance lines, where
+# the voltage-derived 4*W_max/|Z|^2 explodes (~1e9) and wrecks the matrix
+# conditioning badly enough that SCIP/Gurobi spuriously prove infeasibility.
+_ELL_THERMAL_HEADROOM = 3.0
+
+
+def _ell_max(branch, w_max: float, i_base_from: float, i_base_to: float) -> float:
+    """Tightest available per-unit |I|² bound: voltage-derived, capped by the
+    thermal rating (with headroom) when ``max_i_ka`` is available."""
+    ell = _ell_physics_max(branch, w_max)
+    max_i_ka = getattr(branch, "max_i_ka", None)
+    if max_i_ka and max_i_ka > 0:
+        i_base = min(i_base_from, i_base_to)
+        ell_thermal = (_ELL_THERMAL_HEADROOM * max_i_ka / i_base) ** 2
+        ell = min(ell, ell_thermal)
+    return ell
+
+
 def _big_m(w_max: float) -> float:
     """Cauchy-Schwarz big-M; with ``ell_max = 4·W_max/|Z|²`` this collapses to 9·W_max."""
     return 9 * w_max
@@ -61,12 +82,12 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         w_max = grid.vm_pu_max**2
         big_m = _big_m(w_max)
-        ell_phys = _ell_physics_max(branch, w_max)
         tap = _branch_tap(branch)
         sqrt_impl = kwargs["sqrt_impl"]
         # I_base_ka = S_base / (√3 · V_base); trafo primary divides by tap.
         I_base_from = grid.sn_mva / (SQRT_3 * from_node_model.base_kv) / tap
         I_base_to = grid.sn_mva / (SQRT_3 * to_node_model.base_kv)
+        ell_phys = _ell_max(branch, w_max, I_base_from, I_base_to)
         i_mag_pu = sqrt_impl(branch.current_pu)
         # loading² = current_pu · (I_base/max_i_ka)² is linear in current_pu.
         # Used by line_loading_limit() instead of the sqrt-bearing form.

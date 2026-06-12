@@ -204,7 +204,14 @@ class Junction(NodeModel):
                     continue
 
                 m_ext = nm.vars["mass_flow"] * nm.vars.get("regulation", 1)
-                terms.append(m_ext * Tn)
+                t_inj_k = getattr(nm, "injection_t_k", None)
+                if t_inj_k is not None and grid is not None:
+                    # Defined-temperature injection (Source(t_k=...)): credit
+                    # the inflow enthalpy at its own temperature instead of the
+                    # node's, keeping the nodal heat balance full-rank in T_n.
+                    terms.append(m_ext * (t_inj_k / grid.t_ref))
+                else:
+                    terms.append(m_ext * Tn)
 
             # Node q_mw_heat (HeatGenerator/HeatLoad) → kg/s·t_pu via c·t_ref/1e6.
             # grid may be None (compound heat balance); scale only used if needed.

@@ -1,18 +1,18 @@
-=============================================
-Externally paced co-simulation (Conductor)
+﻿=============================================
+Externally paced co-simulation (Stepper)
 =============================================
 
-Use a **Conductor** when an *external* program decides when and how far the
+Use a **Stepper** when an *external* program decides when and how far the
 simulation advances - typically a **co-simulation framework** such as
 `mosaik <https://mosaik.offis.de/>`_, where monee is one simulator among many
 and the orchestrator dictates the clock.  Unlike
 :func:`~monee.run_timeseries`, which loops over a fixed number of steps on its
-own, a :class:`~monee.simulation.Conductor` exposes a single
-:meth:`~monee.simulation.Conductor.step` method that you call whenever your
+own, a :class:`~monee.simulation.Stepper` exposes a single
+:meth:`~monee.simulation.Stepper.step` method that you call whenever your
 framework wants the network to advance - by one hour, by fifteen minutes, or
 by any other positive duration, varying freely from call to call.
 
-Between calls the Conductor keeps a persistent
+Between calls the Stepper keeps a persistent
 :class:`~monee.simulation.StepState`, so storage state of charge, gas
 linepack, and LTC tap positions carry over from one step to the next exactly
 as they do in a regular timeseries run.
@@ -30,7 +30,7 @@ When to use which driver
    :widths: 22 26 26 26
 
    * -
-     - ``Conductor``
+     - ``Stepper``
      - :func:`~monee.run_timeseries`
      - :func:`~monee.run_multi_period`
    * - Who paces the loop
@@ -55,16 +55,16 @@ When to use which driver
 Quick start
 ===========
 
-Build a small electricity network, hand it to a Conductor, and step it
+Build a small electricity network, hand it to a Stepper, and step it
 forward at whatever pace you like:
 
 .. testcode::
 
-   from monee import Conductor
+   from monee import Stepper
    import monee.express as mx
    from monee.simulation import TimeseriesData
 
-   # ── Electricity grid ──────────────────────────────────────────────────
+   # â”€â”€ Electricity grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
    net = mx.create_multi_energy_network()
    bus0 = mx.create_bus(net)
    bus1 = mx.create_bus(net)
@@ -73,11 +73,11 @@ forward at whatever pace you like:
                   length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
    load_id = mx.create_power_load(net, bus1, p_mw=0.1, q_mvar=0.0)
 
-   # Optional: a profile the Conductor can pull rows from
+   # Optional: a profile the Stepper can pull rows from
    td = TimeseriesData()
    td.add_child_series(load_id, "p_mw", [0.1, 0.2, 0.15, 0.1])
 
-   c = Conductor(net, timeseries_data=td)
+   c = Stepper(net, timeseries_data=td)
 
    # The caller decides when and how far to step:
    r = c.step(dt_h=1.0)                                       # one hour
@@ -89,18 +89,18 @@ forward at whatever pace you like:
 
    1.25
 
-Each :meth:`~monee.simulation.Conductor.step` call returns a
+Each :meth:`~monee.simulation.Stepper.step` call returns a
 :class:`~monee.simulation.StepResult` whose ``result`` attribute is the
 familiar single-snapshot ``SolverResult``.
 
 ----
 
-Constructing a Conductor
+Constructing a Stepper
 ========================
 
 .. code-block:: python
 
-   Conductor(
+   Stepper(
        net,
        *,
        solver=None,                  # name string, SolverInterface, or None
@@ -109,6 +109,7 @@ Constructing a Conductor
        timeseries_data=None,         # source for ts_index slices
        initial_state=None,           # {(component_id, attr): float}
        on_step_error="raise",        # or "skip"
+       max_history=None,             # retain only the last N steps
        **solver_kwargs,              # forwarded to every solver.solve(...)
    )
 
@@ -123,8 +124,17 @@ The constructor mirrors :func:`~monee.run_timeseries`:
   fallback values - for example a starting storage state of charge
   ``{(bat_id, "e_mwh"): 2.0}`` - used until the attribute has been written by
   a prior solve.
+* ``max_history`` bounds memory for open-ended runs: every step retains a
+  full solved network copy (in the ``StepState`` and in the history), so an
+  unbounded co-simulation grows memory step by step.  Set ``max_history`` to
+  the longest lookback your inter-step physics needs (the built-in storage,
+  linepack, and LTC couplings only ever read the previous step, so e.g.
+  ``max_history=8`` is generous) and old steps are dropped as new ones
+  arrive.  ``step_count`` and ``t_h`` keep counting across dropped steps;
+  :meth:`~monee.simulation.Stepper.to_timeseries_result` then only covers
+  the retained window.
 
-The Conductor never mutates the base network: every step works on a fresh
+The Stepper never mutates the base network: every step works on a fresh
 ``net.copy()``.  After a successful solve the result network is pushed into
 the persistent ``StepState``, which is how storage, linepack, and LTC state
 carry across calls.
@@ -156,8 +166,8 @@ this order:
 
    r = c.step(
        0.25,
-       ts_index=3,                                  # profile row first …
-       data_overrides={(load_id, "p_mw"): 0.3},     # … then live inputs win
+       ts_index=3,                                  # profile row first â€¦
+       data_overrides={(load_id, "p_mw"): 0.3},     # â€¦ then live inputs win
    )
 
 Two validation rules are deliberate:
@@ -177,6 +187,31 @@ Two validation rules are deliberate:
 
 ----
 
+Reading values back
+===================
+
+A co-simulation adapter needs the full *set / step / get* contract:
+``data_overrides`` is the *set* side, :meth:`~monee.simulation.Stepper.step`
+the *step* side, and :meth:`~monee.simulation.Stepper.get` the *get* side -
+the values you publish back to the orchestrator after each step:
+
+.. code-block:: python
+
+   r = c.step(0.25, data_overrides={(load_id, "p_mw"): 0.3})   # set + step
+   p = c.get(load_id, "p_mw")                                  # get (latest)
+   p_first = c.get(load_id, "p_mw", step=0)                    # absolute index
+
+``get`` reads from the persistent ``StepState``: by default the most recent
+successful solve (``step=-1``); negative values index relative to the latest
+solve, non-negative values are absolute step indices.  It returns ``None``
+(or the ``initial_state`` fallback) when no solve has written the attribute
+yet - or when the requested step has been dropped under ``max_history``.
+
+For tabular post-processing of whole runs, prefer the ``StepResult`` returned
+by each ``step`` call or :meth:`~monee.simulation.Stepper.to_timeseries_result`.
+
+----
+
 Error handling
 ==============
 
@@ -186,18 +221,18 @@ the caller and neither the history nor the clock changes.
 With ``on_step_error="skip"``, a failure is logged, a *failed*
 :class:`~monee.simulation.StepResult` (``failed=True``, ``error`` set) is
 appended to the history, and **time still advances** by ``dt_h`` - the
-external clock and the Conductor's clock stay in sync even across failed
+external clock and the Stepper's clock stay in sync even across failed
 steps:
 
 .. code-block:: python
 
-   c = Conductor(net, on_step_error="skip")
+   c = Stepper(net, on_step_error="skip")
    r = c.step(1.0)
    if r.failed:
        print("step failed:", r.error)
 
 Failed steps are excluded from the DataFrame queries of
-:meth:`~monee.simulation.Conductor.to_timeseries_result` but remain
+:meth:`~monee.simulation.Stepper.to_timeseries_result` but remain
 inspectable via the result's ``failed_steps`` property.
 
 ----
@@ -223,11 +258,11 @@ State, history, and the clock
    * - ``c.reset(initial_state=...)``
      - Clear history and clock, recreate the ``StepState`` (optionally with
        a new ``initial_state``)
-   * - ``with Conductor(net) as c: ...``
+   * - ``with Stepper(net) as c: ...``
      - Context-manager support for tidy scoping in framework adapters
 
 ``reset`` is handy when a co-simulation scenario is re-run: the same
-Conductor (and resolved solver) can be reused without rebuilding the
+Stepper (and resolved solver) can be reused without rebuilding the
 network.
 
 ----
@@ -259,7 +294,7 @@ works unchanged.
 
 .. tip::
 
-   Because the Conductor records every step in order, you can call
+   Because the Stepper records every step in order, you can call
    ``to_timeseries_result()`` at any point mid-run to inspect partial
    results without disturbing the simulation.
 
@@ -277,7 +312,7 @@ See also
       :shadow: sm
 
       The sequential solve architecture, ``StepState``, and inter-step
-      coupling that the Conductor reuses.
+      coupling that the Stepper reuses.
 
    .. grid-item-card:: Timeseries how-to
       :link: timeseries

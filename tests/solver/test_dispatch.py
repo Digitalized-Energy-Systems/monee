@@ -1,9 +1,4 @@
-"""
-Tests for :mod:`monee.solver.dispatch` - the (solver, backend) resolution layer.
-
-These tests focus on the *routing* logic, not the underlying solvers.  We
-inspect the type of the returned solver instance rather than running it.
-"""
+"""Routing tests for :mod:`monee.solver.dispatch` - the (solver, backend) resolution layer."""
 
 import pytest
 
@@ -20,94 +15,140 @@ from monee.solver import (
 )
 from monee.solver.dispatch import _auto_backend
 
+
+def _unavailable_pyomo_solvers(pyo_env):
+    """Return known Pyomo plugin names whose executables are not available."""
+    known = list(pyo_env.SolverFactory.__dict__["_cls"])
+    return [
+        n
+        for n in known
+        if not n.startswith("_")
+        and not pyo_env.SolverFactory(n).available(exception_flag=False)
+    ]
+
+
 # Auto-routing
 
 
 def test_auto_backend_gekko_for_apopt_bpopt_ipopt():
-    assert _auto_backend("apopt") == "gekko"
-    assert _auto_backend("bpopt") == "gekko"
-    assert _auto_backend("ipopt") == "gekko"
+    # WHEN
+    apopt_backend = _auto_backend("apopt")
+    bpopt_backend = _auto_backend("bpopt")
+    ipopt_backend = _auto_backend("ipopt")
+
+    # THEN
+    assert apopt_backend == "gekko"
+    assert bpopt_backend == "gekko"
+    assert ipopt_backend == "gekko"
 
 
 def test_auto_backend_pyomo_for_unknown_names():
-    assert _auto_backend("gurobi") == "pyomo"
-    assert _auto_backend("scip") == "pyomo"
-    assert _auto_backend("glpk") == "pyomo"
-    assert _auto_backend("definitely_not_a_solver") == "pyomo"
+    # WHEN
+    gurobi_backend = _auto_backend("gurobi")
+    scip_backend = _auto_backend("scip")
+    glpk_backend = _auto_backend("glpk")
+    unknown_backend = _auto_backend("definitely_not_a_solver")
+
+    # THEN
+    assert gurobi_backend == "pyomo"
+    assert scip_backend == "pyomo"
+    assert glpk_backend == "pyomo"
+    assert unknown_backend == "pyomo"
 
 
 # resolve_solver - defaults & instances
 
 
 def test_resolve_default_returns_gekko_ipopt():
+    # WHEN
     s = resolve_solver()
+
+    # THEN
     assert isinstance(s, GEKKOSolver)
     assert s.solver == GEKKO_SOLVERS["ipopt"]
 
 
 def test_resolve_instance_returned_unchanged():
+    # GIVEN
     inst = GEKKOSolver(solver=2)
-    assert resolve_solver(inst) is inst
+
+    # WHEN
+    resolved = resolve_solver(inst)
+
+    # THEN
+    assert resolved is inst
 
 
 def test_resolve_instance_with_backend_raises():
+    # GIVEN
+    inst = GEKKOSolver()
+
+    # WHEN / THEN
     with pytest.raises(ValueError, match="backend= cannot be specified"):
-        resolve_solver(GEKKOSolver(), backend="pyomo")
+        resolve_solver(inst, backend="pyomo")
 
 
 # resolve_solver - strings
 
 
 def test_resolve_string_apopt_routes_to_gekko():
+    # WHEN
     s = resolve_solver("apopt")
+
+    # THEN
     assert isinstance(s, GEKKOSolver)
     assert s.solver == GEKKO_SOLVERS["apopt"]
 
 
 def test_resolve_string_ipopt_routes_to_gekko_by_default():
+    # WHEN
     s = resolve_solver("ipopt")
+
+    # THEN
     assert isinstance(s, GEKKOSolver)
     assert s.solver == GEKKO_SOLVERS["ipopt"]
 
 
 def test_resolve_explicit_backend_pyomo_overrides_dual():
-    """``solver="ipopt", backend="pyomo"`` → Pyomo+IPOPT (if installed)."""
+    # GIVEN
     pyo_env = pytest.importorskip("pyomo.environ")
     if not pyo_env.SolverFactory("ipopt").available(exception_flag=False):
         pytest.skip("IPOPT not installed for Pyomo on this system.")
+
+    # WHEN
     s = resolve_solver("ipopt", backend="pyomo")
+
+    # THEN
     assert isinstance(s, PyomoSolver)
     assert s._solver_name == "ipopt"
 
 
 def test_resolve_pyomo_known_but_unavailable_raises():
-    """A Pyomo plugin name that exists but whose executable isn't installed."""
+    # GIVEN
     pyo_env = pytest.importorskip("pyomo.environ")
-    # Find a known plugin name that is NOT available.
-    known = list(pyo_env.SolverFactory.__dict__["_cls"])
-    unavailable = [
-        n
-        for n in known
-        if not n.startswith("_")
-        and not pyo_env.SolverFactory(n).available(exception_flag=False)
-    ]
+    unavailable = _unavailable_pyomo_solvers(pyo_env)
     if not unavailable:
         pytest.skip("All Pyomo solvers happen to be available - cannot test path.")
+
+    # WHEN / THEN
     with pytest.raises(ValueError, match="not available"):
         resolve_solver(unavailable[0], backend="pyomo")
 
 
 def test_resolve_pyomo_unknown_name_raises():
+    # WHEN / THEN
     with pytest.raises(ValueError, match="no solver plugin named"):
         resolve_solver("definitely_not_a_solver", backend="pyomo")
 
 
 def test_resolve_gekko_unknown_name_raises():
+    # WHEN / THEN
     with pytest.raises(ValueError, match="GEKKO has no solver"):
         resolve_solver("gurobi", backend="gekko")
 
 
 def test_resolve_unknown_backend_raises():
+    # WHEN / THEN
     with pytest.raises(ValueError, match="Unknown backend"):
         resolve_solver("ipopt", backend="cplex")
 
@@ -116,31 +157,48 @@ def test_resolve_unknown_backend_raises():
 
 
 def test_resolve_multi_period_default_returns_gekko():
+    # WHEN
     s = resolve_multi_period_solver()
+
+    # THEN
     assert isinstance(s, GekkoMultiPeriodSolver)
 
 
 def test_resolve_multi_period_instance_returned_unchanged():
+    # GIVEN
     inst = GekkoMultiPeriodSolver()
-    assert resolve_multi_period_solver(inst) is inst
+
+    # WHEN
+    resolved = resolve_multi_period_solver(inst)
+
+    # THEN
+    assert resolved is inst
 
 
 def test_resolve_multi_period_string_apopt_routes_to_gekko():
+    # WHEN
     s = resolve_multi_period_solver("apopt")
+
+    # THEN
     assert isinstance(s, GekkoMultiPeriodSolver)
     assert s._solver_int == GEKKO_SOLVERS["apopt"]
 
 
 def test_resolve_multi_period_pyomo_unknown_raises():
+    # WHEN / THEN
     with pytest.raises(ValueError, match="no solver plugin named"):
         resolve_multi_period_solver("definitely_not_a_solver", backend="pyomo")
 
 
 def test_resolve_multi_period_routes_pyomo_for_gurobi():
-    """If Pyomo+Gurobi is available, ``solver='gurobi'`` should route to it."""
+    # GIVEN
     pyo_env = pytest.importorskip("pyomo.environ")
     if not pyo_env.SolverFactory("gurobi").available(exception_flag=False):
         pytest.skip("Gurobi not installed for Pyomo on this system.")
+
+    # WHEN
     s = resolve_multi_period_solver("gurobi")
+
+    # THEN
     assert isinstance(s, PyomoMultiPeriodSolver)
     assert s._solver_name == "gurobi"

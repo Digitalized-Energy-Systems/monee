@@ -27,33 +27,38 @@ bounds_gas = (
 
 ext_grid_el_bounds = (0, 100)
 ext_grid_gas_bounds = (0, 100)
+# The benchmark net's water slack needs ~15 kg/s circulation for its heat
+# demand; the problem default of (-10, 10) makes the model provably
+# infeasible (verified with Gurobi DualReductions=0).
+ext_grid_heat_bounds = (-100, 100)
 
 
 def test_scaled_example_gas_incident_pyo():
+    # GIVEN
     net_multi: mm.Network = create_monee_benchmark_net()
     net_multi.apply_formulation(MISOCP_NETWORK_FORMULATION)
-    # net_multi.childs_by_type(mm.Source)[0].model.mass_flow = -1.3
-
-    print(monee.run_energy_flow(net_multi, solver=PyomoSolver()))
-
     optimization_problem = mp.create_min_load_shedding_problem(
         bounds_el=bounds_el,
         bounds_heat=bounds_heat,
         bounds_gas=bounds_gas,
         ext_grid_el_bounds=ext_grid_el_bounds,
         ext_grid_gas_bounds=ext_grid_gas_bounds,
+        ext_grid_heat_bounds=ext_grid_heat_bounds,
         include_ext_grids=True,
         debug=True,
     )
+
+    # WHEN
+    flow_result = monee.run_energy_flow(net_multi, solver=PyomoSolver())
     result = monee.run_energy_flow_optimization(
         net_multi, optimization_problem=optimization_problem, solver=PyomoSolver()
     )
-
     resilience = mp.calc_general_resilience_performance(result.network)
 
-    print(result)
-    print(result.objective)
-    print(resilience)
+    # THEN
+    assert flow_result.success
+    assert result.success
+
     assert resilience[0] == 0
     assert math.isclose(resilience[2], 0, abs_tol=0.01)
     assert result is not None
@@ -162,11 +167,15 @@ def create_multi_chp():
 
 
 def test_simple_chp():
+    # GIVEN
     multi_energy_network = create_multi_chp()
     multi_energy_network.apply_formulation(MISOCP_NETWORK_FORMULATION)
 
+    # WHEN
     result = ms.PyomoSolver().solve(multi_energy_network)
-    print(result)
+
+    # THEN
+    assert result.success
 
     assert len(result.dataframes) == 15
     assert math.isclose(
@@ -186,13 +195,18 @@ def test_simple_chp():
 def test_monee_visu():
     import plotly.graph_objects as go
 
+    # GIVEN
     net_multi: mm.Network = create_monee_benchmark_net()
     net_multi.apply_formulation(MISOCP_NETWORK_FORMULATION)
-
     result = monee.run_energy_flow(net_multi, solver=PyomoSolver())
 
     from monee.visualization import plot_result
 
+    # WHEN
     fig = plot_result(result)
+
+    # THEN
+    assert result.success
+
     assert isinstance(fig, go.Figure)
     assert len(fig.data) > 0

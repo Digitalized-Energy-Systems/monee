@@ -1,4 +1,4 @@
-
+﻿
 # How-to guides
 
 Short, task-focused guides for common operations. Each guide assumes you are
@@ -80,12 +80,12 @@ schedule via `TimeseriesData` or let the optimizer choose the dispatch.
 :::
 
 :::{grid-item-card} Externally paced simulation
-:link: conductor
+:link: stepper
 :link-type: doc
 :shadow: sm
 
 Drive a network step by step from an external co-simulation framework with
-`Conductor` - variable step sizes, data overrides, and persistent state.
+`Stepper` - variable step sizes, data overrides, and persistent state.
 :::
 
 :::{grid-item-card} Diagnose infeasibility
@@ -147,7 +147,7 @@ use_pyomo_solver
 diagnose_infeasibility
 islanding
 timeseries
-conductor
+stepper
 multi_period
 storage
 express_structures

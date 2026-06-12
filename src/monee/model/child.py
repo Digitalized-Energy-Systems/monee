@@ -102,9 +102,18 @@ class PowerLoad(NoVarChildModel):
 
 @model
 class Source(NoVarChildModel):
-    """Fixed-setpoint mass-flow source. Constructor takes positive magnitude; sign is internal."""
+    """Fixed-setpoint mass-flow source. Constructor takes positive magnitude; sign is internal.
 
-    def __init__(self, mass_flow, **kwargs) -> None:
+    ``t_k`` (optional) is the temperature of the injected stream. Without it the
+    injection is credited at the junction's own (mixed) temperature - matching
+    pandapipes' temperature-less ``source`` - which leaves the junction
+    temperature structurally undetermined when the source is its only inflow:
+    in monee's simultaneous NLP that rank deficiency can break the solve
+    (APOPT) or yield an arbitrary temperature (SCIP/IPOPT disagree). Set
+    ``t_k`` whenever the source feeds a heat grid and its temperature matters.
+    """
+
+    def __init__(self, mass_flow, t_k=None, **kwargs) -> None:
         # Internal callers may pass solver Vars - only validate plain numerics.
         if isinstance(mass_flow, (int, float)) and mass_flow < 0:
             raise ValueError(
@@ -114,6 +123,9 @@ class Source(NoVarChildModel):
             )
         super().__init__(**kwargs)
         self.mass_flow = -mass_flow
+        # Distinct from the ExtHydrGrid/ConsumeHydrGrid ``t_k`` attribute:
+        # those pin the node temperature; this only types the inflow enthalpy.
+        self.injection_t_k = t_k
 
 
 @model

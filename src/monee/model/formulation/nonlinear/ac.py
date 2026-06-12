@@ -9,6 +9,12 @@ from ..core import BranchFormulation, NodeFormulation
 
 SQRT_3 = np.sqrt(3)
 
+# Smoothing scale [MW] for the current-magnitude sqrt - same idiom as
+# smooth_abs in model.phys.nonlinear.smooth. Without it, √(p²+q²) has a
+# singular Jacobian at exactly zero flow, and the min=0 bounds on i_*_ka
+# pin the solver onto that point (e.g. a storage at zero dispatch).
+CURRENT_SMOOTHING_EPS_MW = 1e-4
+
 
 class ACElectricityNodeFormulation(NodeFormulation):
     """AC bus formulation.
@@ -98,11 +104,17 @@ class ACElectricityBranchFormulation(BranchFormulation):
                 on_off=branch.on_off,
             ),
             branch.i_from_ka
-            == (branch.p_from_mw**2 + branch.q_from_mvar**2) ** 0.5
+            == (
+                branch.p_from_mw**2
+                + branch.q_from_mvar**2
+                + CURRENT_SMOOTHING_EPS_MW**2
+            )
+            ** 0.5
             / (from_node_model.vars["vm_pu"] * from_node_model.vars["base_kv"])
             / SQRT_3,
             branch.i_to_ka
-            == (branch.p_to_mw**2 + branch.q_to_mvar**2) ** 0.5
+            == (branch.p_to_mw**2 + branch.q_to_mvar**2 + CURRENT_SMOOTHING_EPS_MW**2)
+            ** 0.5
             / (to_node_model.vars["vm_pu"] * to_node_model.vars["base_kv"])
             / SQRT_3,
             # Loading lives here so MISOCP can swap in its current_pu form.

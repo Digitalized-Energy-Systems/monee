@@ -29,14 +29,13 @@ def create_urban_district_net() -> mm.Network:
     """
     Urban residential district: 20 kV power + medium-pressure gas + district heat.
 
-    5 buses · 5 gas junctions · 6 heat junctions · 4 CPs.
+    5 buses · 5 gas junctions · 4 heat junctions (3 supply + 1 return) · 3 CPs.
     Highest CP-to-node ratio of the three grids.
-    Suitable for: testing CHP-centred resilience, P2H demand-side flexibility.
+    Suitable for: testing CHP-centred resilience.
 
-    Heat consumers are modelled as ``HeatExchangerLoad`` branches (fixed heat
-    demand in kW), paired with a return-side ``Sink`` for mass balance.  CHP
-    supplies 176 kW and P2H 20 kW; the corresponding heat exchangers enforce
-    those demands explicitly at a nominal 25 K supply-to-return temperature drop.
+    The heat grid uses a supply-return two-pipe structure: the CHP injects
+    heat on the return→supply side (r1→s1, ~176 kW) and a single
+    ``HeatExchangerLoad`` consumer extracts on the supply→return side (s3→r1).
     """
     net = mx.create_multi_energy_network()
 
@@ -86,7 +85,7 @@ def create_urban_district_net() -> mm.Network:
 
     mx.create_heat_exchanger(net, s3, r1, 0.2)
 
-    # CHP: gas at G2 → power at B3, heat injected between H1 and H2.
+    # CHP: gas at G2 → power at B3, heat from r1→s1.
     # heat_w = 0.40 × 0.008 kg/s × 3.6 × 15.3 kWh/kg × 1e6 = 176 256 W
     mx.create_chp(
         net,

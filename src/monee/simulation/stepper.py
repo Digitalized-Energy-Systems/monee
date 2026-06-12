@@ -1,8 +1,9 @@
-"""Conductor - externally-paced co-simulation driver.
+"""Stepper - externally-paced co-simulation adapter.
 
-Steps a network forward in time at user-supplied dt_h values, maintaining
-inter-step state (linepack, LTC, storage SoC, …) via the shared StepState
-plumbing. Each :meth:`Conductor.step` works on a fresh network copy.
+Steps a network forward in time at caller-supplied dt_h values (the external
+framework owns the clock), maintaining inter-step state (linepack, LTC,
+storage SoC, ...) via the shared StepState plumbing. Each
+:meth:`Stepper.step` works on a fresh network copy.
 """
 
 from __future__ import annotations
@@ -25,9 +26,17 @@ from monee.solver.dispatch import resolve_solver
 _log = logging.getLogger(__name__)
 
 
-class Conductor:
-    """Externally-paced co-simulation driver. Holds base network, solver,
-    optional problem and timeseries data, and the persistent :class:`StepState`."""
+class Stepper:
+    """Externally-paced co-simulation adapter. Holds base network, solver,
+    optional problem and timeseries data, and the persistent :class:`StepState`.
+
+    ``max_history`` caps how many solved steps are retained (``None`` =
+    unlimited): every step keeps a full solved network copy (once in the
+    :class:`StepState`, once in the :class:`StepResult` history), so an
+    open-ended co-simulation grows memory without bound otherwise. Set it to
+    a small number (the longest lookback any ``inter_step_equations`` needs,
+    e.g. 8) for long runs; :meth:`to_timeseries_result` then only covers the
+    retained window."""
 
     __slots__ = (
         "_base_net",
@@ -36,9 +45,11 @@ class Conductor:
         "_timeseries_data",
         "_initial_state",
         "_on_step_error",
+        "_max_history",
         "_solver_kwargs",
         "_state",
         "_history",
+        "_step_count",
         "_t_h",
     )
 
@@ -52,21 +63,28 @@ class Conductor:
         timeseries_data: TimeseriesData | None = None,
         initial_state: Mapping[tuple, float] | None = None,
         on_step_error: str = "raise",
+        max_history: int | None = None,
         **solver_kwargs: Any,
     ) -> None:
         if on_step_error not in ("raise", "skip"):
             raise ValueError(
                 f"on_step_error must be 'raise' or 'skip', got {on_step_error!r}"
             )
+        if max_history is not None and max_history < 1:
+            raise ValueError(f"max_history must be >= 1 or None, got {max_history}")
         self._base_net = net
         self._solver = resolve_solver(solver, backend=backend)
         self._optimization_problem = optimization_problem
         self._timeseries_data = timeseries_data
         self._initial_state: dict = dict(initial_state) if initial_state else {}
         self._on_step_error = on_step_error
+        self._max_history = max_history
         self._solver_kwargs = dict(solver_kwargs)
-        self._state = StepState(initial_state=self._initial_state)
+        self._state = StepState(
+            initial_state=self._initial_state, max_steps=max_history
+        )
         self._history: list[StepResult] = []
+        self._step_count: int = 0
         self._t_h: float = 0.0
 
     @property
@@ -75,11 +93,13 @@ class Conductor:
 
     @property
     def history(self) -> list[StepResult]:
+        """Retained step results (the last ``max_history`` ones, or all)."""
         return list(self._history)
 
     @property
     def step_count(self) -> int:
-        return len(self._history)
+        """Total number of step() calls, including dropped and failed ones."""
+        return self._step_count
 
     @property
     def t_h(self) -> float:
@@ -104,7 +124,7 @@ class Conductor:
             _apply_overrides(net_copy, data_overrides)
 
         self._state.dt_h = dt_h
-        step_idx = self.step_count
+        step_idx = self._step_count
         try:
             result = self._solver.solve(
                 net_copy,
@@ -115,17 +135,32 @@ class Conductor:
         except Exception as exc:
             if self._on_step_error == "raise":
                 raise
-            _log.warning("Conductor step %d failed: %s", step_idx, exc)
+            _log.warning("Stepper step %d failed: %s", step_idx, exc)
             sr = StepResult(step=step_idx, result=None, failed=True, error=exc)
-            self._history.append(sr)
-            self._t_h += dt_h
+            self._record(sr, dt_h)
             return sr
 
         self._state.push(result.network)
         sr = StepResult(step=step_idx, result=result)
-        self._history.append(sr)
-        self._t_h += dt_h
+        self._record(sr, dt_h)
         return sr
+
+    def get(self, component_id, attr: str, step: int = -1):
+        """Solved value of ``attr`` on component ``component_id`` - by default
+        from the most recent successful step (the *get* side of a co-simulation
+        adapter's set/step/get contract; ``data_overrides`` is the *set* side).
+
+        ``step`` follows :meth:`StepState.get`: negative = relative to the
+        latest solve, non-negative = absolute step index. Returns ``None`` (or
+        the ``initial_state`` fallback) when no solve has written the value."""
+        return self._state.get(component_id, attr, step=step)
+
+    def _record(self, sr: StepResult, dt_h: float) -> None:
+        self._history.append(sr)
+        if self._max_history is not None and len(self._history) > self._max_history:
+            del self._history[0]
+        self._step_count += 1
+        self._t_h += dt_h
 
     def reset(
         self,
@@ -135,18 +170,22 @@ class Conductor:
         """Clear step history and recreate the StepState."""
         if initial_state is not None:
             self._initial_state = dict(initial_state)
-        self._state = StepState(initial_state=self._initial_state)
+        self._state = StepState(
+            initial_state=self._initial_state, max_steps=self._max_history
+        )
         self._history = []
+        self._step_count = 0
         self._t_h = 0.0
 
     def to_timeseries_result(
         self,
         datetime_index: pandas.DatetimeIndex | None = None,
     ) -> TimeseriesResult:
-        """Wrap accumulated history as a :class:`TimeseriesResult`."""
+        """Wrap the retained history as a :class:`TimeseriesResult`. With
+        ``max_history`` set this covers only the retained window."""
         return TimeseriesResult(list(self._history), datetime_index=datetime_index)
 
-    def __enter__(self) -> Conductor:
+    def __enter__(self) -> Stepper:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -154,7 +193,7 @@ class Conductor:
 
     def __repr__(self) -> str:
         return (
-            f"Conductor(steps={self.step_count}, t_h={self._t_h:.4g}, "
+            f"Stepper(steps={self._step_count}, t_h={self._t_h:.4g}, "
             f"solver={type(self._solver).__name__})"
         )
 

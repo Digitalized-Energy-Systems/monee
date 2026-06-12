@@ -1,4 +1,4 @@
-monee simulation
+﻿monee simulation
 ===================
 
 The public names below are re-exported from :mod:`monee.simulation`
@@ -38,10 +38,10 @@ Multi-period
    :undoc-members:
    :show-inheritance:
 
-Conductor (co-simulation)
+Stepper (co-simulation)
 -------------------------
 
-.. automodule:: monee.simulation.conductor
+.. automodule:: monee.simulation.stepper
    :members:
    :undoc-members:
    :show-inheritance:

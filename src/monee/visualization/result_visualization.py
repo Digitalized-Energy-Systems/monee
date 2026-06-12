@@ -339,6 +339,13 @@ def _compute_layout(graph: nx.Graph, network, use_monee_positions: bool) -> dict
         except Exception:
             continue
 
+    if pos is None:
+        # Graphviz/pygraphviz unavailable - fall back to pure-networkx layouts.
+        try:
+            pos = nx.kamada_kawai_layout(graph)
+        except Exception:
+            pos = nx.spring_layout(graph, seed=42)
+
     return pos
 
 

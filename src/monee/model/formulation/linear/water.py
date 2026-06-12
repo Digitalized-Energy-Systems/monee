@@ -37,7 +37,7 @@ class LinearHeatExchangerFormulation(BranchFormulation):
         # is no longer a monee Var - the model's construction-time flag is the
         # only reliable dynamic/fixed discriminator here.
         is_dynamic_mf = branch._calc_mass_flow
-        
+
         # Set by mark_he_flow_prescription() during solver prep; defaults to
         # the prescribing behaviour (supply/return semantics).
         prescribed = getattr(branch, "_he_flow_prescribed", True)
@@ -57,8 +57,7 @@ class LinearHeatExchangerFormulation(BranchFormulation):
         else:
             flow_eqs = [
                 branch.mass_flow_mag == branch.mass_flow_design_kgs,
-                branch.mass_flow_neg
-                == branch.mass_flow_design_kgs * branch.on_off,
+                branch.mass_flow_neg == branch.mass_flow_design_kgs * branch.on_off,
             ]
             balance_flow_kgs = branch.mass_flow_design_kgs
 

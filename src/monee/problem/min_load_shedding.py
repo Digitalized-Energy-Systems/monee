@@ -492,8 +492,16 @@ def create_min_load_shedding_problem(
         model_to_grid.clear()
         model_to_cp_mw.clear()
         out = []
-        # Standard child/branch loads + generators + HX.
-        for model, grid in network.all_models_with_grid():
+        # Standard child/branch loads + generators + HX. Inactive/ignored
+        # components are excluded (mirroring Constraints.select and the CP
+        # loop below): their Vars are never registered with the backend, so
+        # e.g. an ignored HeatExchangerLoad's q_mw_delivered would otherwise
+        # leak a raw monee Var into the objective expression.
+        for component in network.all_components():
+            if not component.active or component.ignored:
+                continue
+            model = component.model
+            grid = getattr(component, "grid", None)
             if not _is_objective_model(model):
                 continue
             if isinstance(model, (Sink, Source)) and not _is_gas_grid(grid):
