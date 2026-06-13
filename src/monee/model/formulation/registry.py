@@ -105,8 +105,8 @@ def attach_formulations(network, formulation=None, simulation: bool = False) -> 
     Called by the solver backends on their internal network copy, after
     extension ``prepare()`` and before problem application / variable
     injection. *formulation* is any spec accepted by
-    :func:`resolve_formulation`; it overrides network-level
-    ``apply_formulation`` choices but not per-component pinned formulations.
+    :func:`resolve_formulation`; it overrides the network-level
+    ``apply_formulation`` choice but not per-component pinned formulations.
     """
     solver_nf = resolve_formulation(formulation)
 
@@ -117,6 +117,10 @@ def attach_formulations(network, formulation=None, simulation: bool = False) -> 
         if effective is None and solver_nf is not None:
             effective = solver_nf.lookup(component.model, component.grid)
         if effective is None:
+            effective = network.lookup_formulation(component.model, component.grid)
+        if effective is None:
+            # Manually assigned (component.formulation = ...) or left over from
+            # a previous attach when re-solving a solver result network.
             effective = component.formulation
         if effective is None:
             effective = DEFAULT_SIMULATION_FORMULATION.lookup(

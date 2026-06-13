@@ -120,6 +120,30 @@ def test_apply_formulation_has_no_var_side_effect():
     assert net.node_by_id(0).model.vm_pu_squared.min == min_before
 
 
+def test_apply_formulation_does_not_touch_components():
+    net, _ = _small_power_net()
+    net.apply_formulation(EL_MISOCP_FORMULATION)
+
+    # Only the network map is updated; components stay untouched until the
+    # solver's attach pass runs on its copy.
+    assert all(c.formulation is None for c in net.all_components())
+    assert isinstance(
+        net.lookup_formulation(net.branches[0].model, net.branches[0].grid),
+        MISOCPElectricityBranchFormulation,
+    )
+
+
+def test_apply_formulation_survives_network_copy():
+    net, line = _small_power_net()
+    net.apply_formulation(EL_MISOCP_FORMULATION)
+
+    copied = net.copy()
+    attach_formulations(copied)
+    assert isinstance(
+        _line_formulation(copied, line), MISOCPElectricityBranchFormulation
+    )
+
+
 # End to end
 
 

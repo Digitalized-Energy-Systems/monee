@@ -108,8 +108,9 @@ The effective formulation per component is resolved most-specific-first:
    :meth:`~monee.model.network.Network.branch`, …),
 2. the ``formulation`` argument of the solve call,
 3. the network-level choice recorded by
-   :meth:`~monee.model.network.Network.apply_formulation` (declarative - it
-   no longer touches model variables),
+   :meth:`~monee.model.network.Network.apply_formulation` (side-effect free -
+   it only updates the network's formulation map; components and model
+   variables stay untouched),
 4. :data:`~monee.model.formulation.bundles.DEFAULT_SIMULATION_FORMULATION` -
    a deliberate hybrid of the polar-AC NLP (electricity), the
    epigraph-relaxed Weymouth (gas) and the bilinear Darcy-Weisbach

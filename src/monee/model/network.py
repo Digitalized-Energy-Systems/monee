@@ -63,20 +63,16 @@ class Network:
         self.__default_formulation: dict[tuple[type, type], Formulation] = {}
 
     def apply_formulation(self, network_formulation: NetworkFormulation):
-        """Record *network_formulation* as the network-level default and assign
-        it to matching existing components.
+        """Record *network_formulation* as the network-level default.
 
-        Declarative only - variables and equations materialise when a solver
-        runs ``attach_formulations`` on its solve-time copy. A ``formulation``
-        argument passed to the solver overrides this choice; per-component
-        formulations passed to the builder methods override both.
+        Side-effect free: only the network's formulation map is updated -
+        components and their models are untouched. The choice materialises
+        when a solver runs ``attach_formulations`` on its solve-time copy. A
+        ``formulation`` argument passed to the solver overrides this choice;
+        per-component formulations passed to the builder methods override
+        both. Repeated calls merge: later registrations win per type key.
         """
-        for type_or_tuple, formulation in (
-            list(network_formulation.branch_type_to_formulations.items())
-            + list(network_formulation.child_type_to_formulations.items())
-            + list(network_formulation.node_type_to_formulations.items())
-            + list(network_formulation.compound_type_to_formulations.items())
-        ):
+        for type_or_tuple, formulation in network_formulation.items():
             tc, tg = None, None
             if isinstance(type_or_tuple, tuple):
                 tc, tg = type_or_tuple
@@ -85,12 +81,15 @@ class Network:
 
             self.__default_formulation[(tc, tg)] = formulation
 
-            for component in self.all_components():
-                # formulation for type tc, and if no grid type is provided or grid type of the component == tg
-                if isinstance(component.model, tc) and (
-                    tg is None or type(component.grid) is tg
-                ):
-                    component.formulation = formulation
+    def lookup_formulation(self, model, grid) -> Formulation | None:
+        """The network-level formulation for *model* (and *grid*) accumulated
+        from ``apply_formulation`` calls, or None. Last matching registration
+        wins, mirroring :meth:`NetworkFormulation.lookup`."""
+        found = None
+        for (tc, tg), formulation in self.__default_formulation.items():
+            if isinstance(model, tc) and (tg is None or type(grid) is tg):
+                found = formulation
+        return found
 
     def set_default_grid(self, key, grid):
         self._default_grid_models[key] = grid
@@ -387,7 +386,7 @@ class Network:
         child = Child(
             child_id,
             model,
-            formulation=self._or_default_formulation(model, formulation, None),
+            formulation=formulation,
             constraints=constraints,
             name=name,
             independent=not self.__collect_components,
@@ -444,13 +443,6 @@ class Network:
             return self.__current_grid
         return grid_or_name
 
-    def _or_default_formulation(self, model, formulation, grid):
-        if formulation is None:
-            for t, form in self.__default_formulation.items():
-                if isinstance(model, t[0]) and (t[1] is None or type(grid) is t[1]):
-                    return form
-        return formulation
-
     def node(
         self,
         model,
@@ -484,7 +476,7 @@ class Network:
             node_id,
             model,
             child_ids,
-            formulation=self._or_default_formulation(model, formulation, grid),
+            formulation=formulation,
             constraints=constraints,
             grid=grid,
             name=name,
@@ -529,7 +521,7 @@ class Network:
             model,
             from_node_id,
             to_node_id,
-            formulation=self._or_default_formulation(model, formulation, grid),
+            formulation=formulation,
             constraints=constraints,
             grid=grid
             or (
@@ -591,7 +583,7 @@ class Network:
             self.__force_blacklist = False
         compound = Compound(
             compound_id=compound_id,
-            formulation=self._or_default_formulation(model, formulation, None),
+            formulation=formulation,
             model=model,
             constraints=constraints,
             connected_to=connected_node_ids,
