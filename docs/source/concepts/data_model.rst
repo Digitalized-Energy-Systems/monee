@@ -51,7 +51,7 @@ its own variable type at solve time.
 
     class MyPipeModel:
         def __init__(self):
-            self.mass_flow = Var(0.0, min=-5.0, max=5.0, name="mass_flow")
+            self.mass_flow_kgs = Var(0.0, min=-5.0, max=5.0, name="mass_flow_kgs")
             self.diameter_m = Const(0.1)
 
 Variables in neighbouring models are accessible via the ``vars`` dictionary:
@@ -169,8 +169,8 @@ internally - passing a negative number raises a ``ValueError``:
 
     -0.5
 
-The same applies to :class:`~monee.model.child.Source` (``mass_flow``) and
-:class:`~monee.model.child.HeatGenerator` (``q_mw``). Storage models follow
+The same applies to :class:`~monee.model.child.Source` (``mass_flow_kgs``) and
+:class:`~monee.model.child.HeatGenerator` (``heat_mw``). Storage models follow
 the same convention: **positive = charging** (consuming from the network),
 negative = discharging.
 
@@ -184,11 +184,11 @@ Units are encoded in attribute-name suffixes:
      - Unit / meaning
    * - ``_mw``, ``_mvar``
      - Megawatt (active power), megavolt-ampere reactive.
-   * - ``mass_flow``
+   * - ``mass_flow_kgs``
      - kg/s (water and gas).
    * - ``_pu``
-     - Per-unit, relative to the grid's reference values (``t_ref``,
-       ``pressure_ref`` for hydraulic grids; nominal voltage for ``vm_pu``).
+     - Per-unit, relative to the grid's reference values (``t_ref_k``,
+       ``pressure_ref_pa`` for hydraulic grids; nominal voltage for ``vm_pu``).
    * - ``_k``
      - Kelvin.
    * - ``_m``, ``_kv``, ``_ka``
@@ -196,8 +196,8 @@ Units are encoded in attribute-name suffixes:
    * - ``_mwh``, ``_kg``
      - Megawatt-hour and kilogram (storage state of charge).
 
-For gas, the grid's ``higher_heating_value`` is given in **kWh/kg**, so
-thermal power converts as ``MW = mass_flow [kg/s] * 3.6 * hhv``.
+For gas, the grid's ``higher_heating_value_kwh_per_kg`` is given in **kWh/kg**, so
+thermal power converts as ``MW = mass_flow_kgs [kg/s] * 3.6 * hhv``.
 
 ----
 
@@ -223,9 +223,9 @@ Subclass :class:`~monee.model.core.NodeModel` and implement
 
         def equations(self, grid, from_branch_models, to_branch_models,
                       connected_child_models, **kwargs):
-            flow_in  = sum(b.vars.get("mass_flow", 0) for b in from_branch_models)
-            flow_out = sum(b.vars.get("mass_flow", 0) for b in to_branch_models)
-            injected = sum(c.vars.get("mass_flow", 0) for c in connected_child_models)
+            flow_in  = sum(b.vars.get("mass_flow_kgs", 0) for b in from_branch_models)
+            flow_out = sum(b.vars.get("mass_flow_kgs", 0) for b in to_branch_models)
+            injected = sum(c.vars.get("mass_flow_kgs", 0) for c in connected_child_models)
             return [flow_in - flow_out + injected == 0]
 
 .. note::
@@ -301,7 +301,7 @@ passed to ``create()`` with the suffix stripped:
 
     net.compound(
         mm.PowerToHeat(
-            heat_energy_mw=0.1,
+            heat_mw=0.1,
             diameter_m=0.1,
             temperature_ext_k=293,
             efficiency=0.9,
@@ -353,14 +353,14 @@ Grid objects are plain dataclasses carrying per-carrier constants. A
   equations blow up, so the floor keeps the NLP well-conditioned while still
   allowing stressed operating points.
 - :class:`~monee.model.WaterGrid` ``(name, ...)`` - water/heat domain with
-  reference temperature ``t_ref`` and pressure ``pressure_ref`` (the bases
+  reference temperature ``t_ref_k`` and pressure ``pressure_ref_pa`` (the bases
   for ``_pu`` quantities). ``v_max_mps`` (default 5 m/s) caps each pipe's
   mass flow via the pipe cross-section; it can only tighten the generic
-  ``f_max`` bound.
+  ``max_mass_flow_kgs`` bound.
 - :class:`~monee.model.GasGrid` - gas domain; construct via
   :func:`~monee.model.create_gas_grid` ``(name, type="lgas")``, which fills
   in the physical constants for the chosen gas type (including
-  ``higher_heating_value`` in kWh/kg).
+  ``higher_heating_value_kwh_per_kg`` in kWh/kg).
 
 ----
 

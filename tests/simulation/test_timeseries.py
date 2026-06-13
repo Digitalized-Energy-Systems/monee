@@ -42,7 +42,7 @@ def _gas_net():
     net.activate_grid(grid=mm.GAS)
     n0 = net.node(Junction(), mm.GAS, child_ids=[net.child(ExtHydrGrid())])
     n1 = net.node(Junction(), mm.GAS)
-    n2 = net.node(Junction(), mm.GAS, child_ids=[net.child(Sink(mass_flow=0.1))])
+    n2 = net.node(Junction(), mm.GAS, child_ids=[net.child(Sink(mass_flow_kgs=0.1))])
     net.branch(mm.GasPipe(diameter_m=0.5, length_m=500, temperature_ext_k=300), n0, n1)
     net.branch(mm.GasPipe(diameter_m=0.5, length_m=500, temperature_ext_k=300), n1, n2)
     return net
@@ -616,7 +616,7 @@ def test_gas_timeseries_varying_sink():
     net = _gas_net()
     sink = net.childs[1]
     td = TimeseriesData()
-    td.add_child_series(sink.id, "mass_flow", [0.05, 0.10, 0.15])
+    td.add_child_series(sink.id, "mass_flow_kgs", [0.05, 0.10, 0.15])
 
     # WHEN
     result = run(net, td)

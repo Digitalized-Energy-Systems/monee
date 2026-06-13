@@ -50,7 +50,7 @@ bus.  A ``NetworkAspect`` is different:
   for the feature (e.g. adding a ``linepack_kg`` variable to every
   ``GasPipe`` that carries linepack).
 * It may need to **activate or suppress behaviour conditionally** - for
-  example, replacing the static ``to_mass_flow == from_mass_flow`` constraint
+  example, replacing the static ``to_mass_flow_kgs == from_mass_flow_kgs`` constraint
   with a dynamic balance only when a timeseries solve is running.
 
 ----

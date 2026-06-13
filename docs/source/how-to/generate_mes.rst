@@ -248,7 +248,7 @@ Automatic pipe sizing
 
 By default every pipe gets the flat ``default_diameter_m`` (0.12 m).  On
 large radial networks this is **physically infeasible** - the trunk pipes
-near the slack must carry the whole network's flow, exceeding the velocity
+near the slack must carry the whole network's flow, exceeding the velocity_mps
 cap while the Darcy pressure drop (∝ :math:`1/D^5`) blows up.  Enable
 ``auto_diameter=True`` to size each supply pipe (and the closing pipe) from
 the cumulative downstream consumer demand instead:
@@ -262,7 +262,7 @@ the cumulative downstream consumer demand instead:
    * - ``auto_diameter``
      - Enable capacity-based sizing (default ``False``).
    * - ``auto_diameter_v_mps``
-     - Design velocity; defaults to the heat grid's ``v_max_mps``.
+     - Design velocity_mps; defaults to the heat grid's ``v_max_mps``.
    * - ``auto_diameter_headroom``
      - Safety margin applied to the design flow before sizing
        (default ``1.5``).
@@ -273,7 +273,7 @@ the cumulative downstream consumer demand instead:
 .. note::
 
    In node-based mode each supply pipe also receives a
-   ``mass_flow_nominal`` attribute equal to its design flow.  The smooth
+   ``mass_flow_nominal_kgs`` attribute equal to its design flow.  The smooth
    NLP formulations read this as a **warm start** for the pipe's flow
    variable, which dramatically improves conditioning - on a simbench MV
    network it cuts IPOPT from roughly 600 to 30 iterations.

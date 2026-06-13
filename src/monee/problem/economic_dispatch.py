@@ -9,22 +9,6 @@ from monee.problem.core import (
 from monee.problem.utils import line_loading_limit
 
 
-def _gen_cost(model):
-    """``cost · (-p_mw)`` (sign-flipped because PowerGenerator stores p_mw negative)."""
-    cost = getattr(model, "cost", None)
-    if cost is None:
-        return 0
-    return cost * (-model.p_mw)
-
-
-def _ext_grid_cost(model):
-    """``cost · p_mw`` (positive p_mw = import)."""
-    cost = getattr(model, "cost", None)
-    if cost is None:
-        return 0
-    return cost * model.p_mw
-
-
 def create_economic_dispatch_problem(
     gen_cost_default=1.0,
     ext_grid_cost_default=None,
@@ -58,7 +42,7 @@ def create_economic_dispatch_problem(
         problem.bounds(
             bounds_lp,
             lambda m, _: isinstance(m, GenericPowerBranch),
-            ["loading_from_percent", "loading_to_percent"],
+            ["loading_from_pu", "loading_to_pu"],
         )
 
     objectives = Objectives()

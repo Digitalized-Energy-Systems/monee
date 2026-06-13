@@ -40,7 +40,7 @@ def _gas_net_with_storage(flow_max=0.2, m_initial=100.0, m_max=500.0):
     net = Network()
     net.activate_grid(grid=mm.GAS)
     n0 = net.node(Junction(), mm.GAS, child_ids=[net.child(ExtHydrGrid())])
-    src_id = net.child(Source(mass_flow=0.05))
+    src_id = net.child(Source(mass_flow_kgs=0.05))
     n_src = net.node(Junction(), mm.GAS, child_ids=[src_id])
     storage_id = net.child(
         GasStorage(
@@ -148,7 +148,7 @@ def test_gas_storage_inter_step_constraint_holds():
     # GIVEN
     net, storage_id = _gas_net_with_storage(flow_max=0.2, m_initial=100.0, m_max=500.0)
     td = TimeseriesData()
-    td.add_child_series(storage_id, "mass_flow", [0.02, 0.01, -0.01])
+    td.add_child_series(storage_id, "mass_flow_kgs", [0.02, 0.01, -0.01])
 
     # WHEN
     ts_result = run(net, td, steps=3)
@@ -157,11 +157,11 @@ def test_gas_storage_inter_step_constraint_holds():
     assert not ts_result.failed_steps
 
     m_series = ts_result.get_result_for_id(storage_id, "m_stored_kg")
-    f_series = ts_result.get_result_for_id(storage_id, "mass_flow")
+    f_series = ts_result.get_result_for_id(storage_id, "mass_flow_kgs")
     assert m_series is not None and f_series is not None
     assert len(m_series) == 3
 
-    # Inter-step invariant: m_stored_kg[t] == m_stored_kg[t-1] + dt_s * mass_flow[t]
+    # Inter-step invariant: m_stored_kg[t] == m_stored_kg[t-1] + dt_s * mass_flow_kgs[t]
     dt_s = 1.0 * 3600.0  # dt_h=1.0 default
     for t in range(1, 3):
         expected = m_series.iloc[t - 1] + dt_s * f_series.iloc[t]
@@ -176,7 +176,7 @@ def test_gas_storage_soc_within_bounds():
     m_max = 300.0
     net, storage_id = _gas_net_with_storage(flow_max=0.15, m_initial=150.0, m_max=m_max)
     td = TimeseriesData()
-    td.add_child_series(storage_id, "mass_flow", [0.02, -0.01, 0.01, -0.01])
+    td.add_child_series(storage_id, "mass_flow_kgs", [0.02, -0.01, 0.01, -0.01])
 
     # WHEN
     ts_result = run(net, td, steps=4)

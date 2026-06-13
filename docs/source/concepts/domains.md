@@ -86,18 +86,18 @@ using the average pressure between the two endpoints.
 
 In the **MISOCP-shaped default** (`GAS_CONVEX_MIQCQP_FORMULATION`) the flow
 is split into two non-negative variables $\dot{m}_{ij}$ / $\dot{m}_{ji}$
-(`mass_flow_pos` / `mass_flow_neg`) gated by a **direction binary**; by
+(`mass_flow_pos_kgs` / `mass_flow_neg_kgs`) gated by a **direction binary**; by
 convention `direction == 0` means *forward* flow, carried by
-`mass_flow_neg`. The squared flows enter through a convex epigraph relaxation
+`mass_flow_neg_kgs`. The squared flows enter through a convex epigraph relaxation
 kept tight by a small objective term, so MIQCP solvers recognise the problem
 as a MISOCP.
 
 Each pipe's flow is capped by the tighter of the grid-wide limit and a
-velocity cap,
+velocity_mps cap,
 
 $$\dot{m}_\text{max} = \min\!\left( f_\text{max},\; \tfrac{\pi}{4} D^2 \, \rho \, v_\text{max} \right)$$
 
-where the gas $v_\text{max}$ defaults to 20 m/s — the erosional velocity cap
+where the gas $v_\text{max}$ defaults to 20 m/s — the erosional velocity_mps cap
 for gas pipelines. This per-pipe bound tightens every big-M constraint.
 
 ## Smooth (binary-free) hydraulics
@@ -141,10 +141,10 @@ with *f* the Darcy friction factor, *L* the pipe length, *D* the inner
 diameter, *ρ* the fluid density, and *A* the cross-sectional area.
 
 As in the gas domain, the default formulation splits the flow into
-`mass_flow_pos` / `mass_flow_neg` gated by a **direction binary**
-(`direction == 0` ⇒ forward flow via `mass_flow_neg`), and each pipe's flow
+`mass_flow_pos_kgs` / `mass_flow_neg_kgs` gated by a **direction binary**
+(`direction == 0` ⇒ forward flow via `mass_flow_neg_kgs`), and each pipe's flow
 is capped by $\min\!\left( f_\text{max},\; \tfrac{\pi}{4} D^2 \rho \, v_\text{max} \right)$
-using the water grid's velocity limit `v_max_mps`.
+using the water grid's velocity_mps limit `v_max_mps`.
 
 ## Friction models
 
@@ -157,7 +157,7 @@ gas and water/heat formulations. Three modes exist:
 | `pwl` | Piecewise function of the flow: an SOS2 / cubic-spline interpolation of the full drop term over log-spaced Reynolds breakpoints | Laminar-heavy networks needing a MIP-compatible variable friction |
 | `nonlinear` | Smooth sigmoid blend of the laminar law and Swamee–Jain (smooth formulations only) | Laminar-heavy networks solved as pure NLPs |
 
-The **constant** mode depends only on relative roughness ε/D, so friction,
+The **constant** mode depends only on relative roughness_m ε/D, so friction,
 Reynolds number and the friction–flow bilinear all drop out of the solver
 model. The price is accuracy at low flow: in the laminar regime (Re < 2 300)
 it under-estimates the pressure drop by a factor of 5–50.

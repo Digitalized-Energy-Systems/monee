@@ -114,7 +114,7 @@ def test_ltc_pipe_volume_computed_correctly():
     ext.prepare(net_copy)
 
     # THEN
-    rho = WaterGrid("w").fluid_density  # default 998 kg/m³
+    rho = WaterGrid("w").fluid_density_kg_per_m3  # default 998 kg/m³
     v_half = math.pi / 4 * PIPE_D**2 * PIPE_L / 2
     rho_v = ext._ltc_rho_v
 

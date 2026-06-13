@@ -87,8 +87,8 @@ def test_auto_priority_floor_raises_low_user_weight():
     net = create_urban_district_net()
     net.apply_formulation(EL_MISOCP_FORMULATION)
     # The hook caps the bound with the problem's default max_line_loading
-    # (1.5, active because check_line_loading defaults to True); the capped
-    # bound stays valid since the loading constraint bounds current_pu.
+    # (1.5, active because check_lp defaults to True); the capped
+    # bound stays valid since the loading constraint bounds current_pu_squared.
     a_max = _aux_objective_upper_bound(net, max_line_loading=1.5)
     prob = create_min_load_shedding_problem(
         demand_weight=1.0,
@@ -193,9 +193,9 @@ def test_auto_floor_keeps_user_objective_optimal_under_aux_scale():
         net = create_urban_district_net()
         net.apply_formulation(EL_MISOCP_FORMULATION)
         prob = create_min_load_shedding_problem(
-            bounds_el=(0.5, 1.5),
-            bounds_gas=(0.5, 1.5),
-            bounds_heat=(0.5, 1.5),
+            bounds_vm=(0.5, 1.5),
+            bounds_pressure=(0.5, 1.5),
+            bounds_t=(0.5, 1.5),
             include_ext_grids=False,
             include_storages=False,
             demand_weight=1.0,

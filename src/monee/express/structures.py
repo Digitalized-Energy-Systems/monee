@@ -155,14 +155,14 @@ class GasStructure(_Structure):
         diameter_m,
         length_m,
         temperature_ext_k=296.15,
-        roughness=1e-5,
+        roughness_m=1e-5,
         grid=None,
     ):
         super().__init__(network)
         self._diameter_m = diameter_m
         self._length_m = length_m
         self._temperature_ext_k = temperature_ext_k
-        self._roughness = roughness
+        self._roughness = roughness_m
         self._grid = grid
 
     def _create_node(self):
@@ -177,7 +177,7 @@ class GasStructure(_Structure):
             diameter_m=self._diameter_m,
             length_m=self._length_m,
             temperature_ext_k=self._temperature_ext_k,
-            roughness=self._roughness,
+            roughness_m=self._roughness,
             grid=self._grid,
         )
 
@@ -186,13 +186,13 @@ class GasStructure(_Structure):
         if kwargs.get("sink_mass_flow") is not None:
             out.append(
                 _mx.create_gas_sink(
-                    self._net, node_id, mass_flow=kwargs["sink_mass_flow"]
+                    self._net, node_id, mass_flow_kgs=kwargs["sink_mass_flow"]
                 )
             )
         if kwargs.get("source_mass_flow") is not None:
             out.append(
                 _mx.create_gas_source(
-                    self._net, node_id, mass_flow=kwargs["source_mass_flow"]
+                    self._net, node_id, mass_flow_kgs=kwargs["source_mass_flow"]
                 )
             )
         return out
@@ -209,8 +209,8 @@ class WaterStructure(_Structure):
         diameter_m,
         length_m,
         temperature_ext_k=296.15,
-        roughness=0.001,
-        lambda_insulation_w_per_k=0.025,
+        roughness_m=0.001,
+        lambda_insulation_w_per_m_k=0.025,
         insulation_thickness_m=0.2,
         unidirectional=False,
         grid=None,
@@ -219,8 +219,8 @@ class WaterStructure(_Structure):
         self._diameter_m = diameter_m
         self._length_m = length_m
         self._temperature_ext_k = temperature_ext_k
-        self._roughness = roughness
-        self._lambda = lambda_insulation_w_per_k
+        self._roughness = roughness_m
+        self._lambda = lambda_insulation_w_per_m_k
         self._ins_thickness = insulation_thickness_m
         self._unidirectional = unidirectional
         self._grid = grid
@@ -237,8 +237,8 @@ class WaterStructure(_Structure):
             diameter_m=self._diameter_m,
             length_m=self._length_m,
             temperature_ext_k=self._temperature_ext_k,
-            roughness=self._roughness,
-            lambda_insulation_w_per_k=self._lambda,
+            roughness_m=self._roughness,
+            lambda_insulation_w_per_m_k=self._lambda,
             insulation_thickness_m=self._ins_thickness,
             unidirectional=self._unidirectional,
             grid=self._grid,
@@ -249,13 +249,13 @@ class WaterStructure(_Structure):
         if kwargs.get("sink_mass_flow") is not None:
             out.append(
                 _mx.create_water_sink(
-                    self._net, node_id, mass_flow=kwargs["sink_mass_flow"]
+                    self._net, node_id, mass_flow_kgs=kwargs["sink_mass_flow"]
                 )
             )
         if kwargs.get("source_mass_flow") is not None:
             out.append(
                 _mx.create_water_source(
-                    self._net, node_id, mass_flow=kwargs["source_mass_flow"]
+                    self._net, node_id, mass_flow_kgs=kwargs["source_mass_flow"]
                 )
             )
         if kwargs.get("heat_load_q_mw") is not None:
@@ -368,8 +368,8 @@ class DhsStructure:
         diameter_m,
         length_m,
         temperature_ext_k=296.15,
-        roughness=0.001,
-        lambda_insulation_w_per_k=0.025,
+        roughness_m=0.001,
+        lambda_insulation_w_per_m_k=0.025,
         insulation_thickness_m=0.2,
         unidirectional=True,
         grid=None,
@@ -379,8 +379,8 @@ class DhsStructure:
             diameter_m=diameter_m,
             length_m=length_m,
             temperature_ext_k=temperature_ext_k,
-            roughness=roughness,
-            lambda_insulation_w_per_k=lambda_insulation_w_per_k,
+            roughness_m=roughness_m,
+            lambda_insulation_w_per_m_k=lambda_insulation_w_per_m_k,
             insulation_thickness_m=insulation_thickness_m,
             unidirectional=unidirectional,
             grid=grid,

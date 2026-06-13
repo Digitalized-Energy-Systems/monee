@@ -2,6 +2,11 @@
 
 Concrete instances pass through unchanged. GEKKO names (APOPT/BPOPT/IPOPT)
 route to GEKKO; anything else is forwarded to Pyomo. Default is GEKKO+IPOPT.
+
+``backend='gurobipy'`` selects the native in-memory Gurobi backend
+(:class:`~monee.solver.gurobipy.GurobipySolver`) instead of driving Gurobi
+through Pyomo's file round-trip; it is single-period only and the solver name
+must be ``'gurobi'`` (the sole solver it provides).
 """
 
 from __future__ import annotations
@@ -16,13 +21,10 @@ GEKKO_SOLVERS: dict[str, int] = {
     "ipopt": 3,
 }
 
-# Names in both backends - default to GEKKO (bundled IPOPT, faster on NLPs).
-_DUAL_AVAILABLE = frozenset({"ipopt"})
-
 
 def _pyomo_known_plugin(name: str) -> bool:
     """Plugin-registry membership; no subprocess spawn."""
-    return name in pyo.SolverFactory.__dict__["_cls"]
+    return name in set(pyo.SolverFactory)
 
 
 def _pyomo_available_names() -> list[str]:
@@ -60,6 +62,49 @@ def _is_multi_period_solver_instance(obj) -> bool:
     return obj is not None and hasattr(obj, "solve_multi_period")
 
 
+def _dispatch_backend(
+    solver, backend, gekko_factory, pyomo_factory, gurobipy_factory=None
+):
+    """Shared (name → backend → construct) routing for the single- and
+    multi-period resolvers.  *gekko_factory* / *pyomo_factory* take the resolved
+    GEKKO solver code / Pyomo solver name respectively and return the concrete
+    solver instance.  *gurobipy_factory* (no arguments) builds the native Gurobi
+    solver; pass ``None`` where that backend is unavailable (e.g. multi-period)."""
+    name = (solver or "ipopt").lower() if isinstance(solver, str) else "ipopt"
+    chosen_backend = backend or _auto_backend(name)
+
+    if chosen_backend == "gekko":
+        if name not in GEKKO_SOLVERS:
+            raise ValueError(
+                f"GEKKO has no solver named {name!r}; choose from "
+                f"{sorted(GEKKO_SOLVERS)} or pass backend='pyomo'."
+            )
+        return gekko_factory(GEKKO_SOLVERS[name])
+
+    if chosen_backend == "pyomo":
+        _validate_pyomo(name)
+        return pyomo_factory(name)
+
+    if chosen_backend == "gurobipy":
+        if gurobipy_factory is None:
+            raise ValueError(
+                "The gurobipy backend is single-period only; use "
+                "backend='pyomo' or backend='gekko' for multi-period solves."
+            )
+        if isinstance(solver, str) and name != "gurobi":
+            raise ValueError(
+                "The gurobipy backend only provides the 'gurobi' solver; got "
+                f"{solver!r}. Pass solver='gurobi' (or omit it) with "
+                "backend='gurobipy'."
+            )
+        return gurobipy_factory()
+
+    raise ValueError(
+        f"Unknown backend {chosen_backend!r}; expected 'gekko', 'pyomo' or "
+        "'gurobipy'."
+    )
+
+
 def resolve_solver(
     solver=None,
     backend: str | None = None,
@@ -73,33 +118,27 @@ def resolve_solver(
             )
         return solver
 
-    if solver is None and backend is None:
+    def _gekko_factory(code):
         # Lazy import so a missing gekko install doesn't break Pyomo callers.
         from .gekko import GEKKOSolver
 
-        return GEKKOSolver(solver=GEKKO_SOLVERS["ipopt"])
+        return GEKKOSolver(solver=code)
 
-    name = (solver or "ipopt").lower() if isinstance(solver, str) else "ipopt"
-    chosen_backend = backend or _auto_backend(name)
-
-    if chosen_backend == "gekko":
-        if name not in GEKKO_SOLVERS:
-            raise ValueError(
-                f"GEKKO has no solver named {name!r}; choose from "
-                f"{sorted(GEKKO_SOLVERS)} or pass backend='pyomo'."
-            )
-        from .gekko import GEKKOSolver
-
-        return GEKKOSolver(solver=GEKKO_SOLVERS[name])
-
-    if chosen_backend == "pyomo":
-        _validate_pyomo(name)
+    def _pyomo_factory(name):
         from .pyo import PyomoSolver
 
         return PyomoSolver(solver_name=name)
 
-    raise ValueError(
-        f"Unknown backend {chosen_backend!r}; expected 'gekko' or 'pyomo'."
+    def _gurobipy_factory():
+        from .gurobipy import GurobipySolver
+
+        return GurobipySolver()
+
+    if solver is None and backend is None:
+        return _gekko_factory(GEKKO_SOLVERS["ipopt"])
+
+    return _dispatch_backend(
+        solver, backend, _gekko_factory, _pyomo_factory, _gurobipy_factory
     )
 
 
@@ -124,30 +163,20 @@ def resolve_multi_period_solver(
     if solver is None and backend is None:
         return GekkoMultiPeriodSolver(solver=GEKKO_SOLVERS["ipopt"])
 
-    name = (solver or "ipopt").lower() if isinstance(solver, str) else "ipopt"
-    chosen_backend = backend or _auto_backend(name)
-
-    if chosen_backend == "gekko":
-        if name not in GEKKO_SOLVERS:
-            raise ValueError(
-                f"GEKKO has no solver named {name!r}; choose from "
-                f"{sorted(GEKKO_SOLVERS)} or pass backend='pyomo'."
-            )
-        return GekkoMultiPeriodSolver(solver=GEKKO_SOLVERS[name])
-
-    if chosen_backend == "pyomo":
-        _validate_pyomo(name)
-        return PyomoMultiPeriodSolver(solver_name=name)
-
-    raise ValueError(
-        f"Unknown backend {chosen_backend!r}; expected 'gekko' or 'pyomo'."
+    return _dispatch_backend(
+        solver,
+        backend,
+        lambda code: GekkoMultiPeriodSolver(solver=code),
+        lambda name: PyomoMultiPeriodSolver(solver_name=name),
     )
 
 
 def _auto_backend(name: str) -> str:
-    """GEKKO names → ``"gekko"``; everything else → ``"pyomo"``."""
-    if name in _DUAL_AVAILABLE:
-        return "gekko"
+    """GEKKO names → ``"gekko"``; everything else → ``"pyomo"``.
+
+    GEKKO ships a bundled IPOPT and is faster on NLPs, so any name it knows
+    (including ``ipopt``, which Pyomo can also drive) routes to GEKKO.
+    """
     if name in GEKKO_SOLVERS:
         return "gekko"
     return "pyomo"

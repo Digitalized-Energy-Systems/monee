@@ -19,15 +19,16 @@ from monee.model import (
 from monee.model.extension.islanding.core import NetworkIslandingConfig
 from monee.model.formulation.registry import attach_formulations
 from monee.problem.core import OptimizationProblem
-from monee.simulation.step_state import StepState
 from monee.solver.infeasibility import diagnose_infeasibility
 
 from .core import (
     SolverInterface,
     SolverResult,
+    StepState,
     apply_post_process_all,
     as_iter,
     compute_bound_violations,
+    filter_bool_eqs,
     filter_intermediate_eqs,
     find_ignored_nodes,
     ignore_branch,
@@ -332,8 +333,16 @@ class PyomoSolver(SolverInterface):
         # Trivial bool equations are not valid Pyomo Constraint expressions:
         # True = tautology (no-op); False = structural infeasibility from an
         # over-deactivated node/branch.  Skip both so the load-shedding
-        # objective can drive the solution instead of crashing construction.
+        # objective can drive the solution instead of crashing construction,
+        # but warn on False so a genuine modelling error is surfaced rather
+        # than silently masked (mirrors the GEKKO backend via filter_bool_eqs).
         if isinstance(expr, bool):
+            if expr is False:
+                _log.warning(
+                    "Dropping always-false (structurally infeasible) equation%s; "
+                    "this usually means a node/branch was over-deactivated.",
+                    f" ({name})" if name is not None else "",
+                )
             return
         if name is not None:
             setattr(pm, name, pyo.Constraint(expr=expr))
@@ -403,13 +412,18 @@ class PyomoSolver(SolverInterface):
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
+        draw_debug=False,
         exclude_unconnected_nodes: bool = False,
-        solver_name: str | None = None,
-        debug=False,
         step_state: StepState = None,
         simulation: bool = False,
         formulation=None,
+        solver_name: str | None = None,
+        **kwargs,
     ):
+        # Parameter names/order mirror SolverInterface.solve so that a caller
+        # passing draw_debug= (per the ABC) works on both backends. ``debug=``
+        # is accepted as a legacy alias; ``solver_name`` is a Pyomo-only extra.
+        debug = draw_debug or kwargs.pop("debug", False)
         self._simulation = simulation
         if solver_name is None:
             solver_name = self._solver_name
@@ -579,9 +593,8 @@ class PyomoSolver(SolverInterface):
             obj_val,
             success,
             violations,
+            infeasibility_report=report if not success else None,
         )
-        if not success:
-            solver_result.infeasibility_report = report
         return solver_result
 
     # Slack added on top of solver MIPGap so the phase-2 cap never excludes
@@ -688,7 +701,9 @@ class PyomoSolver(SolverInterface):
             equations = compound.equations(network)
 
             if equations is not None:
-                equations = as_iter(equations)
+                equations = filter_bool_eqs(
+                    as_iter(equations), context=f"compound_{compound.id}"
+                )
                 self._process_intermediate_eqs(pm, compound, equations)
                 self._add_equations(
                     pm,
@@ -747,7 +762,7 @@ class PyomoSolver(SolverInterface):
             ):
                 pm.aux_obj_exprs.append(expr)
 
-            node_eqs = [eq for eq in equations if not isinstance(eq, bool)]
+            node_eqs = filter_bool_eqs(equations, context=f"node_{node.id}")
             self._process_intermediate_eqs(pm, node.model, node_eqs)
             self._add_equations(
                 pm, filter_intermediate_eqs(node_eqs), name_prefix=f"node_{node.id}"
@@ -758,7 +773,9 @@ class PyomoSolver(SolverInterface):
                     continue
                 for expr in child.minimize(grid, node, sqrt_impl=sqrt_impl):
                     pm.aux_obj_exprs.append(expr)
-                child_eqs = as_iter(child.equations(grid, node))
+                child_eqs = filter_bool_eqs(
+                    as_iter(child.equations(grid, node)), context=f"child_{child.id}"
+                )
                 self._process_intermediate_eqs(pm, child.model, child_eqs)
                 self._add_equations(
                     pm,
@@ -821,6 +838,7 @@ class PyomoSolver(SolverInterface):
             ):
                 pm.aux_obj_exprs.append(expr)
 
+            branch_eqs = filter_bool_eqs(branch_eqs, context=f"branch_{branch.id}")
             self._process_intermediate_eqs(pm, branch.model, branch_eqs)
             self._add_equations(
                 pm,

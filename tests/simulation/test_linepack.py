@@ -13,7 +13,7 @@ def _gas_net():
     net.activate_grid(mm.GAS)
 
     source_id = net.child(mm.ExtHydrGrid())
-    sink_id = net.child(mm.Sink(mass_flow=0.2))
+    sink_id = net.child(mm.Sink(mass_flow_kgs=0.2))
 
     n0 = net.node(mm.Junction(), mm.GAS, child_ids=[source_id])
     n1 = net.node(mm.Junction(), mm.GAS, child_ids=[sink_id])
@@ -37,9 +37,9 @@ def test_linepack_single_step_definition():
     pipe_series = result[pipe_id]
     lp = pipe_series["linepack_kg"]
     npk = pipe_series["net_pack_kgs"]
-    density = pipe_series["gas_density"]
+    density = pipe_series["gas_density_kg_per_m3"]
 
-    # linepack_kg = V * gas_density in steady state
+    # linepack_kg = V * gas_density_kg_per_m3 in steady state
     v_pipe = math.pi / 4 * 0.5**2 * 5000
     assert math.isclose(lp, v_pipe * density, rel_tol=1e-4), (
         f"linepack_kg ({lp:.3f}) != V*density ({v_pipe * density:.3f})"
@@ -58,8 +58,8 @@ def test_linepack_auto_capacity():
     grid = net.grids[0]
     v_pipe = math.pi / 4 * 0.5**2 * 5000
     R, M, T = grid.universal_gas_constant, grid.molar_mass, grid.t_k
-    rho_nominal = grid.pressure_ref * grid.nominal_pressure_pu * M / (R * T)
-    rho_max = grid.pressure_ref * math.sqrt(grid.p_squared_pu_max) * M / (R * T)
+    rho_nominal = grid.pressure_ref_pa * grid.nominal_pressure_pu * M / (R * T)
+    rho_max = grid.pressure_ref_pa * math.sqrt(grid.pressure_squared_pu_max) * M / (R * T)
     expected_initial = v_pipe * rho_nominal
     expected_max = v_pipe * rho_max
 
@@ -114,7 +114,7 @@ def test_linepack_timeseries_mass_conservation():
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    td.add_child_series(sink_id, "mass_flow", [0.1, 0.3])
+    td.add_child_series(sink_id, "mass_flow_kgs", [0.1, 0.3])
 
     # WHEN
     result = run(net, td)
@@ -142,7 +142,7 @@ def test_linepack_source_flow_reduced_by_discharge():
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    td.add_child_series(sink_id, "mass_flow", [0.1, 0.12])
+    td.add_child_series(sink_id, "mass_flow_kgs", [0.1, 0.12])
 
     # WHEN
     result = run(net, td)
@@ -150,7 +150,7 @@ def test_linepack_source_flow_reduced_by_discharge():
     # THEN
     assert not result.failed_steps
 
-    src_flow = result.get_result_for(mm.ExtHydrGrid, "mass_flow")
+    src_flow = result.get_result_for(mm.ExtHydrGrid, "mass_flow_kgs")
     npk = result.get_result_for_id(pipe_id, "net_pack_kgs")
     src_feed_1 = float(-src_flow.iloc[1])
     npk1 = float(npk.iloc[1])
@@ -176,7 +176,7 @@ def test_linepack_buffers_demand_variation():
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    td.add_child_series(sink_id, "mass_flow", [0.1, 0.11, 0.35])
+    td.add_child_series(sink_id, "mass_flow_kgs", [0.1, 0.11, 0.35])
 
     # WHEN
     result = run(net, td)
@@ -202,9 +202,9 @@ def _branching_gas_net():
     net.activate_grid(mm.GAS)
 
     source_id = net.child(mm.ExtHydrGrid())
-    sink_a = net.child(mm.Sink(mass_flow=0.10))
-    sink_b = net.child(mm.Sink(mass_flow=0.08))
-    sink_c = net.child(mm.Sink(mass_flow=0.05))
+    sink_a = net.child(mm.Sink(mass_flow_kgs=0.10))
+    sink_b = net.child(mm.Sink(mass_flow_kgs=0.08))
+    sink_c = net.child(mm.Sink(mass_flow_kgs=0.05))
 
     n0 = net.node(mm.Junction(), mm.GAS, child_ids=[source_id])
     n1 = net.node(mm.Junction(), mm.GAS)
@@ -255,7 +255,7 @@ def test_tree_linepack_single_step_all_pipes():
         row = gp_df[gp_df["id"] == pid].iloc[0]
         lp = row["linepack_kg"]
         npk = row["net_pack_kgs"]
-        density = row["gas_density"]
+        density = row["gas_density_kg_per_m3"]
 
         d, l = pipe_specs[label]
         v_pipe = math.pi / 4 * d**2 * l
@@ -273,9 +273,9 @@ def test_tree_linepack_timeseries_mass_conservation():
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    td.add_child_series(sinks["a"], "mass_flow", [0.10, 0.15, 0.20])
-    td.add_child_series(sinks["b"], "mass_flow", [0.08, 0.08, 0.08])
-    td.add_child_series(sinks["c"], "mass_flow", [0.05, 0.05, 0.05])
+    td.add_child_series(sinks["a"], "mass_flow_kgs", [0.10, 0.15, 0.20])
+    td.add_child_series(sinks["b"], "mass_flow_kgs", [0.08, 0.08, 0.08])
+    td.add_child_series(sinks["c"], "mass_flow_kgs", [0.05, 0.05, 0.05])
 
     # WHEN
     result = run(net, td)
@@ -305,9 +305,9 @@ def test_tree_linepack_discharge_on_demand_spike():
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    td.add_child_series(sinks["a"], "mass_flow", [0.10, 0.10])
-    td.add_child_series(sinks["b"], "mass_flow", [0.08, 0.25])
-    td.add_child_series(sinks["c"], "mass_flow", [0.05, 0.05])
+    td.add_child_series(sinks["a"], "mass_flow_kgs", [0.10, 0.10])
+    td.add_child_series(sinks["b"], "mass_flow_kgs", [0.08, 0.25])
+    td.add_child_series(sinks["c"], "mass_flow_kgs", [0.05, 0.05])
 
     # WHEN
     result = run(net, td)
@@ -343,7 +343,7 @@ def test_tree_linepack_global_mass_balance():
     }
     td = TimeseriesData()
     for label, series in demands.items():
-        td.add_child_series(sinks[label], "mass_flow", series)
+        td.add_child_series(sinks[label], "mass_flow_kgs", series)
 
     # WHEN
     result = run(net, td)
@@ -352,7 +352,7 @@ def test_tree_linepack_global_mass_balance():
     assert not result.failed_steps
 
     # Per step: source feed + Σ(-net_pack_kgs_i) = Σ(sink_demand_i)
-    src_flow = result.get_result_for(mm.ExtHydrGrid, "mass_flow")
+    src_flow = result.get_result_for(mm.ExtHydrGrid, "mass_flow_kgs")
     for step in range(len(demands["a"])):
         total_demand = sum(demands[k][step] for k in demands)
         source_feed = float(-src_flow.iloc[step])
@@ -373,9 +373,9 @@ def test_tree_linepack_recharge_when_demand_drops():
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    td.add_child_series(sinks["a"], "mass_flow", [0.10, 0.05])
-    td.add_child_series(sinks["b"], "mass_flow", [0.08, 0.04])
-    td.add_child_series(sinks["c"], "mass_flow", [0.05, 0.025])
+    td.add_child_series(sinks["a"], "mass_flow_kgs", [0.10, 0.05])
+    td.add_child_series(sinks["b"], "mass_flow_kgs", [0.08, 0.04])
+    td.add_child_series(sinks["c"], "mass_flow_kgs", [0.05, 0.025])
 
     # WHEN
     result = run(net, td)

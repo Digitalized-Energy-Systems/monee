@@ -28,10 +28,10 @@ def test_calc_pipe_area_sub_1():
 def test_calc_nikurdse_friction_factor():
     # GIVEN
     diameter = 2
-    roughness = 0.7
+    roughness_m = 0.7
 
     # WHEN
-    nikurdse_friction = ml.calc_nikurdse(diameter, roughness)
+    nikurdse_friction = ml.calc_nikurdse(diameter, roughness_m)
 
     # THEN
     assert math.isclose(nikurdse_friction, 0.23781164943674166, rel_tol=1e-3)
@@ -52,14 +52,14 @@ def test_reynolds_equation():
     # GIVEN
     # rey_var is scaled by REYNOLDS_SCALE = 1e6, so m*D/(mu*A*1e6) = rey_var
     rey_var = 3.21e-4
-    mass_flow = 321
+    mass_flow_kgs = 321
     diameter = 2
-    dynamic_visc = 0.1
+    dynamic_visc_pas = 0.1
     area = 20
 
     # WHEN
     reynolds_correct = ml.reynolds_equation(
-        rey_var, mass_flow, diameter, dynamic_visc, area
+        rey_var, mass_flow_kgs, diameter, dynamic_visc_pas, area
     )
 
     # THEN

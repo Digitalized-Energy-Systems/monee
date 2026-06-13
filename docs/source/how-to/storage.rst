@@ -39,7 +39,7 @@ All three follow the **load convention**: positive dispatch = charging
 (consuming from the network), negative dispatch = discharging (injecting
 into the network).
 
-By default the dispatch attribute (``p_mw`` or ``mass_flow``) is a plain
+By default the dispatch attribute (``p_mw`` or ``mass_flow_kgs``) is a plain
 Python float - fixed at zero - so the model acts as an idle element in a
 plain energy-flow solve.  Activate it in one of two ways:
 
@@ -306,7 +306,7 @@ Prescribed discharge
    j1 = mx.create_gas_junction(net_g)
    mx.create_gas_ext_grid(net_g, j0)
    mx.create_gas_pipe(net_g, j0, j1, diameter_m=0.3, length_m=5000)
-   mx.create_gas_sink(net_g, j1, mass_flow=0.05)
+   mx.create_gas_sink(net_g, j1, mass_flow_kgs=0.05)
 
    tank = mm.GasStorage(
        m_stored_kg_initial=1000.0,   # start with 1 tonne of gas
@@ -317,7 +317,7 @@ Prescribed discharge
 
    td_g = TimeseriesData()
    # Discharge 0.1 kg/s at each step (negative = inject into network)
-   td_g.add_child_series(tank_id, "mass_flow", [-0.1, -0.1, -0.1, -0.1])
+   td_g.add_child_series(tank_id, "mass_flow_kgs", [-0.1, -0.1, -0.1, -0.1])
 
    result_g = run_timeseries(net_g, td_g)
    stored = result_g.get_result_for_id(tank_id, "m_stored_kg")
@@ -329,7 +329,7 @@ Prescribed discharge
 
 .. note::
 
-   The SoC update is ``m_stored_kg(t) = m_stored_kg(t-1) + dt_s * mass_flow(t)``
+   The SoC update is ``m_stored_kg(t) = m_stored_kg(t-1) + dt_s * mass_flow_kgs(t)``
    where ``dt_s = dt_h * 3600``.  At 1 h per step:
    1000 - 0.1 × 3600 = 640 kg after step 1.
 
@@ -349,13 +349,13 @@ Prescribed discharge
    j1 = mx.create_gas_junction(net_g)
    mx.create_gas_ext_grid(net_g, j0)
    mx.create_gas_pipe(net_g, j0, j1, diameter_m=0.3, length_m=5000)
-   mx.create_gas_sink(net_g, j1, mass_flow=0.05)
+   mx.create_gas_sink(net_g, j1, mass_flow_kgs=0.05)
    tank = mm.GasStorage(m_stored_kg_initial=1000.0, m_stored_kg_max=5000.0,
                         flow_max_kgs=0.2)
    tank_id = mx.create_gas_child(net_g, tank, node_id=j1, name="tank")
 
    td_g = TimeseriesData()
-   td_g.add_child_series(tank_id, "mass_flow", DISPATCH)
+   td_g.add_child_series(tank_id, "mass_flow_kgs", DISPATCH)
    result_g = run_timeseries(net_g, td_g)
    stored = result_g.get_result_for_id(tank_id, "m_stored_kg")
 
@@ -459,9 +459,9 @@ API reference
      - Convert ``p_mw`` into a ``Var`` for optimisation.  Called automatically
        by ``OptimizationProblem.controllable_storages()``.
    * - ``GasStorage.make_controllable()``
-     - Convert ``mass_flow`` into a ``Var`` for optimisation.
+     - Convert ``mass_flow_kgs`` into a ``Var`` for optimisation.
    * - ``ThermalStorage.make_controllable()``
-     - Convert ``mass_flow`` into a ``Var`` for optimisation.
+     - Convert ``mass_flow_kgs`` into a ``Var`` for optimisation.
    * - ``mx.create_el_child(net, model, node_id, name=...)``
      - Attach any electric child model (incl. ``ElectricStorage``) to a bus.
    * - ``mx.create_gas_child(net, model, node_id, name=...)``

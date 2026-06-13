@@ -113,10 +113,10 @@ def _solve(net):
     net.apply_formulation(EL_MISOCP_FORMULATION)
     problem = mp.create_min_load_shedding_problem(
         # Force ext_grid to contribute nothing → only 1 MW generator feeds B2.
-        ext_grid_el_bounds=(0, 0),
+        bounds_ext_el=(0, 0),
         include_ext_grids=True,
         # Disable non-electric checks to keep the test focused.
-        check_temperature=False,
+        check_t=False,
         check_pressure=False,
     )
 

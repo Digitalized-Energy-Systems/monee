@@ -65,8 +65,8 @@ def _user_obj_value(network):
             # Skip - gas factor lookup needs the grid map; tests don't rely on it
             continue
         else:  # HE / PassiveHE branches
-            q_set = getattr(m, "q_mw_set", 0)
-            q_del = getattr(m, "q_mw_delivered", None)
+            q_set = getattr(m, "heat_mw_set", 0)
+            q_del = getattr(m, "heat_mw_delivered", None)
             if isinstance(q_set, (int, float)) and q_del is not None:
                 q_del_val = _val(q_del)
                 shed = (q_set - q_del_val) if q_set > 0 else (q_del_val - q_set)
@@ -85,9 +85,9 @@ def _build_unstressed_net():
 def _make_shedding_problem(lex_objectives=False):
     """Min-load-shedding problem with the relaxed bounds used by these tests."""
     return create_min_load_shedding_problem(
-        bounds_el=(0.5, 1.5),
-        bounds_gas=(0.5, 1.5),
-        bounds_heat=(0.5, 1.5),
+        bounds_vm=(0.5, 1.5),
+        bounds_pressure=(0.5, 1.5),
+        bounds_t=(0.5, 1.5),
         include_ext_grids=False,
         include_storages=False,
         lex_objectives=lex_objectives,

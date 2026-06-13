@@ -258,7 +258,7 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
     fall back to the CP accent colour.
     """
     # single-grid electrical loading
-    for col in ("loading_percent", "loading_from_percent"):
+    for col in ("loading_pu", "loading_from_pu"):
         v = row.get(col)
         if v is not None:
             try:
@@ -267,7 +267,7 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
                 pass
 
     # single-grid hydraulic mass flow
-    for col in ("mass_flow", "mass_flow_pos"):
+    for col in ("mass_flow_kgs", "mass_flow_pos_kgs"):
         v = row.get(col)
         if v is not None:
             try:
@@ -290,7 +290,7 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
                 pass
 
     # multi-grid: gas / hydraulic flow
-    for col in ("gas_kgps", "from_mass_flow", "to_mass_flow"):
+    for col in ("gas_mass_flow_kgs", "from_mass_flow_kgs", "to_mass_flow_kgs"):
         v = row.get(col)
         if v is not None:
             try:
@@ -301,7 +301,7 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
                 pass
 
     # multi-grid: heat
-    for col in ("heat_mw", "q_mw"):
+    for col in ("q_mw", "q_mw_heat"):
         v = row.get(col)
         if v is not None:
             try:
@@ -318,7 +318,9 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
 
 
 def _compute_layout(graph: nx.Graph, network, use_monee_positions: bool) -> dict:
-    if use_monee_positions:
+    if use_monee_positions and all(
+        graph.nodes[nid]["internal_node"].position is not None for nid in graph.nodes
+    ):
         return {
             nid: (
                 graph.nodes[nid]["internal_node"].position[0],

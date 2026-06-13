@@ -17,12 +17,12 @@ def create_branching_two_pipe_heat_example():
     g_node_1 = pn.node(
         mm.Junction(),
         mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=30))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=30))],
     )
     g_node_2 = pn.node(
         mm.Junction(),
         mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=3))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=3))],
     )
 
     pn.branch(
@@ -51,14 +51,14 @@ def create_t_heat_grid_test():
         # t_k types the injected stream; without it the junction temperature
         # is structurally underdetermined - APOPT fails on the rank-deficient
         # system and SCIP/IPOPT return arbitrary, mutually disagreeing values.
-        child_ids=[pn.child(mm.Source(mass_flow=0.1, t_k=340))],
+        child_ids=[pn.child(mm.Source(mass_flow_kgs=0.1, t_k=340))],
     )
     g_node_mid = pn.node(
         mm.Junction(),
     )
     g_node_2 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=0.3))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.3))],
     )
 
     pn.branch(
@@ -95,7 +95,7 @@ def create_rect_he_heat_example():
     )
     g_node_3 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=1))],
+        child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=1))],
     )
 
     pn.branch(
@@ -132,23 +132,23 @@ def create_ext_branching_heat_example():
     )
     g_node_1 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))],
     )
     g_node_2 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))],
     )
     g_node_3 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))],
     )
     g_node_4 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))],
     )
     g_node_5 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=1))],
+        child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=1))],
     )
 
     pn.branch(
@@ -191,10 +191,10 @@ def create_two_pipes_with_he_no_branching():
     g_node_0 = pn.node(
         mm.Junction(),
         mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=0.3))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.3))],
     )
     g_node_1 = pn.node(
-        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=10))]
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=10))]
     )
     g_node_2 = pn.node(mm.Junction(), mm.WATER)
     g_node_3 = pn.node(
@@ -228,7 +228,7 @@ def create_line_heating_with_dead_end():
     g_node_0 = pn.node(
         mm.Junction(),
         mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))],
     )
     g_node_1 = pn.node(mm.Junction(), mm.WATER)
     g_node_2 = pn.node(mm.Junction(), mm.WATER)
@@ -269,7 +269,7 @@ def create_circular_heating_net():
     g_node_0 = pn.node(
         mm.Junction(),
         mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))],
     )
     g_node_1 = pn.node(mm.Junction(), mm.WATER)
     g_node_2 = pn.node(mm.Junction(), mm.WATER)
@@ -319,7 +319,7 @@ def test_two_pipes_heat_network():
     # THEN
     assert result.success
 
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -33)
+    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -33)
     assert len(result.dataframes) == 4
     assert math.isclose(
         result.dataframes["Junction"]["pressure_pa"][2], 999999.84741, abs_tol=0.001
@@ -341,7 +341,7 @@ def test_t_heat_network():
     assert result.success
 
     assert math.isclose(
-        result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2, rel_tol=1e-4
+        result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -0.2, rel_tol=1e-4
     )
     # 356 K slack and 340 K source mix at mid and cool toward the sink; with
     # the source temperature typed, APOPT and SCIP agree on this value to 5
@@ -364,7 +364,7 @@ def test_circle_heat_network():
     assert result.success
 
     assert math.isclose(
-        result.dataframes["ExtHydrGrid"]["mass_flow"][0], -5, rel_tol=1e-4
+        result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -5, rel_tol=1e-4
     )
     # Sink junction mixes the 356 K slack and 340 K source streams (minus pipe
     # losses), so it lies between the injection temperatures. The old 367.18 K
@@ -386,7 +386,7 @@ def test_heat_exchanger():
     assert result.success
 
     assert math.isclose(
-        result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.39834289356
+        result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -0.39834289356
     )
     assert math.isclose(
         result.dataframes["Junction"]["t_k"][0], 383.17457358, abs_tol=0.01
@@ -408,7 +408,7 @@ def test_dead_end():
     assert result.success
 
     assert math.isclose(
-        result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.1, rel_tol=1e-5
+        result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -0.1, rel_tol=1e-5
     )
     assert math.isclose(
         result.dataframes["Junction"]["t_k"][0], 343.40404, abs_tol=0.01
@@ -421,14 +421,14 @@ def create_supply_return_parallel_he():
     pn = mm.Network()
 
     s0 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))])
-    s1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
-    s2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
+    s1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))])
+    s2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))])
 
     r0 = pn.node(
-        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=10))]
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=10))]
     )
-    r1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=3))])
-    r2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=3))])
+    r1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=3))])
+    r2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=3))])
 
     pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s0, s1)
     pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s1, s2)
@@ -454,7 +454,7 @@ def create_supply_return_parallel_he_real(q_mw_coeff=1):
     s2 = pn.node(mm.Junction(), mm.WATER)
 
     r0 = pn.node(
-        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=10))]
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=10))]
     )
     r1 = pn.node(mm.Junction(), mm.WATER)
     r2 = pn.node(mm.Junction(), mm.WATER)

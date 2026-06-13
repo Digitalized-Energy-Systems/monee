@@ -8,7 +8,7 @@ from tests.util import assert_junction_solved as _assert_junction_solved
 
 _LINE = dict(length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, parallel=1)
 _PIPE = dict(diameter_m=0.15, length_m=100)
-_GAS_PIPE = dict(diameter_m=0.3, length_m=100, temperature_ext_k=300, roughness=0.01)
+_GAS_PIPE = dict(diameter_m=0.3, length_m=100, temperature_ext_k=300, roughness_m=0.01)
 
 
 def _power_grid(pn):
@@ -47,7 +47,7 @@ def _heat_grid_main(pn):
     )
     j_hub = pn.node(mm.Junction(), grid=water_grid)
     j_sink = pn.node(
-        mm.Junction(), grid=water_grid, child_ids=[pn.child(mm.Sink(mass_flow=0.05))]
+        mm.Junction(), grid=water_grid, child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.05))]
     )
     pn.branch(mm.WaterPipe(**_PIPE), j_ext, j_hub)
     pn.branch(mm.WaterPipe(**_PIPE), j_hub, j_sink)
@@ -73,7 +73,7 @@ def _gas_grid(pn, *, isolated_junction=False):
     )
     j_mid = pn.node(mm.Junction(), grid=gas_grid)
     j_main = pn.node(
-        mm.Junction(), grid=gas_grid, child_ids=[pn.child(mm.Source(mass_flow=1))]
+        mm.Junction(), grid=gas_grid, child_ids=[pn.child(mm.Source(mass_flow_kgs=1))]
     )
     j_iso = pn.node(mm.Junction(), grid=gas_grid)
     pn.branch(mm.GasPipe(**_GAS_PIPE), j_hub, j_mid)
@@ -92,7 +92,7 @@ def _heat_grid_full(pn):
     )
     j_supply = pn.node(mm.Junction(), grid=water_grid)
     j_return = pn.node(
-        mm.Junction(), grid=water_grid, child_ids=[pn.child(mm.Sink(mass_flow=0.05))]
+        mm.Junction(), grid=water_grid, child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.05))]
     )
     pn.branch(mm.WaterPipe(**_PIPE), j_ext, j_supply)
     pn.branch(mm.WaterPipe(**_PIPE), j_supply, j_return)

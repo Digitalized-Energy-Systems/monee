@@ -5,7 +5,7 @@ Cross-cutting helpers used by load-shedding / dispatch problems.
 from __future__ import annotations
 
 from monee.model.core import Var
-from monee.model.grid import GasGrid
+from monee.model.grid import KGPS_KWHPERKG_TO_MW, GasGrid
 from monee.model.multi import (
     CHPControlNode,
     CHPHGControlNode,
@@ -17,7 +17,7 @@ from monee.model.multi import (
     PowerToHeatHG,
 )
 
-# Fallback HHV (kWh/kg) when a gas grid is missing ``higher_heating_value``.
+# Fallback HHV (kWh/kg) when a gas grid is missing ``higher_heating_value_kwh_per_kg``.
 _HHV_DEFAULT = 15.3
 
 
@@ -25,7 +25,7 @@ def line_loading_limit(branch_model, side: str, max_loading: float):
     """LP-writable line-loading constraint.
 
     AC: ``loading_*_percent ≤ max``. MISOCP: emit
-    ``current_pu · scale² ≤ max²`` using the formulation-stashed
+    ``current_pu_squared · scale² ≤ max²`` using the formulation-stashed
     ``_misocp_loading_*_scale_squared`` (the sqrt form is LP-incompatible).
     """
     if side not in ("from", "to"):
@@ -33,8 +33,8 @@ def line_loading_limit(branch_model, side: str, max_loading: float):
     scale_attr = f"_misocp_loading_{side}_scale_squared"
     if hasattr(branch_model, scale_attr):
         scale_sq = getattr(branch_model, scale_attr)
-        return branch_model.current_pu * scale_sq <= max_loading * max_loading
-    return getattr(branch_model, f"loading_{side}_percent") <= max_loading
+        return branch_model.current_pu_squared * scale_sq <= max_loading * max_loading
+    return getattr(branch_model, f"loading_{side}_pu") <= max_loading
 
 
 def cp_input_rated_mw(component):
@@ -57,7 +57,7 @@ def cp_input_rated_mw(component):
             gg = next((g for g in grid if isinstance(g, GasGrid)), None)
         elif isinstance(grid, GasGrid):
             gg = grid
-        return getattr(gg, "higher_heating_value", _HHV_DEFAULT) if gg else _HHV_DEFAULT
+        return getattr(gg, "higher_heating_value_kwh_per_kg", _HHV_DEFAULT) if gg else _HHV_DEFAULT
 
     def _scalar(x):
         # Read the bound (or the value) off a Var; pass scalars through.
@@ -71,14 +71,14 @@ def cp_input_rated_mw(component):
 
     # ---- Gas-input CPs ----------------------------------------------------
     if isinstance(model, (CHPControlNode, CHPHGControlNode, GasToHeatControlNode)):
-        return ("gas", abs(_scalar(model.gas_kgps)) * 3.6 * _hhv())
+        return ("gas", abs(_scalar(model.gas_mass_flow_kgs)) * KGPS_KWHPERKG_TO_MW * _hhv())
     if isinstance(model, GasToPower):
         eff = max(getattr(model, "efficiency", 1.0), 1e-6)
         # el_mw is stored as -p_mw_setpoint (scalar).
         return ("gas", abs(_scalar(model.el_mw)) / eff)
     if isinstance(model, GasToHeatHG):
         eff = max(getattr(model, "efficiency", 1.0), 1e-6)
-        return ("gas", abs(_scalar(model.heat_energy_mw)) / eff)
+        return ("gas", abs(_scalar(model.heat_mw)) / eff)
 
     # ---- Power-input CPs --------------------------------------------------
     if isinstance(model, PowerToHeatControlNode):
@@ -87,7 +87,7 @@ def cp_input_rated_mw(component):
         return ("power", abs(_scalar(model.load_p_mw)))
     if isinstance(model, PowerToGas):
         eff = max(getattr(model, "efficiency", 1.0), 1e-6)
-        # gas_kgps stored as -mass_flow_setpoint; rated input power = output / η.
-        return ("power", abs(_scalar(model.gas_kgps)) * 3.6 * _hhv() / eff)
+        # gas_mass_flow_kgs stored as -mass_flow_setpoint_kgs; rated input power = output / η.
+        return ("power", abs(_scalar(model.gas_mass_flow_kgs)) * KGPS_KWHPERKG_TO_MW * _hhv() / eff)
 
     return None

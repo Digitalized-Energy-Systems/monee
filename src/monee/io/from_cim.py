@@ -138,13 +138,13 @@ def _add_line(obj, net, tn_to_node, base_kv_of, report):
         GenericPowerBranch(
             tap=1.0,
             shift=0.0,
-            br_r=r / base_z,
-            br_x=x / base_z,
+            br_r_pu=r / base_z,
+            br_x_pu=x / base_z,
             # Split the total shunt admittance evenly across both ends (pi model).
-            g_fr=gch * base_z / 2.0,
-            b_fr=bch * base_z / 2.0,
-            g_to=gch * base_z / 2.0,
-            b_to=bch * base_z / 2.0,
+            g_fr_pu=gch * base_z / 2.0,
+            b_fr_pu=bch * base_z / 2.0,
+            g_to_pu=gch * base_z / 2.0,
+            b_to_pu=bch * base_z / 2.0,
             max_i_ka=_UNBOUNDED_I_KA,  # TODO: read CurrentLimit / OperationalLimit
         ),
         from_node_id=from_node,
@@ -181,12 +181,12 @@ def _add_transformer(obj, ends, net, tn_to_node, base_kv_of, report):
         GenericPowerBranch(
             tap=1.0,  # TODO: RatioTapChanger.step -> off-nominal ratio
             shift=0.0,  # TODO: PhaseTapChanger -> phase shift
-            br_r=r_ohm / base_z,
-            br_x=x_ohm / base_z,
-            g_fr=0.0,
-            b_fr=0.0,
-            g_to=0.0,
-            b_to=0.0,
+            br_r_pu=r_ohm / base_z,
+            br_x_pu=x_ohm / base_z,
+            g_fr_pu=0.0,
+            b_fr_pu=0.0,
+            g_to_pu=0.0,
+            b_to_pu=0.0,
             max_i_ka=_UNBOUNDED_I_KA,
         ),
         from_node_id=from_node,

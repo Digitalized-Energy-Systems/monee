@@ -104,11 +104,11 @@ heating grid via a **power-to-heat (P2H)** unit:
 
     mx.create_ext_hydr_grid(net, j_supply)
     mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.12, length_m=100)
-    mx.create_sink(net, j_return, mass_flow=1)
+    mx.create_sink(net, j_return, mass_flow_kgs=1)
 
     # ── Couple the two grids ──────────────────────────────────────────────
     mx.create_p2h(net, bus_1, j_mid, j_return,
-                  heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9)
+                  heat_mw=0.1, diameter_m=0.1, efficiency=0.9)
 
     result = run_energy_flow(net)
 
@@ -154,9 +154,9 @@ supports fully custom objectives and constraints:
     mx.create_power_load(opt_net, opt_bus_1, p_mw=0.5, q_mvar=0.0)
 
     problem = create_min_load_shedding_problem(
-        bounds_el=(0.9, 1.1),
+        bounds_vm=(0.9, 1.1),
         check_pressure=False,      # no gas grid in this network
-        check_temperature=False,   # no heat grid in this network
+        check_t=False,   # no heat grid in this network
     )
 
     result = run_energy_flow_optimization(opt_net, problem)
@@ -231,7 +231,7 @@ subclass the appropriate model base class and implement ``equations``:
 
       PowerLine  (1 instance)
       ────────────────────────────────────────────────────────────────────
-             id  tap  shift  br_r  br_x  g_fr  b_fr  g_to  b_to  max_i_ka  backup  on_off  p_from_mw  q_from_mvar  i_from_ka  loading_from_percent   p_to_mw  q_to_mvar   i_to_ka  loading_to_percent  length_m  r_ohm_per_m  x_ohm_per_m  parallel
+             id  tap  shift  br_r_pu  br_x_pu  g_fr_pu  b_fr_pu  g_to_pu  b_to_pu  max_i_ka  backup  on_off  p_from_mw  q_from_mvar  i_from_ka  loading_from_pu   p_to_mw  q_to_mvar   i_to_ka  loading_to_pu  length_m  r_ohm_per_m  x_ohm_per_m  parallel
       (0, 1, 0)    1      0  0.01  0.01     0     0     0     0      3.19   False       1   0.003774    1.424e-07  8.222e-06             2.577e-06 -0.003773          0 8.221e-06           2.577e-06       100       0.0001       0.0001         1
 
 The :func:`~monee.model.core.model` decorator (``@mm.model``) registers the

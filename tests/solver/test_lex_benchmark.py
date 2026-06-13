@@ -93,9 +93,9 @@ def _bench_once(
     demand_w, gen_w = weights
     net = _fresh_net(net_factory, kwargs)
     prob = create_min_load_shedding_problem(
-        bounds_el=(0.5, 1.5),
-        bounds_gas=(0.5, 1.5),
-        bounds_heat=(0.5, 1.5),
+        bounds_vm=(0.5, 1.5),
+        bounds_pressure=(0.5, 1.5),
+        bounds_t=(0.5, 1.5),
         include_ext_grids=False,
         include_storages=False,
         lex_objectives=lex,

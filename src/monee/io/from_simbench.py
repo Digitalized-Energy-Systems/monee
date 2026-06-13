@@ -1,8 +1,12 @@
+import logging
+
 import simbench
 
 import monee.model as md
 from monee.io.from_pandapower import aggregated_pp_load_name, from_pandapower_net
 from monee.simulation.timeseries import TimeseriesData
+
+logger = logging.getLogger(__name__)
 
 
 def obtain_simbench_profile_by_pp_net(pp_net) -> TimeseriesData:
@@ -41,13 +45,31 @@ def obtain_simbench_profile_by_pp_net(pp_net) -> TimeseriesData:
             if q_total is not None:
                 td.add_child_series_by_name(agg_name, "q_mvar", q_total.tolist())
 
+    # Non-load profile categories (gen, sgen, storage, ...) are registered as
+    # 'p_mw' child series keyed by the raw simbench column name. from_pandapower_net
+    # only assigns deterministic names to aggregated PowerLoads, so these series
+    # bind only if a child happens to carry the exact simbench column name - and
+    # 'p_mw' is assumed regardless of category (e.g. a storage SOC column would be
+    # mis-typed). Surface the categories so silent non-binding is not invisible.
     for t, profile_df in profiles.items():
         if t == "load":
             continue
+        registered = []
         for name, values in profile_df.items():
             if name == "time":
                 continue
             td.add_child_series_by_name(name, "p_mw", list(values))
+            registered.append(name)
+        if registered:
+            logger.warning(
+                "simbench import: registered %d %r profile column(s) as 'p_mw' "
+                "child series by raw name (%s); these apply only to childs whose "
+                "name matches exactly - from_pandapower_net names aggregated "
+                "PowerLoads only, so unmatched series are silently ignored.",
+                len(registered),
+                t,
+                ", ".join(map(str, registered)),
+            )
 
     return td
 

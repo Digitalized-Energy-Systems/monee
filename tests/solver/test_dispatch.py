@@ -14,6 +14,7 @@ from monee.solver import (
     resolve_solver,
 )
 from monee.solver.dispatch import _auto_backend
+from monee.solver.gurobipy import GurobipySolver
 
 
 def _unavailable_pyomo_solvers(pyo_env):
@@ -153,6 +154,47 @@ def test_resolve_unknown_backend_raises():
         resolve_solver("ipopt", backend="cplex")
 
 
+# resolve_solver - gurobipy backend
+
+
+def test_resolve_gurobipy_backend_with_gurobi_name():
+    # WHEN
+    s = resolve_solver("gurobi", backend="gurobipy")
+
+    # THEN
+    assert isinstance(s, GurobipySolver)
+
+
+def test_resolve_gurobipy_backend_without_solver_name():
+    # backend alone is enough; gurobipy provides only 'gurobi'.
+    # WHEN
+    s = resolve_solver(backend="gurobipy")
+
+    # THEN
+    assert isinstance(s, GurobipySolver)
+
+
+def test_resolve_gurobipy_backend_rejects_other_solver_name():
+    # WHEN / THEN
+    with pytest.raises(ValueError, match="only provides the 'gurobi' solver"):
+        resolve_solver("ipopt", backend="gurobipy")
+
+
+def test_resolve_gurobi_still_routes_to_pyomo_by_default():
+    # Auto-routing is unchanged: 'gurobi' without an explicit backend stays Pyomo.
+    # GIVEN
+    pyo_env = pytest.importorskip("pyomo.environ")
+    if not pyo_env.SolverFactory("gurobi").available(exception_flag=False):
+        pytest.skip("Gurobi not installed for Pyomo on this system.")
+
+    # WHEN
+    s = resolve_solver("gurobi")
+
+    # THEN
+    assert isinstance(s, PyomoSolver)
+    assert s._solver_name == "gurobi"
+
+
 # resolve_multi_period_solver - same shape
 
 
@@ -202,3 +244,10 @@ def test_resolve_multi_period_routes_pyomo_for_gurobi():
     # THEN
     assert isinstance(s, PyomoMultiPeriodSolver)
     assert s._solver_name == "gurobi"
+
+
+def test_resolve_multi_period_gurobipy_backend_raises():
+    # The native Gurobi backend is single-period only.
+    # WHEN / THEN
+    with pytest.raises(ValueError, match="single-period only"):
+        resolve_multi_period_solver("gurobi", backend="gurobipy")

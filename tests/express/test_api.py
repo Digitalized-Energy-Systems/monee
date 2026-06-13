@@ -28,7 +28,7 @@ def test_api_el():
     mx.create_ext_hydr_grid(net, junc_1)
     mx.create_sink(net, junc_2, 1)
 
-    mx.create_p2g(net, bus_0, junc_0, efficiency=0.9, mass_flow_setpoint=0.1)
+    mx.create_p2g(net, bus_0, junc_0, efficiency=0.9, mass_flow_setpoint_kgs=0.1)
 
     # WHEN
     result = run_energy_flow(net)
@@ -81,7 +81,7 @@ def test_api_example_index():
 
     mx.create_ext_hydr_grid(net, junc_0)
     mx.create_water_pipe(net, junc_0, junc_1, diameter_m=0.12, length_m=100)
-    mx.create_sink(net, junc_2, mass_flow=1)
+    mx.create_sink(net, junc_2, mass_flow_kgs=1)
 
     mx.create_p2h(
         net,
@@ -138,7 +138,7 @@ def test_gas_domain_functions():
     net = mx.create_multi_energy_network()
 
     mx.create_gas_ext_grid(net, 0)
-    mx.create_gas_sink(net, 1, mass_flow=0.1)
+    mx.create_gas_sink(net, 1, mass_flow_kgs=0.1)
     mx.create_gas_pipe(net, 0, 1, diameter_m=0.1, length_m=100)
 
     # WHEN
@@ -155,7 +155,7 @@ def test_gas_source_auto_node():
     # create_gas_source with a new node_id auto-creates a gas junction
     net = mx.create_multi_energy_network()
 
-    mx.create_gas_source(net, 0, mass_flow=0.1)
+    mx.create_gas_source(net, 0, mass_flow_kgs=0.1)
     mx.create_gas_ext_grid(net, 1)
     mx.create_gas_pipe(net, 0, 1, diameter_m=0.1, length_m=100)
 
@@ -174,7 +174,7 @@ def test_water_domain_functions():
     net = mx.create_multi_energy_network()
 
     mx.create_water_ext_grid(net, 0)
-    mx.create_water_sink(net, 1, mass_flow=1)
+    mx.create_water_sink(net, 1, mass_flow_kgs=1)
     mx.create_water_pipe(net, 0, 1, diameter_m=0.12, length_m=100)
 
     # WHEN
@@ -193,8 +193,8 @@ def test_water_source_auto_node():
     net = mx.create_multi_energy_network()
 
     mx.create_water_ext_grid(net, 0)
-    mx.create_water_source(net, 1, mass_flow=0.5)
-    mx.create_water_sink(net, 1, mass_flow=1.5)
+    mx.create_water_source(net, 1, mass_flow_kgs=0.5)
+    mx.create_water_sink(net, 1, mass_flow_kgs=1.5)
     mx.create_water_pipe(net, 0, 1, diameter_m=0.12, length_m=100)
 
     # WHEN

@@ -89,15 +89,15 @@ j_mid    = mx.create_water_junction(net)
 j_return = mx.create_water_junction(net)
 mx.create_ext_hydr_grid(net, j_supply)
 mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.12, length_m=100)
-mx.create_sink(net, j_return, mass_flow=1.0)
+mx.create_sink(net, j_return, mass_flow_kgs=1.0)
 
 # Coupling: bus_1 drives a heat pump that feeds the heating loop
 mx.create_p2h(net, bus_1, j_mid, j_return,
-              heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9)
+              heat_mw=0.1, diameter_m=0.1, efficiency=0.9)
 
 result = run_energy_flow(net)
 print(result.get(mm.Bus)[["vm_pu", "va_degree"]])
-print(result.get(mm.WaterPipe)[["mass_flow"]])
+print(result.get(mm.WaterPipe)[["mass_flow_kgs"]])
 ```
 
 Solvers are selected by name - `run_energy_flow(net, solver="gurobi")` routes GEKKO names (`apopt`, `bpopt`, `ipopt`) to the bundled GEKKO back-end and any other name to the matching Pyomo solver. By default `run_energy_flow` runs in **simulation mode** (`simulation=True`), squaring the model for a fast steady-state solve; pass `simulation=False` (or an optimisation problem) to solve in optimisation mode.
@@ -114,9 +114,9 @@ import monee
 net.apply_formulation(monee.EL_MISOCP_FORMULATION)
 
 problem = monee.create_min_load_shedding_problem(
-    bounds_el=(0.9, 1.1),    # voltage bounds (pu)
-    bounds_heat=(0.9, 1.1),  # temperature bounds (pu)
-    bounds_gas=(0.9, 1.1),   # pressure bounds (pu)
+    bounds_vm=(0.9, 1.1),        # voltage bounds (pu)
+    bounds_t=(0.9, 1.1),         # temperature bounds (pu)
+    bounds_pressure=(0.9, 1.1),  # pressure bounds (pu)
     include_ext_grids=True,
 )
 
@@ -171,7 +171,7 @@ from monee.model.branch import GasPipe
 class MyGasPipeFormulation(BranchFormulation):
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         return [from_node_model.pressure_pu - to_node_model.pressure_pu
-                == branch.resistance * branch.mass_flow]
+                == branch.resistance * branch.mass_flow_kgs]
 
 net.apply_formulation(NetworkFormulation(
     branch_type_to_formulations={GasPipe: MyGasPipeFormulation()},

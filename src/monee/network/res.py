@@ -63,8 +63,8 @@ def create_urban_district_net() -> mm.Network:
     g4 = mx.create_gas_junction(net, name="G4_sink")
 
     mx.create_ext_hydr_grid(net, g0)
-    mx.create_sink(net, g3, mass_flow=0.04)  # direct gas consumer
-    mx.create_sink(net, g4, mass_flow=0.02)  # P2G injection node + consumer
+    mx.create_sink(net, g3, mass_flow_kgs=0.04)  # direct gas consumer
+    mx.create_sink(net, g4, mass_flow_kgs=0.02)  # P2G injection node + consumer
 
     mx.create_gas_pipe(net, g0, g1, diameter_m=0.15, length_m=400)
     mx.create_gas_pipe(net, g1, g2, diameter_m=0.12, length_m=300)
@@ -96,27 +96,16 @@ def create_urban_district_net() -> mm.Network:
         diameter_m=0.10,
         efficiency_power=0.40,
         efficiency_heat=0.40,
-        mass_flow_setpoint=0.006,
+        mass_flow_setpoint_kgs=0.006,
         regulation=1,
     )
-    # P2H: power at B4 → heat injected between H4 and H5 (20 kW).
-    # el_mw = 20 000 W / (0.95 × 1e6) ≈ 0.021 MW consumed from B4.
-    # mx.create_p2h(
-    #     net,
-    #     power_node_id=b4,
-    #     heat_node_id=r1,
-    #     heat_return_node_id=s2,
-    #     heat_energy_w=10_000,
-    #     diameter_m=0.10,
-    #     efficiency=0.95,
-    # )
     # P2G: surplus power at B0 → hydrogen injection at G4
     mx.create_p2g(
         net,
         from_node_id=b0,
         to_node_id=g4,
         efficiency=0.70,
-        mass_flow_setpoint=0.010,
+        mass_flow_setpoint_kgs=0.010,
         regulation=1,
     )
     # G2P: gas peaker at G3 → power backup at B2
@@ -191,8 +180,8 @@ def create_urban_district_net_with_ties() -> mm.Network:
     g4 = mx.create_gas_junction(net, name="G4_sink")
 
     mx.create_ext_hydr_grid(net, g0)
-    mx.create_sink(net, g3, mass_flow=0.04)
-    mx.create_sink(net, g4, mass_flow=0.02)
+    mx.create_sink(net, g3, mass_flow_kgs=0.04)
+    mx.create_sink(net, g4, mass_flow_kgs=0.02)
 
     mx.create_gas_pipe(net, g0, g1, diameter_m=0.15, length_m=400)
     mx.create_gas_pipe(net, g1, g2, diameter_m=0.12, length_m=300)
@@ -251,7 +240,7 @@ def create_urban_district_net_with_ties() -> mm.Network:
         diameter_m=0.10,
         efficiency_power=0.40,
         efficiency_heat=0.40,
-        mass_flow_setpoint=0.006,
+        mass_flow_setpoint_kgs=0.006,
         regulation=1,
     )
     mx.create_p2g(
@@ -259,7 +248,7 @@ def create_urban_district_net_with_ties() -> mm.Network:
         from_node_id=b0,
         to_node_id=g4,
         efficiency=0.70,
-        mass_flow_setpoint=0.010,
+        mass_flow_setpoint_kgs=0.010,
         regulation=1,
     )
     mx.create_g2p(
@@ -315,8 +304,8 @@ def _add_urban_district(net, idx: int, slack_bus, ext_gas_junction):
     g3 = mx.create_gas_junction(net, name=f"G3_sink{suffix}")
     g4 = mx.create_gas_junction(net, name=f"G4_sink{suffix}")
 
-    mx.create_sink(net, g3, mass_flow=0.03)
-    mx.create_sink(net, g4, mass_flow=0.015)
+    mx.create_sink(net, g3, mass_flow_kgs=0.03)
+    mx.create_sink(net, g4, mass_flow_kgs=0.015)
 
     mx.create_gas_pipe(net, ext_gas_junction, g1, diameter_m=0.15, length_m=400)
     mx.create_gas_pipe(net, g1, g2, diameter_m=0.12, length_m=250)
@@ -365,7 +354,7 @@ def _add_urban_district(net, idx: int, slack_bus, ext_gas_junction):
         diameter_m=0.10,
         efficiency_power=0.40,
         efficiency_heat=0.40,
-        mass_flow_setpoint=0.005,
+        mass_flow_setpoint_kgs=0.005,
         regulation=1,
     )
     mx.create_p2g(
@@ -373,7 +362,7 @@ def _add_urban_district(net, idx: int, slack_bus, ext_gas_junction):
         from_node_id=b0,
         to_node_id=g4,
         efficiency=0.70,
-        mass_flow_setpoint=0.008,
+        mass_flow_setpoint_kgs=0.008,
         regulation=1,
     )
     mx.create_g2p(
@@ -507,9 +496,9 @@ def create_industrial_hub_net() -> mm.Network:
     g6 = mx.create_gas_junction(net, name="G6_sink")
 
     mx.create_ext_hydr_grid(net, g0, max_import_kgs=1.1)
-    mx.create_sink(net, g2, mass_flow=0.30)  # large industrial process load
-    mx.create_sink(net, g5, mass_flow=0.20)
-    mx.create_sink(net, g6, mass_flow=0.15)
+    mx.create_sink(net, g2, mass_flow_kgs=0.30)  # large industrial process load
+    mx.create_sink(net, g5, mass_flow_kgs=0.20)
+    mx.create_sink(net, g6, mass_flow_kgs=0.15)
 
     mx.create_gas_pipe(net, g0, g1, diameter_m=0.50, length_m=800)
     mx.create_gas_pipe(net, g1, g2, diameter_m=0.40, length_m=600)
@@ -550,7 +539,7 @@ def create_industrial_hub_net() -> mm.Network:
         from_node_id=b1,
         to_node_id=g0,
         efficiency=0.70,
-        mass_flow_setpoint=0.05,
+        mass_flow_setpoint_kgs=0.05,
         regulation=1,
     )
     mx.create_p2g(
@@ -558,7 +547,7 @@ def create_industrial_hub_net() -> mm.Network:
         from_node_id=b6,
         to_node_id=g4,
         efficiency=0.70,
-        mass_flow_setpoint=0.04,
+        mass_flow_setpoint_kgs=0.04,
         regulation=1,
     )
 
@@ -623,9 +612,9 @@ def create_regional_mes_net() -> mm.Network:
     g7 = mx.create_gas_junction(net, name="G7_sink")
 
     mx.create_ext_hydr_grid(net, g0, max_import_kgs=0.42)
-    mx.create_sink(net, g4, mass_flow=0.08)
-    mx.create_sink(net, g6, mass_flow=0.06)
-    mx.create_sink(net, g7, mass_flow=0.10)
+    mx.create_sink(net, g4, mass_flow_kgs=0.08)
+    mx.create_sink(net, g6, mass_flow_kgs=0.06)
+    mx.create_sink(net, g7, mass_flow_kgs=0.10)
 
     mx.create_gas_pipe(net, g0, g1, diameter_m=0.40, length_m=600)
     mx.create_gas_pipe(net, g1, g2, diameter_m=0.35, length_m=500)
@@ -665,7 +654,7 @@ def create_regional_mes_net() -> mm.Network:
         diameter_m=0.12,
         efficiency_power=0.40,
         efficiency_heat=0.40,
-        mass_flow_setpoint=0.008,
+        mass_flow_setpoint_kgs=0.008,
         regulation=1,
     )
     # G2P-1: gas turbine peaker at mid-ring load bus
@@ -692,7 +681,7 @@ def create_regional_mes_net() -> mm.Network:
         from_node_id=b4,
         to_node_id=g5,
         efficiency=0.70,
-        mass_flow_setpoint=0.03,
+        mass_flow_setpoint_kgs=0.03,
         regulation=1,
     )
     # P2H: electric booster at B5, heat from r2→s2 (20 kW).
@@ -757,8 +746,8 @@ def create_balanced_urban_mes_net() -> mm.Network:
     g4 = mx.create_gas_junction(net, name="G4_sink")
 
     mx.create_ext_hydr_grid(net, g0, max_import_kgs=0.06)
-    mx.create_sink(net, g3, mass_flow=0.015)  # ~0.83 MW direct gas consumer
-    mx.create_sink(net, g4, mass_flow=0.010)  # ~0.55 MW P2G injection node + consumer
+    mx.create_sink(net, g3, mass_flow_kgs=0.015)  # ~0.83 MW direct gas consumer
+    mx.create_sink(net, g4, mass_flow_kgs=0.010)  # ~0.55 MW P2G injection node + consumer
 
     mx.create_gas_pipe(net, g0, g1, diameter_m=0.15, length_m=400)
     mx.create_gas_pipe(net, g1, g2, diameter_m=0.12, length_m=300)
@@ -800,7 +789,7 @@ def create_balanced_urban_mes_net() -> mm.Network:
         diameter_m=0.15,
         efficiency_power=0.40,
         efficiency_heat=0.40,
-        mass_flow_setpoint=0.026,
+        mass_flow_setpoint_kgs=0.026,
         regulation=1,
     )
     # P2H: power at B4 → 300 kW heat from r2→s2.
@@ -820,7 +809,7 @@ def create_balanced_urban_mes_net() -> mm.Network:
         from_node_id=b0,
         to_node_id=g4,
         efficiency=0.70,
-        mass_flow_setpoint=0.003,
+        mass_flow_setpoint_kgs=0.003,
         regulation=1,
     )
     # G2P: gas peaker at G3 → power backup at B2
@@ -983,13 +972,13 @@ def create_balanced_urban_mes_timeseries(
     # ── Gas sinks (direct consumers; excludes heat-return Sinks on WaterGrid) ─
     for child in net.childs_by_type(mm.Sink):
         if isinstance(child.grid, GasGrid):
-            mf_rated = child.model.mass_flow
-            td.add_child_series(child.id, "mass_flow", [mf_rated * f for f in g_series])
+            mf_rated = child.model.mass_flow_kgs
+            td.add_child_series(child.id, "mass_flow_kgs", [mf_rated * f for f in g_series])
 
     # q_mw_set is stored in MW with sign convention: negative = consumer.
     for branch in net.branches_by_type(mm.HeatExchangerLoad):
-        q_mw_rated = branch.model.q_mw_set  # e.g. -0.8 for an 800 kW consumer
-        td.add_branch_series(branch.id, "q_mw_set", [q_mw_rated * f for f in h_series])
+        heat_mw_rated = branch.model.q_mw_set  # e.g. -0.8 for an 800 kW consumer
+        td.add_branch_series(branch.id, "q_mw_set", [heat_mw_rated * f for f in h_series])
 
     return td
 
@@ -1052,9 +1041,9 @@ def create_resilient_urban_mes_net() -> mm.Network:
     g6 = mx.create_gas_junction(net, name="G6_chp2")
 
     mx.create_ext_hydr_grid(net, g0, max_import_kgs=0.06)  # primary gas source
-    mx.create_gas_source(net, g5, mass_flow=0.04)  # secondary gas source
-    mx.create_sink(net, g3, mass_flow=0.015)  # direct gas consumer
-    mx.create_sink(net, g4, mass_flow=0.010)  # P2G node + consumer
+    mx.create_gas_source(net, g5, mass_flow_kgs=0.04)  # secondary gas source
+    mx.create_sink(net, g3, mass_flow_kgs=0.015)  # direct gas consumer
+    mx.create_sink(net, g4, mass_flow_kgs=0.010)  # P2G node + consumer
 
     mx.create_gas_pipe(net, g0, g1, diameter_m=0.15, length_m=400)
     mx.create_gas_pipe(net, g1, g2, diameter_m=0.12, length_m=300)
@@ -1107,7 +1096,7 @@ def create_resilient_urban_mes_net() -> mm.Network:
         diameter_m=0.15,
         efficiency_power=0.40,
         efficiency_heat=0.40,
-        mass_flow_setpoint=0.026,
+        mass_flow_setpoint_kgs=0.026,
         regulation=1,
     )
     # CHP2: G6 → B5 (power), heat from r2→s2.
@@ -1121,7 +1110,7 @@ def create_resilient_urban_mes_net() -> mm.Network:
         diameter_m=0.12,
         efficiency_power=0.38,
         efficiency_heat=0.40,
-        mass_flow_setpoint=0.018,
+        mass_flow_setpoint_kgs=0.018,
         regulation=1,
     )
     # P2H: B4 (power) → heat from r3→s3 (300 kW).
@@ -1141,7 +1130,7 @@ def create_resilient_urban_mes_net() -> mm.Network:
         from_node_id=b0,
         to_node_id=g4,
         efficiency=0.70,
-        mass_flow_setpoint=0.003,
+        mass_flow_setpoint_kgs=0.003,
         regulation=1,
     )
     # G2P: gas peaker at G3 → backup power at B2.

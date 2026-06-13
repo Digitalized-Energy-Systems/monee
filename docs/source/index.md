@@ -66,7 +66,7 @@ pip install monee
 
 **Multi-energy networks**
 ^^^
-Electricity, gas, and water/heat in **one model**. Networks are represented
+Electricity, gas, and water/heat in *one model*. Networks are represented
 as directed graphs - any topology is supported.
 :::
 
@@ -76,8 +76,8 @@ as directed graphs - any topology is supported.
 **Energy-carrier coupling**
 ^^^
 Connect carriers with built-in units:
-**P2H** (power-to-heat), **G2P** (gas-to-power), **P2G**, **G2H**, and
-**CHP**. Bidirectional flows are handled automatically.
+*P2H* (power-to-heat), *G2P* (gas-to-power), *P2G*, *G2H*, and
+*CHP*. Bidirectional flows are handled automatically.
 :::
 
 :::{grid-item-card}
@@ -96,7 +96,7 @@ Results come back as typed dataframes - one row per component.
 ^^^
 Swap {func}`~monee.run_energy_flow` for
 {func}`~monee.run_energy_flow_optimization` and pass a problem
-formulation. Built-in: **load shedding**. Supports custom objectives and
+formulation. Built-in: *load shedding*. Supports custom objectives and
 constraints.
 :::
 
@@ -105,7 +105,7 @@ constraints.
 
 **Flexible solver back-ends**
 ^^^
-Ships with **GEKKO** (IPOPT, default) and **Pyomo** (HiGHS · Gurobi · GLPK).
+Ships with *GEKKO* (IPOPT, default) and *Pyomo* (HiGHS · Gurobi · GLPK).
 Switch back-ends without changing model code. MISOCP relaxations available
 for convex OPF.
 :::
@@ -115,7 +115,7 @@ for convex OPF.
 
 **Import / Export**
 ^^^
-Round-trip networks in **MATPOWER**, **pandapower**, and **SimBench**
+Round-trip networks in *MATPOWER*, *pandapower*, and *SimBench*
 formats. One function call in each direction.
 :::
 
@@ -147,11 +147,11 @@ j_mid    = mx.create_water_junction(net)
 j_return = mx.create_water_junction(net)
 mx.create_ext_hydr_grid(net, j_supply)
 mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.12, length_m=100)
-mx.create_sink(net, j_return, mass_flow=1)
+mx.create_sink(net, j_return, mass_flow_kgs=1)
 
 # ── Couple: electric bus drives a heat pump feeding the heating loop ──
 mx.create_p2h(net, bus_1, j_mid, j_return,
-              heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9)
+              heat_mw=0.1, diameter_m=0.1, efficiency=0.9)
 
 result = run_energy_flow(net)
 print(result.dataframes["Bus"][["id", "vm_pu", "va_degree"]])

@@ -32,7 +32,7 @@ def sanitize_apm_name(name: str) -> str:
 class GekkoSolveError(RuntimeError):
     """Failed GEKKO solve with attached :class:`GekkoInfeasibilityReport`."""
 
-    def __init__(self, message: str, report: "GekkoInfeasibilityReport" = None):
+    def __init__(self, message: str, report: "GekkoInfeasibilityReport | None" = None):
         super().__init__(message)
         self.report = report
 

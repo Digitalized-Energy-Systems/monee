@@ -24,7 +24,7 @@ def _build_series_dhs(q_gen_mw: float = 0.0, q_load_mw: float = 0.0):
         mx.create_water_pipe(net, juncs[i], juncs[i + 1], diameter_m=0.15, length_m=100)
 
     mx.create_water_ext_grid(net, juncs[0], t_k=360.0)
-    mx.create_water_sink(net, juncs[-1], mass_flow=1.0)
+    mx.create_water_sink(net, juncs[-1], mass_flow_kgs=1.0)
 
     if q_gen_mw > 0:
         mx.create_heat_generator(net, juncs[5], q_mw=q_gen_mw)
@@ -97,8 +97,8 @@ def test_mccormick_dhs_heat_generator_raises_temperature():
 
 def test_mccormick_dhs_balanced_gen_and_load():
     # GIVEN
-    q_mw = 0.1
-    net = _build_series_dhs(q_gen_mw=q_mw, q_load_mw=q_mw)
+    heat_mw = 0.1
+    net = _build_series_dhs(q_gen_mw=heat_mw, q_load_mw=heat_mw)
 
     # WHEN
     result = ms.PyomoSolver().solve(net)
@@ -112,7 +112,7 @@ def test_mccormick_dhs_balanced_gen_and_load():
     h_out_of_n20 = pipes["H_out_mw"][20]
 
     # Paper eq. (9a) at the load node: H_in - H_out == +q.
-    residual = h_in_at_n20 - h_out_of_n20 - q_mw
+    residual = h_in_at_n20 - h_out_of_n20 - heat_mw
     assert math.isclose(residual, 0.0, rel_tol=1e-4, abs_tol=1e-6), (
         f"Node eq. 9a balance violated at junc[20], residual={residual}"
     )
@@ -123,7 +123,7 @@ def test_mccormick_dhs_plain_envelope_reduces_to_lp():
     net = mm.Network()
     n = [mx.create_water_junction(net) for _ in range(3)]
     mx.create_water_ext_grid(net, n[0], t_k=360.0)
-    mx.create_water_sink(net, n[2], mass_flow=1.0)
+    mx.create_water_sink(net, n[2], mass_flow_kgs=1.0)
     for a, b in zip(n[:-1], n[1:]):
         mx.create_water_pipe(
             net, from_node_id=a, to_node_id=b, diameter_m=0.15, length_m=200.0

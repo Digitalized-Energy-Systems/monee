@@ -286,7 +286,7 @@ def test_load_shedding_network_regulate_gen():
     # GIVEN
     pn, _ = create_two_gen_network()
     load_shedding_problem = create_min_load_shedding_problem(
-        ext_grid_el_bounds=(0, 0), include_ext_grids=True
+        bounds_ext_el=(0, 0), include_ext_grids=True
     )
 
     # WHEN
@@ -316,7 +316,7 @@ def test_load_shedding_network_regulate_load():
     # GIVEN
     pn, _ = create_two_gen_network(power_gen=0.1)
     load_shedding_problem = create_min_load_shedding_problem(
-        ext_grid_el_bounds=(0, 0), include_ext_grids=True
+        bounds_ext_el=(0, 0), include_ext_grids=True
     )
 
     # WHEN

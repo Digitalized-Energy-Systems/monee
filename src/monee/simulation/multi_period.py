@@ -15,10 +15,7 @@ from monee.model.formulation.registry import attach_formulations
 from monee.simulation.step_state import PeriodState
 from monee.simulation.timeseries import TimeseriesData
 from monee.solver.core import (
-    _TABLE_CSS,
     SolverResult,
-    _col_summary,
-    _display_df,
     find_ignored_nodes,
     ignore_node,
     inject_vars,
@@ -26,6 +23,12 @@ from monee.solver.core import (
     mark_ignored_components,
     withdraw_vars,
 )
+
+# Shared result-rendering helpers, imported from the solver's public reporting
+# surface (the simulation layer renders the same kind of result tables).
+from monee.solver.core import TABLE_CSS as _TABLE_CSS
+from monee.solver.core import col_summary as _col_summary
+from monee.solver.core import display_df as _display_df
 from monee.solver.dispatch import resolve_multi_period_solver
 
 _log = logging.getLogger(__name__)
@@ -139,8 +142,13 @@ def _slice_timeseries(td: TimeseriesData, start: int, length: int) -> Timeseries
     end = start + length
 
     def _slice_dict(d: dict) -> dict:
+        # Normalize to a list before slicing: a pandas Series keeps its original
+        # integer labels under ``series[start:end]``, so the later positional
+        # read ``series[timestep]`` (timestep is 0-based within the window) would
+        # be label-based and read the wrong row / raise KeyError. ``list(...)``
+        # makes both lists and Series slice positionally and consistently.
         return {
-            comp_id: {attr: series[start:end] for attr, series in attrs.items()}
+            comp_id: {attr: list(series)[start:end] for attr, series in attrs.items()}
             for comp_id, attrs in d.items()
         }
 
@@ -922,12 +930,18 @@ def run_mpc(
             if timeseries_data is not None
             else None
         )
+        # window_dt already holds the correct per-period durations (derived from
+        # datetime_index by _resolve_dt_h when one was supplied). Drive the
+        # window solve from window_dt alone and pass datetime_index=None, so the
+        # per-window solve does not re-warn about "both dt_h and datetime_index"
+        # and does not discard the computed window_dt.
         window_dt = dt_h_list[offset : offset + actual_window]
-        window_idx = (
-            datetime_index[offset : offset + actual_window]
-            if datetime_index is not None
-            else None
-        )
+
+        # A terminal target pins only the *global* horizon end. Forwarding it to
+        # every rolling window would over-constrain intermediate windows (and can
+        # make them infeasible); only the final window reaches the global end.
+        is_final_window = offset + actual_window >= total_steps
+        window_terminal_state = terminal_state if is_final_window else None
 
         window_result = solver.solve_multi_period(
             network,
@@ -935,9 +949,9 @@ def run_mpc(
             steps=actual_window,
             optimization_problem=optimization_problem,
             dt_h=window_dt,
-            datetime_index=window_idx,
+            datetime_index=None,
             initial_state=current_initial_state,
-            terminal_state=terminal_state,
+            terminal_state=window_terminal_state,
             formulation=formulation,
         )
 

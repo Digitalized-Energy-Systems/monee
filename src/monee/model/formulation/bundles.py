@@ -126,7 +126,7 @@ GAS_NONCONVEX_MIQCQP_FORMULATION = NetworkFormulation(
 
 
 def make_gas_milp_pwl_formulation(n_breakpoints: int = 12) -> NetworkFormulation:
-    """Variable-friction Weymouth via per-pipe PWL of ``φ(m) = friction(Re(m))·m²``.
+    r"""Variable-friction Weymouth via per-pipe PWL of :math:`\varphi(m) = friction(Re(m)) \cdot m^2`.
 
     Opt-in alternative to :data:`GAS_CONVEX_MIQCQP_FORMULATION` for networks
     where laminar-regime accuracy matters (``Re < 2300`` on lightly-loaded
@@ -186,7 +186,7 @@ HEAT_NONCONVEX_MIQCQP_FORMULATION = NetworkFormulation(
 def make_heat_nonconvex_pwl_formulation(
     n_breakpoints: int = 12,
 ) -> NetworkFormulation:
-    """Variable-friction Darcy-Weisbach via per-pipe PWL of ``φ(m)``.
+    r"""Variable-friction Darcy-Weisbach via per-pipe PWL of :math:`\varphi(m)`.
 
     Opt-in alternative to :data:`HEAT_NONCONVEX_MIQCQP_FORMULATION` for
     laminar-heavy networks (Re < 2300); the default's asymptotic shortcut

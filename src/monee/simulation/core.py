@@ -9,6 +9,7 @@ def solve(
     solver=None,
     backend: str | None = None,
     formulation=None,
+    simulation: bool = False,
     **kwargs,
 ):
     """Solve *net*.
@@ -27,6 +28,12 @@ def solve(
             sequence of either (merged left to right). Overrides the network's
             ``apply_formulation`` choice for this solve; components without any
             choice use ``DEFAULT_SIMULATION_FORMULATION``.
+        simulation: When ``True`` solve as a square steady-state simulation
+            (GEKKO IMODE=1, falling back to IMODE=3 if the model is not square);
+            ``False`` (default) takes the optimize-the-feasibility-problem path.
+            Ignored by backends without a simulation mode (e.g. Pyomo). Declared
+            explicitly here so the flag does not ride silently through
+            ``**kwargs``; matches the backend ``solve`` default.
         **kwargs: Forwarded to ``solver.solve(...)``.
     """
     actual_solver = resolve_solver(solver, backend=backend)
@@ -34,5 +41,6 @@ def solve(
         net,
         optimization_problem=optimization_problem,
         formulation=formulation,
+        simulation=simulation,
         **kwargs,
     )

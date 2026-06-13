@@ -93,7 +93,7 @@ result = mn.run_energy_flow(net)
 ```
 
 The source pins the junction pressure to `pressure_pu` (like `ExtHydrGrid`)
-and exposes a variable `mass_flow` that absorbs the island's supply–demand
+and exposes a variable `mass_flow_kgs` that absorbs the island's supply–demand
 imbalance.
 
 For water/heat networks use `mx.create_water_grid_forming_source` identically:
@@ -128,7 +128,7 @@ print(gf_df[["p_mw", "q_mvar"]])
 
 # Gas grid-forming source output
 src_df = result.dataframes.get("GridFormingSource")
-print(src_df[["mass_flow"]])
+print(src_df[["mass_flow_kgs"]])
 ```
 
 ---

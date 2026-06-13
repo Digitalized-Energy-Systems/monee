@@ -65,6 +65,7 @@ class Objective:
 
     def calculate(self, calculator):
         self._calculator = calculator
+        return self
 
     def when_period(self, period_filter):
         """Only activate for periods where *period_filter* is truthy. Accepts a
@@ -132,7 +133,6 @@ class Constraint:
         self._selected_models_link = selected_models_link
         self._selected_models_with_ids_link = selected_models_with_ids_link
         self._data_attacher = None
-        self._model_to_data = {}
         self._equations = []
         self._comp_equations = []
         self._temporal_equations = []
@@ -174,7 +174,7 @@ class Constraint:
         model_equations = []
         selected_models = self._selected_models_link(network)
         for equation in self._equations:
-            if len(self._model_to_data) > 0:
+            if self._data_attacher is not None:
                 model_to_data = {}
                 for model in selected_models:
                     model_to_data[model] = self._data_attacher(model)
@@ -184,7 +184,7 @@ class Constraint:
                 for model in selected_models:
                     model_equations.append(equation(model))
         for comp_equation in self._comp_equations:
-            if len(self._model_to_data) > 0:
+            if self._data_attacher is not None:
                 model_to_data = {}
                 for model in selected_models:
                     model_to_data[model] = self._data_attacher(model)
@@ -430,7 +430,7 @@ class OptimizationProblem:
             self._controllable_to_attr[model] = []
         self._controllable_to_attr[model] += attributes
 
-    def bounds(self, minmax, component_condition=lambda _: True, attributes=None):
+    def bounds(self, minmax, component_condition=lambda _m, _g: True, attributes=None):
         """Override min/max for ``Var`` attributes on matching components.
         ``component_condition`` is ``(model, grid) -> bool``."""
         self._bounds_for_controllables.append(
@@ -486,8 +486,11 @@ class OptimizationProblem:
                         isinstance(
                             component.model, HeatExchanger | PassiveHeatExchanger
                         )
-                        and type(component.model.q_mw) is not Var
-                        and (component.model.q_mw > 0)
+                        # q_mw is always a Var on these models; the consuming
+                        # setpoint lives in q_mw_set (= -q_mw), so a positive
+                        # consuming q_mw maps to q_mw_set < 0.
+                        and isinstance(component.model.q_mw_set, (int, float))
+                        and (component.model.q_mw_set < 0)
                     )
                 )
                 and component.active
@@ -519,7 +522,14 @@ class OptimizationProblem:
         return self
 
     def controllable_ext(self):
-        """Make ExtPowerGrid / ExtHydrGrid connections controllable."""
+        """Declare ExtPowerGrid / ExtHydrGrid connections controllable.
+
+        Purely declarative: these models already expose their exchange
+        (``p_mw`` / ``mass_flow_kgs``) as free Vars from their own ``__init__``, so
+        no attribute is (re)bound here (``attributes=[]``). The call documents
+        intent and registers the components with the controllable set; it does
+        not itself make the ext-grid exchange free.
+        """
         self.controllable(
             component_condition=lambda component: (
                 isinstance(component.model, ExtPowerGrid | ExtHydrGrid)

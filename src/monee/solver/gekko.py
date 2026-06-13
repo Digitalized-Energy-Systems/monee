@@ -16,14 +16,15 @@ from monee.model import (
 from monee.model.extension.islanding.core import NetworkIslandingConfig
 from monee.model.formulation.registry import attach_formulations
 from monee.problem.core import OptimizationProblem
-from monee.simulation.step_state import StepState
 
 from .core import (
     SolverInterface,
     SolverResult,
+    StepState,
     apply_post_process_all,
     as_iter,
     compute_bound_violations,
+    filter_bool_eqs,
     filter_intermediate_eqs,
     find_ignored_nodes,
     generate_real_topology,
@@ -370,7 +371,11 @@ class GEKKOSolver(SolverInterface):
 
     def process_internal_oxf_components(self, m, network):
         for constraint in network.constraints:
-            m.Equation(constraint(network))
+            m.Equations(
+                filter_bool_eqs(
+                    [constraint(network)], context="network constraint"
+                )
+            )
         obj = None
         for objective in network.objectives:
             if obj is not None:
@@ -391,7 +396,12 @@ class GEKKOSolver(SolverInterface):
             not optimization_problem.constraints.empty
         ):
             m.Equations(
-                optimization_problem.constraints.all(network, period_index=period_index)
+                filter_bool_eqs(
+                    optimization_problem.constraints.all(
+                        network, period_index=period_index
+                    ),
+                    context="optimization problem constraint",
+                )
             )
         obj = None
         for objective in (
@@ -417,8 +427,11 @@ class GEKKOSolver(SolverInterface):
                 m.Obj(expr)
 
             if equations is not None:
-                _process_intermediate_eqs(m, compound, equations)
-                m.Equations(filter_intermediate_eqs(as_iter(equations)))
+                compound_eqs = filter_bool_eqs(
+                    as_iter(equations), context=f"compound_{compound.id}"
+                )
+                _process_intermediate_eqs(m, compound, compound_eqs)
+                m.Equations(filter_intermediate_eqs(compound_eqs))
 
     def process_equations_nodes_childs(self, m, network: Network, nodes, ignored_nodes):
         for node in nodes:
@@ -466,14 +479,17 @@ class GEKKOSolver(SolverInterface):
             ):
                 m.Obj(expr)
 
-            node_eqs = [eq for eq in equations if type(eq) is not bool or not eq]
+            node_eqs = filter_bool_eqs(equations, context=f"node_{node.id}")
             _process_intermediate_eqs(m, node.model, node_eqs)
             m.Equations(filter_intermediate_eqs(node_eqs))
 
             for child in node_childs:
                 if ignore_child(child, ignored_nodes):
                     continue
-                child_eqs = as_iter(child.equations(grid, node))
+                child_eqs = filter_bool_eqs(
+                    as_iter(child.equations(grid, node)),
+                    context=f"child_{child.id}",
+                )
 
                 for expr in child.minimize(grid, node, sqrt_impl=m.sqrt):
                     m.Obj(expr)
@@ -518,5 +534,6 @@ class GEKKOSolver(SolverInterface):
             ):
                 objs_exprs.append(expr)
 
+            branch_eqs = filter_bool_eqs(branch_eqs, context=f"branch_{branch.id}")
             _process_intermediate_eqs(m, branch.model, branch_eqs)
             m.Equations(filter_intermediate_eqs(branch_eqs))

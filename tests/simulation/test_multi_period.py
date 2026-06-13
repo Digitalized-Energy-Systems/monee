@@ -626,9 +626,9 @@ def test_multi_period_load_shedding():
     td = TimeseriesData()
     td.add_child_series(load_id, "p_mw", [2.0, 5.0, 2.0, 4.0])
     prob = create_min_load_shedding_problem(
-        ext_grid_el_bounds=(-3.0, 3.0),
+        bounds_ext_el=(-3.0, 3.0),
         include_ext_grids=True,
-        check_line_loading=False,
+        check_lp=False,
     )
 
     # WHEN
@@ -656,14 +656,14 @@ def test_multi_period_load_shedding_ramp():
     td.add_child_series(load_id, "p_mw", [2.0, 5.0, 2.0, 4.0])
 
     prob_free = create_min_load_shedding_problem(
-        ext_grid_el_bounds=(-3.0, 3.0),
+        bounds_ext_el=(-3.0, 3.0),
         include_ext_grids=True,
-        check_line_loading=False,
+        check_lp=False,
     )
     prob_ramp = create_min_load_shedding_problem(
-        ext_grid_el_bounds=(-3.0, 3.0),
+        bounds_ext_el=(-3.0, 3.0),
         include_ext_grids=True,
-        check_line_loading=False,
+        check_lp=False,
         regulation_ramp_limit=0.2,
     )
 

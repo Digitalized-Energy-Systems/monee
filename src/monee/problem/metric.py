@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 
 import monee.model as md
+from monee.model.grid import KGPS_KWHPERKG_TO_MW
 from monee.problem.utils import cp_input_rated_mw
 
 
@@ -18,16 +19,6 @@ class ResilienceMetric(ABC):
     @abstractmethod
     def calc(self):
         pass
-
-
-class rlist(list):
-    def __init__(self, default):
-        self._default = default
-
-    def __setitem__(self, key, value):
-        if key >= len(self):
-            self += [self._default] * (key - len(self) + 1)
-        super().__setitem__(key, value)
 
 
 def is_load(component):
@@ -73,9 +64,9 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                     power_load_curtailed += md.upper(model.p_mw)
                 if isinstance(model, md.Sink):
                     gas_load_curtailed += (
-                        md.upper(model.mass_flow)
-                        * 3.6
-                        * component.grid.higher_heating_value
+                        md.upper(model.mass_flow_kgs)
+                        * KGPS_KWHPERKG_TO_MW
+                        * component.grid.higher_heating_value_kwh_per_kg
                     )
                 if isinstance(
                     model, (md.HeatExchangerLoad, md.PassiveHeatExchangerLoad)
@@ -86,11 +77,11 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                 continue
             if isinstance(model, md.ExtHydrGrid) and include_ext_grid:
                 # Only count when ext grid feeds in (load would need shedding).
-                if md.value(model.mass_flow) < 0:
+                if md.value(model.mass_flow_kgs) < 0:
                     gas_load_curtailed += (
-                        -md.value(model.mass_flow)
-                        * 3.6
-                        * component.grid.higher_heating_value
+                        -md.value(model.mass_flow_kgs)
+                        * KGPS_KWHPERKG_TO_MW
+                        * component.grid.higher_heating_value_kwh_per_kg
                     )
             if isinstance(model, md.ExtPowerGrid) and include_ext_grid:
                 if md.value(model.p_mw) < 0:
@@ -102,11 +93,11 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
             if isinstance(model, md.Sink):
                 gas_load_curtailed += (
                     (
-                        md.upper(model.mass_flow)
-                        - md.value(model.mass_flow) * md.value(model.regulation)
+                        md.upper(model.mass_flow_kgs)
+                        - md.value(model.mass_flow_kgs) * md.value(model.regulation)
                     )
-                    * 3.6
-                    * component.grid.higher_heating_value
+                    * KGPS_KWHPERKG_TO_MW
+                    * component.grid.higher_heating_value_kwh_per_kg
                 )
             if isinstance(model, (md.HeatExchangerLoad, md.PassiveHeatExchangerLoad)):
                 heat_load_curtailed += md.upper(model.q_mw) - md.value(

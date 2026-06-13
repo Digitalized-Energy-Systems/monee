@@ -66,11 +66,11 @@ second builder on the same network instead.
      - ``parallel=1``, ``base_kv=1``, ``grid=None``
    * - :func:`~monee.express.gas_structure`
      - ``diameter_m``, ``length_m``
-     - ``temperature_ext_k=296.15``, ``roughness=1e-5``, ``grid=None``
+     - ``temperature_ext_k=296.15``, ``roughness_m=1e-5``, ``grid=None``
    * - :func:`~monee.express.water_structure`
      - ``diameter_m``, ``length_m``
-     - ``temperature_ext_k=296.15``, ``roughness=0.001``,
-       ``lambda_insulation_w_per_k=0.025``, ``insulation_thickness_m=0.2``,
+     - ``temperature_ext_k=296.15``, ``roughness_m=0.001``,
+       ``lambda_insulation_w_per_m_k=0.025``, ``insulation_thickness_m=0.2``,
        ``unidirectional=False``, ``grid=None``
    * - :func:`~monee.express.dhs_structure`
      - ``diameter_m``, ``length_m``

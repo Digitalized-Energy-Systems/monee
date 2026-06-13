@@ -44,14 +44,14 @@ def create_two_line_example_with_2_pipe_example_p2g(source_flow=0.1):
     gas_grid = mm.create_gas_grid("gas", type="lgas")
     g_node_0 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Source(mass_flow=source_flow))],
+        child_ids=[pn.child(mm.Source(mass_flow_kgs=source_flow))],
         grid=gas_grid,
     )
     g_node_1 = pn.node(
         mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())], grid=gas_grid
     )
     g_node_2 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=0.2))], grid=gas_grid
+        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.2))], grid=gas_grid
     )
 
     pn.branch(
@@ -67,7 +67,7 @@ def create_two_line_example_with_2_pipe_example_p2g(source_flow=0.1):
 
     # MULTI
     pn.branch(
-        mm.PowerToGas(efficiency=0.95, mass_flow_setpoint=0.05),
+        mm.PowerToGas(efficiency=0.95, mass_flow_setpoint_kgs=0.05),
         el_node_0,
         g_node_0,
     )
@@ -81,7 +81,7 @@ def create_multi_chp():
     w_node_0 = pn.node(
         mm.Junction(),
         grid=mm.WATER_KEY,
-        child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))],
     )
     w_node_1 = pn.node(mm.Junction(), grid=mm.WATER_KEY)
     w_node_2 = pn.node(mm.Junction(), grid=mm.WATER_KEY)
@@ -105,26 +105,26 @@ def create_multi_chp():
     gas_grid = mm.create_gas_grid("gas", type="lgas")
     g_node_0 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Source(mass_flow=1))],
+        child_ids=[pn.child(mm.Source(mass_flow_kgs=1))],
         grid=gas_grid,
     )
     g_node_1 = pn.node(
         mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())], grid=gas_grid
     )
     g_node_2 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=1))], grid=gas_grid
+        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))], grid=gas_grid
     )
 
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.75, length_m=100, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.75, length_m=100, temperature_ext_k=300, roughness_m=0.01
         ),
         g_node_0,
         g_node_1,
     )
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.75, length_m=150, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.75, length_m=150, temperature_ext_k=300, roughness_m=0.01
         ),
         g_node_0,
         g_node_2,
@@ -225,22 +225,22 @@ def create_generic_transfer_gas():
 
     g_node_0 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Source(mass_flow=1))],
+        child_ids=[pn.child(mm.Source(mass_flow_kgs=1))],
     )
     g_node_1 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())])
-    g_node_2 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=1))])
-    g_node_3 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=1))])
+    g_node_2 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))])
+    g_node_3 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))])
 
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.35, length_m=1000, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.35, length_m=1000, temperature_ext_k=300, roughness_m=0.01
         ),
         g_node_0,
         g_node_1,
     )
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.35, length_m=1500, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.35, length_m=1500, temperature_ext_k=300, roughness_m=0.01
         ),
         g_node_0,
         g_node_2,
@@ -255,7 +255,7 @@ def create_generic_transfer_heat():
     # WATER
     w_node_0 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))],
     )
     w_node_1 = pn.node(mm.Junction())
     w_node_2 = pn.node(mm.Junction())
@@ -292,7 +292,7 @@ def test_small_p2g_network():
 
     assert len(result.dataframes) == 11
     assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], -2.5219502259)
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.05)
+    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -0.05)
 
 
 def test_load_shedding_p2g_network():
@@ -301,8 +301,8 @@ def test_load_shedding_p2g_network():
         source_flow=1
     )
     load_shedding_problem = mp.create_min_load_shedding_problem(
-        ext_grid_el_bounds=(0, 0),
-        ext_grid_gas_bounds=(-0.0, 0.0),
+        bounds_ext_el=(0, 0),
+        bounds_ext_gas=(-0.0, 0.0),
         include_ext_grids=True,
     )
 
@@ -317,7 +317,7 @@ def test_load_shedding_p2g_network():
 
     assert len(result.dataframes) == 11
     assert math.isclose(
-        result.dataframes["ExtHydrGrid"]["mass_flow"][0], 0, abs_tol=0.001
+        result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], 0, abs_tol=0.001
     )
     assert math.isclose(result.dataframes["ExtPowerGrid"]["p_mw"][0], 0, abs_tol=0.001)
 

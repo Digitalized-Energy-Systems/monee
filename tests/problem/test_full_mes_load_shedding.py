@@ -91,13 +91,13 @@ def create_four_line_example():
     mx.create_sink(
         new_mes,
         new_water_junc,
-        mass_flow=0.075,
+        mass_flow_kgs=0.075,
     )
     new_water_junc_2 = mx.create_water_junction(new_mes)
     mx.create_sink(
         new_mes,
         new_water_junc_2,
-        mass_flow=0.075,
+        mass_flow_kgs=0.075,
     )
     mx.create_heat_exchanger(
         new_mes,
@@ -110,7 +110,7 @@ def create_four_line_example():
     mx.create_sink(
         new_mes,
         new_water_junc_3,
-        mass_flow=0.075,
+        mass_flow_kgs=0.075,
     )
     mx.create_heat_exchanger(
         new_mes,
@@ -124,7 +124,7 @@ def create_four_line_example():
         from_node_id=node_4,
         to_node_id=bus_to_gas_junc[node_4],
         efficiency=0.7,
-        mass_flow_setpoint=0.01,
+        mass_flow_setpoint_kgs=0.01,
         regulation=0,
     )
     mx.create_chp(
@@ -133,7 +133,7 @@ def create_four_line_example():
         heat_node_id=bus_index_to_junction_index[node_0],
         heat_return_node_id=new_water_junc,
         gas_node_id=bus_to_gas_junc[node_3],
-        mass_flow_setpoint=0.0005,
+        mass_flow_setpoint_kgs=0.0005,
         diameter_m=0.3,
         efficiency_power=0.5,
         efficiency_heat=0.5,
@@ -186,21 +186,21 @@ BOUND_EL = ("vm_pu", 1, 0.5)
 BOUND_GAS = ("pressure_pu", 1, 0.5)
 BOUND_HEAT = ("t_pu", 1, 0.5)
 
-bounds_el = (
+bounds_vm = (
     BOUND_EL[1] * (1 - BOUND_EL[2]),
     BOUND_EL[1] * (1 + BOUND_EL[2]),
 )
-bounds_heat = (
+bounds_t = (
     BOUND_HEAT[1] * (1 - BOUND_HEAT[2]),
     BOUND_HEAT[1] * (1 + BOUND_HEAT[2]),
 )
-bounds_gas = (
+bounds_pressure = (
     BOUND_GAS[1] * (1 - BOUND_GAS[2]),
     BOUND_GAS[1] * (1 + BOUND_GAS[2]),
 )
 
-ext_grid_el_bounds = (0, 10)
-ext_grid_gas_bounds = (0, 10)
+bounds_ext_el = (0, 10)
+bounds_ext_gas = (0, 10)
 
 
 # def test_load_shedding_multimicrogrid():
@@ -209,11 +209,11 @@ ext_grid_gas_bounds = (0, 10)
 #     print(run_energy_flow(net_multi))
 
 #     optimization_problem = mp.create_load_shedding_optimization_problem(
-#         bounds_el=bounds_el,
-#         bounds_heat=bounds_heat,
-#         bounds_gas=bounds_gas,
-#         ext_grid_el_bounds=ext_grid_el_bounds,
-#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         bounds_vm=bounds_vm,
+#         bounds_t=bounds_t,
+#         bounds_pressure=bounds_pressure,
+#         bounds_ext_el=bounds_ext_el,
+#         bounds_ext_gas=bounds_ext_gas,
 #         use_ext_grid_bounds=False,
 #         debug=True,
 #     )
@@ -238,11 +238,11 @@ ext_grid_gas_bounds = (0, 10)
 #     print(run_energy_flow(net_multi))
 
 #     optimization_problem = mp.create_load_shedding_optimization_problem(
-#         bounds_el=bounds_el,
-#         bounds_heat=bounds_heat,
-#         bounds_gas=bounds_gas,
-#         ext_grid_el_bounds=ext_grid_el_bounds,
-#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         bounds_vm=bounds_vm,
+#         bounds_t=bounds_t,
+#         bounds_pressure=bounds_pressure,
+#         bounds_ext_el=bounds_ext_el,
+#         bounds_ext_gas=bounds_ext_gas,
 #         use_ext_grid_bounds=False,
 #         debug=True,
 #     )
@@ -262,16 +262,16 @@ ext_grid_gas_bounds = (0, 10)
 
 # def test_load_shedding_multimicrogrid_gas_shedding():
 #     net_multi: mm.Network = create_four_line_example()
-#     net_multi.childs_by_type(Source)[0].model.mass_flow = -2
+#     net_multi.childs_by_type(Source)[0].model.mass_flow_kgs = -2
 
 #     print(run_energy_flow(net_multi))
 
 #     optimization_problem = mp.create_load_shedding_optimization_problem(
-#         bounds_el=bounds_el,
-#         bounds_heat=bounds_heat,
-#         bounds_gas=bounds_gas,
-#         ext_grid_el_bounds=ext_grid_el_bounds,
-#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         bounds_vm=bounds_vm,
+#         bounds_t=bounds_t,
+#         bounds_pressure=bounds_pressure,
+#         bounds_ext_el=bounds_ext_el,
+#         bounds_ext_gas=bounds_ext_gas,
 #         use_ext_grid_bounds=False,
 #         debug=True,
 #     )
@@ -296,11 +296,11 @@ ext_grid_gas_bounds = (0, 10)
 #     print(run_energy_flow(net_multi))
 
 #     optimization_problem = mp.create_load_shedding_optimization_problem(
-#         bounds_el=bounds_el,
-#         bounds_heat=bounds_heat,
-#         bounds_gas=bounds_gas,
-#         ext_grid_el_bounds=ext_grid_el_bounds,
-#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         bounds_vm=bounds_vm,
+#         bounds_t=bounds_t,
+#         bounds_pressure=bounds_pressure,
+#         bounds_ext_el=bounds_ext_el,
+#         bounds_ext_gas=bounds_ext_gas,
 #         use_ext_grid_bounds=False,
 #         debug=True,
 #     )
@@ -320,16 +320,16 @@ ext_grid_gas_bounds = (0, 10)
 
 # def test_scaled_example_gas_incident():
 #     net_multi: mm.Network = mes.create_monee_benchmark_net()
-#     net_multi.childs_by_type(Source)[0].model.mass_flow = -1.3
+#     net_multi.childs_by_type(Source)[0].model.mass_flow_kgs = -1.3
 
 #     print(run_energy_flow(net_multi))
 
 #     optimization_problem = mp.create_load_shedding_optimization_problem(
-#         bounds_el=bounds_el,
-#         bounds_heat=bounds_heat,
-#         bounds_gas=bounds_gas,
-#         ext_grid_el_bounds=ext_grid_el_bounds,
-#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         bounds_vm=bounds_vm,
+#         bounds_t=bounds_t,
+#         bounds_pressure=bounds_pressure,
+#         bounds_ext_el=bounds_ext_el,
+#         bounds_ext_gas=bounds_ext_gas,
 #         use_ext_grid_bounds=False,
 #         debug=True,
 #     )
@@ -354,11 +354,11 @@ ext_grid_gas_bounds = (0, 10)
 #     print(run_energy_flow(net_multi))
 
 #     optimization_problem = mp.create_load_shedding_optimization_problem(
-#         bounds_el=bounds_el,
-#         bounds_heat=bounds_heat,
-#         bounds_gas=bounds_gas,
-#         ext_grid_el_bounds=ext_grid_el_bounds,
-#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         bounds_vm=bounds_vm,
+#         bounds_t=bounds_t,
+#         bounds_pressure=bounds_pressure,
+#         bounds_ext_el=bounds_ext_el,
+#         bounds_ext_gas=bounds_ext_gas,
 #         use_ext_grid_bounds=False,
 #         debug=True,
 #     )
@@ -383,11 +383,11 @@ ext_grid_gas_bounds = (0, 10)
 #     print(run_energy_flow(net_multi))
 
 #     optimization_problem = mp.create_load_shedding_optimization_problem(
-#         bounds_el=bounds_el,
-#         bounds_heat=bounds_heat,
-#         bounds_gas=bounds_gas,
-#         ext_grid_el_bounds=ext_grid_el_bounds,
-#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         bounds_vm=bounds_vm,
+#         bounds_t=bounds_t,
+#         bounds_pressure=bounds_pressure,
+#         bounds_ext_el=bounds_ext_el,
+#         bounds_ext_gas=bounds_ext_gas,
 #         use_ext_grid_bounds=False,
 #         debug=True,
 #     )
@@ -411,11 +411,11 @@ ext_grid_gas_bounds = (0, 10)
 #     net_multi.branch_by_id((10, 13, 0)).active = False
 
 #     optimization_problem = mp.create_load_shedding_optimization_problem(
-#         bounds_el=bounds_el,
-#         bounds_heat=bounds_heat,
-#         bounds_gas=bounds_gas,
-#         ext_grid_el_bounds=ext_grid_el_bounds,
-#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         bounds_vm=bounds_vm,
+#         bounds_t=bounds_t,
+#         bounds_pressure=bounds_pressure,
+#         bounds_ext_el=bounds_ext_el,
+#         bounds_ext_gas=bounds_ext_gas,
 #         use_ext_grid_bounds=False,
 #         debug=True,
 #     )
@@ -436,15 +436,15 @@ ext_grid_gas_bounds = (0, 10)
 # @pytest.mark.pptest
 # def test_scaled_load_shedding_def_cigre():
 #     net_multi = mes.create_mv_multi_cigre()
-#     # net_multi.childs_by_type(Source)[0].model.mass_flow = -4
+#     # net_multi.childs_by_type(Source)[0].model.mass_flow_kgs = -4
 #     print(run_energy_flow(net_multi))
 
 #     optimization_problem = mp.create_load_shedding_optimization_problem(
-#         bounds_el=bounds_el,
-#         bounds_heat=bounds_heat,
-#         bounds_gas=bounds_gas,
-#         ext_grid_el_bounds=ext_grid_el_bounds,
-#         ext_grid_gas_bounds=ext_grid_gas_bounds,
+#         bounds_vm=bounds_vm,
+#         bounds_t=bounds_t,
+#         bounds_pressure=bounds_pressure,
+#         bounds_ext_el=bounds_ext_el,
+#         bounds_ext_gas=bounds_ext_gas,
 #         use_ext_grid_bounds=True,
 #         use_ext_grid_objective=True,
 #         debug=True,

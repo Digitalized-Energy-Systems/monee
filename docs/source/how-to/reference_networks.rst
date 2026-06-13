@@ -92,7 +92,7 @@ Load and run an energy-flow calculation on the urban district network:
     result = run_energy_flow(net)
 
     print(result.get(mm.Bus)[["vm_pu"]].shape)
-    print(result.get(mm.GasPipe)[["mass_flow"]].shape)
+    print(result.get(mm.GasPipe)[["mass_flow_kgs"]].shape)
 
 .. testoutput::
    :options: +SKIP
@@ -201,8 +201,8 @@ winter-weekday demand profiles for every direct consumer in the network:
   and evening peak; both ``p_mw`` and ``q_mvar`` are scaled together so the
   power factor stays constant,
 * gas ``Sink`` children (only those on the gas grid - heat-return sinks are
-  skipped) - twin breakfast/dinner spikes on ``mass_flow``,
-* ``HeatExchangerLoad`` branches - space-heating pattern on ``q_mw_set``,
+  skipped) - twin breakfast/dinner spikes on ``mass_flow_kgs``,
+* ``HeatExchangerLoad`` branches - space-heating pattern on ``heat_mw_set``,
   anti-correlated with outdoor temperature.
 
 All profiles are expressed as fractions of the rated setpoints already
@@ -327,9 +327,9 @@ experiments because it exercises all coupling types simultaneously:
     net.apply_formulation(monee.EL_MISOCP_FORMULATION)
 
     problem = monee.create_min_load_shedding_problem(
-        bounds_el=(0.9, 1.1),
-        bounds_heat=(0.9, 1.1),
-        bounds_gas=(0.9, 1.1),
+        bounds_vm=(0.9, 1.1),
+        bounds_t=(0.9, 1.1),
+        bounds_pressure=(0.9, 1.1),
         include_ext_grids=True,
     )
 

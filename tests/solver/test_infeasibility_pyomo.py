@@ -43,14 +43,14 @@ def test_parse_var_name_multi_period():
 
 def test_parse_var_name_branch():
     # WHEN
-    result = _parse_var_name("branch_7__loading_from_percent")
+    result = _parse_var_name("branch_7__loading_from_pu")
 
     # THEN
     assert result == {
         "cat": "branch",
         "id": 7,
         "t": None,
-        "attr": "loading_from_percent",
+        "attr": "loading_from_pu",
     }
 
 

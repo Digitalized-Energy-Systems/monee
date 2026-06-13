@@ -43,10 +43,10 @@ def _make_urban_district_timeseries(
         )
     for c in net.childs_by_type(mm.Sink):
         if c.grid.name == "gas":
-            base = float(mm.value(c.model.mass_flow))
+            base = float(mm.value(c.model.mass_flow_kgs))
             td.add_child_series(
                 c.id,
-                "mass_flow",
+                "mass_flow_kgs",
                 _sinusoidal_profile(n_steps, base, amplitude=0.30, rng=rng),
             )
     return td
@@ -54,13 +54,13 @@ def _make_urban_district_timeseries(
 
 def _solve(network):
     problem = mp.create_min_load_shedding_problem(
-        bounds_el=BOUNDS_EL,
-        bounds_heat=BOUNDS_HEAT,
-        bounds_gas=BOUNDS_GAS,
+        bounds_vm=BOUNDS_EL,
+        bounds_t=BOUNDS_HEAT,
+        bounds_pressure=BOUNDS_GAS,
         # legacy formulation left ext grids unbounded; replicate with non-binding wide bounds
-        ext_grid_el_bounds=(-100, 100),
-        ext_grid_gas_bounds=(-100, 100),
-        ext_grid_heat_bounds=(-100, 100),
+        bounds_ext_el=(-100, 100),
+        bounds_ext_gas=(-100, 100),
+        bounds_ext_heat=(-100, 100),
         include_ext_grids=True,
     )
     return run_energy_flow_optimization(

@@ -71,7 +71,11 @@ class Var:
         actual_max = None if self.max is None else -self.max
         actual_min = None if self.min is None else -self.min
         return type(self)(
-            value=-self.value, max=actual_min, min=actual_max, name=self.name
+            value=-self.value,
+            max=actual_min,
+            min=actual_max,
+            integer=self.integer,
+            name=self.name,
         )
 
     def __mul__(self, other):
@@ -82,7 +86,11 @@ class Var:
             new_max = None if self.max is None else self.max * other
             new_min = None if self.min is None else self.min * other
         return type(self)(
-            value=self.value * other, max=new_max, min=new_min, name=self.name
+            value=self.value * other,
+            max=new_max,
+            min=new_min,
+            integer=self.integer,
+            name=self.name,
         )
 
     def __lt__(self, other):
@@ -196,7 +204,7 @@ class PostProcess:
     Unlike :class:`Intermediate`, it is never injected as a solver variable nor
     referenced by any equation - it carries no degrees of freedom and cannot
     affect convergence or squareness. The clean home for derived reports (e.g.
-    ``vm_pu_squared = vm_pu²``): physics stays in the solver, reporting outside.
+    ``vm_pu_squared = vm_pu^2``): physics stays in the solver, reporting outside.
     """
 
     def __init__(self, fn, value=0):

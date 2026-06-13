@@ -13,10 +13,10 @@ from .core import NodeFormulation
 
 
 class GasNodeFormulation(NodeFormulation):
-    """Gas junction working in pressure-squared space.
+    r"""Gas junction working in pressure-squared space.
 
     ``pressure_squared_pu`` is the decision variable (Weymouth is linear in
-    p²); ``pressure_pu`` is a reporting intermediate.
+    :math:`p^2`); ``pressure_pu`` is a reporting intermediate.
     """
 
     def ensure_var(self, model, simulation=False, grid=None):
@@ -39,7 +39,7 @@ class GasNodeFormulation(NodeFormulation):
         **kwargs,
     ):
         node.pressure_pa = PostProcess(
-            lambda v, ref=grid.pressure_ref: v.pressure_pu * ref
+            lambda v, ref=grid.pressure_ref_pa: v.pressure_pu * ref
         )
         return [
             IntermediateEq(
@@ -66,6 +66,6 @@ class WaterNodeFormulation(NodeFormulation):
         **kwargs,
     ):
         node.pressure_pa = PostProcess(
-            lambda v, ref=grid.pressure_ref: v.pressure_pu * ref
+            lambda v, ref=grid.pressure_ref_pa: v.pressure_pu * ref
         )
         return []

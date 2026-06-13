@@ -10,7 +10,7 @@ from monee.model.formulation import EL_MISOCP_FORMULATION
 def _build_chp_network(
     efficiency_power=0.6,
     efficiency_heat=0.4,
-    mass_flow_setpoint=0.001,
+    mass_flow_setpoint_kgs=0.001,
     regulation=1.0,
     diameter_m=0.3,
 ):
@@ -22,7 +22,7 @@ def _build_chp_network(
         mm.Junction(),
         grid=mm.WATER_KEY,
         child_ids=[
-            pn.child(mm.Sink(mass_flow=0.5)),
+            pn.child(mm.Sink(mass_flow_kgs=0.5)),
             pn.child(mm.ExtHydrGrid(t_k=359)),
         ],
     )
@@ -37,22 +37,22 @@ def _build_chp_network(
     # Gas grid
     gas_grid = mm.create_gas_grid("gas", type="lgas")
     g0 = pn.node(
-        mm.Junction(), grid=gas_grid, child_ids=[pn.child(mm.Source(mass_flow=1))]
+        mm.Junction(), grid=gas_grid, child_ids=[pn.child(mm.Source(mass_flow_kgs=1))]
     )
     g1 = pn.node(mm.Junction(), grid=gas_grid, child_ids=[pn.child(mm.ExtHydrGrid())])
     g2 = pn.node(
-        mm.Junction(), grid=gas_grid, child_ids=[pn.child(mm.Sink(mass_flow=1))]
+        mm.Junction(), grid=gas_grid, child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))]
     )
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.35, length_m=100, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.35, length_m=100, temperature_ext_k=300, roughness_m=0.01
         ),
         g0,
         g1,
     )
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.35, length_m=150, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.35, length_m=150, temperature_ext_k=300, roughness_m=0.01
         ),
         g0,
         g2,
@@ -92,7 +92,7 @@ def _build_chp_network(
             diameter_m,
             efficiency_power,
             efficiency_heat,
-            mass_flow_setpoint,
+            mass_flow_setpoint_kgs,
             regulation=regulation,
         ),
         gas_node_id=g2,
@@ -154,7 +154,7 @@ def test_chp_energy_balance_invariant():
     """el_mw / eff_p == heat_mw / eff_h since both are driven by the same gas input."""
     eff_p, eff_h = 0.6, 0.4
     net = _build_chp_network(
-        efficiency_power=eff_p, efficiency_heat=eff_h, mass_flow_setpoint=0.001
+        efficiency_power=eff_p, efficiency_heat=eff_h, mass_flow_setpoint_kgs=0.001
     )
     result = ms.GEKKOSolver().solve(net)
     cn = result.dataframes["CHPControlNode"]
@@ -177,10 +177,10 @@ def test_chp_regulation_linear_scaling():
 def test_chp_efficiency_ratio():
     """el_mw scales with efficiency_power; heat_mw scales with efficiency_heat."""
     net_a = _build_chp_network(
-        efficiency_power=0.7, efficiency_heat=0.2, mass_flow_setpoint=0.001
+        efficiency_power=0.7, efficiency_heat=0.2, mass_flow_setpoint_kgs=0.001
     )
     net_b = _build_chp_network(
-        efficiency_power=0.3, efficiency_heat=0.6, mass_flow_setpoint=0.001
+        efficiency_power=0.3, efficiency_heat=0.6, mass_flow_setpoint_kgs=0.001
     )
     ra = ms.GEKKOSolver().solve(net_a)
     rb = ms.GEKKOSolver().solve(net_b)
@@ -193,9 +193,9 @@ def test_chp_efficiency_ratio():
 
 
 def test_chp_mass_flow_linearity():
-    """Doubling mass_flow_setpoint doubles el_mw."""
-    net_lo = _build_chp_network(mass_flow_setpoint=0.0005)
-    net_hi = _build_chp_network(mass_flow_setpoint=0.001)
+    """Doubling mass_flow_setpoint_kgs doubles el_mw."""
+    net_lo = _build_chp_network(mass_flow_setpoint_kgs=0.0005)
+    net_hi = _build_chp_network(mass_flow_setpoint_kgs=0.001)
     r_lo = ms.GEKKOSolver().solve(net_lo)
     r_hi = ms.GEKKOSolver().solve(net_hi)
     el_lo = r_lo.dataframes["CHPControlNode"]["el_mw"].iloc[0]
@@ -206,7 +206,7 @@ def test_chp_mass_flow_linearity():
 def test_chp_absolute_values():
     """Verify el_mw and heat_mw against the analytical formula.
 
-    For lgas (HHV = 15.3 kWh/kg), regulation=1, mass_flow=0.001 kg/s:
+    For lgas (HHV = 15.3 kWh/kg), regulation=1, mass_flow_kgs=0.001 kg/s:
       el_mw  = -eff_p * mass * 3.6 * HHV = -0.033048 MW
       heat_mw = -eff_h * mass * 3.6 * HHV = -0.022032 MW
     """
@@ -218,7 +218,7 @@ def test_chp_absolute_values():
     net = _build_chp_network(
         efficiency_power=eff_p,
         efficiency_heat=eff_h,
-        mass_flow_setpoint=mf,
+        mass_flow_setpoint_kgs=mf,
         regulation=1.0,
     )
     result = ms.GEKKOSolver().solve(net)
@@ -229,7 +229,7 @@ def test_chp_absolute_values():
 
 def test_chp_misocp_formulation():
     """MISOCP formulation produces consistent vm_pu/vm_pu_squared, energy balance, and matches GEKKO voltages."""
-    net = _build_chp_network(mass_flow_setpoint=0.001)
+    net = _build_chp_network(mass_flow_setpoint_kgs=0.001)
     net.apply_formulation(EL_MISOCP_FORMULATION)
     result = ms.PyomoSolver().solve(net)
 
@@ -249,7 +249,7 @@ def test_chp_misocp_formulation():
     assert math.isclose(el_mw / eff_p, heat_mw / eff_h, rel_tol=1e-3)
 
     # MISOCP and GEKKO should give the same voltage profile
-    gekko_net = _build_chp_network(mass_flow_setpoint=0.001)
+    gekko_net = _build_chp_network(mass_flow_setpoint_kgs=0.001)
     gekko_result = ms.GEKKOSolver().solve(gekko_net)
     gekko_vm = sorted(gekko_result.dataframes["Bus"]["vm_pu"].tolist())
     misocp_vm = sorted(result.dataframes["Bus"]["vm_pu"].tolist())
@@ -261,7 +261,7 @@ def test_chp_heat_dominated():
     """High thermal efficiency: heat output should be eff_h/eff_p times electrical output."""
     eff_p, eff_h = 0.15, 0.75
     net = _build_chp_network(
-        efficiency_power=eff_p, efficiency_heat=eff_h, mass_flow_setpoint=0.0001
+        efficiency_power=eff_p, efficiency_heat=eff_h, mass_flow_setpoint_kgs=0.0001
     )
     result = ms.GEKKOSolver().solve(net)
     cn = result.dataframes["CHPControlNode"]
@@ -274,7 +274,7 @@ def test_chp_power_dominated():
     """High electrical efficiency: same ratio check as heat-dominated but inverted."""
     eff_p, eff_h = 0.8, 0.1
     net = _build_chp_network(
-        efficiency_power=eff_p, efficiency_heat=eff_h, mass_flow_setpoint=0.001
+        efficiency_power=eff_p, efficiency_heat=eff_h, mass_flow_setpoint_kgs=0.001
     )
     result = ms.GEKKOSolver().solve(net)
     cn = result.dataframes["CHPControlNode"]

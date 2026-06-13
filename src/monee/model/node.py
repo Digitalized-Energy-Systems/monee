@@ -19,7 +19,7 @@ class Bus(NodeModel):
         self.q_mvar = Intermediate()
 
     def calc_signed_power_values(
-        self, from_branch_models, to_branch_models, connected_node_models
+        self, from_branch_models, to_branch_models, child_models
     ):
         signed_active_power = (
             [
@@ -32,7 +32,7 @@ class Bus(NodeModel):
             ]
             + [
                 model.vars["p_mw"] * model.vars["regulation"]
-                for model in connected_node_models
+                for model in child_models
             ]
         )
         signed_reactive_power = (
@@ -46,7 +46,7 @@ class Bus(NodeModel):
             ]
             + [
                 model.vars["q_mvar"] * model.vars["regulation"]
-                for model in connected_node_models
+                for model in child_models
             ]
         )
         return (signed_active_power, signed_reactive_power)
@@ -78,18 +78,18 @@ class Bus(NodeModel):
         grid,
         from_branch_models,
         to_branch_models,
-        connected_node_models,
+        child_models,
         **kwargs,
     ):
         signed_ap, signed_rp = self.calc_signed_power_values(
-            from_branch_models, to_branch_models, connected_node_models
+            from_branch_models, to_branch_models, child_models
         )
         # Re-attach the report lambda each solve so it survives a native reload
         # (which restores only the stored value, not the closure).
         self.va_degree = PostProcess(lambda v: 180 / math.pi * v.va_radians)
         return [
-            self.p_mw_equation(connected_node_models),
-            self.q_mvar_equation(connected_node_models),
+            self.p_mw_equation(child_models),
+            self.q_mvar_equation(child_models),
             power_balance_equation(signed_ap),
             power_balance_equation(signed_rp),
         ]
@@ -98,47 +98,51 @@ class Bus(NodeModel):
 @model
 class Junction(NodeModel):
     def __init__(self) -> None:
-        # t_k is report-only (= t_pu·t_ref, never read by an equation); the real
-        # closure is attached in equations() where the grid t_ref is available.
+        # NOTE: deliberately does NOT call super().__init__(). Junction sits in
+        # the cooperative-init MRO of the coupling nodes (PowerToHeatControlNode,
+        # CHPControlNode, ... = MultiGridNodeModel, Junction, Bus); calling
+        # super() here would chain into Bus.__init__, which requires base_kv.
+        # t_k is report-only (= t_pu \cdot t_ref_k, never read by an equation); the real
+        # closure is attached in equations() where the grid t_ref_k is available.
         self.t_k = PostProcess(lambda v: float("nan"))
         self.t_pu = Var(1, min=0.3, max=2, name="t_pu")
-        self.pressure_squared_pu = Var(1, min=0.5, max=2, name="p_squared_pu")
-        self.pressure_pu = Var(1, min=0.5, max=2, name="p_pu")
-        self.mass_flow = Intermediate(1)
+        self.pressure_squared_pu = Var(1, min=0.5, max=2, name="pressure_squared_pu")
+        self.pressure_pu = Var(1, min=0.5, max=2, name="pressure_pu")
+        self.mass_flow_kgs = Intermediate(1)
 
     def calc_signed_mass_flow(
-        self, from_branch_models, to_branch_models, connected_node_models
+        self, from_branch_models, to_branch_models, child_models
     ):
         return (
             [
-                model.vars["from_mass_flow"] * model.vars["on_off"]
+                model.vars["from_mass_flow_kgs"] * model.vars["on_off"]
                 for model in from_branch_models
-                if "from_mass_flow" in model.vars
+                if "from_mass_flow_kgs" in model.vars
             ]
             + [
-                model.vars["to_mass_flow"] * model.vars["on_off"]
+                model.vars["to_mass_flow_kgs"] * model.vars["on_off"]
                 for model in to_branch_models
-                if "to_mass_flow" in model.vars
+                if "to_mass_flow_kgs" in model.vars
             ]
             + [
-                -model.vars["mass_flow_pos"] * model.vars["on_off"]
+                -model.vars["mass_flow_pos_kgs"] * model.vars["on_off"]
                 for model in from_branch_models
-                if "mass_flow_pos" in model.vars
+                if "mass_flow_pos_kgs" in model.vars
             ]
             + [
-                model.vars["mass_flow_pos"] * model.vars["on_off"]
+                model.vars["mass_flow_pos_kgs"] * model.vars["on_off"]
                 for model in to_branch_models
-                if "mass_flow_pos" in model.vars
+                if "mass_flow_pos_kgs" in model.vars
             ]
             + [
-                model.vars["mass_flow_neg"] * model.vars["on_off"]
+                model.vars["mass_flow_neg_kgs"] * model.vars["on_off"]
                 for model in from_branch_models
-                if "mass_flow_neg" in model.vars
+                if "mass_flow_neg_kgs" in model.vars
             ]
             + [
-                -model.vars["mass_flow_neg"] * model.vars["on_off"]
+                -model.vars["mass_flow_neg_kgs"] * model.vars["on_off"]
                 for model in to_branch_models
-                if "mass_flow_neg" in model.vars
+                if "mass_flow_neg_kgs" in model.vars
             ]
             + [
                 # Linepack: 0.5 splits net packing equally across both endpoints.
@@ -153,16 +157,16 @@ class Junction(NodeModel):
                 if "net_pack_kgs" in model.vars
             ]
             + [
-                model.vars["mass_flow"] * model.vars["regulation"]
-                for model in connected_node_models
-                if "mass_flow" in model.vars
+                model.vars["mass_flow_kgs"] * model.vars["regulation"]
+                for model in child_models
+                if "mass_flow_kgs" in model.vars
             ]
         )
 
     def calc_signed_heat_flow(
-        self, from_branch_models, to_branch_models, connected_node_models, grid
+        self, from_branch_models, to_branch_models, child_models, grid
     ):
-        # LTC / Mcc-DHS replace the degenerate T_n × mass_balance with their own
+        # LTC / Mcc-DHS replace the degenerate T_n \times mass_balance with their own
         # nodal heat balance, so skip emitting it here.
         if getattr(self, "_ltc_active", False) or getattr(
             self, "_mccormick_dhs_active", False
@@ -179,10 +183,10 @@ class Junction(NodeModel):
 
             # node is FROM-end of these branches
             for bm in from_branch_models:
-                if "mass_flow_pos" not in bm.vars or "mass_flow_neg" not in bm.vars:
+                if "mass_flow_pos_kgs" not in bm.vars or "mass_flow_neg_kgs" not in bm.vars:
                     continue
-                mpos = bm.vars["mass_flow_pos"] * bm.vars.get("on_off", 1)
-                mneg = bm.vars["mass_flow_neg"] * bm.vars.get("on_off", 1)
+                mpos = bm.vars["mass_flow_pos_kgs"] * bm.vars.get("on_off", 1)
+                mneg = bm.vars["mass_flow_neg_kgs"] * bm.vars.get("on_off", 1)
 
                 Tin = bm.vars["t_from_pu"]
                 Tout = self.t_pu * bm.vars.get("on_off", 1)
@@ -190,35 +194,35 @@ class Junction(NodeModel):
 
             # node is TO-end of these branches
             for bm in to_branch_models:
-                if "mass_flow_pos" not in bm.vars or "mass_flow_neg" not in bm.vars:
+                if "mass_flow_pos_kgs" not in bm.vars or "mass_flow_neg_kgs" not in bm.vars:
                     continue
-                mpos = bm.vars["mass_flow_pos"] * bm.vars.get("on_off", 1)
-                mneg = bm.vars["mass_flow_neg"] * bm.vars.get("on_off", 1)
+                mpos = bm.vars["mass_flow_pos_kgs"] * bm.vars.get("on_off", 1)
+                mneg = bm.vars["mass_flow_neg_kgs"] * bm.vars.get("on_off", 1)
 
                 Tin = bm.vars["t_to_pu"]  # inflow at to-end
                 Tout = self.t_pu * bm.vars.get("on_off", 1)
                 terms.append(-mneg * Tin + mpos * Tout)
 
-            for nm in connected_node_models:
-                if "mass_flow" not in nm.vars:
+            for nm in child_models:
+                if "mass_flow_kgs" not in nm.vars:
                     continue
 
-                m_ext = nm.vars["mass_flow"] * nm.vars.get("regulation", 1)
+                m_ext = nm.vars["mass_flow_kgs"] * nm.vars.get("regulation", 1)
                 t_inj_k = getattr(nm, "injection_t_k", None)
                 if t_inj_k is not None and grid is not None:
                     # Defined-temperature injection (Source(t_k=...)): credit
                     # the inflow enthalpy at its own temperature instead of the
                     # node's, keeping the nodal heat balance full-rank in T_n.
-                    terms.append(m_ext * (t_inj_k / grid.t_ref))
+                    terms.append(m_ext * (t_inj_k / grid.t_ref_k))
                 else:
                     terms.append(m_ext * Tn)
 
-            # Node q_mw_heat (HeatGenerator/HeatLoad) → kg/s·t_pu via c·t_ref/1e6.
+            # Node q_mw_heat (HeatGenerator/HeatLoad) \to kg/s \cdot t_pu via c \cdot t_ref_k/1e6.
             # grid may be None (compound heat balance); scale only used if needed.
             scale_mw_per_kgs = (
-                SPECIFIC_HEAT_CAP_WATER * grid.t_ref / 1e6 if grid is not None else None
+                SPECIFIC_HEAT_CAP_WATER * grid.t_ref_k / 1e6 if grid is not None else None
             )
-            for nm in connected_node_models:
+            for nm in child_models:
                 if "q_mw_heat" not in nm.vars:
                     continue
                 q = nm.vars["q_mw_heat"] * nm.vars.get("regulation", 1)
@@ -231,8 +235,8 @@ class Junction(NodeModel):
                 q = bm.vars["q_mw_heat"] * bm.vars.get("on_off", 1)
                 terms.append(q / scale_mw_per_kgs)
 
-            # Conduction-style regularizer keeps ∂(heat_bal)/∂T_n non-zero
-            # when Σm_out ≈ Σm_in.
+            # Conduction-style regularizer keeps \partial(heat_bal)/\partial T_n non-zero
+            # when \sum m_out \approx \sum m_in.
             k_reg = getattr(grid, "node_heat_reg_kgs", 0.0)
             if k_reg:
                 t_anchor = self.t_pu.value if hasattr(self.t_pu, "value") else 1.0
@@ -246,27 +250,27 @@ class Junction(NodeModel):
         grid,
         from_branch_models,
         to_branch_models,
-        connected_node_models,
+        child_models,
         **kwargs,
     ):
         mass_flow_signed_list = self.calc_signed_mass_flow(
-            from_branch_models, to_branch_models, connected_node_models
+            from_branch_models, to_branch_models, child_models
         )
         energy_flow_list = self.calc_signed_heat_flow(
-            from_branch_models, to_branch_models, connected_node_models, grid
+            from_branch_models, to_branch_models, child_models, grid
         )
         if mass_flow_signed_list:
             # Report-only nodal temperature, computed outside the solver.
-            self.t_k = PostProcess(lambda v, tref=grid.t_ref: v.t_pu * tref)
+            self.t_k = PostProcess(lambda v, tref=grid.t_ref_k: v.t_pu * tref)
             eqs = [
                 junction_mass_flow_balance(mass_flow_signed_list),
                 IntermediateEq(
-                    "mass_flow",
+                    "mass_flow_kgs",
                     sum(
                         [
-                            model.vars["mass_flow"] * model.vars["regulation"]
-                            for model in connected_node_models
-                            if "mass_flow" in model.vars
+                            model.vars["mass_flow_kgs"] * model.vars["regulation"]
+                            for model in child_models
+                            if "mass_flow_kgs" in model.vars
                         ]
                     ),
                 ),

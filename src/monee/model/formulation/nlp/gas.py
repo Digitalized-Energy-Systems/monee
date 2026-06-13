@@ -10,12 +10,12 @@ FRICTION_MODELS = ("constant", "pwl", "nonlinear")
 
 
 def _seed_mag(model):
-    """Warm-start magnitude for ``mass_flow_mag``: the design flow the network
-    generator stored on the pipe (``mass_flow_nominal``), else the flat 0.1.
-    A good |m| seed alone cuts the smooth-NLP iteration count by ~20× - the sign
+    r"""Warm-start magnitude for ``mass_flow_mag_kgs``: the design flow the network
+    generator stored on the pipe (``mass_flow_nominal_kgs``), else the flat 0.1.
+    A good :math:`|m|` seed alone cuts the smooth-NLP iteration count by ~20\ :math:`\times` - the sign
     of the signed flow is recovered cheaply, the magnitude is what conditions the
     Darcy/Weymouth and temperature-transport rows."""
-    seed = getattr(model, "mass_flow_nominal", None)
+    seed = getattr(model, "mass_flow_nominal_kgs", None)
     return seed if seed and seed > 0 else 0.1
 
 
@@ -35,29 +35,29 @@ def _ensure_friction_vars(model, friction_model):
     formulation applied earlier (which may have pinned these to ``Const``)."""
     if friction_model == "constant":
         model.friction = Const(
-            hydraulicsmodel.friction_at_high_re(model.diameter_m, model.roughness)
+            hydraulicsmodel.friction_at_high_re(model.diameter_m, model.roughness_m)
         )
-        model.reynolds = Const(0.0)
+        model.reynolds_scaled = Const(0.0)
     elif friction_model == "nonlinear":
         model.friction = Var(0.02, min=0, max=7, name="friction")
-        model.reynolds = Var(1e-3, min=0, max=10, name="reynolds")
-    else:  # pwl: one odd spline ψ(m) replaces friction·m·|m|.
+        model.reynolds_scaled = Var(1e-3, min=0, max=10, name="reynolds_scaled")
+    else:  # pwl: one odd spline \psi(m) replaces friction \cdot m \cdot |m|.
         model.friction = Const(0.0)
-        model.reynolds = Const(0.0)
+        model.reynolds_scaled = Const(0.0)
         model.psi_pwl = Var(0.0, name="psi_pwl")
 
 
 class SmoothWeymouthBranchFormulation(BranchFormulation):
-    """Pure-NLP Weymouth gas pipe for GEKKO IPOPT/APOPT.
+    r"""Pure-NLP Weymouth gas pipe for GEKKO IPOPT/APOPT.
 
     One signed mass-flow var drives a smooth pressure drop
-    ``(p_i²-p_j²)·C²·on_off == -friction · m · |m|``. ``mass_flow_pos/neg`` are
+    :math:`(p_i^2-p_j^2) \cdot C^2 \cdot \text{on\_off} = -friction \cdot m \cdot |m|`. ``mass_flow_pos_kgs/neg`` are
     kept as the public interface (consumed by the nodal balance) but bound to the
     smooth split of ``m``, so no ``direction`` binary and no epigraph relaxation
     are needed. ``on_off`` stays an optional switch.
 
     ``friction_model``: ``"constant"`` (turbulent asymptote per pipe),
-    ``"pwl"`` (odd spline of the drop term) or ``"nonlinear"`` (smooth laminar↔
+    ``"pwl"`` (odd spline of the drop term) or ``"nonlinear"`` (smooth laminar\ :math:`\leftrightarrow`
     turbulent friction blend).
     """
 
@@ -73,39 +73,39 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         self.n_breakpoints = n_breakpoints
 
     def ensure_var(self, model, simulation=False, grid=None):
-        # mass_flow is already the signed flow (model defines it as pos − neg);
+        # mass_flow_kgs is already the signed flow (model defines it as pos − neg);
         # promote it to the decision var instead of adding a redundant one.
-        model.mass_flow = Var(0.0, name="mass_flow")
+        model.mass_flow_kgs = Var(0.0, name="mass_flow_kgs")
         # Seed |m| only for the square simulation solve (see nlp.heat).
         # simulation=True also squares the model for an IMODE=1 steady-state
         # solve: pins phantom vars (and equations() drops the flow limits).
         mag0 = _seed_mag(model) if simulation else 0.1
-        model.mass_flow_mag = Var(mag0, min=0, name="mass_flow_mag")
+        model.mass_flow_mag_kgs = Var(mag0, min=0, name="mass_flow_mag_kgs")
         # Neutralise the MIQCQP-only vars so no integer/aux vars get injected.
         model.direction = Const(1)
-        model.mass_flow_pos_squared = Const(0.0)
-        model.mass_flow_neg_squared = Const(0.0)
+        model.mass_flow_pos_kgs_squared = Const(0.0)
+        model.mass_flow_neg_kgs_squared = Const(0.0)
         if simulation:
-            _pin(model, "velocity")
+            _pin(model, "velocity_mps")
         _ensure_friction_vars(model, self.friction_model)
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         sqrt_impl = kwargs["sqrt_impl"]
         area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
 
-        gas_density = (
-            grid.pressure_ref
+        gas_density_kg_per_m3 = (
+            grid.pressure_ref_pa
             * grid.molar_mass
             / (grid.universal_gas_constant * grid.t_k)
         )
         f_max_local = min(
-            grid.f_max,
+            grid.max_mass_flow_kgs,
             hydraulicsmodel.calc_max_mass_flow(
-                branch.diameter_m, gas_density, getattr(grid, "v_max_mps", 20.0)
+                branch.diameter_m, gas_density_kg_per_m3, getattr(grid, "v_max_mps", 20.0)
             ),
         )
 
-        # Linearise √p around nominal pressure for the density estimate.
+        # Linearise \sqrt{p} around nominal pressure for the density estimate.
         p0 = grid.nominal_pressure_pu
         x0 = p0**2
         p_from = p0 + (1 / (2 * p0)) * (
@@ -114,12 +114,12 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         p_to = p0 + (1 / (2 * p0)) * (to_node_model.vars["pressure_squared_pu"] - x0)
         p_avg = 0.5 * (p_from + p_to)
 
-        signed = branch.mass_flow
-        mag = branch.mass_flow_mag
+        signed = branch.mass_flow_kgs
+        mag = branch.mass_flow_mag_kgs
         drop_term, friction_eqs = smoothmodel.drop_term_and_eqs(
             self.friction_model,
             branch,
-            grid.dynamic_visc,
+            grid.dynamic_visc_pas,
             area,
             signed,
             mag,
@@ -129,8 +129,8 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
 
         eqs = [
             mag == smoothmodel.smooth_abs(signed, self.smoothing_eps, sqrt_impl),
-            branch.mass_flow_pos == 0.5 * (mag + signed),
-            branch.mass_flow_neg == 0.5 * (mag - signed),
+            branch.mass_flow_pos_kgs == 0.5 * (mag + signed),
+            branch.mass_flow_neg_kgs == 0.5 * (mag - signed),
         ]
         if not kwargs.get("simulation", False):
             # Operational flow limits - dropped in simulation mode (their slacks
@@ -148,11 +148,11 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
                 length_m=branch.length_m,
                 t_k=grid.t_k,
                 compressibility=grid.compressibility,
-                pressure_ref=grid.pressure_ref,
+                pressure_ref_pa=grid.pressure_ref_pa,
                 on_off=branch.on_off,
             ),
-            branch.gas_density
-            == grid.pressure_ref
+            branch.gas_density_kg_per_m3
+            == grid.pressure_ref_pa
             * p_avg
             * grid.molar_mass
             / (grid.universal_gas_constant * grid.t_k),

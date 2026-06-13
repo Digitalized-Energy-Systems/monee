@@ -1,7 +1,7 @@
-"""Epigraph-relaxed Weymouth gas formulation: a convex MIQCQP (MISOCP-shaped).
+r"""Epigraph-relaxed Weymouth gas formulation: a convex MIQCQP (MISOCP-shaped).
 
 Weymouth is linear in pressure-squared space; the only quadratics are the
-convex epigraph relaxations ``m·m ≤ m_sq``, kept tight by a small ε objective
+convex epigraph relaxations :math:`m \cdot m \le m_{sq}`, kept tight by a small :math:`\varepsilon` objective
 term, plus the ``direction``/``on_off`` binaries.
 """
 
@@ -16,23 +16,23 @@ class RelaxedWeymouthBranchFormulation(BranchFormulation):
     EPIGRAPH_TIGHTENING_EPS = 1e-5
 
     def ensure_var(self, model, simulation=False, grid=None):
-        f_const = hydraulicsmodel.friction_at_high_re(model.diameter_m, model.roughness)
+        f_const = hydraulicsmodel.friction_at_high_re(model.diameter_m, model.roughness_m)
 
         model.friction = Const(f_const)
-        model.reynolds = Const(0.0)
+        model.reynolds_scaled = Const(0.0)
 
     def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
         return [
             self.EPIGRAPH_TIGHTENING_EPS
-            * (branch.mass_flow_pos_squared + branch.mass_flow_neg_squared)
+            * (branch.mass_flow_pos_kgs_squared + branch.mass_flow_neg_kgs_squared)
         ]
 
     def _epigraph_eqs(self, branch):
-        """Convex epigraph relaxation ``m² ≤ m_sq``; the exact sibling
+        r"""Convex epigraph relaxation :math:`m^2 \le m_{sq}`; the exact sibling
         overrides this with the equality form."""
         return [
-            branch.mass_flow_pos * branch.mass_flow_pos <= branch.mass_flow_pos_squared,
-            branch.mass_flow_neg * branch.mass_flow_neg <= branch.mass_flow_neg_squared,
+            branch.mass_flow_pos_kgs * branch.mass_flow_pos_kgs <= branch.mass_flow_pos_kgs_squared,
+            branch.mass_flow_neg_kgs * branch.mass_flow_neg_kgs <= branch.mass_flow_neg_kgs_squared,
         ]
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
@@ -47,32 +47,32 @@ class RelaxedWeymouthBranchFormulation(BranchFormulation):
         p_to = p0 + (1 / (2 * p0)) * (to_node_model.vars["pressure_squared_pu"] - x0)
         p_avg = 0.5 * (p_from + p_to)
 
-        gas_density = (
-            grid.pressure_ref
+        gas_density_kg_per_m3 = (
+            grid.pressure_ref_pa
             * grid.molar_mass
             / (grid.universal_gas_constant * grid.t_k)
         )
         f_max_local = min(
-            grid.f_max,
+            grid.max_mass_flow_kgs,
             hydraulicsmodel.calc_max_mass_flow(
                 branch.diameter_m,
-                gas_density,
+                gas_density_kg_per_m3,
                 getattr(grid, "v_max_mps", 20.0),
             ),
         )
 
         return self._epigraph_eqs(branch) + [
-            branch.mass_flow_pos_squared <= f_max_local**2 * branch.direction,
-            branch.mass_flow_neg_squared <= f_max_local**2 * (1 - branch.direction),
-            branch.mass_flow_pos_squared <= f_max_local**2 * branch.on_off,
-            branch.mass_flow_neg_squared <= f_max_local**2 * branch.on_off,
+            branch.mass_flow_pos_kgs_squared <= f_max_local**2 * branch.direction,
+            branch.mass_flow_neg_kgs_squared <= f_max_local**2 * (1 - branch.direction),
+            branch.mass_flow_pos_kgs_squared <= f_max_local**2 * branch.on_off,
+            branch.mass_flow_neg_kgs_squared <= f_max_local**2 * branch.on_off,
             ogfmodel.pipe_weymouth(
                 p_squared_i=from_node_model.vars["pressure_squared_pu"]
-                * grid.pressure_ref**2,
+                * grid.pressure_ref_pa**2,
                 p_squared_j=to_node_model.vars["pressure_squared_pu"]
-                * grid.pressure_ref**2,
-                f_a_pos_sq=branch.mass_flow_pos_squared,
-                f_a_neg_sq=branch.mass_flow_neg_squared,
+                * grid.pressure_ref_pa**2,
+                f_a_pos_sq=branch.mass_flow_pos_kgs_squared,
+                f_a_neg_sq=branch.mass_flow_neg_kgs_squared,
                 diameter_m=branch.diameter_m,
                 length_m=branch.length_m,
                 t_k=grid.t_k,
@@ -81,8 +81,8 @@ class RelaxedWeymouthBranchFormulation(BranchFormulation):
                 friction=branch.friction,
                 **kwargs,
             ),
-            branch.gas_density
-            == grid.pressure_ref
+            branch.gas_density_kg_per_m3
+            == grid.pressure_ref_pa
             * p_avg
             * grid.molar_mass
             / (grid.universal_gas_constant * grid.t_k),

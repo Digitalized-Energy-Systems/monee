@@ -24,27 +24,27 @@ def create_g2h_net():
 
     gas_grid = mm.create_gas_grid("gas", type="lgas")
     g_node_0 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow=1))], grid=gas_grid
+        mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow_kgs=1))], grid=gas_grid
     )
     g_node_1 = pn.node(
         mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())], grid=gas_grid
     )
     g_node_2 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=1))], grid=gas_grid
+        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))], grid=gas_grid
     )
     pn.branch(
-        mm.GasPipe(diameter_m=0.3, length_m=100, temperature_ext_k=300, roughness=0.01),
+        mm.GasPipe(diameter_m=0.3, length_m=100, temperature_ext_k=300, roughness_m=0.01),
         g_node_0,
         g_node_1,
     )
     pn.branch(
-        mm.GasPipe(diameter_m=0.3, length_m=150, temperature_ext_k=300, roughness=0.01),
+        mm.GasPipe(diameter_m=0.3, length_m=150, temperature_ext_k=300, roughness_m=0.01),
         g_node_0,
         g_node_2,
     )
 
     w_node_0 = pn.node(
-        mm.Junction(), grid=mm.WATER_KEY, child_ids=[pn.child(mm.Sink(mass_flow=0.1))]
+        mm.Junction(), grid=mm.WATER_KEY, child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))]
     )
     w_node_1 = pn.node(
         mm.Junction(), child_ids=[pn.child(mm.ConsumeHydrGrid(1))], grid=mm.WATER_KEY
@@ -83,12 +83,12 @@ def create_water_loop(source_t_k=None):
     n1 = net.node(
         mm.Junction(),
         mm.WATER,
-        child_ids=[net.child(mm.Source(mass_flow=5, t_k=source_t_k))],
+        child_ids=[net.child(mm.Source(mass_flow_kgs=5, t_k=source_t_k))],
     )
     n2 = net.node(
         mm.Junction(),
         mm.WATER,
-        child_ids=[net.child(mm.Sink(mass_flow=10))],
+        child_ids=[net.child(mm.Sink(mass_flow_kgs=10))],
     )
     pipe = dict(diameter_m=WATER_LOOP_PIPE_D, length_m=WATER_LOOP_PIPE_L)
     net.branch(mm.WaterPipe(**pipe), n0, n1)

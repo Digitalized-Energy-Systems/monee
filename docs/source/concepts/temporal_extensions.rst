@@ -96,7 +96,7 @@ Step-by-step walkthrough
    j_load   = mx.create_water_junction(net)
 
    mx.create_ext_hydr_grid(net, j_supply)
-   mx.create_water_sink(net, j_load, mass_flow=0.5)
+   mx.create_water_sink(net, j_load, mass_flow_kgs=0.5)
    mx.create_water_pipe(net, j_supply, j_mid,
                         diameter_m=0.3, length_m=500)
    mx.create_water_pipe(net, j_mid, j_load,
@@ -145,7 +145,7 @@ effect.
        j_mid    = mx.create_water_junction(net)
        j_load   = mx.create_water_junction(net)
        mx.create_ext_hydr_grid(net, j_supply)
-       mx.create_water_sink(net, j_load, mass_flow=0.5)
+       mx.create_water_sink(net, j_load, mass_flow_kgs=0.5)
        mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.3, length_m=500)
        mx.create_water_pipe(net, j_mid, j_load,   diameter_m=0.2, length_m=300)
        if with_ltc:
@@ -310,7 +310,7 @@ Linepack walkthrough
    j2 = mx.create_gas_junction(net_gas)   # demand end
 
    mx.create_gas_ext_grid(net_gas, j0)
-   mx.create_gas_sink(net_gas, j2, mass_flow=0.3, name="industry")
+   mx.create_gas_sink(net_gas, j2, mass_flow_kgs=0.3, name="industry")
 
    # Long transmission pipe - large volume = significant linepack
    long_pipe_id = mx.create_gas_pipe(net_gas, j0, j1,
@@ -352,7 +352,7 @@ in ``overrides`` always use auto-computed values.
    # Off-peak → peak → off-peak
    demand = [0.20, 0.20, 0.35, 0.45, 0.50, 0.45, 0.25, 0.20]
    td_gas = TimeseriesData()
-   td_gas.add_child_series_by_name("industry", "mass_flow", demand)
+   td_gas.add_child_series_by_name("industry", "mass_flow_kgs", demand)
 
 **Timeseries: replay the profile**
 
@@ -400,7 +400,7 @@ The plot below runs the same network twice - with and without the extension
        j1  = mx.create_gas_junction(net)
        j2  = mx.create_gas_junction(net)
        src_id  = mx.create_gas_ext_grid(net, j0)
-       mx.create_gas_sink(net, j2, mass_flow=0.20, name="consumer")
+       mx.create_gas_sink(net, j2, mass_flow_kgs=0.20, name="consumer")
        # Long high-pressure pipe - significant stored volume
        pipe_id = mx.create_gas_pipe(net, j0, j1, diameter_m=0.6, length_m=40_000)
        mx.create_gas_pipe(net, j1, j2, diameter_m=0.3, length_m=8_000)
@@ -409,16 +409,16 @@ The plot below runs the same network twice - with and without the extension
            net.add_extension(GasLinepack())
 
        td = TimeseriesData()
-       td.add_child_series_by_name("consumer", "mass_flow", DEMAND)
+       td.add_child_series_by_name("consumer", "mass_flow_kgs", DEMAND)
        result = run_timeseries(net, td)
        return result, pipe_id, j0
 
    result_lp,  pipe_id, j0 = build_and_run(with_linepack=True)
    result_nolp, _,       _  = build_and_run(with_linepack=False)
 
-   # Source outflow is the mass_flow of ExtHydrGrid at j0 (negative = injection)
-   src_lp   = result_lp.get_result_for_id(j0, "mass_flow")
-   src_nolp = result_nolp.get_result_for_id(j0, "mass_flow")
+   # Source outflow is the mass_flow_kgs of ExtHydrGrid at j0 (negative = injection)
+   src_lp   = result_lp.get_result_for_id(j0, "mass_flow_kgs")
+   src_nolp = result_nolp.get_result_for_id(j0, "mass_flow_kgs")
    lp_kg    = result_lp.get_result_for_id(pipe_id, "linepack_kg")
    lp0      = lp_kg.values[0]
 
@@ -443,7 +443,7 @@ The plot below runs the same network twice - with and without the extension
 
    # ── Middle: source feed rate ──────────────────────────────────────────
    ax_s = axes[1]
-   # ExtHydrGrid mass_flow sign: negative = injection into network → negate for "feed"
+   # ExtHydrGrid mass_flow_kgs sign: negative = injection into network → negate for "feed"
    feed_lp   = [-v for v in src_lp.values]
    feed_nolp = [-v for v in src_nolp.values]
 
@@ -507,7 +507,7 @@ parameters using the ideal-gas equation of state:
    * - ``linepack_kg_initial``
      - ``V_pipe × ρ(p_ref × p_nominal_pu, T)``
    * - ``linepack_kg_max``
-     - ``V_pipe × ρ(p_ref × √p_squared_pu_max, T)``
+     - ``V_pipe × ρ(p_ref × √pressure_squared_pu_max, T)``
 
 Both values can be overridden per pipe via the ``overrides`` argument to
 ``GasLinepack``.

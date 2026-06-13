@@ -56,7 +56,9 @@ One-call interface
     print(f"Objective (shed load cost): {result.objective_value:.4f}")
 
 The result is a :class:`~monee.solver.core.SolverResult` with the solved
-network and DataFrames for each model type.
+network and DataFrames for each model type. The bound and check arguments are
+keyword-only and mirror :func:`~monee.problem.create_min_load_shedding_problem`
+one-to-one.
 
 ----
 
@@ -84,9 +86,9 @@ different bounds - use
     # Create and customise the load-shedding problem
     problem = create_min_load_shedding_problem(
         demand_weight=20,            # penalty per MW of shed demand
-        bounds_el=(0.92, 1.08),      # tighter voltage bounds
+        bounds_vm=(0.92, 1.08),      # tighter voltage bounds
         check_pressure=False,        # no gas grid present
-        check_temperature=False,     # no heat grid present
+        check_t=False,               # no heat grid present
         debug=False,
     )
 
@@ -120,20 +122,20 @@ Key parameters of ``create_min_load_shedding_problem``:
        for priority ordering. ``None`` falls back to ``demand_weight``.
        Default: ``None``. See
        :ref:`how-to/load_shedding:Prioritising individual loads`.
-   * - ``bounds_el``
+   * - ``bounds_vm``
      - ``(min, max)`` voltage bounds in per unit. Default: ``(0.9, 1.1)``.
-   * - ``bounds_heat``
+   * - ``bounds_t``
      - ``(min, max)`` temperature bounds in per unit. Default: ``(0.9, 1.1)``.
-   * - ``bounds_gas``
+   * - ``bounds_pressure``
      - ``(min, max)`` pressure bounds in per unit. Default: ``(0.9, 1.1)``.
    * - ``max_line_loading``
      - Maximum electrical line loading. Default: ``1.5`` (150 %). The
        constraint is built by :func:`~monee.problem.utils.line_loading_limit`,
        which works for both the AC formulation (loading percent) and the
        MISOCP formulation (squared-current scale).
-   * - ``check_vm`` / ``check_temperature`` / ``check_pressure`` / ``check_line_loading``
+   * - ``check_vm`` / ``check_t`` / ``check_pressure`` / ``check_lp``
      - Disable individual bound checks for carriers not present in the network.
-   * - ``ext_grid_el_bounds`` / ``ext_grid_gas_bounds`` / ``ext_grid_heat_bounds``
+   * - ``bounds_ext_el`` / ``bounds_ext_gas`` / ``bounds_ext_heat``
      - Exchange range at external grids: active power in MW for electricity,
        mass flow in kg/s for gas and heat. Defaults: ``(-3, 3)`` /
        ``(-10, 10)`` / ``(-10, 10)``. Only applied when
@@ -229,7 +231,7 @@ curtailment is free - only the downstream service loss is penalised. With
 P2H control nodes as well as the P2G, G2P, P2H-HG, and G2H-HG branches) are
 penalised at ``demand_weight * rated input MW * (1 - regulation)``: each
 coupling point is treated as a load on its *input* carrier (power or gas),
-with gas input converted to MW via ``3.6 * higher_heating_value``. Use this
+with gas input converted to MW via ``3.6 * higher_heating_value_kwh_per_kg``. Use this
 when curtailing a conversion unit should count as lost demand in its own
 right.
 
@@ -242,13 +244,13 @@ carriers. The conversion conventions are:
 - **Electrical and heat loads/generators** contribute
   ``setpoint * (1 - regulation)`` directly in MW.
 - **Gas sinks and sources** are mass flows in kg/s; their shed is converted
-  to MW via ``3.6 * higher_heating_value`` of the enclosing gas grid
+  to MW via ``3.6 * higher_heating_value_kwh_per_kg`` of the enclosing gas grid
   (fallback: 15.3 kWh/kg if the grid defines no heating value).
 - **Water-grid sinks and sources are deliberately excluded** - mass flow in a
   heating loop is a transport quantity, not demand, and applying a heating
   value to it would produce a phantom MW-scale penalty.
 - **Heat exchangers** are penalised by the under-delivery gap
-  ``|q_mw_set - q_mw_delivered|``, which captures both regulation cuts and
+  ``|heat_mw_set - heat_mw_delivered|``, which captures both regulation cuts and
   physical shortfall from a narrow temperature spread that a pure
   ``(1 - regulation)`` proxy would miss.
 
@@ -306,6 +308,6 @@ or, equivalently, via the convenience wrapper
 Ignored or inactive loads (e.g. excluded by ``exclude_unconnected_nodes``)
 count at their full rating; regulated loads count at
 ``upper - value * regulation``. Gas curtailment is converted to MW with the
-same ``3.6 * higher_heating_value`` convention as the objective. Pass
+same ``3.6 * higher_heating_value_kwh_per_kg`` convention as the objective. Pass
 ``include_coupling_points=True`` to also account coupling-point curtailment
 on the input carrier, mirroring the corresponding problem option.

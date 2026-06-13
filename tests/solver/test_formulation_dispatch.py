@@ -151,8 +151,8 @@ def test_solve_with_formulation_key_pyomo():
     net, _ = _small_power_net()
     result = ms.PyomoSolver().solve(net, formulation="el_misocp")
     assert result.success
-    # current_pu is MISOCP-only - proves the solver-arg formulation ran.
-    assert "current_pu" in result.dataframes["PowerLine"].columns
+    # current_pu_squared is MISOCP-only - proves the solver-arg formulation ran.
+    assert "current_pu_squared" in result.dataframes["PowerLine"].columns
     # The user's network stays pristine.
     assert all(c.formulation is None for c in net.all_components())
 

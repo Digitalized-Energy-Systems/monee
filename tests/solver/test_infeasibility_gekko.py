@@ -41,7 +41,7 @@ Number           ID  Node    Horizon  Unscaled Res  Scaled Res   Scaling     Nam
 
 _NAME_MAP = {
     "powergenerator_5_p_mw": "powergenerator-5.p_mw",
-    "node_4_q_mw": "node-4.q_mw",
+    "node_4_q_mw": "node-4.heat_mw",
 }
 
 
@@ -93,7 +93,7 @@ def test_parse_infeasibilities_with_name_map():
 
     # THEN
     assert "powergenerator-5.p_mw" in equations[0].equation
-    assert "node-4.q_mw" in equations[0].equation
+    assert "node-4.heat_mw" in equations[0].equation
     assert equations[0].variables[0].display_name == "powergenerator-5.p_mw"
 
 
@@ -124,7 +124,7 @@ def test_diagnose_failed_gekko_solve():
     m.options.SOLVER = 3  # IPOPT
     m.options.IMODE = 3
     x = m.Var(1.0, lb=0, ub=1, name="powergenerator-5.p_mw")
-    y = m.Var(1.0, lb=0, ub=1, name="node-4.q_mw")
+    y = m.Var(1.0, lb=0, ub=1, name="node-4.heat_mw")
     m.Equation(x + y == 5)  # impossible with x, y <= 1
 
     # WHEN

@@ -14,12 +14,12 @@ class GenericPowerBranch(BranchModel):
         self,
         tap,
         shift,
-        br_r,
-        br_x,
-        g_fr,
-        b_fr,
-        g_to,
-        b_to,
+        br_r_pu,
+        br_x_pu,
+        g_fr_pu,
+        b_fr_pu,
+        g_to_pu,
+        b_to_pu,
         max_i_ka=3.19,
         backup=False,
         on_off=1,
@@ -28,34 +28,34 @@ class GenericPowerBranch(BranchModel):
         super().__init__()
         self.tap = tap
         self.shift = shift
-        self.br_r = br_r
-        self.br_x = br_x
-        self.g_fr = g_fr
-        self.b_fr = b_fr
-        self.g_to = g_to
-        self.b_to = b_to
+        self.br_r_pu = br_r_pu
+        self.br_x_pu = br_x_pu
+        self.g_fr_pu = g_fr_pu
+        self.b_fr_pu = b_fr_pu
+        self.g_to_pu = g_to_pu
+        self.b_to_pu = b_to_pu
         self.max_i_ka = max_i_ka
         self.backup = backup
         self.on_off = on_off
         self.p_from_mw = Var(1, name="p_from_mw")
         self.q_from_mvar = Var(1, name="q_from_mvar")
         self.i_from_ka = Var(1, min=0, name="i_from_ka")
-        self.loading_from_percent = Var(1, min=0, name="loading_from_percent")
+        self.loading_from_pu = Var(1, min=0, name="loading_from_pu")
         self.p_to_mw = Var(1, name="p_to_mw")
         self.q_to_mvar = Var(1, name="q_to_mvar")
         self.i_to_ka = Var(1, min=0, name="i_to_ka")
-        self.loading_to_percent = Var(1, min=0, name="loading_to_percent")
+        self.loading_to_pu = Var(1, min=0, name="loading_to_pu")
 
     @property
-    def loading_percent(self):
-        return max(self.loading_to_percent.value, self.loading_from_percent.value)
+    def loading_pu(self):
+        return max(self.loading_to_pu.value, self.loading_from_pu.value)
 
     def loss_percent(self):
         return abs((self.p_from_mw.value - self.p_to_mw.value) / self.p_from_mw.value)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
-        # loading_*_percent ↔ i_*_ka identity is owned by the branch formulation
-        # (AC: equality; MISOCP: derived from current_pu post-solve).
+        # loading_*_percent \leftrightarrow i_*_ka identity is owned by the branch formulation
+        # (AC: equality; MISOCP: derived from current_pu_squared post-solve).
         return []
 
 
@@ -77,7 +77,7 @@ class PowerBranch(GenericPowerBranch, ABC):
         pass
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
-        self.br_r, self.br_x = self.calc_r_x(grid, from_node_model, to_node_model)
+        self.br_r_pu, self.br_x_pu = self.calc_r_x(grid, from_node_model, to_node_model)
         return super().equations(grid, from_node_model, to_node_model, **kwargs)
 
 
@@ -101,9 +101,9 @@ class PowerLine(PowerBranch):
 
     def calc_r_x(self, grid: PowerGrid, from_node_model, to_node_model):
         base_r = from_node_model.base_kv**2 / grid.sn_mva
-        br_r = self.r_ohm_per_m * self.length_m / base_r / self.parallel
-        br_x = self.x_ohm_per_m * self.length_m / base_r / self.parallel
-        return (br_r, br_x)
+        br_r_pu = self.r_ohm_per_m * self.length_m / base_r / self.parallel
+        br_x_pu = self.x_ohm_per_m * self.length_m / base_r / self.parallel
+        return (br_r_pu, br_x_pu)
 
 
 @model
@@ -140,8 +140,8 @@ class WaterPipe(BranchModel):
         diameter_m,
         length_m,
         temperature_ext_k=283.15,
-        roughness=4.5e-05,
-        lambda_insulation_w_per_k=0.025,
+        roughness_m=4.5e-05,
+        lambda_insulation_w_per_m_k=0.025,
         insulation_thickness_m=0.12,
         on_off=1,
         friction=None,
@@ -151,21 +151,21 @@ class WaterPipe(BranchModel):
         self.diameter_m = diameter_m
         self.length_m = length_m
         self.temperature_ext_k = temperature_ext_k
-        self.roughness = roughness
-        self.lambda_insulation_w_per_k = lambda_insulation_w_per_k
+        self.roughness_m = roughness_m
+        self.lambda_insulation_w_per_m_k = lambda_insulation_w_per_m_k
         self.insulation_thickness_m = insulation_thickness_m
         self.on_off = on_off
         self.unidirectional = unidirectional
-        self.mass_flow = Intermediate(0.1)
-        self.mass_flow_pos = Var(0.1, min=0, name="mass_flow_pos")
-        self.mass_flow_neg = Var(0.1, min=0, name="mass_flow_neg")
-        self.mass_flow_pos_squared = Var(0, min=0, name="mass_flow_pos_sq")
-        self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
+        self.mass_flow_kgs = Intermediate(0.1)
+        self.mass_flow_pos_kgs = Var(0.1, min=0, name="mass_flow_pos_kgs")
+        self.mass_flow_neg_kgs = Var(0.1, min=0, name="mass_flow_neg_kgs")
+        self.mass_flow_pos_kgs_squared = Var(0, min=0, name="mass_flow_pos_kgs_squared")
+        self.mass_flow_neg_kgs_squared = Var(0, min=0, name="mass_flow_neg_kgs_squared")
         self.direction = Var(1, integer=True, min=0, max=1, name="direction")
-        self.velocity = Var(1, min=-50, max=50, name="velocity")
+        self.velocity_mps = Var(1, min=-50, max=50, name="velocity_mps")
         self.q_mw = Var(1e-6, name="q_mw")
-        # reynolds is stored as Re/1e6 (see REYNOLDS_SCALE); 1e-3 ≈ laminar floor.
-        self.reynolds = Var(1e-3, min=0, max=10, name="reynolds")
+        # reynolds_scaled is stored as Re/1e6 (see REYNOLDS_SCALE); 1e-3 \approx laminar floor.
+        self.reynolds_scaled = Var(1e-3, min=0, max=10, name="reynolds_scaled")
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
         # friction upper bound 7 covers the PWL leftmost breakpoint (Re=10, 64/10).
@@ -174,18 +174,22 @@ class WaterPipe(BranchModel):
         )
 
     def loss_percent(self):
+        mass_flow_kgs = abs(self.mass_flow_kgs.value)
+        if mass_flow_kgs == 0:
+            return 0
+        # Average fluid temperature in Kelvin from the per-unit endpoint temps
+        # (WaterGrid.t_ref_k is the per-unit reference; the branch has no grid here).
+        t_average_k = (
+            (self.t_from_pu.value + self.t_to_pu.value) / 2 * WaterGrid.t_ref_k
+        )
         return (
             abs(self.q_mw.value)
             * 1e6
-            / (
-                abs(self.mass_flow.value)
-                * ohfmodel.SPECIFIC_HEAT_CAP_WATER
-                * self.t_average_k.value
-            )
+            / (mass_flow_kgs * ohfmodel.SPECIFIC_HEAT_CAP_WATER * t_average_k)
         )
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
-        return [IntermediateEq("mass_flow", self.mass_flow_pos - self.mass_flow_neg)]
+        return [IntermediateEq("mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs)]
 
 
 @model
@@ -216,16 +220,16 @@ class HeatExchanger(BranchModel):
                 self._calc_mass_flow = True
 
         self.mass_flow_design_kgs = mass_flow_design_kgs
-        self.mass_flow = Intermediate(0.1)
-        self.mass_flow_pos = Var(0, min=0, name="mass_flow_pos")
-        self.mass_flow_neg = Var(0, min=0, name="mass_flow_neg")
+        self.mass_flow_kgs = Intermediate(0.1)
+        self.mass_flow_pos_kgs = Var(0, min=0, name="mass_flow_pos_kgs")
+        self.mass_flow_neg_kgs = Var(0, min=0, name="mass_flow_neg_kgs")
         self.direction = Var(0, integer=True, min=0, max=1, name="direction")
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         eqs = [
-            IntermediateEq("mass_flow", self.mass_flow_pos - self.mass_flow_neg),
+            IntermediateEq("mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs),
         ]
         if self._calc_mass_flow:
             eqs.append(
@@ -269,7 +273,7 @@ class PassiveHeatExchanger(BranchModel):
         self,
         q_mw,
         diameter_m,
-        roughness=0.0001,
+        roughness_m=0.0001,
         length_m=2.5,
         temperature_ext_k=293,
         regulation=1,
@@ -278,7 +282,7 @@ class PassiveHeatExchanger(BranchModel):
         super().__init__()
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
-        self.roughness = roughness
+        self.roughness_m = roughness_m
         self.length_m = length_m
         self.limit = 0.1
         self.regulation = regulation
@@ -286,15 +290,15 @@ class PassiveHeatExchanger(BranchModel):
         self.q_mw_set = -q_mw
         self.q_mw = Var(-1e-3, name="q_mw")
 
-        self.mass_flow = Intermediate(0.1)
-        self.mass_flow_pos = Var(0, min=0, name="mass_flow_pos")
-        self.mass_flow_neg = Var(0, min=0, name="mass_flow_neg")
-        self.mass_flow_pos_squared = Var(0, min=0, name="mass_flow_pos_sq")
-        self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
+        self.mass_flow_kgs = Intermediate(0.1)
+        self.mass_flow_pos_kgs = Var(0, min=0, name="mass_flow_pos_kgs")
+        self.mass_flow_neg_kgs = Var(0, min=0, name="mass_flow_neg_kgs")
+        self.mass_flow_pos_kgs_squared = Var(0, min=0, name="mass_flow_pos_kgs_squared")
+        self.mass_flow_neg_kgs_squared = Var(0, min=0, name="mass_flow_neg_kgs_squared")
         self.direction = Var(0, integer=True, min=0, max=1, name="direction")
-        self.velocity = Var(1, min=-50, max=50, name="velocity")
-        # reynolds = Re/1e6 (see REYNOLDS_SCALE); 1e-3 ≈ laminar floor.
-        self.reynolds = Var(1e-3, min=0, max=10, name="reynolds")
+        self.velocity_mps = Var(1, min=-50, max=50, name="velocity_mps")
+        # reynolds_scaled = Re/1e6 (see REYNOLDS_SCALE); 1e-3 \approx laminar floor.
+        self.reynolds_scaled = Var(1e-3, min=0, max=10, name="reynolds_scaled")
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
         # friction upper bound 7 covers the PWL leftmost breakpoint (Re=10).
@@ -304,7 +308,7 @@ class PassiveHeatExchanger(BranchModel):
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         return [
-            IntermediateEq("mass_flow", self.mass_flow_pos - self.mass_flow_neg),
+            IntermediateEq("mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs),
             self.q_mw == self.q_mw_set * self.regulation,
         ]
 
@@ -332,7 +336,7 @@ class GasPipe(BranchModel):
         diameter_m,
         length_m,
         temperature_ext_k=296.15,
-        roughness=0.0001,
+        roughness_m=0.0001,
         on_off=1,
         friction=None,
     ) -> None:
@@ -340,46 +344,46 @@ class GasPipe(BranchModel):
         self.diameter_m = diameter_m
         self.length_m = length_m
         self.temperature_ext_k = temperature_ext_k
-        self.roughness = roughness
+        self.roughness_m = roughness_m
         self.on_off = on_off
-        self.mass_flow = Intermediate(0.1)
-        self.mass_flow_pos = Var(0, min=0, name="mass_flow_pos")
-        self.mass_flow_neg = Var(0, min=0, name="mass_flow_neg")
-        self.mass_flow_pos_squared = Var(0, min=0, name="mass_flow_pos_sq")
-        self.mass_flow_neg_squared = Var(0, min=0, name="mass_flow_neg_sq")
+        self.mass_flow_kgs = Intermediate(0.1)
+        self.mass_flow_pos_kgs = Var(0, min=0, name="mass_flow_pos_kgs")
+        self.mass_flow_neg_kgs = Var(0, min=0, name="mass_flow_neg_kgs")
+        self.mass_flow_pos_kgs_squared = Var(0, min=0, name="mass_flow_pos_kgs_squared")
+        self.mass_flow_neg_kgs_squared = Var(0, min=0, name="mass_flow_neg_kgs_squared")
         self.direction = Var(0, integer=True, min=0, max=1)
-        self.velocity = Var(1, min=-100, max=100, name="velocity")
-        # reynolds = Re/1e6 (see REYNOLDS_SCALE); 1e-3 ≈ laminar floor.
-        self.reynolds = Var(1e-3, min=0, max=10, name="reynolds")
-        self.gas_density = Var(1, min=0, max=100, name="gas_density")
+        self.velocity_mps = Var(1, min=-100, max=100, name="velocity_mps")
+        # reynolds_scaled = Re/1e6 (see REYNOLDS_SCALE); 1e-3 \approx laminar floor.
+        self.reynolds_scaled = Var(1e-3, min=0, max=10, name="reynolds_scaled")
+        self.gas_density_kg_per_m3 = Var(1, min=0, max=100, name="gas_density_kg_per_m3")
         self.friction = (
             Var(0.02, min=0, max=7, name="friction") if friction is None else friction
         )
         self.q_mw = 0
 
     def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):
-        return [IntermediateEq("mass_flow", self.mass_flow_pos - self.mass_flow_neg)]
+        return [IntermediateEq("mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs)]
 
 
 @model
 class GasCompressor(BranchModel):
     """
     Ideal compressor - fixed pressure ratio, unidirectional (suction → discharge).
-    Forward flow lives in ``mass_flow_neg`` to match GasPipe's Weymouth convention.
+    Forward flow lives in ``mass_flow_neg_kgs`` to match GasPipe's Weymouth convention.
     """
 
     def __init__(self, compression_ratio=1.5, max_flow_kgs=10.0) -> None:
         super().__init__()
         self.compression_ratio = compression_ratio
         self.max_flow_kgs = max_flow_kgs
-        self.mass_flow = Intermediate(0.1)
-        self.mass_flow_neg = Var(0.1, min=0, max=max_flow_kgs, name="mass_flow_neg")
+        self.mass_flow_kgs = Intermediate(0.1)
+        self.mass_flow_neg_kgs = Var(0.1, min=0, max=max_flow_kgs, name="mass_flow_neg_kgs")
         self.on_off = 1
 
     def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):
         p_sq_from = from_node_model.vars["pressure_squared_pu"]
         p_sq_to = to_node_model.vars["pressure_squared_pu"]
         return [
-            IntermediateEq("mass_flow", -self.mass_flow_neg),
+            IntermediateEq("mass_flow_kgs", -self.mass_flow_neg_kgs),
             self.compression_ratio**2 * p_sq_from == p_sq_to,
         ]

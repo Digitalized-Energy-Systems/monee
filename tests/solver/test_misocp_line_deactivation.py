@@ -58,8 +58,8 @@ def test_inactive_branch_has_zero_current():
     assert result.success
 
     backup = _backup_row(result)
-    assert math.isclose(backup["current_pu"], 0.0, abs_tol=1e-6), (
-        f"Inactive branch current_pu should be 0, got {backup['current_pu']}"
+    assert math.isclose(backup["current_pu_squared"], 0.0, abs_tol=1e-6), (
+        f"Inactive branch current_pu_squared should be 0, got {backup['current_pu_squared']}"
     )
 
 
@@ -92,8 +92,8 @@ def test_active_lines_carry_full_load():
 
     lines = result.get(mm.PowerLine)
     active = lines[lines["on_off"] == 1]
-    assert (active["current_pu"] > 1e-4).all(), (
-        f"Active lines should carry current:\n{active['current_pu']}"
+    assert (active["current_pu_squared"] > 1e-4).all(), (
+        f"Active lines should carry current:\n{active['current_pu_squared']}"
     )
 
     # All load is served (regulation = 1 for both loads)

@@ -212,7 +212,7 @@ Jointly optimize a CHP unit serving both electrical and heat demand:
    j_return = mx.create_water_junction(net_mes)
    mx.create_gas_ext_grid(net_mes, j_gas)
    mx.create_ext_hydr_grid(net_mes, j_supply)
-   mx.create_water_sink(net_mes, j_return, mass_flow=0.0, name="heat_load")
+   mx.create_water_sink(net_mes, j_return, mass_flow_kgs=0.0, name="heat_load")
 
    mx.create_chp(net_mes,
                  power_node_id=bus_load,
@@ -222,14 +222,14 @@ Jointly optimize a CHP unit serving both electrical and heat demand:
                  diameter_m=0.1,
                  efficiency_power=0.35,
                  efficiency_heat=0.45,
-                 mass_flow_setpoint=0.1)
+                 mass_flow_setpoint_kgs=0.1)
 
    el_prof   = [0.8, 1.0, 1.4, 1.8, 1.6, 1.2]
    heat_prof = [0.4, 0.5, 0.7, 0.9, 0.8, 0.6]
 
    td_mes = TimeseriesData()
    td_mes.add_child_series_by_name("el_load",   "p_mw",     el_prof)
-   td_mes.add_child_series_by_name("heat_load", "mass_flow", heat_prof)
+   td_mes.add_child_series_by_name("heat_load", "mass_flow_kgs", heat_prof)
 
 Solve and query CHP dispatch:
 
@@ -271,7 +271,7 @@ Solve and query CHP dispatch:
    j_return = mx.create_water_junction(net_mes)
    mx.create_gas_ext_grid(net_mes, j_gas)
    mx.create_ext_hydr_grid(net_mes, j_supply)
-   mx.create_water_sink(net_mes, j_return, mass_flow=0.0, name="heat_load")
+   mx.create_water_sink(net_mes, j_return, mass_flow_kgs=0.0, name="heat_load")
 
    mx.create_chp(net_mes,
                  power_node_id=bus_load,
@@ -281,11 +281,11 @@ Solve and query CHP dispatch:
                  diameter_m=0.1,
                  efficiency_power=0.35,
                  efficiency_heat=0.45,
-                 mass_flow_setpoint=0.1)
+                 mass_flow_setpoint_kgs=0.1)
 
    td_mes = TimeseriesData()
    td_mes.add_child_series_by_name("el_load",   "p_mw",      EL_PROF)
-   td_mes.add_child_series_by_name("heat_load", "mass_flow",  HEAT_PROF)
+   td_mes.add_child_series_by_name("heat_load", "mass_flow_kgs",  HEAT_PROF)
 
    result_mes = run_multi_period(net_mes, td_mes, dt_h=1.0)
    chp_reg = result_mes.get_result_for(mm.CHP, "regulation").iloc[:, 0]
@@ -343,7 +343,7 @@ required feed-source capacity:
    j1 = mx.create_gas_junction(net_lp)
    j2 = mx.create_gas_junction(net_lp)
    mx.create_gas_ext_grid(net_lp, j0)
-   mx.create_gas_sink(net_lp, j2, mass_flow=0.3, name="consumer")
+   mx.create_gas_sink(net_lp, j2, mass_flow_kgs=0.3, name="consumer")
 
    pipe_id = mx.create_gas_pipe(net_lp, j0, j1,
                                 diameter_m=0.5, length_m=50_000)
@@ -355,7 +355,7 @@ required feed-source capacity:
    }))
 
    td_lp = TimeseriesData()
-   td_lp.add_child_series_by_name("consumer", "mass_flow",
+   td_lp.add_child_series_by_name("consumer", "mass_flow_kgs",
                                    [0.3, 0.3, 0.6, 0.9, 0.8, 0.4])
 
 .. plot::
@@ -374,7 +374,7 @@ required feed-source capacity:
    j1 = mx.create_gas_junction(net_lp)
    j2 = mx.create_gas_junction(net_lp)
    mx.create_gas_ext_grid(net_lp, j0)
-   mx.create_gas_sink(net_lp, j2, mass_flow=0.3, name="consumer")
+   mx.create_gas_sink(net_lp, j2, mass_flow_kgs=0.3, name="consumer")
    pipe_id = mx.create_gas_pipe(net_lp, j0, j1,
                                 diameter_m=0.5, length_m=50_000)
    mx.create_gas_pipe(net_lp, j1, j2, diameter_m=0.3, length_m=10_000)
@@ -382,7 +382,7 @@ required feed-source capacity:
        pipe_id: dict(linepack_kg_initial=5_000, linepack_kg_max=15_000)
    }))
    td_lp = TimeseriesData()
-   td_lp.add_child_series_by_name("consumer", "mass_flow", DEMAND)
+   td_lp.add_child_series_by_name("consumer", "mass_flow_kgs", DEMAND)
 
    result = run_multi_period(net_lp, td_lp, dt_h=1.0)
    lp = result.get_result_for_id(pipe_id, "linepack_kg")

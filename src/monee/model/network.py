@@ -22,14 +22,19 @@ from .core import (
     PostProcess,
     Var,
 )
-from .formulation import (
-    Formulation,
-    NetworkFormulation,
-)
 from .grid import create_gas_grid, create_power_grid, create_water_grid
 
 if TYPE_CHECKING:
     from .extension.core import NetworkAspect
+
+    # Imported only for typing: at runtime ``apply_formulation`` resolves the
+    # spec lazily via ``formulation.registry.resolve_formulation`` (a local
+    # import), so the model package no longer eagerly triggers the
+    # formulation -> branch/node import chain at load time.
+    from .formulation import (  # noqa: F401
+        Formulation,
+        NetworkFormulation,
+    )
 
 
 class Network:
@@ -62,8 +67,13 @@ class Network:
         # (see monee.model.formulation.registry.attach_formulations).
         self.__default_formulation: dict[tuple[type, type], Formulation] = {}
 
-    def apply_formulation(self, network_formulation: NetworkFormulation):
+    def apply_formulation(self, network_formulation):
         """Record *network_formulation* as the network-level default.
+
+        Accepts the same spec as the solver's ``formulation`` argument
+        (:func:`~monee.model.formulation.registry.resolve_formulation`): a
+        registry key string (``"smooth_nlp"``), a :class:`NetworkFormulation`,
+        or a sequence of either (merged left to right).
 
         Side-effect free: only the network's formulation map is updated -
         components and their models are untouched. The choice materialises
@@ -72,6 +82,11 @@ class Network:
         per-component formulations passed to the builder methods override
         both. Repeated calls merge: later registrations win per type key.
         """
+        from .formulation.registry import resolve_formulation
+
+        network_formulation = resolve_formulation(network_formulation)
+        if network_formulation is None:
+            return
         for type_or_tuple, formulation in network_formulation.items():
             tc, tg = None, None
             if isinstance(type_or_tuple, tuple):
@@ -209,11 +224,24 @@ class Network:
         return None
 
     def remove_node(self, node_id):
+        # nx.remove_node drops all incident edges from the graph but leaves
+        # the surviving neighbours' from_branch_ids/to_branch_ids pointing at
+        # those now-vanished edges. Detach them first so later
+        # branches_connected_to / components_connected_to on a neighbour does
+        # not call branch_by_id on a missing edge.
+        incident = [
+            (u, v, key)
+            for u, v, key in self._network_internal.edges(node_id, keys=True)
+        ]
+        for u, v, key in incident:
+            self.remove_branch_between(u, v, key=key)
         self._network_internal.remove_node(node_id)
 
     def remove_branch(self, branch_id):
         branch: Branch = self.branch_by_id(branch_id)
-        self.remove_branch_between(branch.from_node_id, branch.to_node_id)
+        self.remove_branch_between(
+            branch.from_node_id, branch.to_node_id, key=branch_id[2]
+        )
 
     def remove_compound(self, compound_id):
         compound: Compound = self.compound_by_id(compound_id)
@@ -787,6 +815,17 @@ def to_spanning_tree(network: Network):
 def transform_network(network: Network, graph_transform):
     network = network.copy()
     network._network_internal = graph_transform(network.graph)
+    # The transform (e.g. minimum_spanning_tree) drops edges, leaving the
+    # surviving nodes' from_branch_ids/to_branch_ids referencing branches that
+    # no longer exist. Rebuild those lists from the reduced edge set so
+    # branches_connected_to / components_connected_to stay consistent.
+    for node in network.nodes:
+        node.from_branch_ids = []
+        node.to_branch_ids = []
+    for from_id, to_id, key in network._network_internal.edges(keys=True):
+        branch_id = (from_id, to_id, key)
+        network.node_by_id(from_id).add_from_branch_id(branch_id)
+        network.node_by_id(to_id).add_to_branch_id(branch_id)
     for child in list(network.childs):
         referenced = False
         for node in network.nodes:

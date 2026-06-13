@@ -110,7 +110,9 @@ The effective formulation per component is resolved most-specific-first:
 3. the network-level choice recorded by
    :meth:`~monee.model.network.Network.apply_formulation` (side-effect free -
    it only updates the network's formulation map; components and model
-   variables stay untouched),
+   variables stay untouched). It accepts the same spec as the ``formulation=``
+   solve argument: a registry-key string (``"smooth_nlp"``), a
+   ``NetworkFormulation``, or a sequence of either (merged left to right),
 4. :data:`~monee.model.formulation.bundles.DEFAULT_SIMULATION_FORMULATION` -
    a deliberate hybrid of the polar-AC NLP (electricity), the
    epigraph-relaxed Weymouth (gas) and the bilinear Darcy-Weisbach
@@ -407,7 +409,7 @@ solve:
     j1 = mx.create_gas_junction(net)
     mx.create_gas_pipe(net, j0, j1, diameter_m=0.3, length_m=1000)
     mx.create_ext_hydr_grid(net, j0)
-    mx.create_sink(net, j1, mass_flow=0.5)
+    mx.create_sink(net, j1, mass_flow_kgs=0.5)
 
     net.apply_formulation(GAS_NLP_FORMULATION)
     result = run_energy_flow(net)
@@ -429,7 +431,7 @@ square - check ``result.mode_used``. See :doc:`solvers` for details.
 .. tip::
 
    **Warm starting.** In simulation mode the smooth formulations seed the
-   flow magnitude ``mass_flow_mag`` from ``branch.mass_flow_nominal`` (the
+   flow magnitude ``mass_flow_mag_kgs`` from ``branch.mass_flow_nominal_kgs`` (the
    design flow stored on pipes by the MES network generators). A good
    magnitude seed alone cuts the smooth-NLP iteration count by roughly 20× -
    the sign of the flow is recovered cheaply, the magnitude is what
@@ -475,12 +477,12 @@ constraints) and optionally ``minimize`` (return auxiliary objective terms):
             eqs = [
                 from_node_model.vars["pressure_pu"]
                 - to_node_model.vars["pressure_pu"]
-                == branch.resistance * branch.mass_flow
+                == branch.resistance * branch.mass_flow_kgs
             ]
             if not kwargs.get("simulation", False):
                 # Operational limits would unbalance a square simulation
                 # solve - emit them only in optimisation mode.
-                eqs.append(branch.mass_flow <= branch.flow_max)
+                eqs.append(branch.mass_flow_kgs <= branch.flow_max)
             return eqs
 
         def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):

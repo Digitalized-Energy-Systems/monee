@@ -84,9 +84,9 @@ def test_load_shedding_with_disconnected_bus():
     pn = _build_net()
     pn.apply_formulation(EL_MISOCP_FORMULATION)
     problem = create_min_load_shedding_problem(
-        ext_grid_el_bounds=(0, 0),
+        bounds_ext_el=(0, 0),
         include_ext_grids=True,
-        check_temperature=False,
+        check_t=False,
         check_pressure=False,
     )
 

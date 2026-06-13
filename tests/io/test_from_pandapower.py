@@ -22,6 +22,44 @@ def test_from_pandapower_net():
 
 
 @pytest.mark.pptest
+def test_sgens_import_as_distinct_generators_without_positive_reactive():
+    import simbench
+
+    import monee.model as mm
+    from monee.io.from_pandapower import from_pandapower_net
+
+    # GIVEN a grid whose buses carry both loads and static generators
+    net = simbench.get_simbench_net("1-MV-rural--0-sw")
+    n_sgen = int(net.sgen.in_service.sum())
+    assert n_sgen > 0
+
+    # WHEN
+    monee_net = from_pandapower_net(net)
+
+    # THEN every in-service sgen becomes its own PowerGenerator ...
+    gens = [c for c in monee_net.childs if isinstance(c.model, mm.PowerGenerator)]
+    assert len(gens) == n_sgen
+
+    # ... and none carries positive (consuming) reactive power. monee stores
+    # generation in load convention, so an injecting generator's q_mvar is <= 0;
+    # the load's reactive power now stays on its own PowerLoad child.
+    assert all(g.model.q_mvar <= 1e-9 for g in gens)
+
+    # The net nodal injection is unchanged vs the raw pandapower elements
+    # (load - sgen, both in generation convention for the sgen contribution).
+    childs = [
+        c
+        for c in monee_net.childs
+        if isinstance(c.model, (mm.PowerGenerator, mm.PowerLoad))
+    ]
+    assert abs(sum(c.model.p_mw for c in childs) - (net.load.p_mw.sum() - net.sgen.p_mw.sum())) < 1e-6
+    assert abs(sum(c.model.q_mvar for c in childs) - (net.load.q_mvar.sum() - net.sgen.q_mvar.sum())) < 1e-6
+
+    # The caller's net is not mutated.
+    assert len(net.sgen) == n_sgen
+
+
+@pytest.mark.pptest
 def test_from_pandapower_max_i_ka_overrides_matpower_placeholder():
     import simbench
 

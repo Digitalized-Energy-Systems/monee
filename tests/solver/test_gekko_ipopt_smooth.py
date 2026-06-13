@@ -19,17 +19,17 @@ IPOPT = 3
 
 def _gas_only_net():
     pn = mm.Network(mm.create_gas_grid("gas", type="lgas"))
-    g0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow=1))])
+    g0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow_kgs=1))])
     g1 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())])
-    g2 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=0.6))])
-    pn.branch(mm.GasPipe(diameter_m=0.35, length_m=1000, roughness=0.01), g0, g1)
-    pn.branch(mm.GasPipe(diameter_m=0.35, length_m=1500, roughness=0.01), g0, g2)
+    g2 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.6))])
+    pn.branch(mm.GasPipe(diameter_m=0.35, length_m=1000, roughness_m=0.01), g0, g1)
+    pn.branch(mm.GasPipe(diameter_m=0.35, length_m=1500, roughness_m=0.01), g0, g2)
     return pn
 
 
 def _heat_only_net():
     pn = mm.Network(mm.create_water_grid("heat"))
-    w0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=0.1))])
+    w0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))])
     w1 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ConsumeHydrGrid(1))])
     w2 = pn.node(mm.Junction())
     w3 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid(t_k=359))])
@@ -92,12 +92,12 @@ def test_smooth_mes_solves_under_ipopt(friction_model):
     assert result.success
 
     # Gas mass balance is closed by the ext grid.
-    ext_mass = result.dataframes["ExtHydrGrid"]["mass_flow"][0]
+    ext_mass = result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0]
     assert math.isfinite(ext_mass)
 
     # No spurious bidirectional flow: per pipe, pos*neg ~ 0 (smooth complementarity).
     gas_pipes = result.dataframes["GasPipe"]
-    for pos, neg in zip(gas_pipes["mass_flow_pos"], gas_pipes["mass_flow_neg"]):
+    for pos, neg in zip(gas_pipes["mass_flow_pos_kgs"], gas_pipes["mass_flow_neg_kgs"]):
         assert min(abs(pos), abs(neg)) < 1e-2
 
 
@@ -135,8 +135,8 @@ def test_simulation_gas_only_matches_default():
 
     # Square IMODE=1 simulation matches the default IMODE=3 smooth solve.
     assert math.isclose(
-        ref_res.dataframes["ExtHydrGrid"]["mass_flow"][0],
-        sim_res.dataframes["ExtHydrGrid"]["mass_flow"][0],
+        ref_res.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0],
+        sim_res.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0],
         abs_tol=1e-3,
     )
 
@@ -200,7 +200,7 @@ def test_smooth_simbench_mes_solves_under_ipopt():
     # Pipes carry unidirectional flow; NaN pipes (unconnected/ignored) are skipped.
     for carrier in ("GasPipe", "WaterPipe"):
         pipes = result.dataframes[carrier]
-        for pos, neg in zip(pipes["mass_flow_pos"], pipes["mass_flow_neg"]):
+        for pos, neg in zip(pipes["mass_flow_pos_kgs"], pipes["mass_flow_neg_kgs"]):
             if math.isnan(pos) or math.isnan(neg):
                 continue
             assert min(abs(pos), abs(neg)) < 1e-2

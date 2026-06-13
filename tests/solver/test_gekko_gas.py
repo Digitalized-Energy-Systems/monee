@@ -18,7 +18,7 @@ def create_two_pipes_no_branching():
     g_node_2 = pn.node(
         mm.Junction(),
         mm.GAS,
-        child_ids=[pn.child(mm.Sink(mass_flow=0.2))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.2))],
     )
 
     pn.branch(
@@ -41,7 +41,7 @@ def create_two_pipes_gas_example():
     # GAS
     g_node_0 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Source(mass_flow=0.2))],
+        child_ids=[pn.child(mm.Source(mass_flow_kgs=0.2))],
     )
     g_node_1 = pn.node(
         mm.Junction(),
@@ -49,7 +49,7 @@ def create_two_pipes_gas_example():
     )
     g_node_2 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=0.4))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.4))],
     )
 
     pn.branch(
@@ -72,36 +72,36 @@ def create_branching_gas_net():
     gas_grid = mm.create_gas_grid("gas", type="lgas")
     g_node_0 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Source(mass_flow=0.1))],
+        child_ids=[pn.child(mm.Source(mass_flow_kgs=0.1))],
         grid=gas_grid,
     )
     g_node_1 = pn.node(
         mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())], grid=gas_grid
     )
     g_node_2 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=0.1))], grid=gas_grid
+        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))], grid=gas_grid
     )
     g_node_3 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=0.1))], grid=gas_grid
+        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))], grid=gas_grid
     )
 
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.75, length_m=100, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.75, length_m=100, temperature_ext_k=300, roughness_m=0.01
         ),
         g_node_0,
         g_node_1,
     )
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.75, length_m=150, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.75, length_m=150, temperature_ext_k=300, roughness_m=0.01
         ),
         g_node_0,
         g_node_2,
     )
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.75, length_m=150, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.75, length_m=150, temperature_ext_k=300, roughness_m=0.01
         ),
         g_node_2,
         g_node_3,
@@ -119,7 +119,7 @@ def test_two_pipes_gas_network():
     # THEN
     assert result.success
 
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2)
+    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -0.2)
 
     # analytic constant-friction (Swamee-Jain Re->inf) Weymouth solution;
     # wider tolerance on node 2 absorbs the documented epigraph relaxation slack
@@ -143,7 +143,7 @@ def test_two_pipes_line_gas_network():
     # THEN
     assert result.success
 
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2)
+    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -0.2)
     assert math.isclose(
         result.dataframes["Junction"]["pressure_pa"][2], 999995.60081, abs_tol=0.001
     )

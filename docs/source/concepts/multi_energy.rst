@@ -114,15 +114,15 @@ return pipe closes the thermal loop.
         power_node_id=bus_el,
         heat_node_id=junc_supply,
         heat_return_node_id=junc_return,
-        heat_energy_mw=0.5,  # thermal output setpoint [MW]
+        heat_mw=0.5,  # thermal output setpoint [MW]
         diameter_m=0.1,      # heat-exchange pipe diameter
         efficiency=0.95,     # electrical-to-thermal efficiency
     )
 
 **Key parameters:**
 
-- ``heat_energy_mw`` - thermal output setpoint in **megawatts**. The solver
-  derives the required electrical input as ``heat_energy_mw / efficiency``.
+- ``heat_mw`` - thermal output setpoint in **megawatts**. The solver
+  derives the required electrical input as ``heat_mw / efficiency``.
 - ``efficiency`` - ratio of thermal output to electrical input (≤ 1 for
   resistive heating, > 1 for heat pumps modelled with a fixed COP).
 - ``diameter_m`` - internal pipe diameter of the connecting heat-exchange
@@ -146,7 +146,7 @@ A P2G unit (electrolysis) converts electricity into gas (e.g. green hydrogen).
         from_node_id=bus_el,
         to_node_id=junc_gas,
         efficiency=0.7,               # electrical-to-chemical efficiency
-        mass_flow_setpoint=0.05,      # target gas production [kg/s]
+        mass_flow_setpoint_kgs=0.05,      # target gas production [kg/s]
     )
 
 P2G is a plain two-endpoint **branch** coupler; its conversion loss is exposed
@@ -193,7 +193,7 @@ heating (heat output).
 
     # Gas grid
     junc_gas = mx.create_gas_junction(net)
-    mx.create_source(net, junc_gas, mass_flow=0.5)
+    mx.create_source(net, junc_gas, mass_flow_kgs=0.5)
 
     # Electricity grid
     bus_el = mx.create_bus(net)
@@ -214,7 +214,7 @@ heating (heat output).
         diameter_m=0.15,
         efficiency_power=0.35,   # gas → electricity
         efficiency_heat=0.45,    # gas → heat
-        mass_flow_setpoint=0.1,  # gas consumption [kg/s]
+        mass_flow_setpoint_kgs=0.1,  # gas consumption [kg/s]
     )
 
 **Key parameters:**
@@ -222,7 +222,7 @@ heating (heat output).
 - ``efficiency_power`` and ``efficiency_heat`` - individual efficiencies for
   electrical and thermal output. Their sum must not exceed 1 (total fuel
   utilisation).
-- ``mass_flow_setpoint`` - gas consumption setpoint in kg/s.
+- ``mass_flow_setpoint_kgs`` - gas consumption setpoint in kg/s.
 - ``regulation`` - a factor in [0, 1] that scales all outputs. Set as a
   :class:`~monee.model.core.Var` to let the optimiser dispatch the unit.
 
@@ -250,7 +250,7 @@ A gas boiler converts gas to district heat without producing electricity.
         gas_node_id=junc_gas,
         heat_node_id=junc_heat_supply,
         heat_return_node_id=junc_heat_return,
-        heat_energy_mw=0.5,  # thermal output [MW]
+        heat_mw=0.5,  # thermal output [MW]
         diameter_m=0.1,
         efficiency=0.90,
     )
@@ -263,7 +263,7 @@ through an internal heat-exchanger branch that bridges the supply and return
 sides of the heating network - which is why they require a
 ``heat_return_node_id`` and a ``diameter_m``. Each of them has a **node-based
 "HG" variant** ("heat generator") that instead injects the thermal power
-directly at a single heat junction: the heat appears as a ``q_mw_heat`` term
+directly at a single heat junction: the heat appears as a ``heat_mw`` term
 that the :class:`~monee.model.node.Junction` heat balance picks up, exactly
 like a node-level :class:`~monee.model.child.HeatGenerator` child.
 
@@ -311,11 +311,11 @@ The variants differ structurally from their classic counterparts:
   heat-generator child placed at ``heat_node`` instead of a heat-exchanger
   branch. It therefore needs **no** ``heat_return_node`` and **no**
   ``diameter_m``.
-- :class:`~monee.model.multi.GasToHeatHG` (``heat_energy_mw, efficiency,
+- :class:`~monee.model.multi.GasToHeatHG` (``heat_mw, efficiency,
   regulation=1``) and :class:`~monee.model.multi.PowerToHeatHG`
-  (``heat_energy_mw, efficiency, q_mvar_setpoint=0, regulation=1``) are plain
+  (``heat_mw, efficiency, q_mvar_setpoint=0, regulation=1``) are plain
   two-endpoint **branch** couplers, just like G2P and P2G: they withdraw gas or
-  electricity at the from-node and carry ``q_mw_heat`` directly on the branch,
+  electricity at the from-node and carry ``heat_mw`` directly on the branch,
   where the junction heat balance at the to-node picks it up. Both also expose
   ``loss_percent()`` (= ``1 - efficiency``).
 
@@ -356,7 +356,7 @@ Prefer the HG variants when
         gas_node_id=junc_gas,
         efficiency_power=0.35,   # gas → electricity
         efficiency_heat=0.45,    # gas → heat
-        mass_flow_setpoint=0.1,  # gas consumption [kg/s]
+        mass_flow_setpoint_kgs=0.1,  # gas consumption [kg/s]
     )
 
 The single-branch variants follow the same pattern as
@@ -368,14 +368,14 @@ The single-branch variants follow the same pattern as
         net_hg,
         power_node_id=bus_el,
         heat_node_id=junc_heat,
-        heat_energy_mw=0.5,  # thermal output setpoint [MW]
+        heat_mw=0.5,  # thermal output setpoint [MW]
         efficiency=0.95,
     )
     mx.create_g2h_hg(
         net_hg,
         gas_node_id=junc_gas,
         heat_node_id=junc_heat,
-        heat_energy_mw=0.5,
+        heat_mw=0.5,
         efficiency=0.90,
     )
 
@@ -406,7 +406,7 @@ loop - without mass transfer.
         net_hx,
         from_node_id=junc_primary,
         to_node_id=junc_secondary,
-        q_mw=0.2,  # heat transfer setpoint [MW]; positive = from→to
+        heat_mw=0.2,  # heat transfer setpoint [MW]; positive = from→to
     )
 
 ----

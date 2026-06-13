@@ -56,9 +56,9 @@ def test_min_load_shedding_no_incident():
     net = create_urban_district_net()
     net.apply_formulation(EL_MISOCP_FORMULATION)
     problem = create_min_load_shedding_problem(
-        bounds_el=(0.5, 1.5),
-        bounds_gas=(0.5, 1.5),
-        bounds_heat=(0.5, 1.5),
+        bounds_vm=(0.5, 1.5),
+        bounds_pressure=(0.5, 1.5),
+        bounds_t=(0.5, 1.5),
         include_ext_grids=False,
         include_storages=False,
     )
@@ -87,12 +87,12 @@ def test_min_load_shedding_with_ext_grids():
     net = create_urban_district_net()
     net.apply_formulation(EL_MISOCP_FORMULATION)
     problem = create_min_load_shedding_problem(
-        bounds_el=(0.5, 1.5),
-        bounds_gas=(0.5, 1.5),
-        bounds_heat=(0.5, 1.5),
-        ext_grid_el_bounds=(-100, 100),
-        ext_grid_gas_bounds=(-100, 100),
-        ext_grid_heat_bounds=(-100, 100),
+        bounds_vm=(0.5, 1.5),
+        bounds_pressure=(0.5, 1.5),
+        bounds_t=(0.5, 1.5),
+        bounds_ext_el=(-100, 100),
+        bounds_ext_gas=(-100, 100),
+        bounds_ext_heat=(-100, 100),
         include_ext_grids=True,
         include_storages=False,
     )
@@ -112,9 +112,9 @@ def test_min_load_shedding_no_incident_large():
     # GIVEN
     net = create_restoration_benchmark(misocp=True)
     problem = create_min_load_shedding_problem(
-        bounds_el=(0.5, 1.5),
-        bounds_gas=(0.5, 1.5),
-        bounds_heat=(0.5, 1.5),
+        bounds_vm=(0.5, 1.5),
+        bounds_pressure=(0.5, 1.5),
+        bounds_t=(0.5, 1.5),
         include_ext_grids=True,
         include_storages=False,
     )

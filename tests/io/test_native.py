@@ -50,25 +50,25 @@ def create_compound_test_network():
     # GAS
     gas_grid = mm.create_gas_grid("gas", type="lgas")
     g_node_0 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow=0.1))], grid=gas_grid
+        mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow_kgs=0.1))], grid=gas_grid
     )
     g_node_1 = pn.node(
         mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())], grid=gas_grid
     )
     g_node_2 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=1))], grid=gas_grid
+        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))], grid=gas_grid
     )
 
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.35, length_m=1000, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.35, length_m=1000, temperature_ext_k=300, roughness_m=0.01
         ),
         g_node_0,
         g_node_1,
     )
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.35, length_m=1500, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.35, length_m=1500, temperature_ext_k=300, roughness_m=0.01
         ),
         g_node_0,
         g_node_2,
@@ -77,13 +77,13 @@ def create_compound_test_network():
     # HEAT
     heating_grid = mm.create_water_grid("heat")
     h_node_0 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow=0.1))], grid=heating_grid
+        mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow_kgs=0.1))], grid=heating_grid
     )
     h_node_1 = pn.node(
         mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())], grid=heating_grid
     )
     h_node_2 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=1))], grid=heating_grid
+        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))], grid=heating_grid
     )
 
     pn.branch(
@@ -275,7 +275,7 @@ def test_var_value_bounds_integer_name_preserved():
 def test_integer_var_flag_preserved_on_branch():
     # GIVEN
     pn = mm.Network(mm.create_water_grid("water"))
-    n0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow=0.1))])
+    n0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow_kgs=0.1))])
     n1 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())])
     pn.branch(mm.WaterPipe(diameter_m=0.3, length_m=100), n0, n1)
 
@@ -535,7 +535,7 @@ def test_heat_exchanger_nondefault_private_param_preserved():
     # GIVEN
     pn = mm.Network(mm.create_water_grid("water"))
     n0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())])
-    n1 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=0.5))])
+    n1 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.5))])
     pn.branch(mm.HeatExchanger(q_mw=2.0, T_delta_design_K=45), n0, n1)
 
     # WHEN

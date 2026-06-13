@@ -78,10 +78,10 @@ def test_on_off_water():
     # THEN
     assert result.success
 
-    assert result.dataframes["Sink"]["mass_flow"][0] < 0.000001
+    assert result.dataframes["Sink"]["mass_flow_kgs"][0] < 0.000001
     assert (
-        result.dataframes["WaterPipe"]["mass_flow"][1] < 0.01
-        and result.dataframes["WaterPipe"]["mass_flow"][1] > -0.0009
+        result.dataframes["WaterPipe"]["mass_flow_kgs"][1] < 0.01
+        and result.dataframes["WaterPipe"]["mass_flow_kgs"][1] > -0.0009
     )
 
 
@@ -100,7 +100,7 @@ def test_on_off_gas():
     def my_constraint(line, grid, fn, tn, **kwargs):
         return line.on_off == 0
 
-    mx.create_gas_pipe(net, j_0, j_1, diameter_m=0.1, length_m=1000, roughness=0.001)
+    mx.create_gas_pipe(net, j_0, j_1, diameter_m=0.1, length_m=1000, roughness_m=0.001)
 
     mx.create_gas_pipe(
         net,
@@ -119,9 +119,9 @@ def test_on_off_gas():
     # THEN
     assert result.success
 
-    assert math.isclose(result.dataframes["Sink"]["mass_flow"][0], 0, abs_tol=1e-9)
+    assert math.isclose(result.dataframes["Sink"]["mass_flow_kgs"][0], 0, abs_tol=1e-9)
     assert (
-        result.dataframes["GasPipe"]["mass_flow"][1] < 0.001
-        and result.dataframes["GasPipe"]["mass_flow"][1] > -0.0009
+        result.dataframes["GasPipe"]["mass_flow_kgs"][1] < 0.001
+        and result.dataframes["GasPipe"]["mass_flow_kgs"][1] > -0.0009
     )
     assert result.dataframes["GasPipe"]["on_off"][1] == 0

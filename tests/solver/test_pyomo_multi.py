@@ -12,25 +12,25 @@ BOUND_EL = ("vm_pu", 1, 0.5)
 BOUND_GAS = ("pressure_pu", 1, 0.5)
 BOUND_HEAT = ("t_pu", 1, 0.5)
 
-bounds_el = (
+bounds_vm = (
     BOUND_EL[1] * (1 - BOUND_EL[2]),
     BOUND_EL[1] * (1 + BOUND_EL[2]),
 )
-bounds_heat = (
+bounds_t = (
     BOUND_HEAT[1] * (1 - BOUND_HEAT[2]),
     BOUND_HEAT[1] * (1 + BOUND_HEAT[2]),
 )
-bounds_gas = (
+bounds_pressure = (
     BOUND_GAS[1] * (1 - BOUND_GAS[2]),
     BOUND_GAS[1] * (1 + BOUND_GAS[2]),
 )
 
-ext_grid_el_bounds = (0, 100)
-ext_grid_gas_bounds = (0, 100)
+bounds_ext_el = (0, 100)
+bounds_ext_gas = (0, 100)
 # The benchmark net's water slack needs ~15 kg/s circulation for its heat
 # demand; the problem default of (-10, 10) makes the model provably
 # infeasible (verified with Gurobi DualReductions=0).
-ext_grid_heat_bounds = (-100, 100)
+bounds_ext_heat = (-100, 100)
 
 
 def test_scaled_example_gas_incident_pyo():
@@ -38,12 +38,12 @@ def test_scaled_example_gas_incident_pyo():
     net_multi: mm.Network = create_monee_benchmark_net()
     net_multi.apply_formulation(EL_MISOCP_FORMULATION)
     optimization_problem = mp.create_min_load_shedding_problem(
-        bounds_el=bounds_el,
-        bounds_heat=bounds_heat,
-        bounds_gas=bounds_gas,
-        ext_grid_el_bounds=ext_grid_el_bounds,
-        ext_grid_gas_bounds=ext_grid_gas_bounds,
-        ext_grid_heat_bounds=ext_grid_heat_bounds,
+        bounds_vm=bounds_vm,
+        bounds_t=bounds_t,
+        bounds_pressure=bounds_pressure,
+        bounds_ext_el=bounds_ext_el,
+        bounds_ext_gas=bounds_ext_gas,
+        bounds_ext_heat=bounds_ext_heat,
         include_ext_grids=True,
         debug=True,
     )
@@ -95,26 +95,26 @@ def create_multi_chp():
     gas_grid = mm.create_gas_grid("gas", type="lgas")
     g_node_0 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Source(mass_flow=0.1))],
+        child_ids=[pn.child(mm.Source(mass_flow_kgs=0.1))],
         grid=gas_grid,
     )
     g_node_1 = pn.node(
         mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())], grid=gas_grid
     )
     g_node_2 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow=1))], grid=gas_grid
+        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))], grid=gas_grid
     )
 
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.35, length_m=100, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.35, length_m=100, temperature_ext_k=300, roughness_m=0.01
         ),
         g_node_0,
         g_node_1,
     )
     pn.branch(
         mm.GasPipe(
-            diameter_m=0.35, length_m=150, temperature_ext_k=300, roughness=0.01
+            diameter_m=0.35, length_m=150, temperature_ext_k=300, roughness_m=0.01
         ),
         g_node_0,
         g_node_2,
@@ -184,7 +184,7 @@ def test_simple_chp():
         abs_tol=0.001,
     )
     assert math.isclose(
-        result.dataframes["ExtHydrGrid"]["mass_flow"][1],
+        result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][1],
         -1.0,
     )
     assert math.isclose(

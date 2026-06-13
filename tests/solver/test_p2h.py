@@ -8,7 +8,7 @@ from monee.model.formulation import EL_MISOCP_FORMULATION
 
 
 def _build_p2h_network(
-    heat_energy_mw=0.020,
+    heat_mw=0.020,
     efficiency=1.0,
     diameter_m=0.15,
 ):
@@ -50,7 +50,7 @@ def _build_p2h_network(
     )
 
     pn.compound(
-        mm.PowerToHeat(heat_energy_mw, diameter_m, 300, efficiency),
+        mm.PowerToHeat(heat_mw, diameter_m, 300, efficiency),
         power_node_id=p2,
         heat_node_id=w2,
         heat_return_node_id=w1,
@@ -110,7 +110,7 @@ def test_p2h_compound_structure():
 
 def test_p2h_energy_balance():
     # GIVEN
-    net = _build_p2h_network(heat_energy_mw=0.020, efficiency=0.8)
+    net = _build_p2h_network(heat_mw=0.020, efficiency=0.8)
 
     # WHEN
     result = ms.GEKKOSolver().solve(net)
@@ -126,7 +126,7 @@ def test_p2h_energy_balance():
 def test_p2h_perfect_efficiency():
     # GIVEN
     heat_mw = 0.015
-    net = _build_p2h_network(heat_energy_mw=heat_mw, efficiency=1.0)
+    net = _build_p2h_network(heat_mw=heat_mw, efficiency=1.0)
 
     # WHEN
     result = ms.GEKKOSolver().solve(net)
@@ -142,8 +142,8 @@ def test_p2h_perfect_efficiency():
 
 def test_p2h_efficiency_linearity():
     # GIVEN
-    net_hi = _build_p2h_network(heat_energy_mw=0.010, efficiency=1.0)
-    net_lo = _build_p2h_network(heat_energy_mw=0.010, efficiency=0.5)
+    net_hi = _build_p2h_network(heat_mw=0.010, efficiency=1.0)
+    net_lo = _build_p2h_network(heat_mw=0.010, efficiency=0.5)
 
     # WHEN
     r_hi = ms.GEKKOSolver().solve(net_hi)
@@ -161,8 +161,8 @@ def test_p2h_efficiency_linearity():
 
 def test_p2h_heat_setpoint_linearity():
     # GIVEN
-    net_lo = _build_p2h_network(heat_energy_mw=0.010, efficiency=0.9)
-    net_hi = _build_p2h_network(heat_energy_mw=0.020, efficiency=0.9)
+    net_lo = _build_p2h_network(heat_mw=0.010, efficiency=0.9)
+    net_hi = _build_p2h_network(heat_mw=0.020, efficiency=0.9)
 
     # WHEN
     r_lo = ms.GEKKOSolver().solve(net_lo)
@@ -182,7 +182,7 @@ def test_p2h_absolute_values():
     heat_mw = 0.020
     eff = 0.85
     expected_el = heat_mw / eff
-    net = _build_p2h_network(heat_energy_mw=heat_mw, efficiency=eff)
+    net = _build_p2h_network(heat_mw=heat_mw, efficiency=eff)
 
     # WHEN
     result = ms.GEKKOSolver().solve(net)
@@ -190,7 +190,7 @@ def test_p2h_absolute_values():
     # THEN
     assert result.success
 
-    # el_mw = heat_energy_mw / efficiency; heat_mw = -heat_energy_mw (injection)
+    # el_mw = heat_mw / efficiency; heat_mw = -heat_mw (injection)
     cn = result.dataframes["PowerToHeatControlNode"]
     assert math.isclose(cn["el_mw"].iloc[0], expected_el, rel_tol=1e-4)
     assert math.isclose(cn["heat_mw"].iloc[0], -heat_mw, rel_tol=1e-4)
@@ -229,8 +229,8 @@ def test_p2h_misocp_formulation():
 
 def test_p2h_cop_analogy():
     # GIVEN
-    net_ref = _build_p2h_network(heat_energy_mw=0.010, efficiency=1.0)
-    net_low = _build_p2h_network(heat_energy_mw=0.010, efficiency=0.6)
+    net_ref = _build_p2h_network(heat_mw=0.010, efficiency=1.0)
+    net_low = _build_p2h_network(heat_mw=0.010, efficiency=0.6)
 
     # WHEN
     r_ref = ms.GEKKOSolver().solve(net_ref)

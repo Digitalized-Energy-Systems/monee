@@ -1,3 +1,4 @@
+import logging
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -26,6 +27,8 @@ from monee.model.child import GridFormingMixin
 from monee.model.grid import GasGrid, PowerGrid, WaterGrid
 from monee.model.node import Junction
 from monee.problem.core import OptimizationProblem
+
+_log = logging.getLogger(__name__)
 
 # Display helpers (also imported by simulation.timeseries)
 
@@ -64,6 +67,15 @@ _TABLE_CSS = (
     "</style>"
 )
 
+# Public, documented aliases for the shared result-rendering helpers above.
+# The simulation layer (timeseries / multi_period) renders the same kind of
+# result tables, so these are part of the solver's public reporting surface
+# rather than backend-private internals.  The underscore-prefixed names are
+# retained for backwards compatibility.
+display_df = _display_df
+col_summary = _col_summary
+TABLE_CSS = _TABLE_CSS
+
 
 @dataclass
 class SolverResult:
@@ -81,6 +93,12 @@ class SolverResult:
     #: the signal that the fast steady-state path silently fell back. ``None``
     #: when the backend doesn't distinguish the two (e.g. Pyomo).
     mode_used: str | None = None
+    #: Diagnostic infeasibility report when the solve failed (``success=False``);
+    #: ``None`` on success. Declaring it as a field gives both backends a single,
+    #: documented place to surface the report instead of the GEKKO-raises /
+    #: Pyomo-dynamic-attribute split. (GEKKO additionally raises
+    #: ``GekkoSolveError`` carrying the same report.)
+    infeasibility_report: object | None = None
 
     def summary(self):
         return repr(self)
@@ -446,6 +464,36 @@ def filter_intermediate_eqs(eqs):
     return [eq for eq in eqs if type(eq) is not IntermediateEq]
 
 
+def filter_bool_eqs(eqs, context=None):
+    """Drop Python-``bool`` sentinel equations, identically for both backends.
+
+    An ``equations()`` body can collapse a constraint to a Python ``bool`` when
+    a component is over-deactivated (e.g. an attribute overwritten by a
+    :class:`Const` so ``a == b`` evaluates eagerly):
+
+    * ``True``  → tautology, a no-op; dropped silently.
+    * ``False`` → structurally infeasible (contradictory) constraint. Feeding it
+      into model construction either crashes the build (GEKKO) or - if it were
+      kept - injects an unsatisfiable constraint. We drop it so the
+      load-shedding objective can resolve the situation, but emit a warning so
+      the modelling error is surfaced rather than silently hidden.
+
+    *context* is an optional label (e.g. ``"node_3"``) included in the warning.
+    """
+    kept = []
+    for eq in eqs:
+        if isinstance(eq, bool):
+            if eq is False:
+                _log.warning(
+                    "Dropping always-false (structurally infeasible) equation%s; "
+                    "this usually means a node/branch was over-deactivated.",
+                    f" in {context}" if context is not None else "",
+                )
+            continue
+        kept.append(eq)
+    return kept
+
+
 def inject_nans(target: GenericModel):
     """Replace Var/Const fields with NaN placeholders; zero regulation."""
     for key, value in target.__dict__.items():
@@ -576,7 +624,7 @@ def _island_has_free_mass_flow_child(network: Network, island) -> bool:
         node = network.node_by_id(nid)
         for child in network.childs_by_ids(node.child_ids):
             if child.active and isinstance(
-                getattr(child.model, "mass_flow", None), Var
+                getattr(child.model, "mass_flow_kgs", None), Var
             ):
                 return True
     return False
@@ -779,7 +827,7 @@ def ignore_child(child, ignored_nodes):
     # ``child.ignored`` is set by ``mark_ignored_components`` when the child
     # belongs to an ignored compound - without consulting it here, the child
     # would still appear in its host node's balance equations as a free Var
-    # (e.g. SubHG.q_mw_heat absorbing arbitrary heat at the heat node).
+    # (e.g. SubHG.heat_mw absorbing arbitrary heat at the heat node).
     return (not child.active) or (child.node_id in ignored_nodes) or child.ignored
 
 
@@ -791,7 +839,7 @@ def ignore_compound(compound, ignored_nodes):
     # Internal subcomponent turned off (e.g. user deactivates one of a
     # CHPHG's internal transfer branches): the ControlNode's power balance -
     # degenerate when its from-branches are gone - otherwise collides with
-    # its el_mw / q_mw_heat coupling rows and the LP is infeasible.
+    # its el_mw / heat_mw coupling rows and the LP is infeasible.
     internal_broken = any(
         not getattr(sc, "active", True) for sc in compound.subcomponents
     )
@@ -935,7 +983,7 @@ def find_ignored_nodes(network: Network, islanding_config=None):
             """A Junction at degree ≤ 1 needs a mass-flow-contributing child
             (Sink / Source / ExtHydrGrid) to anchor mass conservation.
             Heat-only children (HeatLoad / HeatGenerator) don't qualify -
-            with no outgoing pipe their q_mw_heat term has no enthalpy
+            with no outgoing pipe their heat_mw term has no enthalpy
             stream to balance against and the junction becomes infeasible."""
             for cid in int_node.child_ids:
                 if cid in compound_port_child_ids:
@@ -943,7 +991,7 @@ def find_ignored_nodes(network: Network, islanding_config=None):
                 child = without_cps.child_by_id(cid)
                 if not child.active:
                     continue
-                if "mass_flow" in getattr(child.model, "vars", {}):
+                if "mass_flow_kgs" in getattr(child.model, "vars", {}):
                     return True
             return False
 
@@ -965,7 +1013,7 @@ def find_ignored_nodes(network: Network, islanding_config=None):
                     new_stubs.add(node_id)
                     continue
                 # Mass-balance dead-end: Junction at degree ≤ 1 whose only
-                # children are heat-only (q_mw_heat) - see _has_mass_flow_anchor.
+                # children are heat-only (heat_mw) - see _has_mass_flow_anchor.
                 if isinstance(int_node.model, Junction) and not _has_mass_flow_anchor(
                     int_node
                 ):
@@ -975,3 +1023,172 @@ def find_ignored_nodes(network: Network, islanding_config=None):
             ignored_nodes.update(new_stubs)
 
     return ignored_nodes
+
+
+# ---------------------------------------------------------------------------
+# Inter-step state carriers
+# ---------------------------------------------------------------------------
+# StepState (sequential timeseries, plain floats) and PeriodState (multi-period,
+# live solver vars) live here - in the solver's low-level core - rather than in
+# the simulation layer, because both solver backends accept a ``step_state`` and
+# must reference these types.  Hosting them here keeps the dependency direction
+# one-way (simulation -> solver) and avoids a circular import; the historical
+# import path ``monee.simulation.step_state`` re-exports them unchanged.
+
+
+def _find_model(net, component_id, attr=None):
+    """Return the model for *component_id*. Disambiguates node/child id collisions
+    by preferring a model that actually carries *attr*."""
+    candidates = []
+    for node in net.nodes:
+        if node.id == component_id:
+            candidates.append(node.model)
+        for child in net.childs_by_ids(node.child_ids):
+            if child.id == component_id:
+                candidates.append(child.model)
+    for branch in net.branches:
+        if branch.id == component_id:
+            candidates.append(branch.model)
+    for compound in net.compounds:
+        if compound.id == component_id:
+            candidates.append(compound.model)
+
+    if not candidates:
+        return None
+    if attr is not None and len(candidates) > 1:
+        with_attr = [m for m in candidates if hasattr(m, attr)]
+        if with_attr:
+            return with_attr[0]
+    return candidates[0]
+
+
+def _extract_value(val):
+    """Return a plain float from *val* (Var, Intermediate, float, int, or None)."""
+    if val is None:
+        return None
+
+    if isinstance(val, (Var, Intermediate, PostProcess)):
+        return val.value
+    if isinstance(val, (int, float)):
+        return float(val)
+    return val
+
+
+class InterStepState(ABC):
+    """Abstract base. ``step``: negative = relative to current, non-negative = absolute."""
+
+    dt_h: float = 1.0
+
+    @abstractmethod
+    def get(self, component_id, attr: str, step: int = -1):
+        """Float (StepState) / live var (PeriodState), or None if no data."""
+
+    def has(self, component_id, attr: str) -> bool:
+        return self.get(component_id, attr) is not None
+
+
+class StepState(InterStepState):
+    """All previously-solved network copies (sequential timeseries). ``get`` returns floats.
+
+    ``initial_state`` falls back when no prior solve has written the attribute.
+    ``max_steps`` caps how many solved networks are retained (``None`` =
+    unlimited): each network is a full copy, so an open-ended run (e.g. a
+    :class:`~monee.simulation.Stepper` paced by a co-simulation framework)
+    would otherwise grow memory without bound. Absolute ``step`` indices keep
+    their meaning when old networks are dropped; reading a dropped step falls
+    back to ``initial_state``."""
+
+    def __init__(
+        self, initial_state: dict | None = None, max_steps: int | None = None
+    ) -> None:
+        if max_steps is not None and max_steps < 1:
+            raise ValueError(f"max_steps must be >= 1 or None, got {max_steps}")
+        self._networks: list = []
+        self._dropped: int = 0
+        self._max_steps = max_steps
+        self.dt_h: float = 1.0
+        self._initial_state: dict = dict(initial_state) if initial_state else {}
+
+    def push(self, net) -> None:
+        self._networks.append(net)
+        if self._max_steps is not None and len(self._networks) > self._max_steps:
+            del self._networks[0]
+            self._dropped += 1
+
+    def get(self, component_id, attr: str, step: int = -1):
+        if self._networks:
+            if step < 0:
+                net = self._networks[step] if -step <= len(self._networks) else None
+            else:
+                # Absolute index: shift by dropped prefix; dropped → fallback.
+                idx = step - self._dropped
+                net = self._networks[idx] if 0 <= idx < len(self._networks) else None
+            if net is not None:
+                model = _find_model(net, component_id, attr)
+                if model is not None:
+                    val = _extract_value(getattr(model, attr, None))
+                    if val is not None:
+                        return val
+        return self._initial_state.get((component_id, attr))
+
+    def __len__(self) -> int:
+        """Logical number of solved steps (including dropped ones)."""
+        return self._dropped + len(self._networks)
+
+    def __repr__(self) -> str:
+        n = len(self)
+        return f"StepState({n} step{'s' if n != 1 else ''})"
+
+
+class PeriodState(InterStepState):
+    """All period networks (multi-period). ``get`` returns live solver vars after
+    injection, so reading from another period becomes an algebraic cross-period
+    constraint. Both past and future absolute indices are accessible.
+
+    .. note::
+       Absolute (non-negative) ``step`` indices are **window-local** under
+       :func:`~monee.simulation.multi_period.run_mpc`: ``self._networks`` is only
+       the current rolling window's networks, so ``step=0`` means the first
+       period of *this window*, not the global start of the run. This differs
+       from :class:`StepState`, whose absolute indices stay globally meaningful
+       via its dropped-prefix bookkeeping. Relative (negative) lookbacks behave
+       identically in both. Prefer relative indices in ``inter_step_equations``
+       if you need MPC-window-independent behaviour.
+    """
+
+    def __init__(
+        self,
+        networks: list,
+        current_t: int,
+        dt_h: float = 1.0,
+        initial_state: dict | None = None,
+    ) -> None:
+        self._networks = networks
+        self.current_t = current_t
+        self.dt_h = dt_h
+        self._initial_state: dict = initial_state or {}
+
+    @property
+    def T(self) -> int:
+        return len(self._networks)
+
+    def get(self, component_id, attr: str, step: int = -1):
+        actual_t = (self.current_t + step) if step < 0 else step
+
+        if actual_t < 0:
+            key = (component_id, attr)
+            if key in self._initial_state:
+                return self._initial_state[key]
+            return None
+
+        try:
+            net = self._networks[actual_t]
+        except IndexError:
+            return None
+        model = _find_model(net, component_id, attr)
+        if model is None:
+            return None
+        return getattr(model, attr, None)
+
+    def __repr__(self) -> str:
+        return f"PeriodState(T={self.T}, current_t={self.current_t}, dt_h={self.dt_h})"

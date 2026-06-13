@@ -10,7 +10,12 @@ from monee.model import Network
 from monee.model.core import Var
 from monee.simulation.core import solve
 from monee.simulation.step_state import StepState
-from monee.solver.core import _TABLE_CSS, _col_summary, _display_df
+
+# Shared result-rendering helpers, imported from the solver's public reporting
+# surface (the simulation layer renders the same kind of result tables).
+from monee.solver.core import TABLE_CSS as _TABLE_CSS
+from monee.solver.core import col_summary as _col_summary
+from monee.solver.core import display_df as _display_df
 from monee.solver.dispatch import resolve_solver
 
 _log = logging.getLogger(__name__)
@@ -530,24 +535,6 @@ class TimeseriesResult:
         )
 
 
-def apply_to_by_id(component, data: dict, timestep: int) -> None:
-    if component.id in data:
-        for attr, series in data[component.id].items():
-            setattr(component.model, attr, series[timestep])
-
-
-def apply_to_child(child, timeseries_data: TimeseriesData, timestep: int) -> None:
-    timeseries_data.apply_to_child(child, timestep)
-
-
-def apply_to_branch(branch, timeseries_data: TimeseriesData, timestep: int) -> None:
-    timeseries_data.apply_to_branch(branch, timestep)
-
-
-def apply_to_compound(compound, timeseries_data: TimeseriesData, timestep: int) -> None:
-    timeseries_data.apply_to_compound(compound, timestep)
-
-
 class StepHook(ABC):
     """Pre/post-step callbacks for timeseries runs. Both methods are optional no-ops."""
 
@@ -622,9 +609,17 @@ def run(
     step_state = StepState()
 
     for step in range(steps):
-        if datetime_index is not None and step > 0:
-            delta = datetime_index[step] - datetime_index[step - 1]
-            step_state.dt_h = delta.total_seconds() / 3600.0
+        if datetime_index is not None:
+            # First step uses the first interval (matching the multi-period
+            # engine's _resolve_dt_h); later steps use the prior interval. Both
+            # engines then agree on dt_h for identical inputs. Falls back to the
+            # default 1.0 only when a single timestamp leaves no interval.
+            if step > 0:
+                delta = datetime_index[step] - datetime_index[step - 1]
+                step_state.dt_h = delta.total_seconds() / 3600.0
+            elif len(datetime_index) > 1:
+                delta = datetime_index[1] - datetime_index[0]
+                step_state.dt_h = delta.total_seconds() / 3600.0
 
         for hook in step_hooks:
             if isinstance(hook, StepHook):

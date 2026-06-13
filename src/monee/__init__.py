@@ -64,8 +64,14 @@ def make_mccormick_dhs_formulation(num_partitions: int = 1):
 
 MCCORMICK_DHS_NETWORK_FORMULATION = make_mccormick_dhs_formulation(num_partitions=1)
 from monee.problem import (
+    GeneralResiliencePerformanceMetric,
     OptimizationProblem,
+    WEIGHT_DEMAND,
+    WEIGHT_GENERATOR,
+    calc_general_resilience_performance,
+    create_economic_dispatch_problem,
     create_min_load_shedding_problem,
+    create_multi_period_economic_dispatch_problem,
 )
 from monee.simulation import (
     solve,
@@ -82,6 +88,7 @@ from monee.simulation import (
 )
 from monee.solver import GEKKOSolver, PyomoSolver
 from monee.solver.core import persist_solution, compute_bound_violations
+from monee.visualization import plot_network, plot_result
 
 
 def enable_islanding(
@@ -179,11 +186,13 @@ def run_energy_flow_optimization(
 
 def solve_load_shedding_problem(
     network: Network,
-    bounds_vm: tuple,
-    bounds_t: tuple,
-    bounds_pressure: tuple,
-    bounds_ext_el: tuple,
-    bounds_ext_gas: tuple,
+    *,
+    bounds_vm: tuple = (0.9, 1.1),
+    bounds_pressure: tuple = (0.9, 1.1),
+    bounds_t: tuple = (0.9, 1.1),
+    bounds_ext_el: tuple = (-3, 3),
+    bounds_ext_gas: tuple = (-10, 10),
+    bounds_ext_heat: tuple = (-10, 10),
     include_ext_grids=True,
     check_lp=True,
     check_vm=True,
@@ -195,17 +204,29 @@ def solve_load_shedding_problem(
     """
     Solves a load shedding optimization problem for a network using specified operational bounds across subsystems.
 
-    This function is designed for scenarios where minimizing load shedding is essential, such as during network contingencies or in energy management systems. Use it when you need to enforce operational limits on voltage, temperature, and pressure for electrical, thermal, and gas subsystems, as well as external grid interfaces. The function constructs a load shedding optimization problem using the provided bounds and delegates the solution process to the energy flow optimization routine. Enabling debug mode provides additional diagnostic output for troubleshooting or analysis.
+    The bound / check parameters mirror :func:`create_min_load_shedding_problem`
+    one-to-one, using the physical-quantity vocabulary: ``bounds_vm`` (voltage
+    magnitude), ``bounds_t`` (temperature), ``bounds_pressure`` (gas pressure),
+    ``bounds_ext_el`` / ``bounds_ext_gas`` / ``bounds_ext_heat`` (external-grid
+    exchange) and the ``check_vm`` / ``check_t`` / ``check_pressure`` /
+    ``check_lp`` toggles. Any remaining keyword argument is forwarded to the
+    solver via :func:`run_energy_flow_optimization`.
 
     Args:
         network (Network): The network to optimize, representing the system's topology and parameters.
-        bounds_vm (tuple): Voltage magnitude bounds (min, max) for the electrical subsystem. Must be a tuple of two numeric values.
-        bounds_t (tuple): Temperature bounds (min, max) for the thermal subsystem. Must be a tuple of two numeric values.
-        bounds_pressure (tuple): Pressure bounds (min, max) for the gas subsystem. Must be a tuple of two numeric values.
-        bounds_ext_el (tuple): External grid voltage bounds (min, max) for the electrical subsystem. Must be a tuple of two numeric values.
-        bounds_ext_gas (tuple): External grid pressure bounds (min, max) for the gas subsystem. Must be a tuple of two numeric values.
+        bounds_vm (tuple): Per-unit voltage-magnitude bounds (min, max) for the electrical subsystem.
+        bounds_pressure (tuple): Per-unit pressure bounds (min, max) for the gas subsystem.
+        bounds_t (tuple): Per-unit temperature bounds (min, max) for the thermal subsystem.
+        bounds_ext_el (tuple): External electrical-grid exchange bounds (min, max).
+        bounds_ext_gas (tuple): External gas-grid exchange bounds (min, max).
+        bounds_ext_heat (tuple): External heat-grid exchange bounds (min, max).
+        include_ext_grids (bool): Constrain external-grid exchange. Defaults to True.
+        check_lp (bool): Enforce the line-loading limit. Defaults to True.
+        check_vm (bool): Enforce voltage-magnitude bounds. Defaults to True.
+        check_pressure (bool): Enforce gas-pressure bounds. Defaults to True.
+        check_t (bool): Enforce temperature bounds. Defaults to True.
         debug (bool, optional): If True, enables verbose logging and diagnostics. Defaults to False.
-        **kwargs: Additional keyword arguments for solver configuration or optimization tuning. Refer to the solver documentation for supported options.
+        **kwargs: Additional keyword arguments forwarded to the solver. Refer to the solver documentation for supported options.
 
     Returns:
         Any: The result of the load shedding optimization, typically including optimized energy flows, load shedding amounts, and status information. The structure of the result depends on the solver and problem formulation.
@@ -224,22 +245,23 @@ def solve_load_shedding_problem(
                 bounds_pressure=(30, 50),
                 bounds_ext_el=(0.9, 1.1),
                 bounds_ext_gas=(25, 45),
-                debug=True
+                debug=True,
             )
 
         This executes the optimization with the specified bounds and returns the results.
     """
     optimization_problem = mp.create_min_load_shedding_problem(
-        bounds_el=bounds_vm,
-        bounds_heat=bounds_t,
-        bounds_gas=bounds_pressure,
-        ext_grid_el_bounds=bounds_ext_el,
-        ext_grid_gas_bounds=bounds_ext_gas,
+        bounds_vm=bounds_vm,
+        bounds_pressure=bounds_pressure,
+        bounds_t=bounds_t,
+        bounds_ext_el=bounds_ext_el,
+        bounds_ext_gas=bounds_ext_gas,
+        bounds_ext_heat=bounds_ext_heat,
         include_ext_grids=include_ext_grids,
-        check_line_loading=check_lp,
+        check_lp=check_lp,
         check_vm=check_vm,
         check_pressure=check_pressure,
-        check_temperature=check_t,
+        check_t=check_t,
         debug=debug,
     )
     return run_energy_flow_optimization(

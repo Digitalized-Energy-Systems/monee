@@ -1,10 +1,12 @@
+import copy
 import math
 import os
+import tempfile
 import uuid
 
 import pandapower.converter as pc
 
-from monee.model.child import PowerLoad
+from monee.model.child import PowerGenerator, PowerLoad
 
 from .matpower import read_matpower_case
 
@@ -81,12 +83,103 @@ def _pp_branch_max_i_ka_overrides(net):
     return overrides
 
 
+def _extract_sgens(net):
+    """Pull static generators out of *net* so they import as distinct PowerGenerators.
+
+    pandapower's ``to_mpc`` folds non-controllable sgens into each bus's net
+    ``(Pd, Qd)`` injection rather than emitting them as ``gen`` rows. A bus that
+    carries both a (reactive-consuming) load and an (active-injecting) sgen then
+    collapses to a single child typed only by the net *active* sign - yielding a
+    PowerGenerator that wrongly carries the load's positive reactive power.
+
+    Removing the sgens here keeps the bus injection load-only; the caller re-adds
+    each sgen as its own PowerGenerator via :func:`_attach_sgens`. The caller's
+    net is never mutated - a copy is returned.
+
+    Returns ``(net_without_sgens, sgens)`` where each sgen is a
+    ``(bus, p_mw, q_mvar, name)`` tuple with ``scaling`` already applied (matching
+    to_mpc's snapshot) and out-of-service rows dropped (to_mpc ignores them too).
+    """
+    if not hasattr(net, "sgen") or not len(net.sgen):
+        return net, []
+    sgens = []
+    for row in net.sgen.itertuples():
+        if not getattr(row, "in_service", True):
+            continue
+        scaling = _coerce_positive_float(getattr(row, "scaling", 1.0))
+        name = getattr(row, "name", None)
+        sgens.append(
+            (
+                int(row.bus),
+                float(row.p_mw) * scaling,
+                float(row.q_mvar) * scaling,
+                None if name is None else str(name),
+            )
+        )
+    net = copy.deepcopy(net)
+    net.sgen = net.sgen.drop(net.sgen.index)
+    return net, sgens
+
+
+def _pp_bus_to_node_id(net):
+    """Map each pandapower bus index to its monee node id.
+
+    monee node ids equal the matpower bus numbers, which are pandapower's
+    internal ppc bus indices (0-based) + 1. ``to_mpc`` fuses buses joined by
+    closed bus-bus switches (e.g. simbench HV grids collapse 306 buses to 64),
+    so several pandapower buses can share one node. The authoritative mapping is
+    pandapower's own ``_pd2ppc_lookups['bus']``, populated by the preceding
+    ``to_mpc`` call; positional order (``get_loc + 1``) is only correct when no
+    fusion happens, so it is used solely as a fallback.
+    """
+    lookups = getattr(net, "_pd2ppc_lookups", None)
+    bus_lookup = None if lookups is None else lookups.get("bus")
+    mapping = {}
+    for bus in net.bus.index:
+        bus = int(bus)
+        if bus_lookup is not None and 0 <= bus < len(bus_lookup):
+            ppc_idx = int(bus_lookup[bus])
+            if ppc_idx >= 0:
+                mapping[bus] = ppc_idx + 1
+                continue
+        mapping[bus] = int(net.bus.index.get_loc(bus)) + 1
+    return mapping
+
+
+def _attach_sgens(monee_net, sgens, bus_to_node):
+    """Add each extracted sgen as its own PowerGenerator on its bus's monee node.
+
+    PowerGenerator takes positive magnitudes and stores them in load convention
+    (negative = injection); pandapower sgen power is already a positive
+    generation magnitude (positive q_mvar = reactive injection), so the values
+    pass straight through.
+    """
+    if not sgens:
+        return
+    nodes_by_id = {n.id: n for n in monee_net.nodes}
+    for bus, p_mw, q_mvar, name in sgens:
+        node = nodes_by_id.get(bus_to_node.get(bus))
+        if node is None:
+            continue
+        monee_net.child_to(
+            PowerGenerator(p_mw=p_mw, q_mvar=q_mvar),
+            node_id=node.id,
+            name=name,
+        )
+
+
 def from_pandapower_net(net):
-    id_file = uuid.uuid4()
-    name_file = f"{id_file}.mat"
-    pc.to_mpc(net, init="flat", filename=name_file)
-    monee_net = read_matpower_case(name_file)
-    os.remove(name_file)
+    # Import sgens as distinct PowerGenerators instead of letting to_mpc fold
+    # them into each bus's net injection (see _extract_sgens). Works on the
+    # returned copy so the caller's net is left untouched.
+    net, sgens = _extract_sgens(net)
+    # Write the intermediate matpower case into a private temp dir so it is
+    # always cleaned up (even if the read raises) and never collides with or
+    # pollutes the caller's working directory.
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        name_file = os.path.join(tmp_dir, f"{uuid.uuid4()}.mat")
+        pc.to_mpc(net, init="flat", filename=name_file)
+        monee_net = read_matpower_case(name_file)
     for node in monee_net.nodes:
         pp_id = node.id - 1
         if len(net.bus) > pp_id:
@@ -107,17 +200,22 @@ def from_pandapower_net(net):
             if bid in overrides:
                 branch.model.max_i_ka = overrides[bid]
 
+    # pandapower bus -> monee node id, accounting for bus fusion in to_mpc.
+    bus_to_node = _pp_bus_to_node_id(net)
+
     # Tag aggregated PowerLoad with a deterministic name so simbench
     # timeseries can be matched back by name.
     if hasattr(net, "load") and len(net.load):
         nodes_by_id = {n.id: n for n in monee_net.nodes}
         for pp_bus, group in net.load.groupby("bus", sort=False):
-            monee_node = nodes_by_id.get(int(pp_bus) + 1)
+            monee_node = nodes_by_id.get(bus_to_node.get(int(pp_bus)))
             if monee_node is None:
                 continue
             agg_name = aggregated_pp_load_name(group)
             for child in monee_net.childs_by_ids(monee_node.child_ids):
                 if isinstance(child.model, PowerLoad):
                     child.name = agg_name
+
+    _attach_sgens(monee_net, sgens, bus_to_node)
 
     return monee_net
