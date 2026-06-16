@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import monee.express as mx
 import monee.model as mm
+from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 from monee.model import GasLinepack, LumpedThermalCapacitance
 
 # -- electrical line catalogue --
@@ -71,7 +72,7 @@ _DH_TRUNK = dict(diameter_m=0.25, length_m=100)
 # -- heat sizing helpers --
 _CP = 4186.0  # water specific heat, J/(kg K)
 _DT = 25.0  # supply-return temperature drop, K
-_HHV_MJ = 55.08  # gas higher heating value, MJ/kg (l-gas)
+_HHV_MJ = DEFAULT_GAS_HHV_MJ_PER_KG  # gas higher heating value, MJ/kg (lgas)
 
 
 def _mf(heat_mw):

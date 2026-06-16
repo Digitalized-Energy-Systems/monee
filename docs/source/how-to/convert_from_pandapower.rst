@@ -4,13 +4,12 @@ Convert from pandapower
 
 If you already have an electrical network defined in
 `pandapower <https://www.pandapower.org>`_, monee can import it directly.
-The conversion works by first serialising the pandapower network to an
-intermediate MATPOWER ``.mat`` file and then reading it back into monee -
-all handled automatically by the helper function.
+The helper function serialises the pandapower network to a temporary
+MATPOWER ``.mat`` file and reads it back into monee for you.
 
 .. warning::
 
-   This feature is **experimental**. Complex pandapower networks with
+   This feature is experimental. Complex pandapower networks with
    special elements (three-winding transformers, DC lines, switches) may
    not convert correctly. Always verify results against the original network.
 
@@ -19,8 +18,8 @@ all handled automatically by the helper function.
 Prerequisites
 =============
 
-pandapower (and simbench, for the section below) are **optional
-dependencies**. Install them via the ``simbench`` extra:
+pandapower (and simbench, for the section below) are optional
+dependencies. Install them via the ``simbench`` extra:
 
 .. code-block:: bash
 
@@ -77,7 +76,7 @@ What is preserved
    * - ``ext_grid``
      - :class:`~monee.model.child.ExtPowerGrid` child
    * - ``gen`` / ``sgen``
-     - Generator child
+     - :class:`~monee.model.child.PowerGenerator` child
    * - ``load``
      - :class:`~monee.model.child.PowerLoad` child (aggregated per bus,
        see below)
@@ -85,11 +84,23 @@ What is preserved
 Node ids, names and positions
 -----------------------------
 
-The MATPOWER format numbers buses from 1, so the **monee node id is the
-pandapower bus index + 1**. Bus names and geographic coordinates
-(``bus_geodata``) are copied onto the monee nodes when present: after
-conversion ``node.name`` holds the pandapower bus name and
-``node.position`` the ``(x, y)`` coordinates.
+The MATPOWER format numbers buses from 1, so the monee node id is the
+pandapower bus index plus 1. Bus names and coordinates are copied onto the
+nodes when present. After conversion, ``node.name`` holds the pandapower bus
+name and ``node.position`` holds the ``(x, y)`` coordinates. Coordinates come
+from ``net.bus.geo`` (the GeoJSON ``Point`` column used by pandapower 3.x) or
+from the legacy ``net.bus_geodata`` frame on pandapower 2.x.
+
+.. note::
+
+   pandapower 3.x models a transformer's winding vector group as a branch phase
+   shift (a multiple of 30°, for example Dyn5 gives 150°) and exports it through
+   ``to_mpc``; pandapower 2.x dropped it. For monee's single-slack PQ power flow
+   that shift is a pure reference rotation: it offsets all downstream bus angles
+   by a constant and leaves every magnitude (voltages, branch flows, currents)
+   unchanged. The importer zeroes these transformer phase shifts so the
+   flat-start AC solve stays well-conditioned. Reported magnitudes still match
+   pandapower's; only the absolute downstream angle reference differs.
 
 Line current limits
 -------------------
@@ -102,7 +113,7 @@ monee branch.
 
 .. note::
 
-   **Transformers deliberately keep a placeholder limit.** monee's single
+   Transformers deliberately keep a placeholder limit. monee's single
    ``max_i_ka`` per branch cannot represent the different rated currents of
    the HV and LV sides at once, so any tight bound would make one side
    infeasible. Check transformer limits manually before running
@@ -111,13 +122,12 @@ monee branch.
 Load aggregation and naming
 ---------------------------
 
-All pandapower loads connected to the same bus are **aggregated into a
-single** :class:`~monee.model.child.PowerLoad`. The aggregated child is
+All pandapower loads connected to the same bus are aggregated into a
+single :class:`~monee.model.child.PowerLoad`. The aggregated child is
 named deterministically by joining the original pandapower load names with
-``+`` (see :func:`~monee.io.from_pandapower.aggregated_pp_load_name`), e.g.
-``"LV1.101 Load 1+LV1.101 Load 2"``. This deterministic naming is what
-allows simbench timeseries to be matched back to the aggregated loads by
-name.
+``+`` (see :func:`~monee.io.from_pandapower.aggregated_pp_load_name`), for
+example ``"LV1.101 Load 1+LV1.101 Load 2"``. This deterministic naming lets
+simbench timeseries match back to the aggregated loads by name.
 
 .. tip::
 
@@ -152,13 +162,12 @@ pandapower converter and turns the simbench profiles into a
      - :class:`~monee.simulation.TimeseriesData` from an already loaded
        simbench pandapower net
 
-Load profiles are scaled per load (``base_p_mw * profile``) and **summed
-per bus** so they match the per-bus PowerLoad aggregation described above.
-Each summed series is registered via
-:meth:`~monee.simulation.TimeseriesData.add_child_series_by_name` under the
-aggregated load name, for both the ``p_mw`` and ``q_mvar`` attributes.
-Profiles of other element categories pass through under their raw simbench
-column names as ``p_mw`` series.
+Load profiles are scaled per load (``base_p_mw * profile``) and summed per
+bus, matching the per-bus PowerLoad aggregation described above. Each summed
+series is registered under the aggregated load name via
+:meth:`~monee.simulation.TimeseriesData.add_child_series_by_name`, for both the
+``p_mw`` and ``q_mvar`` attributes. Profiles of other element categories pass
+through under their raw simbench column names as ``p_mw`` series.
 
 Feeding the result into a timeseries simulation takes four lines:
 

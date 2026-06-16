@@ -261,12 +261,18 @@ class HeatExchangerGenerator(HeatExchanger):
 
 @model
 class PassiveHeatExchanger(BranchModel):
-    """
+    r"""
     Passive heat exchanger injecting/extracting fixed ``q_mw`` into a free-flowing
     water branch. Mass flow is determined by surrounding hydraulics; temperature
     change follows from q_mw and actual mass flow.
 
     Sign: positive q_mw = load, negative = generator.
+
+    Hydraulics: by default the pressure drop is Darcy-Weisbach friction over
+    ``length_m``. Passing ``loss_coefficient`` (zeta) instead switches to the
+    pandapipes ``heat_exchanger`` model - a zero-length minor loss
+    :math:`\Delta p = \zeta \cdot \tfrac{\rho}{2} v^2` (``length_m`` / friction
+    are then ignored; ``loss_coefficient=0`` is a lossless heat injector).
     """
 
     def __init__(
@@ -278,12 +284,14 @@ class PassiveHeatExchanger(BranchModel):
         temperature_ext_k=293,
         regulation=1,
         friction=None,
+        loss_coefficient=None,
     ) -> None:
         super().__init__()
         self.diameter_m = diameter_m
         self.temperature_ext_k = temperature_ext_k
         self.roughness_m = roughness_m
         self.length_m = length_m
+        self.loss_coefficient = loss_coefficient
         self.limit = 0.1
         self.regulation = regulation
         self.on_off = 1
@@ -317,16 +325,22 @@ class PassiveHeatExchanger(BranchModel):
 class PassiveHeatExchangerLoad(PassiveHeatExchanger):
     """Passive heat exchanger that consumes heat (load, ``q_mw > 0``)."""
 
-    def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
-        super().__init__(q_mw, diameter_m, temperature_ext_k=temperature_ext_k)
+    def __init__(self, q_mw, diameter_m, temperature_ext_k=293, loss_coefficient=None) -> None:
+        super().__init__(
+            q_mw, diameter_m, temperature_ext_k=temperature_ext_k,
+            loss_coefficient=loss_coefficient,
+        )
 
 
 @model
 class PassiveHeatExchangerGenerator(PassiveHeatExchanger):
     """Passive heat exchanger that injects heat (generator, ``q_mw < 0``)."""
 
-    def __init__(self, q_mw, diameter_m, temperature_ext_k=293) -> None:
-        super().__init__(q_mw, diameter_m, temperature_ext_k=temperature_ext_k)
+    def __init__(self, q_mw, diameter_m, temperature_ext_k=293, loss_coefficient=None) -> None:
+        super().__init__(
+            q_mw, diameter_m, temperature_ext_k=temperature_ext_k,
+            loss_coefficient=loss_coefficient,
+        )
 
 
 @model

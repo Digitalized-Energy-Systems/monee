@@ -38,12 +38,10 @@ def create_economic_dispatch_problem(
 
     if check_vm:
         problem.bounds(bounds_vm, lambda m, _: type(m) is Bus, ["vm_pu"])
-    if check_lp:
-        problem.bounds(
-            bounds_lp,
-            lambda m, _: isinstance(m, GenericPowerBranch),
-            ["loading_from_pu", "loading_to_pu"],
-        )
+    # The line-loading cap is enforced by the line_loading_limit *constraint*
+    # below (added when check_lp). loading_*_pu are passive intermediates in
+    # every electricity formulation (NLP and MISOCP), so a var-bounds override on
+    # them is a no-op - the constraint is the single enforcement path.
 
     objectives = Objectives()
 

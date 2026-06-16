@@ -1,11 +1,21 @@
 from dataclasses import dataclass
 
 from .core import model
+from .phys.core.properties import (
+    gas_compressibility,
+    water_density_kg_per_m3,
+    water_dynamic_viscosity_pas,
+)
 
 # Gas/heat energy-rate conversion: power[MW] = mass_flow[kg/s] \cdot HHV[kWh/kg] \cdot 3.6,
 # since 1 kWh/s = 3600 kW = 3.6 MW (3600 s/h \div 1000 kW/MW). Used wherever a gas
 # mass flow is turned into a power, so the bare 3.6 never appears inline.
 KGPS_KWHPERKG_TO_MW = 3.6
+
+# Standard atmosphere [Pa] (sea level). Set a gas grid's ``pressure_ambient_pa``
+# to this to make its node pressures GAUGE (absolute = gauge + 1 atm), matching
+# pandapipes and the conventional way operating/MAOP pressures are stated.
+STANDARD_ATMOSPHERE_PA = 101325.0
 
 
 @model
@@ -34,42 +44,89 @@ class PowerGrid(Grid):
 @model
 @dataclass(unsafe_hash=True)
 class WaterGrid(Grid):
-    """Water/heat grid domain."""
+    """Water/heat grid domain.
 
-    fluid_density_kg_per_m3: float = 998
-    dynamic_visc_pas: float = 0.000596
+    ``fluid_density_kg_per_m3`` and ``dynamic_visc_pas`` default to ``None`` and
+    are then derived from ``t_ref_k`` via the standard water correlations (see
+    :mod:`monee.model.phys.core.properties`), so the transport properties always
+    match the grid's declared operating temperature. Pass explicit values to
+    override (e.g. to model a non-water fluid or a different reference)."""
+
     t_ref_k: float = 356
     pressure_ref_pa: float = 1000000
     max_mass_flow_kgs: float = 200
     # v_max_mps caps per-pipe mass-flow via \pi/4 \cdot D^2 \cdot \rho \cdot v_max; combined with max_mass_flow_kgs
     # by min(...), so it can only tighten. 5 m/s is generous for DH water.
     v_max_mps: float = 5.0
+    fluid_density_kg_per_m3: float = None
+    dynamic_visc_pas: float = None
 
+    def __post_init__(self):
+        if self.fluid_density_kg_per_m3 is None:
+            self.fluid_density_kg_per_m3 = water_density_kg_per_m3(self.t_ref_k)
+        if self.dynamic_visc_pas is None:
+            self.dynamic_visc_pas = water_dynamic_viscosity_pas(self.t_ref_k)
+
+
+# Conditions and bounds shared by every lgas variant; only the gas-identity
+# constants (molar mass, viscosity, heating value) differ between them.
+# ``compressibility`` is intentionally absent: it is derived from the reference
+# pressure/temperature/molar mass in ``GasGrid.__post_init__``.
+_LGAS_COMMON = {
+    "universal_gas_constant": 8.314,
+    "t_k": 300,
+    "t_ref_k": 356,
+    "pressure_ref_pa": 1000000,
+    "nominal_pressure_pu": 1,
+    "max_mass_flow_kgs": 20,
+    "pressure_squared_pu_max": 1.3,
+    "pressure_squared_pu_min": 0.7,
+}
 
 GAS_GRID_ATTRS = {
+    # Realistic L-gas (N2/CO2-diluted natural gas): heavier and lower-calorific
+    # than pure methane. Values match pandapipes' 'lgas' fluid library.
     "lgas": {
-        "compressibility": 1,
+        **_LGAS_COMMON,
+        "molar_mass": 0.0181138902,
+        "dynamic_visc_pas": 1.2086239755175486e-05,
+        "higher_heating_value_kwh_per_kg": 11.79011,
+    },
+    # Methane / H-gas (pure natural gas): lighter and higher-calorific than
+    # L-gas. The molar mass / HHV match monee's pre-2026 defaults (M=0.0165
+    # kg/mol, HHV=15.3 kWh/kg ~ methane). NOTE: compressibility is now DERIVED
+    # (real-gas Papay Z~=0.978 at 10 bar), not the old hardcoded ideal-gas Z=1,
+    # so this does NOT reproduce pre-2026 gas pressure drops byte-for-byte (the
+    # Weymouth C^2 ~ 1/Z shifts ~2.3%). For exact historical (ideal-gas) numbers
+    # construct GasGrid(..., compressibility=1) directly.
+    "methane": {
+        **_LGAS_COMMON,
         "molar_mass": 0.0165,
         "dynamic_visc_pas": 1.2190162697374919e-05,
         "higher_heating_value_kwh_per_kg": 15.3,
-        "universal_gas_constant": 8.314,
-        "t_k": 300,
-        "t_ref_k": 356,
-        "pressure_ref_pa": 1000000,
-        "nominal_pressure_pu": 1,
-        "max_mass_flow_kgs": 20,
-        "pressure_squared_pu_max": 1.3,
-        "pressure_squared_pu_min": 0.7,
-    }
+    },
 }
+
+# Single source of truth for the default gas heating value (the lgas grid's HHV)
+# and its MJ/kg form. Network-sizing heuristics and HHV fallbacks reference these
+# instead of re-hardcoding the constant, so they always match the gas physics
+# (which reads ``grid.higher_heating_value_kwh_per_kg``). 1 kWh = 3.6 MJ.
+DEFAULT_GAS_HHV_KWH_PER_KG = GAS_GRID_ATTRS["lgas"]["higher_heating_value_kwh_per_kg"]
+DEFAULT_GAS_HHV_MJ_PER_KG = DEFAULT_GAS_HHV_KWH_PER_KG * 3.6
 
 
 @model
 @dataclass(unsafe_hash=True)
 class GasGrid(Grid):
-    """Gas grid domain. Construct via :func:`create_gas_grid` for defaults."""
+    """Gas grid domain. Construct via :func:`create_gas_grid` for defaults.
 
-    compressibility: float
+    ``compressibility`` defaults to ``None`` and is then derived from the
+    reference pressure (``pressure_ref_pa``), temperature (``t_k``) and
+    ``molar_mass`` via the Papay real-gas correlation (see
+    :mod:`monee.model.phys.core.properties`), so Z reflects the grid's declared
+    operating pressure rather than a fixed ideal-gas 1. Pass an explicit value to
+    override (e.g. to force ideal gas with ``compressibility=1``)."""
+
     molar_mass: float
     dynamic_visc_pas: float
     higher_heating_value_kwh_per_kg: float
@@ -81,6 +138,18 @@ class GasGrid(Grid):
     max_mass_flow_kgs: float
     pressure_squared_pu_max: float
     pressure_squared_pu_min: float
+    compressibility: float = None
+    # Ambient pressure [Pa] added to node pressure to form the ABSOLUTE pressure
+    # the Weymouth/density physics require. 0.0 (default) => node pressures are
+    # absolute (monee's historical convention); STANDARD_ATMOSPHERE_PA => node
+    # pressures are gauge (pandapipes/standard-engineering convention).
+    pressure_ambient_pa: float = 0.0
+
+    def __post_init__(self):
+        if self.compressibility is None:
+            self.compressibility = gas_compressibility(
+                self.pressure_ref_pa, self.t_k, self.molar_mass
+            )
 
 
 @model
@@ -92,13 +161,30 @@ class NoGrid(Grid):
 NO_GRID = NoGrid("None")
 
 
-def create_gas_grid(name, type="lgas"):
-    """Return a :class:`GasGrid` populated from ``GAS_GRID_ATTRS[type]``."""
-    return GasGrid(name, **GAS_GRID_ATTRS[type])
+def create_gas_grid(name, type="lgas", t_ref_k=None, pressure_ref_pa=None):
+    """Return a :class:`GasGrid` populated from ``GAS_GRID_ATTRS[type]``.
+
+    ``t_ref_k`` / ``pressure_ref_pa`` override the reference condition so the
+    derived compressibility tracks the grid's actual operating pressure. Pass
+    them here rather than mutating the grid afterwards, so ``__post_init__``
+    derives Z from the final values (a post-construction assignment leaves the
+    already-derived Z stale)."""
+    attrs = dict(GAS_GRID_ATTRS[type])
+    if t_ref_k is not None:
+        attrs["t_ref_k"] = t_ref_k
+    if pressure_ref_pa is not None:
+        attrs["pressure_ref_pa"] = pressure_ref_pa
+    return GasGrid(name, **attrs)
 
 
-def create_water_grid(name):
-    return WaterGrid(name)
+def create_water_grid(
+    name, t_ref_k=WaterGrid.t_ref_k, pressure_ref_pa=WaterGrid.pressure_ref_pa
+):
+    """Return a :class:`WaterGrid` whose density/viscosity are derived from
+    ``t_ref_k`` (see :class:`WaterGrid`). Pass ``t_ref_k`` here rather than
+    mutating the grid afterwards, so the derived properties match the final
+    reference temperature."""
+    return WaterGrid(name, t_ref_k=t_ref_k, pressure_ref_pa=pressure_ref_pa)
 
 
 def create_power_grid(name, sn_mva=1):

@@ -16,3 +16,15 @@ from .infeasibility import (
     diagnose_infeasibility,
 )
 from .pyo import PyomoSolver
+
+# The CasADi backend is optional (casadi may not be installed); expose its
+# classes lazily so importing monee.solver never hard-requires casadi.
+__all_lazy__ = ("CasADiSolver", "CasADiTimeseries", "CasADiMultiPeriodSolver")
+
+
+def __getattr__(name):
+    if name in __all_lazy__:
+        from . import casadi as _casadi
+
+        return getattr(_casadi, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

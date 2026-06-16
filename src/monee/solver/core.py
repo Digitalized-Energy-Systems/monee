@@ -494,6 +494,212 @@ def filter_bool_eqs(eqs, context=None):
     return kept
 
 
+def _process_intermediate_eqs(m, model, equations):
+    """Replace each ``Intermediate``-typed attribute with the backend's named
+    intermediate sub-expression (``m.Intermediate``), for backends whose model
+    object exposes that hook (GEKKO, CasADi)."""
+    for intermediate_eq in [eq for eq in equations if type(eq) is IntermediateEq]:
+        attr_intermediate_var = getattr(model, intermediate_eq.attr)
+        eq = (
+            intermediate_eq.eq() if callable(intermediate_eq.eq) else intermediate_eq.eq
+        )
+        if type(attr_intermediate_var) is Intermediate:
+            i = m.Intermediate(eq)
+            setattr(model, intermediate_eq.attr, i)
+
+
+class OperatorEquationAssembly:
+    """Equation-assembly passes shared by backends whose model object exposes
+    operator-overloaded symbols plus GEKKO-style hooks (``m.sin``/``m.cos``/...,
+    ``m.Equation(s)``, ``m.Obj``, ``m.Intermediate``): the GEKKO and CasADi
+    backends.
+
+    monee's component ``equations()`` bodies are backend-agnostic - they build
+    expressions from the injected variable objects and the math hooks passed in -
+    so a single set of passes drives both backends. Pyomo and Gurobi construct
+    constraints differently (their own intermediate handling / objective
+    accumulation) and provide their own overrides instead of using this mixin.
+
+    Hosts must set ``self._simulation`` (the per-solve simulation flag, read by
+    the branch pass to drop operational flow limits) and may override
+    :meth:`_pwl_impl`.
+    """
+
+    def _pwl_impl(self, m):
+        """Backend piecewise-linear/spline implementation handed to
+        ``branch.equations(..., pwl_impl=...)``. ``None`` when the backend has no
+        PWL support (e.g. CasADi); GEKKO overrides it with a cubic-spline impl."""
+        return None
+
+    def process_internal_oxf_components(self, m, network):
+        for constraint in network.constraints:
+            m.Equations(
+                filter_bool_eqs([constraint(network)], context="network constraint")
+            )
+        obj = None
+        for objective in network.objectives:
+            if obj is not None:
+                obj = obj + objective(network)
+            else:
+                obj = objective(network)
+        if obj is not None:
+            m.Obj(obj)
+
+    def process_oxf_components(
+        self,
+        m,
+        network: "Network",
+        optimization_problem,
+        period_index=None,
+    ):
+        if optimization_problem.constraints is not None and (
+            not optimization_problem.constraints.empty
+        ):
+            m.Equations(
+                filter_bool_eqs(
+                    optimization_problem.constraints.all(
+                        network, period_index=period_index
+                    ),
+                    context="optimization problem constraint",
+                )
+            )
+        obj = None
+        for objective in (
+            optimization_problem.objectives.all(network, period_index=period_index)
+            if optimization_problem.objectives is not None
+            else []
+        ):
+            if obj is not None:
+                obj = obj + objective
+            else:
+                obj = objective
+        if obj is not None:
+            m.Obj(obj)
+
+    def process_equations_compounds(self, m, network, compounds, ignored_nodes):
+        for compound in compounds:
+            if ignore_compound(compound, ignored_nodes):
+                continue
+
+            equations = compound.equations(network)
+
+            for expr in compound.minimize(network, sqrt_impl=m.sqrt):
+                m.Obj(expr)
+
+            if equations is not None:
+                compound_eqs = filter_bool_eqs(
+                    as_iter(equations), context=f"compound_{compound.id}"
+                )
+                _process_intermediate_eqs(m, compound, compound_eqs)
+                m.Equations(filter_intermediate_eqs(compound_eqs))
+
+    def process_equations_nodes_childs(
+        self, m, network: "Network", nodes, ignored_nodes
+    ):
+        for node in nodes:
+            if ignore_node(node, network, ignored_nodes):
+                continue
+            node_childs = network.childs_by_ids(node.child_ids)
+            grid = node.grid
+
+            from_branches = [
+                network.branch_by_id(branch_id).model
+                for branch_id in node.from_branch_ids
+                if not ignore_branch(
+                    network.branch_by_id(branch_id), network, ignored_nodes
+                )
+            ]
+            to_branches = [
+                network.branch_by_id(branch_id).model
+                for branch_id in node.to_branch_ids
+                if not ignore_branch(
+                    network.branch_by_id(branch_id), network, ignored_nodes
+                )
+            ]
+            connected_childs = [
+                child.model
+                for child in node_childs
+                if not ignore_child(child, ignored_nodes)
+            ]
+            equations = as_iter(
+                node.equations(
+                    grid,
+                    from_branches,
+                    to_branches,
+                    connected_childs,
+                    sin_impl=m.sin,
+                    cos_impl=m.cos,
+                    if_impl=m.if2,
+                    abs_impl=m.abs3,
+                    max_impl=m.max2,
+                    sign_impl=m.sign2,
+                    sqrt_impl=m.sqrt,
+                )
+            )
+            for expr in node.minimize(
+                grid, from_branches, to_branches, connected_childs, sqrt_impl=m.sqrt
+            ):
+                m.Obj(expr)
+
+            node_eqs = filter_bool_eqs(equations, context=f"node_{node.id}")
+            _process_intermediate_eqs(m, node.model, node_eqs)
+            m.Equations(filter_intermediate_eqs(node_eqs))
+
+            for child in node_childs:
+                if ignore_child(child, ignored_nodes):
+                    continue
+                child_eqs = filter_bool_eqs(
+                    as_iter(child.equations(grid, node)),
+                    context=f"child_{child.id}",
+                )
+
+                for expr in child.minimize(grid, node, sqrt_impl=m.sqrt):
+                    m.Obj(expr)
+
+                _process_intermediate_eqs(m, child.model, child_eqs)
+                m.Equations(filter_intermediate_eqs(child_eqs))
+
+    def process_equations_branches(
+        self, m, network, branches, ignored_nodes, objs_exprs
+    ):
+        pwl_impl = self._pwl_impl(m)
+        for branch in branches:
+            if ignore_branch(branch, network, ignored_nodes):
+                continue
+            grid = branch.grid
+
+            branch_eqs = as_iter(
+                branch.equations(
+                    grid,
+                    network.node_by_id(branch.from_node_id).model,
+                    network.node_by_id(branch.to_node_id).model,
+                    sin_impl=m.sin,
+                    cos_impl=m.cos,
+                    if_impl=m.if3,
+                    abs_impl=m.abs3,
+                    max_impl=m.max2,
+                    sign_impl=m.sign3,
+                    log_impl=m.log10,
+                    sqrt_impl=m.sqrt,
+                    exp_impl=m.exp,
+                    pwl_impl=pwl_impl,
+                    simulation=self._simulation,
+                )
+            )
+
+            for expr in branch.minimize(
+                grid,
+                network.node_by_id(branch.from_node_id).model,
+                network.node_by_id(branch.to_node_id).model,
+                sqrt_impl=m.sqrt,
+            ):
+                objs_exprs.append(expr)
+
+            branch_eqs = filter_bool_eqs(branch_eqs, context=f"branch_{branch.id}")
+            _process_intermediate_eqs(m, branch.model, branch_eqs)
+            m.Equations(filter_intermediate_eqs(branch_eqs))
+
+
 def inject_nans(target: GenericModel):
     """Replace Var/Const fields with NaN placeholders; zero regulation."""
     for key, value in target.__dict__.items():

@@ -2,13 +2,12 @@
 Formulations
 ============
 
-A **formulation** defines the mathematical equations that describe how energy
-flows through a grid component. Separating formulations from the data model
-means you can swap equation sets without redefining the network topology - for
-example, replacing a nonlinear AC power flow with a convex MISOCP relaxation,
-trading the mixed-integer gas model for a smooth, binary-free NLP variant, or
-experimenting with a new linearised hydraulic model, without touching nodes
-and branches.
+A formulation defines the mathematical equations that describe how energy
+flows through a grid component. Formulations are separate from the data model,
+so you can swap equation sets without redefining the network topology. You can
+replace a nonlinear AC power flow with a convex MISOCP relaxation, trade the
+mixed-integer gas model for a smooth binary-free NLP variant, or try a new
+linearised hydraulic model, all without touching nodes and branches.
 
 Architecture
 ============
@@ -48,16 +47,15 @@ Lifecycle
 
 Each formulation object participates in three phases:
 
-``ensure_var(model, simulation=False)``
-    Declares (or replaces) solver variables on the component model - ``Var``,
+``ensure_var(model, simulation=False, grid=None)``
+    Declares (or replaces) solver variables on the component model: ``Var``,
     ``Const``, ``Intermediate`` or ``PostProcess`` attributes. The solver
     calls it on its solve-time network copy when it attaches the effective
     formulations (``attach_formulations``), right before variable injection.
-    With ``simulation=True`` it additionally *squares* the model: phantom
-    degrees of freedom are pinned to constants or demoted to post-solve
-    reports so that a steady-state simulation can run as a square equation
-    system. See :doc:`solvers` for how the solver's ``simulation`` flag
-    drives this.
+    With ``simulation=True`` it also *squares* the model. Phantom degrees of
+    freedom are pinned to constants or demoted to post-solve reports, so a
+    steady-state simulation can run as a square equation system. See
+    :doc:`solvers` for how the solver's ``simulation`` flag drives this.
 
 ``equations(...)``
     Returns the list of constraint expressions for one component. The solver
@@ -69,18 +67,18 @@ Each formulation object participates in three phases:
     inequalities that would break a square solve).
 
 ``minimize(...)``
-    Returns auxiliary objective terms appended to the solver objective - for
+    Returns auxiliary objective terms appended to the solver objective, for
     example the ε-tightening terms that keep a convex epigraph relaxation
     tight at the optimum, or the loss term that tightens the MISOCP cone.
 
 Choosing formulations at solve time
 -----------------------------------
 
-The formulation is a property of the **solve**, not of the network data. The
-solver backends attach the effective formulation to every component of their
-internal network copy right before model assembly - the network you build
-stays pristine, and the same network can be solved under different
-formulations without mutation:
+The formulation is a property of the solve, not of the network data. Right
+before model assembly, the solver backends attach the effective formulation to
+every component of their internal network copy. The network you build stays
+pristine, so you can solve the same network under different formulations
+without mutating it:
 
 .. code-block:: python
 
@@ -108,27 +106,27 @@ The effective formulation per component is resolved most-specific-first:
    :meth:`~monee.model.network.Network.branch`, …),
 2. the ``formulation`` argument of the solve call,
 3. the network-level choice recorded by
-   :meth:`~monee.model.network.Network.apply_formulation` (side-effect free -
+   :meth:`~monee.model.network.Network.apply_formulation` (side-effect free:
    it only updates the network's formulation map; components and model
    variables stay untouched). It accepts the same spec as the ``formulation=``
    solve argument: a registry-key string (``"smooth_nlp"``), a
    ``NetworkFormulation``, or a sequence of either (merged left to right),
-4. :data:`~monee.model.formulation.bundles.DEFAULT_SIMULATION_FORMULATION` -
+4. :data:`~monee.model.formulation.bundles.DEFAULT_SIMULATION_FORMULATION`,
    a deliberate hybrid of the polar-AC NLP (electricity), the
    epigraph-relaxed Weymouth (gas) and the bilinear Darcy-Weisbach
    (water/heat).
 
 Registration keys in a ``NetworkFormulation`` may be a plain model type
-(``GasPipe``) or a ``(model_type, grid_type)`` tuple - the latter is needed
-when a model is shared between carriers, e.g. ``Junction`` is used by both
-gas and water grids, so the node formulations are keyed
-``(Junction, GasGrid)`` and ``(Junction, WaterGrid)``.
+(``GasPipe``) or a ``(model_type, grid_type)`` tuple. Use the tuple form when a
+model is shared between carriers. For example, ``Junction`` is used by both gas
+and water grids, so the node formulations are keyed ``(Junction, GasGrid)`` and
+``(Junction, WaterGrid)``.
 
 .. note::
 
    Native IO (:func:`~monee.io.native.write_omef_network` /
-   :func:`~monee.io.native.load_to_network`) does **not** persist
-   formulation choices - they are solve parameters. Pass ``formulation=`` to
+   :func:`~monee.io.native.load_to_network`) does not persist
+   formulation choices: they are solve parameters. Pass ``formulation=`` to
    the solve (or re-run ``apply_formulation``) after loading from disk.
 
 ----
@@ -137,8 +135,8 @@ Built-in formulations
 =====================
 
 All built-in formulations are importable from :mod:`monee.model.formulation`
-(and re-exported at the top level). Names follow the **optimization class**:
-sector constants are ``<SECTOR>_<CLASS>_FORMULATION``, and three
+(and re-exported at the top level). Names follow the optimization class.
+Per-sector constants are ``<SECTOR>_<CLASS>_FORMULATION``. Three
 sector-complete bundles cover the whole network with one consistent class:
 
 .. testcode::
@@ -173,8 +171,8 @@ remain importable but are deprecated.
 
       ``EL_NLP_FORMULATION`` *(default)*
 
-      Full nonlinear polar AC power flow using **voltage magnitude** and
-      **angle** as decision variables - a smooth non-convex NLP. Handles any
+      Full nonlinear polar AC power flow using voltage magnitude and
+      angle as decision variables, a smooth non-convex NLP. Handles any
       network topology. Compatible with NLP solvers (GEKKO / IPOPT). A single
       formulation serves both modes: under a simulation solve,
       ``ensure_var(simulation=True)`` demotes the unused ``vm_pu_squared``
@@ -185,7 +183,7 @@ remain importable but are deprecated.
       ``EL_MISOCP_FORMULATION``
 
       Second-order cone relaxation of the AC optimal power flow (branch-flow
-      model with squared voltages and currents). The formulation is **convex**
+      model with squared voltages and currents). The formulation is convex
       and compatible with MILP / MIQCP solvers such as Gurobi or SCIP; its
       ``minimize()`` adds a resistive-loss term that keeps the cone tight.
       Supports branch currents (``i_from_ka``/``i_to_ka``) and line-loading
@@ -196,8 +194,8 @@ remain importable but are deprecated.
 
       ``EL_NONCONVEX_MIQCQP_FORMULATION``
 
-      The branch-flow model with the SOC pinned to **equality**
-      ``P² + Q² = (W/tap²)·ell`` - exact AC power flow in the lifted
+      The branch-flow model with the SOC pinned to equality
+      ``P² + Q² = (W/tap²)·ell``, exact AC power flow in the lifted
       variables, a non-convex MIQCQP for global solvers (SCIP, Gurobi).
 
       *Best for:* exact mixed-integer AC studies without trigonometric terms.
@@ -206,12 +204,12 @@ remain importable but are deprecated.
 
       ``GAS_CONVEX_MIQCQP_FORMULATION`` *(default)*
 
-      Epigraph-relaxed (MISOCP-shaped) Weymouth pipe flow - a **convex
-      MIQCQP**. Pressure is represented as *pressure-squared* (p²), flow
+      Epigraph-relaxed (MISOCP-shaped) Weymouth pipe flow, a convex
+      MIQCQP. Pressure is represented as *pressure-squared* (p²), flow
       direction by a binary plus a convex epigraph relaxation
       ``m² ≤ m_squared`` that ``minimize()`` keeps tight with a small
       ε-tightening term. Friction is pinned to the turbulent Swamee-Jain
-      asymptote per pipe - accurate for typical gas distribution (Re ≳ 10⁵),
+      asymptote per pipe, accurate for typical gas distribution (Re ≳ 10⁴),
       but it under-estimates the pressure drop in the laminar regime.
 
       *Best for:* gas optimisation with branch-and-bound solvers
@@ -219,13 +217,13 @@ remain importable but are deprecated.
 
       ``GAS_NONCONVEX_MIQCQP_FORMULATION``
 
-      The same model with the epigraph pinned to **equality**
-      ``m² = m_squared`` - exact Weymouth, a non-convex MIQCQP for global
+      The same model with the epigraph pinned to equality
+      ``m² = m_squared``, exact Weymouth, a non-convex MIQCQP for global
       solvers. No ε term in the objective.
 
       :func:`~monee.model.formulation.make_gas_milp_pwl_formulation` ``(n_breakpoints=12)``
 
-      Opt-in **variable-friction MILP** variant: replaces the constant
+      Opt-in variable-friction MILP variant: replaces the constant
       friction with a per-pipe piecewise linearisation of
       ``φ(m) = friction(Re(m))·m²`` over log-spaced breakpoints, so laminar
       and turbulent regimes both resolve. Use it when lightly-loaded pipes
@@ -234,11 +232,13 @@ remain importable but are deprecated.
       :func:`~monee.model.formulation.make_gas_nlp_formulation` ``(friction_model="constant", smoothing_eps=1e-3, n_breakpoints=12)``
       / ``GAS_NLP_FORMULATION``
 
-      **Pure-NLP, binary-free** Weymouth: one signed mass-flow variable drives
+      Pure-NLP, binary-free Weymouth: one signed mass-flow variable drives
       a smooth pressure drop ``friction·m·|m|`` with ``|m| ≈ √(m² + ε²)``
-      (``smoothing_eps``, in kg/s). No direction binary, no epigraph - the
+      (``smoothing_eps``, in kg/s). No direction binary, no epigraph: the
       pressure equation is also row-normalised for IPOPT conditioning.
       ``friction_model`` selects ``"constant"`` (turbulent asymptote),
+      ``"hybrid"`` (laminar Hagen-Poiseuille ``64/Re`` term plus the
+      fully-rough turbulent term, QCQP-representable),
       ``"pwl"`` (one odd spline replacing the whole drop term) or
       ``"nonlinear"`` (smooth laminar-turbulent friction blend with a
       Reynolds closure).
@@ -255,7 +255,7 @@ remain importable but are deprecated.
       insulation losses and external-temperature influence, with a direction
       binary for temperature upwinding. The temperature side carries true
       continuous bilinears (``alpha·mag``, ``direction·t``), making the model
-      a **non-convex MIQCQP**. Active heat exchangers
+      a non-convex MIQCQP. Active heat exchangers
       (:class:`~monee.model.branch.HeatExchanger`) use the LP
       ``FixedFlowHeatExchangerFormulation`` (fixed design mass flow, energy
       balance in MW); passive heat exchangers use the bilinear free-flow
@@ -266,7 +266,7 @@ remain importable but are deprecated.
 
       :func:`~monee.model.formulation.make_heat_nonconvex_pwl_formulation` ``(n_breakpoints=12)``
 
-      Opt-in **variable-friction** PWL variant, analogous to the gas one:
+      Opt-in variable-friction PWL variant, analogous to the gas one:
       restores laminar-regime accuracy for lightly-loaded pipes (Re < 2300).
       Heat-exchanger formulations are unchanged; the temperature bilinears
       keep the model a non-convex MIQCQP.
@@ -274,7 +274,7 @@ remain importable but are deprecated.
       :func:`~monee.model.formulation.make_heat_nlp_formulation` ``(friction_model="constant", smoothing_eps=1e-3, n_breakpoints=12)``
       / ``HEAT_NLP_FORMULATION``
 
-      **Pure-NLP, binary-free** water/heat: smooth signed flow plus smooth
+      Pure-NLP, binary-free water/heat: smooth signed flow plus smooth
       temperature upwinding written in multiplied form (no direction binary,
       no division by the flow magnitude), and active/passive heat-exchanger
       formulations with their binaries pinned to constants. Same
@@ -287,12 +287,12 @@ remain importable but are deprecated.
       ``HEAT_CONVEX_MILP_FORMULATION`` /
       :func:`~monee.model.formulation.make_heat_convex_milp_formulation` ``(num_partitions=1, include_heat_exchangers=True)``
 
-      Convex **relaxation** of the district-heating thermal side after Deng et
+      Convex relaxation of the district-heating thermal side after Deng et
       al. (2021): the bilinear enthalpy ``H = c·m·τ`` is replaced by McCormick
       envelopes, the heat loss is Taylor-linearised, and hydraulics are
       omitted (pipes are unidirectional). With ``num_partitions=1`` the result
-      is a plain McCormick **LP**; ``num_partitions > 1`` upgrades to a
-      piecewise **MILP** with tighter envelopes. By default the active and
+      is a plain McCormick LP; ``num_partitions > 1`` upgrades to a
+      piecewise MILP with tighter envelopes. By default the active and
       passive heat exchangers map to their convex variants
       (``McCormickHeatExchangerFormulation`` /
       ``McCormickPassiveHeatExchangerFormulation``) so the sector has no
@@ -321,7 +321,7 @@ remain importable but are deprecated.
       / ``SMOOTH_NLP_FORMULATION``
 
       Polar AC + smooth gas + smooth water/heat in a single
-      ``NetworkFormulation`` - one ``apply_formulation`` call turns a
+      ``NetworkFormulation``: one ``apply_formulation`` call turns a
       multi-energy network into a pure NLP across all three carriers.
 
       *Best for:* full-MES simulation and optimisation with IPOPT/APOPT where
@@ -333,13 +333,13 @@ remain importable but are deprecated.
       Branch-flow MISOCP electricity + epigraph-relaxed Weymouth gas +
       McCormick district heating (incl. the convex heat-exchanger variants).
       Every constraint is certifiable by a convex MIQCQP/MISOCP solver;
-      solutions are relaxation optima - check the documented gap bounds where
+      solutions are relaxation optima, check the documented gap bounds where
       exactness matters.
 
       ``NONCONVEX_MIQCQP_FORMULATION``
 
       Exact branch flow + exact Weymouth + bilinear Darcy-Weisbach: the exact
-      quadratic models across all carriers, with no trigonometric terms - for
+      quadratic models across all carriers, with no trigonometric terms, for
       global MIQCQP solvers (SCIP, Gurobi).
 
 ----
@@ -347,13 +347,17 @@ remain importable but are deprecated.
 Choosing a formulation
 ======================
 
-For each carrier monee offers formulations in several **optimization
-classes**: the MIQCQP family (direction binary plus epigraph - ideal for
-branch-and-bound solvers such as Gurobi or SCIP, in a convex relaxed and an
-exact non-convex flavour), the LP/MILP family (PWL variable-friction
-variants and the McCormick heating relaxation), and the smooth pure-NLP
-family (when you want IPOPT/APOPT to solve the whole system without integer
-variables).
+For each carrier monee offers formulations in several optimization classes:
+
+The MIQCQP family uses a direction binary plus an epigraph and suits
+branch-and-bound solvers such as Gurobi or SCIP. It comes in a convex relaxed
+and an exact non-convex flavour.
+
+The LP/MILP family covers the PWL variable-friction variants and the McCormick
+heating relaxation.
+
+The smooth pure-NLP family lets IPOPT or APOPT solve the whole system without
+integer variables.
 
 .. list-table::
    :header-rows: 1
@@ -395,7 +399,7 @@ variables).
 
 See :doc:`solvers` for guidance on picking the right solver back-end.
 
-A minimal smooth-NLP example - build a gas network, swap the formulation,
+A minimal smooth-NLP example: build a gas network, swap the formulation,
 solve:
 
 .. testcode::
@@ -417,25 +421,25 @@ solve:
 Simulation vs optimisation
 --------------------------
 
-There are **no separate simulation formulations**. Whether a model is solved
-as a square steady-state simulation or as an optimisation problem is decided
-entirely by the solver's ``simulation`` flag
-(:func:`~monee.run_energy_flow` passes ``simulation=True`` by default): the
-solver re-calls ``ensure_var(model, simulation=True)`` on every component,
-which pins phantom degrees of freedom, demotes report-only quantities to
-``PostProcess`` values and (in the smooth formulations) drops operational
-flow-limit inequalities so the equation system becomes square. GEKKO then
-attempts a fast IMODE=1 solve, falling back to IMODE=3 when the model is not
-square - check ``result.mode_used``. See :doc:`solvers` for details.
+There are no separate simulation formulations. The solver's ``simulation``
+flag alone decides whether a model is solved as a square steady-state
+simulation or as an optimisation problem (:func:`~monee.run_energy_flow` passes
+``simulation=True`` by default). The solver re-calls
+``ensure_var(model, simulation=True)`` on every component. That pins phantom
+degrees of freedom, demotes report-only quantities to ``PostProcess`` values
+and, in the smooth formulations, drops operational flow-limit inequalities so
+the equation system becomes square. GEKKO then attempts a fast IMODE=1 solve
+and falls back to IMODE=3 when the model is not square. Check
+``result.mode_used`` to see which path ran. See :doc:`solvers` for details.
 
 .. tip::
 
    **Warm starting.** In simulation mode the smooth formulations seed the
-   flow magnitude ``mass_flow_mag_kgs`` from ``branch.mass_flow_nominal_kgs`` (the
-   design flow stored on pipes by the MES network generators). A good
-   magnitude seed alone cuts the smooth-NLP iteration count by roughly 20× -
-   the sign of the flow is recovered cheaply, the magnitude is what
-   conditions the pressure-drop and temperature-transport equations.
+   flow magnitude ``mass_flow_mag_kgs`` from ``branch.mass_flow_nominal_kgs``
+   (the design flow stored on pipes by the MES network generators). A good
+   magnitude seed alone cuts the smooth-NLP iteration count by roughly 20 times.
+   The sign of the flow is recovered cheaply; the magnitude is what conditions
+   the pressure-drop and temperature-transport equations.
 
 ----
 
@@ -457,7 +461,7 @@ constraints) and optionally ``minimize`` (return auxiliary objective terms):
 
 
     class MyNodeFormulation(NodeFormulation):
-        def ensure_var(self, model, simulation=False):
+        def ensure_var(self, model, simulation=False, grid=None):
             # Declare a decision variable on the node model. Solvers call
             # this again with simulation=True at solve time - pin variables
             # your equations never constrain so the model stays square.
@@ -506,14 +510,14 @@ by the solver back-end:
      - Meaning
    * - ``sqrt_impl``, ``cos_impl``, ``sin_impl``, ``log_impl``, ``exp_impl``
      - Backend-specific math implementations (GEKKO operators or Pyomo
-       intrinsics) - use these instead of ``math.*`` so the same formulation
+       intrinsics); use these instead of ``math.*`` so the same formulation
        runs on every back-end.
    * - ``pwl_impl``
      - Piecewise-linear builder; call ``pwl_impl.piecewise_eq(y, x, xs, ys)``
        to constrain ``y = f(x)`` along breakpoints ``xs``/``ys`` (GEKKO cubic
        spline, Pyomo SOS2 piecewise).
    * - ``simulation``
-     - ``True`` when the solver runs in simulation mode - drop inequalities
+     - ``True`` when the solver runs in simulation mode: drop inequalities
        that would unbalance a square solve and verify them post-hoc instead.
 
 Activate the formulation with ``net.apply_formulation(MY_NETWORK_FORMULATION)``

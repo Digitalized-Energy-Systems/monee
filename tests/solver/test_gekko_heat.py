@@ -4,6 +4,9 @@ import monee.model as mm
 import monee.solver as ms
 from tests.util import create_water_loop
 
+from monee import run_energy_flow
+from monee.model.formulation import make_heat_nlp_formulation
+from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER as CP
 
 def create_branching_two_pipe_heat_example():
     pn = mm.Network()
@@ -322,7 +325,7 @@ def test_two_pipes_heat_network():
     assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -33)
     assert len(result.dataframes) == 4
     assert math.isclose(
-        result.dataframes["Junction"]["pressure_pa"][2], 999999.84741, abs_tol=0.001
+        result.dataframes["Junction"]["pressure_pa"][2], 999999.84300, abs_tol=0.001
     )
     assert math.isclose(
         result.dataframes["Junction"]["t_k"][2], 355.74529187, abs_tol=0.001
@@ -392,7 +395,7 @@ def test_heat_exchanger():
         result.dataframes["Junction"]["t_k"][0], 383.17457358, abs_tol=0.01
     )
     assert math.isclose(
-        result.dataframes["Junction"]["pressure_pa"][0], 999997.7186, abs_tol=0.01
+        result.dataframes["Junction"]["pressure_pa"][0], 999997.65278, abs_tol=0.01
     )
     assert len(result.dataframes) == 6
 
@@ -507,3 +510,45 @@ def test_supply_return_parallel_he_real_loads():
     assert result.success
 
     assert math.isclose(result.get(mm.Junction)["t_k"][3], 325.4, abs_tol=0.09)
+
+
+def test_passive_he_minor_loss_matches_analytic():
+
+    q_mw, mdot, zeta, dia = 0.1, 2.0, 5.0, 0.1
+    grid = mm.create_water_grid("heat")
+    net = mm.Network()
+    a = net.node(mm.Junction(), grid=grid, child_ids=[net.child(mm.ExtHydrGrid(t_k=350))])
+    b = net.node(mm.Junction(), grid=grid, child_ids=[net.child(mm.Sink(mass_flow_kgs=mdot))])
+    net.branch(
+        mm.PassiveHeatExchanger(q_mw=q_mw, diameter_m=dia, loss_coefficient=zeta), a, b
+    )
+    net.apply_formulation(make_heat_nlp_formulation(friction_model="constant"))
+
+    result = run_energy_flow(net)
+    print(result)
+    assert result.success
+
+    j = result.dataframes["Junction"]
+    t_in, t_out = j["t_k"].iloc[0], j["t_k"].iloc[1]
+    dp = j["pressure_pa"].iloc[0] - j["pressure_pa"].iloc[1]
+
+    rho = grid.fluid_density_kg_per_m3
+    v = mdot / (rho * math.pi / 4 * dia**2)
+    assert math.isclose(t_out, t_in + q_mw * 1e6 / (CP * mdot), rel_tol=1e-4)
+    assert math.isclose(dp, zeta * rho / 2 * v**2, rel_tol=1e-3)
+
+
+def test_passive_he_zero_loss_coefficient_is_lossless():
+
+    net = mm.Network()
+    a = net.node(mm.Junction(), grid=mm.WATER_KEY, child_ids=[net.child(mm.ExtHydrGrid(t_k=350))])
+    b = net.node(mm.Junction(), grid=mm.WATER_KEY, child_ids=[net.child(mm.Sink(mass_flow_kgs=2.0))])
+    net.branch(
+        mm.PassiveHeatExchanger(q_mw=0.01, diameter_m=0.1, loss_coefficient=0.0), a, b
+    )
+    net.apply_formulation(make_heat_nlp_formulation(friction_model="constant"))
+
+    result = run_energy_flow(net)
+    assert result.success
+    j = result.dataframes["Junction"]
+    assert math.isclose(j["pressure_pa"].iloc[0], j["pressure_pa"].iloc[1], abs_tol=1e-3)

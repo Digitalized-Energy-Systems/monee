@@ -2,15 +2,15 @@
 Timeseries simulation
 =====================
 
-The timeseries runner drives a network through a sequence of timesteps, solving
-each independently while passing scalar state values between steps.  It is the
-right choice when you want to **replay known profiles** or when inter-step
-coupling is one-directional (past â†’ future).
+The timeseries runner drives a network through a sequence of timesteps. It
+solves each step independently and passes scalar state values forward to the
+next. Reach for it when you replay known profiles or when coupling between
+steps runs one way only, from past to future.
 
 .. note::
 
-   For globally-optimal dispatch - where the solver must look ahead, e.g.
-   to decide when to charge a battery - see :doc:`multi_period`.
+   For globally optimal dispatch, where the solver must look ahead (for
+   example, to decide when to charge a battery), see :doc:`multi_period`.
 
 ----
 
@@ -21,27 +21,24 @@ Each timestep follows a fixed four-phase cycle:
 
 .. code-block:: text
 
-   â”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”
-   â”‚  for step k in 0 â€¦ T-1:                                     â”‚
-   â”‚                                                             â”‚
-   â”‚  1. net_copy = net.copy()          (base net never touched) â”‚
-   â”‚  2. timeseries_data.apply(net_copy, k)  (inject values)     â”‚
-   â”‚  3. result = solve(net_copy, step_state=state)              â”‚
-   â”‚  4. state.push(result.network)     (record solved values)   â”‚
-   â””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜
+   for step k in 0 .. T-1:
+       1. net_copy = net.copy()              (base net never touched)
+       2. timeseries_data.apply(net_copy, k) (inject values)
+       3. result = solve(net_copy, step_state=state)
+       4. state.push(result.network)         (record solved values)
 
-**Copy** - a fresh ``Network.copy()`` is taken each step so solved attributes
-from step *k* never bleed into step *k+1*.
+**Copy:** each step takes a fresh ``Network.copy()``, so solved attributes from
+step *k* never bleed into step *k+1*.
 
-**Inject** - ``TimeseriesData`` writes per-step scalar values directly onto
-model attributes before the solver sees them.  It is equivalent to setting the
-attribute by hand.
+**Inject:** ``TimeseriesData`` writes per-step scalar values onto model
+attributes before the solver runs. This is the same as setting the attribute by
+hand.
 
-**Solve** - the copied-and-patched network is passed to the solver exactly like
-a single-step call.  Any solver or optimisation problem works here.
+**Solve:** the copied and patched network goes to the solver exactly like a
+single-step call. Any solver or optimization problem works here.
 
-**Record** - :class:`~monee.simulation.step_state.StepState` stores the solved
-float value of every ``Var`` attribute, making it available as a constant in
+**Record:** :class:`~monee.simulation.step_state.StepState` stores the solved
+float value of every ``Var`` attribute and makes it available as a constant in
 the next step's inter-step constraint.
 
 ----
@@ -69,7 +66,7 @@ Quick start
    td.add_child_series_by_name("demand", "p_mw",
                                 [0.4, 0.8, 1.2, 1.0, 0.6, 0.3])
 
-   # 3. Run - step count inferred from series length
+   # 3. Run (step count inferred from series length)
    result = run_timeseries(net, td)
    print(f"{len(result.raw)} successful steps, "
          f"{len(result.failed_steps)} failures")
@@ -78,59 +75,18 @@ Quick start
 
    6 successful steps, 0 failures
 
-.. plot::
-   :caption: Six-step load profile - bus voltage and grid import track the varying demand
+Six-step load profile: bus voltage and grid import track the varying demand.
 
-   import monee.model as mm
-   import monee.express as mx
-   from monee.simulation import TimeseriesData, run_timeseries
-   import matplotlib.pyplot as plt
+.. only:: html
 
-   LOAD_PROFILE = [0.4, 0.8, 1.2, 1.0, 0.6, 0.3]
-   STEPS = list(range(len(LOAD_PROFILE)))
+   .. raw:: html
 
-   net = mx.create_multi_energy_network()
-   bus0 = mx.create_bus(net)
-   bus1 = mx.create_bus(net)
-   mx.create_ext_power_grid(net, bus0)
-   mx.create_line(net, bus0, bus1,
-                  length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-   load = mx.create_power_load(net, bus1, p_mw=1.0, q_mvar=0.0, name="demand")
+      <iframe src="../_static/interactive/concepts_timeseries.html" width="100%" height="660" style="border:none;" loading="lazy" title="Timeseries simulation quick start"></iframe>
 
-   td = TimeseriesData()
-   td.add_child_series_by_name("demand", "p_mw", LOAD_PROFILE)
-   result = run_timeseries(net, td)
+.. only:: latex
 
-   vm_df  = result.get_result_for(mm.Bus, "vm_pu")
-   ext_df = result.get_result_for(mm.ExtPowerGrid, "p_mw")
-   vm1    = vm_df.iloc[:, 1].values        # residential bus
-   grid_p = ext_df.iloc[:, 0].values
-
-   fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 6),
-                             gridspec_kw={"hspace": 0.45})
-
-   axes[0].step(STEPS, LOAD_PROFILE, where="post", lw=2, color="#f4a261")
-   axes[0].fill_between(STEPS, 0, LOAD_PROFILE, step="post",
-                         color="#f4a261", alpha=0.18)
-   axes[0].set_ylabel("Load  [MW]")
-   axes[0].set_title("Demand profile", fontsize=10)
-   axes[0].grid(axis="y", alpha=0.3)
-
-   axes[1].bar(STEPS, grid_p, color="#2c7bb6", alpha=0.8, width=0.6)
-   axes[1].axhline(0, color="grey", lw=0.8)
-   axes[1].set_ylabel("Grid import  [MW]")
-   axes[1].set_title("External grid flow", fontsize=10)
-   axes[1].grid(axis="y", alpha=0.3)
-
-   axes[2].plot(STEPS, vm1, marker="o", lw=2, color="#1a9641")
-   axes[2].set_ylabel("Voltage  [pu]")
-   axes[2].set_xlabel("Step")
-   axes[2].set_title("Bus 1 voltage", fontsize=10)
-   axes[2].set_xticks(STEPS)
-   axes[2].grid(axis="y", alpha=0.3)
-
-   fig.suptitle("Timeseries simulation - quick start", fontsize=12, fontweight="bold")
-   plt.tight_layout()
+   .. image:: /_static/interactive/concepts_timeseries.png
+      :width: 100%
 
 ----
 
@@ -138,7 +94,7 @@ TimeseriesData
 ==============
 
 ``TimeseriesData`` maps ``(component, attribute)`` pairs to per-step value
-lists.  All registered series must have the same length - mismatches raise
+lists.  All registered series must have the same length; mismatches raise
 ``ValueError`` at registration time.
 
 Registering series
@@ -196,10 +152,10 @@ Two ``TimeseriesData`` objects combine with ``+`` or ``extend()``.  Both
 merge at the ``(component, attribute)`` level but resolve duplicates from
 opposite ends:
 
-* ``td.extend(other)`` merges *other* into ``td`` **in place** - for duplicate
-  ``(component, attribute)`` pairs the **receiver** (``td`` itself) wins.
-* ``td1 + td2`` returns a **new** object - for duplicate pairs the
-  **left operand** (``td1``) wins.
+* ``td.extend(other)`` merges *other* into ``td`` in place: for duplicate
+  ``(component, attribute)`` pairs the receiver (``td`` itself) wins.
+* ``td1 + td2`` returns a new object: for duplicate pairs the
+  left operand (``td1``) wins.
 
 Merging objects of different lengths raises ``ValueError``.
 
@@ -243,7 +199,7 @@ Querying results
       .. code-block:: python
 
          # Series: one value per successful step
-         p_load = result.get_result_for_id(load.id, "p_mw")
+         p_load = result.get_result_for_id(load, "p_mw")
 
    .. tab-item:: Datetime index
 
@@ -314,7 +270,7 @@ previous step's solved float (or ``None`` on the first step):
 
    ``inter_temporal_equations`` works identically in timeseries simulation
    and multi-period optimization.  Use ``inter_step_equations`` only when
-   you need timeseries-specific behaviour that should **not** activate in a
+   you need timeseries-specific behaviour that should not activate in a
    multi-period solve.
 
 Accessing earlier steps
@@ -331,7 +287,7 @@ The ``step`` argument allows look-back beyond the immediately previous step:
 .. note::
 
    ``StepState.get`` unwraps not only ``Var`` and ``Intermediate`` but also
-   :class:`~monee.model.core.PostProcess` values - report-only quantities
+   :class:`~monee.model.core.PostProcess` values: report-only quantities
    computed after the solve, such as ``Bus.va_degree`` or ``Junction.t_k``.
    They are therefore just as readable in ``inter_step_equations`` as solver
    variables.
@@ -347,7 +303,7 @@ Three temporal hooks
      - Invoked by
      - Use
    * - ``inter_temporal_equations``
-     - timeseries **and** multi-period
+     - timeseries and multi-period
      - Storage SoC, linepack, thermal mass
    * - ``inter_step_equations``
      - timeseries only
@@ -369,18 +325,18 @@ Hooks let you inspect or modify the network before and after each step:
 
    class MyHook(StepHook):
        def pre_run(self, net, step, step_state):
-           """Called before the solve - net is the base network."""
+           """Called before the solve. net is the base network."""
            print(f"Step {step}: starting")
 
-       def post_run(self, net, step, step_state, step_result):
-           """Called after the solve - net is the solved copy."""
+       def post_run(self, net, step, step_state, step_result, base_net):
+           """Called after the solve. net is the solved copy; base_net is the base."""
            if step_result.failed:
-               print(f"Step {step}: FAILED - {step_result.error}")
+               print(f"Step {step}: FAILED ({step_result.error})")
 
    result = run_timeseries(net, td, step_hooks=[MyHook()])
 
-The ``step_state`` argument is the live :class:`~monee.simulation.step_state.StepState`
-- hooks can read or write inter-step values directly.
+The ``step_state`` argument is the live :class:`~monee.simulation.step_state.StepState`;
+hooks can read or write inter-step values directly.
 
 ----
 
@@ -388,8 +344,8 @@ Externally paced steps
 ======================
 
 ``run_timeseries`` owns the loop: it decides the number of steps and marches
-through them at a fixed cadence.  In **co-simulation** settings an external
-framework decides *when* and *how far* to advance - with a possibly different
+through them at a fixed cadence.  In co-simulation settings an external
+framework decides *when* and *how far* to advance, with a possibly different
 ``dt_h`` on every call.  For this, use :class:`~monee.simulation.stepper.Stepper`
 (``monee.Stepper``), which keeps a persistent ``StepState`` across
 user-driven ``step()`` calls:
@@ -410,8 +366,8 @@ See :doc:`../how-to/stepper` for the full recipe.
 Temporal network extensions
 ============================
 
-For time-coupled physics that spans the entire network - thermal inertia,
-pipeline linepack - use a :class:`~monee.model.formulation.core.NetworkAspect`
+For time-coupled physics that spans the entire network (thermal inertia,
+pipeline linepack), use a :class:`~monee.model.extension.core.NetworkAspect`
 extension rather than modifying individual model classes:
 
 .. code-block:: python
@@ -438,9 +394,9 @@ Scalability
    * - Factor
      - Impact
    * - Steps
-     - Linear - each step is one independent solve
+     - Linear: each step is one independent solve
    * - Network size
-     - Same as single-step; memory âˆ steps Ã— result size
+     - Same as single-step; memory grows with steps times result size
    * - Inter-step constraints
      - O(coupled vars) extra constraints per step; negligible overhead
    * - Failed steps (``on_step_error='skip'``)

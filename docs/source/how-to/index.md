@@ -13,7 +13,7 @@ already familiar with the {doc}`../quickstart`.
 :shadow: sm
 
 Find the minimum demand curtailment needed to keep a network feasible under
-voltage, pressure, and temperature bounds - one call or fully customised.
+voltage, pressure, and temperature bounds, in one call or fully customised.
 :::
 
 :::{grid-item-card} Import MATPOWER files
@@ -31,7 +31,7 @@ networks to/from the native OMEF JSON format.
 :shadow: sm
 
 Import an existing pandapower network into monee with a single function
-call. *(Experimental - complex elements may not convert correctly.)*
+call. *(Experimental: complex elements may not convert correctly.)*
 :::
 
 :::{grid-item-card} Use the Pyomo solver
@@ -39,7 +39,7 @@ call. *(Experimental - complex elements may not convert correctly.)*
 :link-type: doc
 :shadow: sm
 
-Plug in HiGHS, Gurobi, GLPK, or CBC as the solver back-end - required for
+Plug in HiGHS, Gurobi, GLPK, or CBC as the solver back-end, required for
 MILP / MIQCP problems such as the MISOCP optimal power flow.
 :::
 
@@ -67,7 +67,7 @@ time-varying load profiles, ramp constraints, and rich result queries.
 :shadow: sm
 
 Jointly optimize storage dispatch, CHP scheduling, and linepack usage over a
-full planning horizon - including rolling-horizon MPC.
+full planning horizon, including rolling-horizon MPC.
 :::
 
 :::{grid-item-card} Storage dispatch
@@ -85,7 +85,7 @@ schedule via `TimeseriesData` or let the optimizer choose the dispatch.
 :shadow: sm
 
 Drive a network step by step from an external co-simulation framework with
-`Stepper` - variable step sizes, data overrides, and persistent state.
+`Stepper`, using variable step sizes, data overrides, and persistent state.
 :::
 
 :::{grid-item-card} Diagnose infeasibility
@@ -93,7 +93,7 @@ Drive a network step by step from an external co-simulation framework with
 :link-type: doc
 :shadow: sm
 
-Find out *why* a solve failed: bound-violation reports, Pyomo
+Find out why a solve failed: bound-violation reports, Pyomo
 `InfeasibilityReport`, and GEKKO APM diagnostics.
 :::
 
@@ -121,7 +121,7 @@ grid to generate reproducible multi-energy test systems.
 :shadow: sm
 
 Import CIM/CGMES grid models and ESDL energy-system descriptions.
-*(Experimental - see the per-import transparency reports.)*
+*(Experimental: see the per-import transparency reports.)*
 :::
 
 :::{grid-item-card} Reference networks

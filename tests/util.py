@@ -32,13 +32,19 @@ def create_g2h_net():
     g_node_2 = pn.node(
         mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))], grid=gas_grid
     )
+    # Realistic gas main: 0.1 mm steel roughness over km-scale lengths. The old
+    # net used 100 m pipes with a 10 mm roughness - both unrealistic, and only
+    # well-conditioned for the (8x-inflated) pre-fix Weymouth drop. With the
+    # corrected coefficient a realistic roughness over km-scale lengths gives a
+    # drop large enough to keep the pressure<->flow coupling well-conditioned for
+    # the default IMODE=3 solve.
     pn.branch(
-        mm.GasPipe(diameter_m=0.3, length_m=100, temperature_ext_k=300, roughness_m=0.01),
+        mm.GasPipe(diameter_m=0.3, length_m=1000, temperature_ext_k=300, roughness_m=1e-4),
         g_node_0,
         g_node_1,
     )
     pn.branch(
-        mm.GasPipe(diameter_m=0.3, length_m=150, temperature_ext_k=300, roughness_m=0.01),
+        mm.GasPipe(diameter_m=0.3, length_m=1500, temperature_ext_k=300, roughness_m=1e-4),
         g_node_0,
         g_node_2,
     )

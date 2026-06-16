@@ -1,17 +1,17 @@
 monee.model.formulation
 =======================
 
-The package is organised by **optimization class** first, sector second:
+The package is organised by optimization class first, sector second:
 
-* :mod:`~monee.model.formulation.nlp` — smooth non-convex NLPs
-  (polar AC, smooth Weymouth, smooth Darcy–Weisbach) for IPOPT/APOPT.
-* :mod:`~monee.model.formulation.milp` — LP/MILP models (PWL Weymouth,
+* :mod:`~monee.model.formulation.nlp`: smooth non-convex NLPs
+  (polar AC, smooth Weymouth, smooth Darcy-Weisbach) for IPOPT/APOPT.
+* :mod:`~monee.model.formulation.milp`: LP/MILP models (PWL Weymouth,
   McCormick district heating, fixed-flow heat exchanger).
-* :mod:`~monee.model.formulation.miqcqp.convex` — certifiable relaxations
+* :mod:`~monee.model.formulation.miqcqp.convex`: certifiable relaxations
   (branch-flow MISOCP, epigraph-relaxed Weymouth).
-* :mod:`~monee.model.formulation.miqcqp.nonconvex` — exact quadratic models
+* :mod:`~monee.model.formulation.miqcqp.nonconvex`: exact quadratic models
   for global solvers (exact branch flow, exact Weymouth, bilinear
-  Darcy–Weisbach).
+  Darcy-Weisbach).
 
 Core
 ----
@@ -38,10 +38,11 @@ importable directly from ``monee.model.formulation``.
 Registry & solve-time attachment
 --------------------------------
 
-String shortcuts for the solve-call ``formulation=`` parameter
-(:data:`~monee.model.formulation.registry.FORMULATIONS`) and the
-:func:`~monee.model.formulation.registry.attach_formulations` pass the solver
-backends run on their network copy.
+Formulations belong to the solve, not to the network data. Each solver
+backend calls :func:`~monee.model.formulation.registry.attach_formulations`
+on its own network copy just before model assembly. Use the string keys in
+:data:`~monee.model.formulation.registry.FORMULATIONS` to pick a formulation
+without imports, for example ``solve(net, formulation="convex_miqcqp")``.
 
 .. automodule:: monee.model.formulation.registry
    :members:
@@ -76,7 +77,7 @@ Binary-free smooth Weymouth physics for pure-NLP solves (IPOPT/APOPT).
    :undoc-members:
    :show-inheritance:
 
-Smooth Darcy–Weisbach heat
+Smooth Darcy-Weisbach heat
 ~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 Binary-free smooth pipe and heat-exchanger formulations for pure-NLP solves.
@@ -148,7 +149,7 @@ Exact Weymouth gas
    :undoc-members:
    :show-inheritance:
 
-Bilinear Darcy–Weisbach heat
+Bilinear Darcy-Weisbach heat
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
 .. automodule:: monee.model.formulation.miqcqp.nonconvex.heat

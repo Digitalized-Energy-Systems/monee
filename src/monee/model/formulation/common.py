@@ -17,6 +17,12 @@ class GasNodeFormulation(NodeFormulation):
 
     ``pressure_squared_pu`` is the decision variable (Weymouth is linear in
     :math:`p^2`); ``pressure_pu`` is a reporting intermediate.
+
+    Pressure convention: the node pressure (and the reported ``pressure_pa``)
+    follows the grid's convention - it is ABSOLUTE when the gas grid's
+    ``pressure_ambient_pa`` is 0 (the default) and GAUGE when it is set (e.g. to
+    ``STANDARD_ATMOSPHERE_PA``). In gauge mode the Weymouth/density physics add
+    the ambient internally; only the reported value stays gauge.
     """
 
     def ensure_var(self, model, simulation=False, grid=None):

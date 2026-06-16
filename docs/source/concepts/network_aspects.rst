@@ -2,11 +2,10 @@
 Network aspects
 ================
 
-A **NetworkAspect** is a solver-agnostic plug-in that extends a network with
-additional variables and constraints without modifying any existing model class.
-It operates at the *network level* rather than the component level, making it
-the right tool whenever a feature spans multiple components or requires
-coordination across the entire topology.
+A NetworkAspect is a solver-agnostic plug-in that adds variables and constraints
+to a network without modifying any existing model class. It works at the network
+level rather than the component level. Reach for one whenever a feature spans
+multiple components or needs coordination across the whole topology.
 
 .. grid:: 1 2 2 3
    :gutter: 3
@@ -14,25 +13,25 @@ coordination across the entire topology.
    .. grid-item-card:: Islanding
       :shadow: sm
 
-      Binary connectivity variables + flow constraints that restore feasibility
-      when the network splits into electrically isolated islands.
+      Binary connectivity variables and flow constraints that restore
+      feasibility when the network splits into electrically isolated islands.
 
    .. grid-item-card:: Lumped Thermal Capacitance
       :shadow: sm
 
-      Thermal inertia in district heating junctions - slows temperature
+      Thermal inertia in district heating junctions: slows temperature
       propagation between consecutive timesteps.
 
    .. grid-item-card:: Gas Linepack
       :shadow: sm
 
-      Stored gas mass in pipeline segments - enables the pipeline itself to
+      Stored gas mass in pipeline segments: enables the pipeline itself to
       act as a short-term storage buffer.
 
    .. grid-item-card:: Your extension
       :shadow: sm
 
-      Subclass :class:`~monee.model.formulation.core.NetworkAspect`, implement
+      Subclass :class:`~monee.model.extension.core.NetworkAspect`, implement
       the phases you need, and call ``network.add_extension()``.
 
 ----
@@ -41,17 +40,17 @@ Why not a formulation?
 ======================
 
 Formulations (:class:`~monee.model.formulation.core.BranchFormulation`,
-:class:`~monee.model.formulation.core.NodeFormulation`, …) define *how a single
-component type behaves* - the equations for a gas pipe, the variables for a
-bus.  A ``NetworkAspect`` is different:
+:class:`~monee.model.formulation.core.NodeFormulation`, …) define how a single
+component type behaves: the equations for a gas pipe, the variables for a bus.
+A ``NetworkAspect`` is different:
 
-* It touches **many components at once** (e.g. all water junctions).
-* It needs to **inject variables onto existing models** that were not designed
-  for the feature (e.g. adding a ``linepack_kg`` variable to every
-  ``GasPipe`` that carries linepack).
-* It may need to **activate or suppress behaviour conditionally** - for
-  example, replacing the static ``to_mass_flow_kgs == from_mass_flow_kgs`` constraint
-  with a dynamic balance only when a timeseries solve is running.
+* It touches many components at once (for example, all water junctions).
+* It injects variables onto existing models that were not designed for the
+  feature, such as adding a ``linepack_kg`` variable to every ``GasPipe`` that
+  carries linepack.
+* It can activate or suppress behaviour conditionally. Gas linepack, for
+  instance, pins its net mass change to zero in a steady-state solve and lets a
+  dynamic balance govern it only when a timeseries solve is running.
 
 ----
 
@@ -60,45 +59,34 @@ The four phases
 
 Every ``NetworkAspect`` participates in up to four phases of the solver pipeline:
 
-.. code-block:: text
+.. mermaid::
 
-   solver.solve(net, ...)
-   │
-   ├── [Phase 0]  prepare(network)
-   │     ↳ Inject Var placeholders onto existing models.
-   │       Called before variable injection so the solver loop picks them up.
-   │
-   ├── [Phase 1a] activate_timeseries(network, ignored_nodes, step_state)
-   │     ↳ Set flags / warm-start values before equation assembly.
-   │       Only called for timeseries / multi-period solves.
-   │
-   ├── [Phase 1b] equations(network, ignored_nodes)
-   │     ↳ Return static constraints added to every solve.
-   │
-   └── [Phase 1c] inter_temporal_equations(network, ignored_nodes, state)
-                  inter_step_equations(...)      # timeseries only
-                  inter_period_equations(...)    # multi-period only
-         ↳ Return time-coupling constraints.
+   flowchart LR
+       P0["Phase 0<br/>prepare"]
+       P1a["Phase 1a<br/>activate timeseries"]
+       P1b["Phase 1b<br/>equations"]
+       P1c["Phase 1c<br/>time coupling"]
+       P0 --> P1a --> P1b --> P1c
 
-Only implement the phases you need - every phase has a no-op default.
+Only implement the phases you need; every phase has a no-op default.
 
 ----
 
 Minimal example
 ===============
 
-A one-file aspect that adds a global pressure-drop monitoring variable to all
-gas junctions and reports the spread:
+A one-file aspect that adds a pressure-spread variable to every gas junction and
+bounds it against a reference junction:
 
 .. testcode::
 
    import monee.model as mm
    import monee.express as mx
-   from monee.model.formulation.core import NetworkAspect
+   from monee.model.extension.core import NetworkAspect
    from monee.model.core import Var
 
    class PressureSpreadAspect(NetworkAspect):
-       """Adds a ``p_spread_pu`` Var that the solver minimises."""
+       """Adds a ``p_spread_pu`` Var bounded against a reference junction."""
 
        def prepare(self, network) -> None:
            for node in network.nodes:
@@ -126,8 +114,8 @@ gas junctions and reports the spread:
 Temporal phases in detail
 =========================
 
-The three temporal methods share the same ``InterStepState`` interface but are
-called in different contexts:
+All three temporal methods share the same ``InterStepState`` interface but run
+in different contexts:
 
 .. list-table::
    :header-rows: 1
@@ -137,8 +125,8 @@ called in different contexts:
      - Called by
      - Typical use
    * - ``inter_temporal_equations``
-     - timeseries **and** multi-period
-     - Storage SoC, linepack balance, LTC - anything that should work in both
+     - timeseries and multi-period
+     - Storage SoC, linepack balance, LTC: anything that should work in both
    * - ``inter_step_equations``
      - timeseries only
      - Logic that only makes sense step-by-step (e.g. clamp from a controller)
@@ -157,7 +145,7 @@ The ``temporal_state`` argument implements
    # In a multi-period solve: temporal_state is PeriodState
    #   → .get() returns a live solver variable (GEKKO GKVariable / Pyomo Var)
    #
-   # Both expose the same .get() and .dt_h API - your code is identical.
+   # Both expose the same .get() and .dt_h API, so your code is identical.
 
    def inter_temporal_equations(self, network, ignored_nodes, temporal_state):
        eqs = []
@@ -177,8 +165,8 @@ The ``temporal_state`` argument implements
 Registering an aspect
 =====================
 
-Aspects are registered on the network before the first solve and persist
-across all subsequent single-step, timeseries, and multi-period solves:
+Register aspects on the network before the first solve. They persist across all
+later single-step, timeseries, and multi-period solves:
 
 .. testcode::
 
@@ -210,7 +198,7 @@ across all subsequent single-step, timeseries, and multi-period solves:
 
    2
 
-Multiple aspects compose without conflict - each operates on its own
+Multiple aspects compose without conflict; each operates on its own
 variable subset.
 
 ----
@@ -251,4 +239,4 @@ See also
       :shadow: sm
 
       How ``PeriodState`` replaces ``StepState`` in a single-shot joint
-      solve - and why existing aspect code works unchanged.
+      solve, and why existing aspect code works unchanged.

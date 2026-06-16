@@ -1,7 +1,7 @@
 
 # Concepts
 
-These pages explain the ideas and architecture behind monee - from how
+These pages explain the ideas and architecture behind monee, from how
 networks are represented in memory to the physical equations used for each
 energy carrier and the solver interfaces that bring it all together.
 
@@ -14,7 +14,7 @@ energy carrier and the solver interfaces that bring it all together.
 :shadow: sm
 
 How monee represents networks as directed graphs: nodes, branches, children,
-grids, variables, and parameters - and how to build custom components.
+grids, variables, and parameters, and how to build custom components.
 :::
 
 :::{grid-item-card} Physical models
@@ -22,8 +22,8 @@ grids, variables, and parameters - and how to build custom components.
 :link-type: doc
 :shadow: sm
 
-The steady-state equations for **electricity** (AC power flow), **gas**
-(Weymouth), and **water / heat** (Darcy–Weisbach) networks.
+The steady-state equations for electricity (AC power flow), gas
+(Weymouth), and water / heat (Darcy-Weisbach) networks.
 :::
 
 :::{grid-item-card} Multi-energy coupling
@@ -31,8 +31,8 @@ The steady-state equations for **electricity** (AC power flow), **gas**
 :link-type: doc
 :shadow: sm
 
-All built-in coupling components - P2H, P2G, G2P, G2H, CHP, and heat
-exchanger - and how to dispatch them in an optimisation.
+All built-in coupling components (P2H, P2G, G2P, G2H, CHP, and heat
+exchanger) and how to dispatch them in an optimisation.
 :::
 
 :::{grid-item-card} Formulations
@@ -49,8 +49,8 @@ built-in formulations ship with monee, and how to write a custom one.
 :link-type: doc
 :shadow: sm
 
-GEKKO vs Pyomo: capabilities, limitations, and guidance on choosing the
-right back-end for each type of problem.
+The CasADi, GEKKO, and Pyomo back-ends: capabilities, limitations, and
+guidance on choosing the right one for each type of problem.
 :::
 
 :::{grid-item-card} Islanding
@@ -85,7 +85,7 @@ and terminal state constraints.
 :link-type: doc
 :shadow: sm
 
-The general plug-in mechanism - inject variables and equations across the
+The general plug-in mechanism: inject variables and equations across the
 whole network. Used by islanding, thermal capacitance, and linepack.
 :::
 
@@ -94,7 +94,7 @@ whole network. Used by islanding, thermal capacitance, and linepack.
 :link-type: doc
 :shadow: sm
 
-`LumpedThermalCapacitance` and `GasLinepack` - step-by-step walkthroughs
+`LumpedThermalCapacitance` and `GasLinepack`: step-by-step walkthroughs
 with physics background and visualisation code.
 :::
 

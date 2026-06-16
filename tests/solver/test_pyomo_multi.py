@@ -92,7 +92,7 @@ def create_multi_chp():
     )
 
     # GAS
-    gas_grid = mm.create_gas_grid("gas", type="lgas")
+    gas_grid = mm.create_gas_grid("gas", type="methane")
     g_node_0 = pn.node(
         mm.Junction(),
         child_ids=[pn.child(mm.Source(mass_flow_kgs=0.1))],

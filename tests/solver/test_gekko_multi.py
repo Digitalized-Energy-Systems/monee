@@ -41,7 +41,7 @@ def create_two_line_example_with_2_pipe_example_p2g(source_flow=0.1):
     )
 
     # GAS
-    gas_grid = mm.create_gas_grid("gas", type="lgas")
+    gas_grid = mm.create_gas_grid("gas", type="methane")
     g_node_0 = pn.node(
         mm.Junction(),
         child_ids=[pn.child(mm.Source(mass_flow_kgs=source_flow))],

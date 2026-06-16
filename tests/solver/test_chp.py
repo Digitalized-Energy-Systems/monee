@@ -2,9 +2,17 @@
 
 import math
 
+import monee.express as mx
 import monee.model as mm
 import monee.solver as ms
-from monee.model.formulation import EL_MISOCP_FORMULATION
+from monee import run_energy_flow
+from monee.model.formulation import (
+    EL_MISOCP_FORMULATION,
+    EL_NLP_FORMULATION,
+    make_gas_nlp_formulation,
+    make_heat_nlp_formulation,
+)
+from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
 
 
 def _build_chp_network(
@@ -35,7 +43,7 @@ def _build_chp_network(
     pn.branch(mm.WaterPipe(diameter_m=0.15, length_m=200), w3, w2)
 
     # Gas grid
-    gas_grid = mm.create_gas_grid("gas", type="lgas")
+    gas_grid = mm.create_gas_grid("gas", type="methane")
     g0 = pn.node(
         mm.Junction(), grid=gas_grid, child_ids=[pn.child(mm.Source(mass_flow_kgs=1))]
     )
@@ -104,13 +112,16 @@ def _build_chp_network(
 
 
 def test_chp_basic_solve():
-    """Solve with Pyomo MISOCP and verify voltages, power direction, thermal output, and gas pressures."""
+    # GIVEN
     net = _build_chp_network()
     net.apply_formulation(EL_MISOCP_FORMULATION)
+    
+    # WHEN
     result = ms.PyomoSolver().solve(net)
 
+    # THEN
+    print(result)
     assert result.success
-
     assert len(result.dataframes) == 15
 
     bus_df = result.dataframes["Bus"]
@@ -135,10 +146,10 @@ def test_chp_basic_solve():
     # because the CHP heats water flowing through its SubHE from w1 to w2
     t_supply = jct_df["t_k"].iloc[1]
     t_return = jct_df["t_k"].iloc[2]
+    # Supply = ingoing flow, so its heated to the outflow = Return
     assert t_supply < t_return
     assert 330 < t_supply < 400
     assert 330 < t_return < 400
-
     # Gas pressures near 1.0 pu
     assert all(0.99 < p <= 1.01 for p in jct_df["pressure_pu"] if p > 0)
 

@@ -13,6 +13,7 @@ from monee.model.child import ExtHydrGrid, ExtPowerGrid, PowerLoad, Sink
 from monee.model.grid import PowerGrid
 from monee.model.node import Bus, Junction
 from monee.simulation.timeseries import StepHook, StepResult, TimeseriesData, run
+from monee.solver import GEKKOSolver
 
 
 def _el_net(load_p_mw=1.0, load_name="load"):
@@ -421,9 +422,12 @@ def test_on_step_error_raise_is_default(monkeypatch):
         _make_failing_solve(2, "solver exploded"),
     )
 
-    # WHEN / THEN
+    # WHEN / THEN  (pin a non-CasADi solver so the per-step loop - which calls
+    # the monkeypatched ``solve`` - runs, rather than the CasADi build-once fast
+    # path, which bypasses ``solve``; the error-handling contract under test is
+    # backend-independent).
     with pytest.raises(RuntimeError, match="solver exploded"):
-        run(net, td)
+        run(net, td, solver=GEKKOSolver())
 
 
 def test_on_step_error_skip_records_failure(monkeypatch):
@@ -436,8 +440,8 @@ def test_on_step_error_skip_records_failure(monkeypatch):
         _make_failing_solve(2, "step 1 failed"),
     )
 
-    # WHEN
-    result = run(net, td, on_step_error="skip")
+    # WHEN  (per-step loop, see test_on_step_error_raise_is_default)
+    result = run(net, td, on_step_error="skip", solver=GEKKOSolver())
 
     # THEN
     assert result.failed_steps == [1]
@@ -457,8 +461,8 @@ def test_on_step_error_skip_step_result_has_error(monkeypatch):
         lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("bad")),
     )
 
-    # WHEN
-    result = run(net, td, on_step_error="skip")
+    # WHEN  (per-step loop, see test_on_step_error_raise_is_default)
+    result = run(net, td, on_step_error="skip", solver=GEKKOSolver())
 
     # THEN
     sr = result.step_results[0]

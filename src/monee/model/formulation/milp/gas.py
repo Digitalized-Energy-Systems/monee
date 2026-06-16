@@ -11,14 +11,11 @@ from ..core import BranchFormulation
 def _pwl_m_max(model, grid) -> float:
     """Per-pipe mass-flow cap: grid max_mass_flow_kgs tightened by the velocity_mps bound at
     reference-pressure density."""
-    gas_density_kg_per_m3 = (
-        grid.pressure_ref_pa * grid.molar_mass / (grid.universal_gas_constant * grid.t_k)
-    )
     return min(
         grid.max_mass_flow_kgs,
         hydraulicsmodel.calc_max_mass_flow(
             model.diameter_m,
-            gas_density_kg_per_m3,
+            ogfmodel.reference_gas_density(grid),
             getattr(grid, "v_max_mps", 20.0),
         ),
     )
@@ -94,6 +91,22 @@ class PwlWeymouthBranchFormulation(BranchFormulation):
             branch.length_m,
             grid.t_k,
             grid.compressibility,
+            grid.universal_gas_constant / grid.molar_mass,
+        )
+
+        p_amb = getattr(grid, "pressure_ambient_pa", 0.0)
+        # ABSOLUTE squared-pressure difference (per-unit): gauge psq difference
+        # plus the gauge->absolute term. In gauge mode the offset uses the
+        # LINEARIZED pressure p_from/p_to (affine in pressure_squared_pu, the same
+        # linearization used for the density) so the equation stays linear; a
+        # no-op when p_amb = 0.
+        abs_psq_diff = ogfmodel.abs_psq_diff_pu(
+            from_node_model.vars["pressure_squared_pu"],
+            to_node_model.vars["pressure_squared_pu"],
+            p_from,
+            p_to,
+            p_amb,
+            grid.pressure_ref_pa,
         )
 
         return [
@@ -103,8 +116,8 @@ class PwlWeymouthBranchFormulation(BranchFormulation):
             branch.mass_flow_pos_kgs <= m_max * branch.on_off,
             branch.mass_flow_neg_kgs <= m_max * branch.on_off,
             #
-            (from_node_model.vars["pressure_squared_pu"] - to_node_model.vars["pressure_squared_pu"]) * grid.pressure_ref_pa**2 * C_sq * branch.on_off
+            abs_psq_diff * grid.pressure_ref_pa**2 * C_sq * branch.on_off
             == branch.phi_pwl_neg - branch.phi_pwl_pos,
             #
-            branch.gas_density_kg_per_m3 == grid.pressure_ref_pa * p_avg * grid.molar_mass / (grid.universal_gas_constant * grid.t_k),
+            branch.gas_density_kg_per_m3 == (grid.pressure_ref_pa * p_avg + p_amb) * grid.molar_mass / (grid.universal_gas_constant * grid.t_k),
         ]

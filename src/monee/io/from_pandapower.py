@@ -1,10 +1,11 @@
 import copy
+import json
 import math
 import os
 import tempfile
 import uuid
 
-import pandapower.converter as pc
+from pandapower.converter.matpower import to_mpc
 
 from monee.model.child import PowerGenerator, PowerLoad
 
@@ -168,6 +169,66 @@ def _attach_sgens(monee_net, sgens, bus_to_node):
         )
 
 
+def _strip_transformer_vector_group_shifts(monee_net):
+    """Zero the phase ``shift`` on imported transformer branches.
+
+    pandapower models a transformer's winding vector group as a phase shift (a
+    multiple of 30°, e.g. Dyn5 = 150°). pandapower **3.x** applies that shift in
+    its power-flow model and ``to_mpc`` exports it; pandapower **2.x** dropped it
+    (exported ``shift = 0``). The two are otherwise byte-identical - same r/x/b,
+    same nodal injections (verified against each version's own solved ``_ppc``;
+    ``to_mpc`` is faithful in both, so this is a pandapower transformer-model
+    change, not an export bug).
+
+    For monee's single-reference PQ/slack distribution power flow a vector-group
+    shift is a pure *reference rotation*: it offsets every downstream bus angle
+    by the same constant and leaves all reported magnitudes (voltages, branch
+    flows, |currents|) unchanged. But a lone 150° jump across one branch, with
+    the rest of the grid at 0°, wrecks the conditioning of the flat-start NLP -
+    the IPOPT/CasADi solve collapses onto the spurious low-voltage root (GEKKO's
+    square Newton solve tolerates it; the default in-process CasADi backend does
+    not). Lines never carry a shift, so zeroing every non-zero branch shift
+    normalises exactly the transformer vector groups - reproducing monee's
+    pre-pandapower-3 behaviour while keeping every magnitude identical to
+    pandapower's own solution.
+    """
+    for branch in monee_net.branches:
+        shift = getattr(branch.model, "shift", None)
+        if shift is None:
+            continue
+        try:
+            shift_val = float(shift)
+        except (TypeError, ValueError):
+            continue
+        if abs(shift_val) > 1e-9:
+            branch.model.shift = 0.0
+
+
+def _bus_position(net, pp_id):
+    """``(x, y)`` for the pandapower bus at positional index ``pp_id``, or ``None``.
+
+    pandapower 3.x stores bus coordinates as a GeoJSON ``Point`` string in
+    ``net.bus['geo']`` (``{"coordinates": [x, y], "type": "Point"}``); 2.x kept
+    them in a separate ``net.bus_geodata`` frame. Support both so the bridge is
+    not pinned to one pandapower major.
+    """
+    if "geo" in net.bus.columns:
+        geo = net.bus["geo"].iloc[pp_id]
+        if not isinstance(geo, str):  # None / NaN -> no coordinates
+            return None
+        try:
+            coords = json.loads(geo)["coordinates"]
+        except (ValueError, KeyError, TypeError):
+            return None
+        return (coords[0], coords[1])
+    if hasattr(net, "bus_geodata") and len(net.bus_geodata) > pp_id:
+        return (
+            net.bus_geodata["x"].iloc[pp_id],
+            net.bus_geodata["y"].iloc[pp_id],
+        )
+    return None
+
+
 def from_pandapower_net(net):
     # Import sgens as distinct PowerGenerators instead of letting to_mpc fold
     # them into each bus's net injection (see _extract_sgens). Works on the
@@ -178,17 +239,15 @@ def from_pandapower_net(net):
     # pollutes the caller's working directory.
     with tempfile.TemporaryDirectory() as tmp_dir:
         name_file = os.path.join(tmp_dir, f"{uuid.uuid4()}.mat")
-        pc.to_mpc(net, init="flat", filename=name_file)
+        to_mpc(net, init="flat", filename=name_file)
         monee_net = read_matpower_case(name_file)
     for node in monee_net.nodes:
         pp_id = node.id - 1
         if len(net.bus) > pp_id:
             node.name = net.bus["name"].iloc[pp_id]
-            if hasattr(net, "bus_geodata"):
-                node.position = (
-                    net.bus_geodata["x"].iloc[pp_id],
-                    net.bus_geodata["y"].iloc[pp_id],
-                )
+            position = _bus_position(net, pp_id)
+            if position is not None:
+                node.position = position
 
     # Recover max_i_ka from pandapower (dropped by the matpower roundtrip).
     overrides = _pp_branch_max_i_ka_overrides(net)
@@ -199,6 +258,11 @@ def from_pandapower_net(net):
             bid = (branch.from_node_id, branch.to_node_id, branch.id[2])
             if bid in overrides:
                 branch.model.max_i_ka = overrides[bid]
+
+    # Normalise transformer vector-group phase shifts (pandapower 3.x exports
+    # them where 2.x didn't); a lone 150° shift across one branch otherwise
+    # collapses the flat-start AC NLP onto the spurious low-voltage root.
+    _strip_transformer_vector_group_shifts(monee_net)
 
     # pandapower bus -> monee node id, accounting for bus fusion in to_mpc.
     bus_to_node = _pp_bus_to_node_id(net)

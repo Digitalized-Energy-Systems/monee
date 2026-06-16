@@ -1,10 +1,8 @@
 
 # Solve islanded networks
 
-This guide shows how to enable islanding for one or more carriers so that a
-network with multiple disconnected islands converges correctly.
-
-For background on the formulation see {doc}`../concepts/islanding`.
+Enable islanding for one or more carriers so a network with disconnected
+islands converges. For the formulation, see {doc}`../concepts/islanding`.
 
 ---
 
@@ -12,12 +10,12 @@ For background on the formulation see {doc}`../concepts/islanding`.
 
 * monee installed with a MIP-capable solver (GEKKO or Pyomo + HiGHS / CBC /
   Gurobi).
-* A `Network` object with at least one junction that has no reachable path to
-  the external grid - i.e. a second island.
+* A `Network` with at least one node that has no reachable path to the external
+  grid, that is, a second island.
 
 ---
 
-## Quick start - electricity
+## Quick start: electricity
 
 ```python
 import monee as mn
@@ -48,8 +46,8 @@ print(result)
 ```
 
 `enable_islanding` returns a `NetworkIslandingConfig` and registers it on the
-network.  The solver picks it up automatically when `run_energy_flow` (or
-`solve`) is called.
+network. The solver picks it up automatically when `run_energy_flow` (or
+`solve`) runs.
 
 ---
 
@@ -73,9 +71,9 @@ mn.enable_islanding(
 )
 ```
 
-`angle_bound` (in radians) caps the voltage angle on energised buses.  The
+`angle_bound` (in radians) caps the voltage angle on energised buses. The
 big-M constant of the connectivity-flow constraints is sized automatically
-from the number of nodes in the network - you do not need to tune it.
+from the node count, so you do not need to tune it.
 
 ---
 
@@ -93,8 +91,8 @@ result = mn.run_energy_flow(net)
 ```
 
 The source pins the junction pressure to `pressure_pu` (like `ExtHydrGrid`)
-and exposes a variable `mass_flow_kgs` that absorbs the island's supply–demand
-imbalance.
+and exposes a `mass_flow_kgs` variable that absorbs the island's supply and
+demand imbalance.
 
 For water/heat networks use `mx.create_water_grid_forming_source` identically:
 
@@ -105,7 +103,7 @@ mn.enable_islanding(net, water=True)
 
 ---
 
-## Express API reference - islanding components
+## Express API reference: islanding components
 
 | Function | Carrier | Description |
 |---|---|---|
@@ -135,7 +133,7 @@ print(src_df[["mass_flow_kgs"]])
 
 ## Choosing the right solver
 
-Islanding adds binary variables, making the problem a **MILP / MIQP**.  Both
+Islanding adds binary variables, making the problem a MILP or MIQP. Both
 back-ends support this:
 
 | Solver | Notes |
@@ -151,28 +149,23 @@ result = mn.run_energy_flow(net, solver=mn.PyomoSolver(solver_name="highs"))
 
 ## Common pitfalls
 
-**Island not detected - bus still ignored**
+**Island not detected, bus still ignored.** Check that the island's
+grid-forming child inherits `GridFormingMixin` and is marked `active=True`.
+`ExtPowerGrid`, `ExtHydrGrid`, `GridFormingGenerator`, and `GridFormingSource`
+all qualify automatically. A custom component must inherit `GridFormingMixin`
+explicitly.
 
-Check that the island's grid-forming child inherits `GridFormingMixin` and
-is marked `active=True`.  `ExtPowerGrid`, `ExtHydrGrid`, `GridFormingGenerator`,
-and `GridFormingSource` all qualify automatically.  A custom component must
-explicitly inherit `GridFormingMixin`.
+**All energization variables are zero.** The big-M is sized automatically from
+the node count, so an all-zero solution is never a tuning issue. Check instead
+that an `active` grid-forming child exists in each island, and that the back-end
+is MIP-capable. The energization variables `e_*` are binary, so use GEKKO
+(APOPT) or Pyomo with `highs`, `cbc`, `gurobi`, or `scip`.
 
-**All energization variables are zero**
+**Islanding lost after saving and loading.** The islanding configuration is
+registered as a network extension and is not persisted by
+{mod}`monee.io.native`. Call `enable_islanding` again after loading a network
+from JSON.
 
-The big-M of the connectivity constraints is sized automatically from the
-node count, so an all-zero solution is never a tuning issue.  Check instead
-that a grid-forming child exists and is `active` in each island, and that the
-back-end is MIP-capable - the energization variables `e_*` are binary, so use
-GEKKO (APOPT) or Pyomo with `gurobi` or `scip`.
-
-**Islanding lost after saving and loading**
-
-The islanding configuration is registered as a network extension and is not
-persisted by {mod}`monee.io.native`.  Call `enable_islanding` again after
-loading a network from JSON.
-
-**Solver does not support integers**
-
-Some Pyomo solver interfaces (e.g. IPOPT) do not support integer variables and
-will raise an error.  Switch to HiGHS, CBC, or Gurobi.
+**Solver does not support integers.** Some Pyomo solver interfaces (for example
+IPOPT) reject integer variables and raise an error. Switch to HiGHS, CBC, or
+Gurobi.

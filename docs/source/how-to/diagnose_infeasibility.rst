@@ -4,13 +4,12 @@ Diagnose infeasible and failed solves
 
 A solve can fail for many reasons: an over-constrained optimisation problem,
 a disconnected island without a slack, bounds that exclude the only physical
-solution, or a solver that simply runs out of iterations. monee ships
-structured **infeasibility diagnostics** for both back-ends that turn a bare
-"Solution Not Found" into a ranked list of violated constraints and variables
-with their values and bounds - translated back to monee component names.
+solution, or a solver that runs out of iterations. monee turns a bare
+"Solution Not Found" into a ranked list of violated constraints and variables,
+each with its value and bounds, translated back to monee component names.
 
-This page shows what to check first, and how to read the diagnostic reports
-produced by the Pyomo and GEKKO back-ends.
+This page shows what to check first, then how to read the diagnostic reports
+from the Pyomo and GEKKO back-ends.
 
 ----
 
@@ -29,17 +28,17 @@ reaching for the back-end-specific reports, inspect three fields:
     result.mode_used    # "simulation" | "optimization" | None (Pyomo)
 
 ``result.violations`` lists every variable whose solved value lies outside
-its declared bounds by more than ``1e-6`` - for example
+its declared bounds by more than ``1e-6``. For example
 ``{"Bus.4.vm_pu": 0.0123}`` means the voltage magnitude at bus 4 exceeds its
-bound by 0.0123 p.u. The dict is also printed at the bottom of
-``repr(result)``, so violations are visible in any summary printout. A
-"successful" solve with non-empty violations usually means the solver
-converged to a point that only *barely* satisfies the constraints, or that a
-relaxation left bound noise behind - treat it as a warning sign.
+bound by 0.0123 p.u. The dict also prints at the bottom of ``repr(result)``,
+so violations show up in any summary printout. A successful solve with
+non-empty violations is a warning sign: the solver converged to a point that
+only barely satisfies the constraints, or a relaxation left bound noise
+behind.
 
-``result.mode_used`` tells you which solve path actually ran. When you
-request a simulation (square steady-state solve) but the model is not square,
-the GEKKO back-end silently falls back to optimisation mode -
+``result.mode_used`` tells you which solve path actually ran. When you request
+a simulation (a square steady-state solve) but the model is not square, the
+GEKKO back-end silently falls back to optimisation mode. A
 ``mode_used == "optimization"`` is the signal that this happened.
 
 Two modelling mistakes cause the vast majority of infeasible solves:
@@ -48,10 +47,11 @@ Two modelling mistakes cause the vast majority of infeasible solves:
 
    **Disconnected nodes.** Buses or junctions that are topologically
    disconnected (e.g. because a line or pipe is deactivated) have no path to
-   any slack and make the whole system unsolvable. Pass
-   ``exclude_unconnected_nodes=True`` to the solve call so disconnected
-   components are excluded automatically - see
-   :doc:`load_shedding` for details on how excluded components are reported.
+   any slack and make the whole system unsolvable. Plain energy-flow solves
+   exclude such components automatically. For optimisation solves, attach an
+   islanding config (see :doc:`islanding`), the preferred mechanism, or pass
+   the legacy ``exclude_unconnected_nodes=True`` flag to the solve call. See
+   :doc:`load_shedding` for how excluded components are reported.
 
 .. note::
 
@@ -66,9 +66,9 @@ Two modelling mistakes cause the vast majority of infeasible solves:
 Pyomo back-end
 ==============
 
-When a Pyomo solve terminates as *infeasible*, the
-:class:`~monee.solver.PyomoSolver` **automatically** runs the diagnostics and
-attaches the report to the result:
+When a Pyomo solve terminates as infeasible, the
+:class:`~monee.solver.PyomoSolver` runs the diagnostics and attaches the
+report to the result:
 
 .. code-block:: python
 
@@ -101,11 +101,11 @@ your console even if you never touch the result object.
      - Variables whose value violates their declared bounds, sorted by
        violation magnitude.
    * - ``variables_at_bounds``
-     - Variables sitting *exactly on* a bound (within tolerance) - these are
-       the active bounds, often the ones to relax.
+     - Variables sitting on a bound (within tolerance); these are the active
+       bounds, often the ones to relax.
    * - ``mis_constraints``
-     - The constraints and variable bounds forming a **Minimal Infeasible
-       Subsystem** (MIS): a smallest set that is infeasible on its own.
+     - The constraints and variable bounds forming a Minimal Infeasible
+       Subsystem (MIS): a smallest set that is infeasible on its own.
    * - ``summary(max_items=10)``
      - Human-readable report of all of the above (``str(report)`` gives the
        same output).
@@ -124,7 +124,7 @@ example in a custom solver workflow), build the same report yourself:
         pm,                     # the Pyomo ConcreteModel after a failed solve
         solver_name="scip",     # used for the MIS computation
         tol=1e-4,               # residual / bound tolerance
-        compute_mis_flag=True,  # MIS analysis is slow - disable for speed
+        compute_mis_flag=True,  # MIS analysis is slow; disable for speed
     )
     print(report.summary())
 
@@ -147,8 +147,8 @@ The individual primitives are also exported from :mod:`monee.solver`:
 
 .. note::
 
-   The MIS computation requires **SCIP, Gurobi, or CPLEX** and runs a series
-   of auxiliary solves; each internal solve is capped at **10 seconds** so a
+   The MIS computation requires SCIP, Gurobi, or CPLEX and runs a series
+   of auxiliary solves; each internal solve is capped at 10 seconds so a
    hard MIS computation cannot stall your script. On large models, pass
    ``compute_mis_flag=False`` and start from the constraint residuals
    instead.
@@ -168,12 +168,11 @@ translates them back to readable component descriptions:
 Time limits and other non-OK statuses
 -------------------------------------
 
-Only *infeasible* terminations trigger a report. Other non-OK outcomes -
-most commonly a time limit reached with a feasible incumbent - are treated
-as **success with a warning** ("using witness solution"): the result carries
-the best solution found so far, ``result.success`` is ``True``, and no
-report is attached. Check the log for the warning if your objective value
-looks suboptimal.
+Only infeasible terminations trigger a report. Other non-OK outcomes, most
+commonly a time limit reached with a feasible incumbent, count as success with
+a warning ("using witness solution"): the result carries the best solution
+found so far, ``result.success`` is ``True``, and no report is attached. Check
+the log for the warning if your objective value looks suboptimal.
 
 ----
 
@@ -183,7 +182,7 @@ GEKKO back-end
 APMonitor (the engine behind GEKKO) normally fails with nothing more than
 ``@error: Solution Not Found``. monee instead parses the artifacts APMonitor
 leaves in its run directory (``infeasibilities.txt``, ``results.json``) and
-raises a :class:`~monee.solver.GekkoSolveError` - a ``RuntimeError`` subclass
+raises a :class:`~monee.solver.GekkoSolveError` (a ``RuntimeError`` subclass)
 whose ``.report`` attribute carries the full diagnosis:
 
 .. code-block:: python
@@ -212,7 +211,7 @@ also logged at ``ERROR`` level.
      - The raw error message from GEKKO/APMonitor.
    * - ``infeasible_equations``
      - The equations APMonitor flagged as possibly infeasible at the final
-       iterate, ranked by infeasibility magnitude - each with the involved
+       iterate, ranked by infeasibility magnitude, each with the involved
        variables (value, bounds, marginal).
    * - ``bound_violations``
      - Variables whose failed-iterate value violates their declared bounds.
@@ -229,18 +228,18 @@ per-variable listings.
 
 .. note::
 
-   GEKKO diagnostics are **best-effort**: they require the run-directory
-   artifacts of a *local* solve. :class:`~monee.solver.GEKKOSolver` always
-   solves locally, but if you call the lower-level
+   GEKKO diagnostics are best-effort: they need the run-directory artifacts of
+   a local solve. :class:`~monee.solver.GEKKOSolver` always solves locally, but
+   if you call the lower-level
    :func:`~monee.solver.diagnose_gekko_infeasibility` on a remote GEKKO
-   instance, no artifacts exist and it returns ``None`` instead of a report;
-   the diagnosis itself never raises. When no report can be built, the
-   original GEKKO exception propagates unchanged.
+   instance, no artifacts exist and it returns ``None`` instead of a report.
+   The diagnosis itself never raises. When no report can be built, the original
+   GEKKO exception propagates unchanged.
 
 Even on failure, the partial final iterate is written back to the input
-network as a warm start - so after fixing the modelling issue (relaxing a
-bound, adding a slack), the next solve resumes from where the failed one
-stopped instead of starting cold.
+network as a warm start. After you fix the modelling issue (relax a bound, add
+a slack), the next solve resumes from where the failed one stopped instead of
+starting cold.
 
 ----
 

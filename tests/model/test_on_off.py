@@ -112,8 +112,10 @@ def test_on_off_gas():
         constraints=[my_constraint],
     )
 
-    # WHEN
-    result = run_energy_flow(net)
+    # WHEN  (integer line switching needs an integer-aware solver, as in
+    # test_on_off_el; the default IPOPT backend - CasADi or GEKKO - relaxes the
+    # binary, so on_off would not come back exactly 0/1.)
+    result = run_energy_flow(net, solver="apopt")
     print(result)
 
     # THEN

@@ -44,6 +44,34 @@ def value(var_or_const):
     return var_or_const
 
 
+def set_initial_value(var, value) -> None:
+    """Seed a variable's initial guess / warm start, backend-agnostically.
+
+    A model attribute may be a monee :class:`Var` *or*, once a backend has run
+    ``inject_vars`` (e.g. in ``activate_timeseries``), the backend's own variable
+    object. monee ``Var`` / GEKKO ``GKVariable`` / Pyomo ``Var`` all expose a
+    settable ``value``; gurobipy ``Var`` instead carries its warm start in
+    ``Start`` (and has no ``value``, so ``var.value = ...`` raises). Duck-type on
+    the available attribute so callers in the model layer never need to know
+    which solver backend is active.
+
+    A backend symbol that seeds its warm start elsewhere (e.g. the CasADi
+    ``CasSym``, which captures ``x0`` at ``inject_vars`` time and exposes neither
+    attribute) is deliberately a silent no-op. A plain scalar/string target is
+    never a valid warm-start sink, so reject it loudly to catch the wrong-target
+    programming error the no-op would otherwise mask.
+    """
+    if hasattr(var, "value"):
+        var.value = value
+    elif hasattr(var, "Start"):  # gurobipy.Var
+        var.Start = value
+    elif isinstance(var, (int, float, complex, str, bool)):
+        raise TypeError(
+            f"set_initial_value got a non-variable target {var!r}; expected a "
+            "backend variable with a settable 'value' or 'Start'"
+        )
+
+
 class Var:
     """
     A decision variable (or mutable parameter) in the optimisation model.

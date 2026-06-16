@@ -114,8 +114,8 @@ print(combined.length)
 
 For duplicate `(component, attribute)` pairs the conflict rules are:
 
-- `td_a.extend(td_b)` merges in place - the **receiver** (`td_a`) **wins**.
-- `td_a + td_b` builds a new object - the **left operand** (`td_a`) **wins**.
+- `td_a.extend(td_b)` merges in place: the receiver (`td_a`) wins.
+- `td_a + td_b` builds a new object: the left operand (`td_a`) wins.
 
 Both raise a `ValueError` if the two objects have different series lengths.
 
@@ -157,7 +157,7 @@ print(vm.index)   # DatetimeIndex
 
 ## Error handling
 
-By default the runner raises immediately on any step failure.  Set
+By default the runner raises immediately on any step failure. Set
 `on_step_error='skip'` to record failures and continue:
 
 ```{testcode}
@@ -184,11 +184,10 @@ the steps that failed.
 
 ## Applying data without solving
 
-Set `solve_flag=False` to run the loop without invoking the solver.  Each step
+Set `solve_flag=False` to run the loop without invoking the solver. Each step
 still copies the network, applies the timeseries data, and calls the step
-hooks - the resulting `StepResult` objects are marked `skipped=True`.  This is
-useful for dry-running profiles and hooks, or when an external process
-performs the actual solve:
+hooks, but the resulting `StepResult` objects are marked `skipped=True`. Use this
+to dry-run profiles and hooks, or when an external process performs the solve:
 
 ```{testcode}
 result_dry = run_timeseries(net, td, solve_flag=False)
@@ -239,7 +238,7 @@ def log_step(net_copy, step, step_state, step_result, base_net):
 ```
 
 ```{note}
-Both `pre_run` and `post_run` receive the live `StepState` - hooks can read
+Both `pre_run` and `post_run` receive the live `StepState`; hooks can read
 or write inter-step values directly.
 ```
 
@@ -277,8 +276,8 @@ class RampGenerator(ChildModel):
 ```
 
 ```{tip}
-`inter_temporal_equations` is called in **both** timeseries and multi-period
-solves.  The same model works in both contexts without any changes - see
+`inter_temporal_equations` is called in both timeseries and multi-period
+solves.  The same model works in both contexts without any changes; see
 {doc}`multi_period` for the multi-period workflow.
 ```
 
@@ -286,8 +285,8 @@ solves.  The same model works in both contexts without any changes - see
 
 ## Thermal and gas storage extensions
 
-For network-wide time coupling - thermal inertia in junctions, gas stored in
-pipelines - attach a {doc}`../concepts/network_aspects` extension before the
+For network-wide time coupling (thermal inertia in junctions, gas stored in
+pipelines) attach a {doc}`../concepts/network_aspects` extension before the
 first run:
 
 ```{testcode}
@@ -323,12 +322,11 @@ See {doc}`../concepts/temporal_extensions` for step-by-step walkthroughs.
 ## Externally paced simulation
 
 `run_timeseries` owns the time loop: it iterates over a fixed number of
-equally indexed steps.  When an external process drives the clock - a
-co-simulation framework, a real-time loop, an event-based scheduler - use
-{class}`~monee.simulation.Stepper` instead.  It keeps a persistent
-`StepState` and lets you call `step(dt_h)` whenever *you* decide, with a
-variable step size and per-step data overrides.  See {doc}`stepper` for the
-full workflow.
+equally indexed steps. When an external process drives the clock (a
+co-simulation framework, a real-time loop, an event-based scheduler) use
+{class}`~monee.simulation.Stepper` instead. It keeps a persistent
+`StepState` and lets you call `step(dt_h)` on demand, with a variable step
+size and per-step data overrides. See {doc}`stepper` for the full workflow.
 
 ---
 
@@ -358,7 +356,7 @@ full workflow.
 | `run_timeseries(net, td, ...)` | Execute the timeseries simulation |
 | `steps=None` | Number of steps; defaults to `td.length`.  Raises if neither is given or `steps` exceeds the registered series length |
 | `step_hooks=None` | List of `StepHook` instances; plain callables are treated as post-run hooks |
-| `solver=None` / `backend=None` | Solver name or instance, and `'gekko'`/`'pyomo'` backend (default: GEKKO + IPOPT) |
+| `solver=None` / `backend=None` | Solver name or instance, and `'casadi'`, `'gekko'`, `'pyomo'`, or `'gurobipy'` backend. Default is IPOPT on CasADi when installed, otherwise GEKKO's bundled IPOPT |
 | `optimization_problem=None` | `OptimizationProblem` applied at every step |
 | `solve_flag=True` | If `False`, apply data and run hooks without solving; steps are marked `skipped=True` |
 | `on_step_error='raise'` | `'raise'` (default) or `'skip'` to record failures and continue |
@@ -369,7 +367,7 @@ full workflow.
 
 | Symbol | Description |
 |---|---|
-| `result.get_result_for(ModelClass, attr)` | DataFrame (steps Ã— component ids) |
+| `result.get_result_for(ModelClass, attr)` | DataFrame: rows are steps, columns are component ids |
 | `result.get_result_for_id(id, attr)` | Series: one value per successful step |
 | `result[component_id]` | DataFrame of all attributes for one component |
 | `result.failed_steps` | List of step indices that failed to converge |

@@ -2,17 +2,15 @@
 Reference networks
 ====================
 
-monee ships a family of **fixed multi-energy reference networks** that are
-ready to use for testing, benchmarking, and tutorial examples.  Every factory
-is deterministic - hand-built or internally seeded - so repeated calls always
-return the same grid.  All of them couple electricity, gas, and/or heat via
-standard conversion units (CHP, P2H, P2G, G2P) and are importable directly
-from :mod:`monee.network`.
+monee ships fixed multi-energy reference networks for testing,
+benchmarking, and tutorials.  Import them from :mod:`monee.network`.
+Every factory is deterministic (hand-built or internally seeded), so
+repeated calls return the same grid.  They couple electricity, gas, and
+(in most cases) heat through conversion units (CHP, P2H, P2G, G2P).
 
-If you want to *generate* a multi-energy overlay on top of an arbitrary
-power network instead - gas and heat grids derived from the electrical
-topology, with configurable coupling-point density - see
-:doc:`generate_mes`.
+To generate a multi-energy overlay on top of an arbitrary power network
+instead (gas and heat grids derived from the electrical topology, with
+configurable coupling-point density), see :doc:`generate_mes`.
 
 ----
 
@@ -28,18 +26,18 @@ Available networks
      - Description
    * - :func:`~monee.network.res.create_urban_district_net`
      - Small
-     - 20 kV residential district.  5 buses · 5 gas junctions · 6 heat
+     - 20 kV residential district.  5 buses · 5 gas junctions · 4 heat
        junctions.  CHP-centred topology with high coupling-point density.
-       Suitable for load-shedding and demand-side flexibility studies.
+       Best for load-shedding and demand-side flexibility studies.
    * - :func:`~monee.network.res.create_urban_district_net_with_ties`
      - Small
-     - Urban district plus **normally-open tie branches** (``on_off=0``,
+     - Urban district plus normally-open tie branches (``on_off=0``,
        named ``tie_*``) in all three carriers and a second heat consumer.
        Built for restoration and reconfiguration studies.
    * - :func:`~monee.network.res.create_balanced_urban_mes_net`
      - Small
-     - Urban district with **balanced per-carrier demands** (~1.7 MW power ·
-       ~1.4 MW gas · 0.85 MW heat) so single-carrier failures shed comparable
+     - Urban district with balanced per-carrier demands (~1.7 MW power ·
+       ~1.06 MW gas · 0.85 MW heat) so single-carrier failures shed comparable
        load.  Comes with a synthetic timeseries generator.
    * - :func:`~monee.network.res.create_resilient_urban_mes_net`
      - Small
@@ -63,8 +61,8 @@ Available networks
    * - :func:`~monee.network.mes.create_monee_benchmark_net`
      - Small
      - Seeded 7-bus 120 kV MES with gas and heat overlay, CHP, P2G, two G2P
-       units, a grid-forming generator, and two normally-open **backup
-       lines** (``backup=True``, ``on_off=0``).
+       units, a grid-forming generator, and two normally-open backup
+       lines (``backup=True``, ``on_off=0``).
    * - :func:`~monee.network.mes.create_mv_multi_cigre`
      - Medium
      - Seeded MES built on the pandapower CIGRE MV grid (with PV and wind
@@ -72,7 +70,7 @@ Available networks
        backup line.  Requires the optional ``pandapower`` dependency.
    * - :func:`~monee.network.bench.restoration.create_restoration_benchmark`
      - Large
-     - Curated multi-energy restoration benchmark - see
+     - Curated multi-energy restoration benchmark, see
        :ref:`the dedicated section below <how-to/reference_networks:The restoration benchmark>`.
 
 ----
@@ -98,7 +96,7 @@ Load and run an energy-flow calculation on the urban district network:
    :options: +SKIP
 
    (5, 1)
-   (5, 1)
+   (4, 1)
 
 ----
 
@@ -109,8 +107,8 @@ Normally-open ties
 ------------------
 
 :func:`~monee.network.res.create_urban_district_net_with_ties` keeps the
-primary topology of the urban district but adds **normally-open tie
-branches** - switchable alternative paths created with ``on_off=0`` and
+primary topology of the urban district but adds normally-open tie
+branches: switchable alternative paths created with ``on_off=0`` and
 named ``tie_*``:
 
 * a power tie ``b3↔b4`` between the two large loads,
@@ -143,11 +141,11 @@ Scaling up: replicated districts
 
 :func:`~monee.network.res.create_large_urban_mes_net` replicates the
 urban-district pattern (including its internal ties) ``n_districts`` times
-under a **shared HV slack bus and a shared external gas feeder**.  Adjacent
+under a shared HV slack bus and a shared external gas feeder.  Adjacent
 districts are linked by normally-open MV power ties and live gas trunks, so
 electricity and gas each remain a single connected component.  The heat
-sector is intentionally **local per district** - one supply-return consumer
-pair each - and therefore decomposes into one connected component per
+sector is intentionally local per district (one supply-return consumer
+pair each) and therefore decomposes into one connected component per
 district.
 
 .. testcode::
@@ -157,8 +155,8 @@ district.
     net = create_large_urban_mes_net(n_districts=6)   # ~96 nodes
     big = create_large_urban_mes_net(n_districts=20)  # ~320 nodes
 
-Each district contributes 5 power buses, 4 gas junctions, 4 water junctions,
-2 heat consumers, 3 coupling points (CHP, P2G, G2P), and 4 internal ties.
+Each district contributes 5 power buses, 4 gas junctions, 5 water junctions,
+2 heat consumers, 3 coupling points (CHP, P2G, G2P), and 3 internal ties.
 
 Seeded benchmark nets with backup lines
 ---------------------------------------
@@ -167,13 +165,13 @@ Two further fixed MES grids live in :mod:`monee.network.mes`.  Both are
 seeded internally, so they are reproducible despite using the randomized
 overlay generators under the hood:
 
-* :func:`~monee.network.mes.create_monee_benchmark_net` - a 7-bus 120 kV
+* :func:`~monee.network.mes.create_monee_benchmark_net`: a 7-bus 120 kV
   power grid with full gas and heat overlay, a CHP, a P2G, two G2P units,
   and a :class:`~monee.model.GridFormingGenerator` (useful together with
   :doc:`islanding <islanding>`).  Two extra power lines are created as
-  **backup assets** with ``backup=True`` and ``on_off=0`` - open in normal
+  backup assets with ``backup=True`` and ``on_off=0``: open in normal
   operation, available to a restoration algorithm.
-* :func:`~monee.network.mes.create_mv_multi_cigre` - the pandapower CIGRE MV
+* :func:`~monee.network.mes.create_mv_multi_cigre`: the pandapower CIGRE MV
   benchmark (with PV and wind DER) converted to monee and overlaid with gas
   and heat grids, a P2G, a CHP, and one open backup line.  Requires
   ``pandapower``.
@@ -189,7 +187,7 @@ magnitude, so a gas outage and a power outage are hard to compare.
 shed-able demand per carrier to comparable energy levels:
 
 * **Power**: 0.5 + 0.7 + 0.5 MW of direct loads = 1.7 MW
-* **Gas**: 0.015 + 0.010 kg/s of direct sinks ≈ 1.4 MW
+* **Gas**: 0.015 + 0.010 kg/s of direct sinks ≈ 1.06 MW
 * **Heat**: 0.55 + 0.30 MW of heat-exchanger consumers = 0.85 MW
 
 The companion function
@@ -197,12 +195,12 @@ The companion function
 ready-to-run :class:`~monee.simulation.TimeseriesData` with synthetic
 winter-weekday demand profiles for every direct consumer in the network:
 
-* ``PowerLoad`` children - residential/commercial pattern with morning ramp
+* ``PowerLoad`` children: residential/commercial pattern with morning ramp
   and evening peak; both ``p_mw`` and ``q_mvar`` are scaled together so the
   power factor stays constant,
-* gas ``Sink`` children (only those on the gas grid - heat-return sinks are
-  skipped) - twin breakfast/dinner spikes on ``mass_flow_kgs``,
-* ``HeatExchangerLoad`` branches - space-heating pattern on ``heat_mw_set``,
+* gas ``Sink`` children (only those on the gas grid, heat-return sinks are
+  skipped): twin breakfast/dinner spikes on ``mass_flow_kgs``,
+* ``HeatExchangerLoad`` branches: space-heating pattern on ``q_mw_set``,
   anti-correlated with outdoor temperature.
 
 All profiles are expressed as fractions of the rated setpoints already
@@ -239,11 +237,11 @@ Redundancy-rich variant
 
 :func:`~monee.network.res.create_resilient_urban_mes_net` extends the
 balanced network with deliberate redundancy, making carrier dependence and
-backup paths directly observable: **two gas sources** (an external grid plus
-a secondary source, inter-connected so either can serve both CHPs), **two
-CHPs** in independent gas sub-trees, **wind and solar** generation that is
+backup paths directly observable: two gas sources (an external grid plus
+a secondary source, inter-connected so either can serve both CHPs), two
+CHPs in independent gas sub-trees, wind and solar generation that is
 independent of the gas system, three heat-exchanger consumers on separate
-supply-return pairs, and a **G2P** unit providing gas-backed power.
+supply-return pairs, and a G2P unit providing gas-backed power.
 
 ----
 
@@ -259,17 +257,17 @@ optimisation:
 
     def create_restoration_benchmark(*, linepack=False, ltc=False, misocp=True)
 
-* **Electricity** - two 110 kV feeders (each with its own external grid)
+* **Electricity:** two 110 kV feeders (each with its own external grid)
   joined by an HV tie, four 20 kV substations behind 63 MVA transformers,
   and three five-bus load chains (industrial, commercial, residential) with
   distributed solar and wind generation.
-* **Gas** - two high-pressure feeders with a trunk pipe, three compressors
-  stepping down into three eight-junction medium-pressure chains plus two
-  spur junctions, and fourteen gas sinks.
-* **Heat** - a long district-heating supply chain (120 junctions) fed by a
+* **Gas:** two high-pressure feeders with a trunk pipe, three compressors
+  feeding three eight-junction medium-pressure chains plus two spur
+  junctions, and fourteen gas sinks.
+* **Heat:** a long district-heating supply chain (120 junctions) fed by a
   358 K heat plant, with a common return junction and consumer heat
   exchangers along the chain.
-* **Coupling points** - two CHP-HG units (gas → power + heat, node-based
+* **Coupling points:** two CHP-HG units (gas → power + heat, node-based
   heat injection), one P2G electrolyser, and one G2P peaker.
 
 The keyword-only flags select optional features:
@@ -282,15 +280,15 @@ The keyword-only flags select optional features:
   :data:`~monee.model.formulation.EL_MISOCP_FORMULATION` to the power
   grid, replacing the nonlinear AC formulation.
 
-Both extensions only take effect in multi-period runs - see
+Both extensions only take effect in multi-period runs, see
 :doc:`../concepts/temporal_extensions`.
 
 .. tip::
 
    With the default ``misocp=True``, pair the benchmark with a
-   MIQCP-capable solver such as **Gurobi**.  For the nonlinear variant
+   MIQCP-capable solver such as Gurobi.  For the nonlinear variant
    (``misocp=False``), use the :class:`~monee.solver.PyomoSolver` with
-   **ipopt** and relaxed tolerances.
+   ipopt and relaxed tolerances.
 
 .. code-block:: python
 
@@ -315,8 +313,8 @@ Both extensions only take effect in multi-period runs - see
 Load shedding on a reference network
 =====================================
 
-The regional MES network is a convenient starting point for load-shedding
-experiments because it exercises all coupling types simultaneously:
+The regional MES network is a good starting point for load-shedding
+experiments: it exercises all four coupling types at once.
 
 .. code-block:: python
 
@@ -361,7 +359,7 @@ These are set at network construction time:
     # Limit the electrical connection to 4 MW import, 1 MW export.
     mx.create_ext_power_grid(net_cap, bus_cap, max_import_mw=4.0, max_export_mw=1.0)
 
-    # Gas connection: unlimited import, no export allowed.
+    # Gas connection: import capped at 0.1 kg/s, export unbounded.
     junc_cap = mx.create_gas_junction(net_cap)
     mx.create_ext_hydr_grid(net_cap, junc_cap, max_import_kgs=0.1)
 

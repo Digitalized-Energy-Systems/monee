@@ -2,10 +2,10 @@
 Load shedding
 =====================
 
-Load shedding finds the minimum amount of demand that must be curtailed to
-keep a network feasible under given operational limits. monee ships a
-ready-made load-shedding formulation for multi-energy networks with a
-one-call interface and a lower-level builder function for customisation.
+Load shedding finds the minimum demand that must be curtailed to keep a
+network feasible under given operational limits. monee ships a ready-made
+load-shedding formulation for multi-energy networks: a one-call interface for
+the common case, and a builder function when you need to customise it.
 
 How it works
 ============
@@ -37,7 +37,7 @@ One-call interface
 
 .. tip::
 
-   Use :func:`monee.solve_load_shedding_problem` for the simplest path - it
+   Use :func:`monee.solve_load_shedding_problem` for the simplest path: it
    picks sensible defaults and requires minimal configuration.
 
 .. code-block:: python
@@ -53,7 +53,7 @@ One-call interface
         bounds_ext_gas=(-2.0, 2.0),
     )
 
-    print(f"Objective (shed load cost): {result.objective_value:.4f}")
+    print(f"Objective (shed load cost): {result.objective:.4f}")
 
 The result is a :class:`~monee.solver.core.SolverResult` with the solved
 network and DataFrames for each model type. The bound and check arguments are
@@ -65,8 +65,8 @@ one-to-one.
 Custom problem
 ==============
 
-For finer control - different weights per carrier, extra constraints, or
-different bounds - use
+For finer control (different weights per carrier, extra constraints, or
+different bounds) use
 :func:`~monee.problem.create_min_load_shedding_problem` directly:
 
 .. testcode::
@@ -100,10 +100,9 @@ different bounds - use
 
    Pass ``exclude_unconnected_nodes=True`` when the network may contain buses
    or junctions that are topologically disconnected (e.g. because a line is
-   deactivated).  Without this flag such nodes are included in the solve,
-   which can cause infeasibility.  With it, disconnected components are
-   automatically excluded and their ``regulation`` is reported as ``0.0``
-   (fully shed) in the result.
+   deactivated). Without this flag such nodes enter the solve and can cause
+   infeasibility. With it, disconnected components are excluded and their
+   ``regulation`` is reported as ``0.0`` (fully shed) in the result.
 
 Key parameters of ``create_min_load_shedding_problem``:
 
@@ -172,7 +171,7 @@ Prioritising individual loads
 -----------------------------
 
 By default every demand is shed at the same cost per MW. To establish a
-priority ordering - keep the hospital, shed the warehouse first - pass
+priority ordering (keep the hospital, shed the warehouse first), pass
 ``weight_for_load``, a callback that receives a load *model* and returns its
 shed weight, or ``None`` to fall back to ``demand_weight``. A convenient
 pattern is to tag the models with a custom attribute when building the
@@ -192,9 +191,10 @@ network:
     )
 
 The callback applies to all demand-type models (``PowerLoad``, ``HeatLoad``,
-gas ``Sink``, and the heat-exchanger load variants). All per-load weights are
-multiplied by the shared auto-priority-floor scale (see below), so the
-*ratios* you choose are preserved even when monee lifts the weights.
+gas ``Sink``) and to every heat-exchanger variant, load and generator side
+alike. All per-load weights are multiplied by the shared auto-priority-floor
+scale (see below), so the *ratios* you choose are preserved even when monee
+lifts the weights.
 
 Why the default weights just work
 ---------------------------------
@@ -202,7 +202,7 @@ Why the default weights just work
 Some network formulations (e.g. MISOCP electricity, the smooth nonlinear gas
 and heat models) add small auxiliary objective terms that tighten their
 relaxations. On a large network these terms accumulate, and a fixed
-``demand_weight`` could be undercut - the solver would rather shed load than
+``demand_weight`` could be undercut: the solver would rather shed load than
 pay the tightening cost. With ``auto_priority_floor=True`` (the default),
 monee computes an upper bound of the total auxiliary objective at apply time
 and lifts the demand weights to at least ``priority_safety_factor`` times
@@ -215,7 +215,7 @@ Lexicographic objectives
 
 Instead of weighting shed cost against the auxiliary terms, you can separate
 them entirely: with ``lex_objectives=True`` the problem is solved in two
-phases - phase one minimises shed load alone, phase two minimises the
+phases. Phase one minimises shed load alone, phase two minimises the
 auxiliary tightening terms with the phase-one optimum pinned. This removes
 weight tuning altogether, at the cost of a second solve. It requires the
 Pyomo backend (:class:`~monee.solver.PyomoSolver`); GEKKO falls back to a
@@ -226,7 +226,7 @@ Shedding coupling points
 ------------------------
 
 By default, coupling units between carriers are controllable but their
-curtailment is free - only the downstream service loss is penalised. With
+curtailment is free: only the downstream service loss is penalised. With
 ``include_coupling_points=True``, coupling points (the CHP, CHPHG, G2H, and
 P2H control nodes as well as the P2G, G2P, P2H-HG, and G2H-HG branches) are
 penalised at ``demand_weight * rated input MW * (1 - regulation)``: each
@@ -241,16 +241,17 @@ What counts as shed energy
 The objective sums weighted unserved energy in MW-equivalent across all
 carriers. The conversion conventions are:
 
-- **Electrical and heat loads/generators** contribute
+- Electrical and heat loads/generators contribute
   ``setpoint * (1 - regulation)`` directly in MW.
-- **Gas sinks and sources** are mass flows in kg/s; their shed is converted
+- Gas sinks and sources are mass flows in kg/s; their shed is converted
   to MW via ``3.6 * higher_heating_value_kwh_per_kg`` of the enclosing gas grid
-  (fallback: 15.3 kWh/kg if the grid defines no heating value).
-- **Water-grid sinks and sources are deliberately excluded** - mass flow in a
+  (fallback: the lgas heating value of about 11.79 kWh/kg if the grid defines
+  none).
+- Water-grid sinks and sources are deliberately excluded: mass flow in a
   heating loop is a transport quantity, not demand, and applying a heating
   value to it would produce a phantom MW-scale penalty.
-- **Heat exchangers** are penalised by the under-delivery gap
-  ``|heat_mw_set - heat_mw_delivered|``, which captures both regulation cuts and
+- Heat exchangers are penalised by the under-delivery gap
+  ``|q_mw_set - q_mw_delivered|``, which captures both regulation cuts and
   physical shortfall from a narrow temperature spread that a pure
   ``(1 - regulation)`` proxy would miss.
 
@@ -283,7 +284,7 @@ Measuring curtailment
 
 To quantify how much demand was actually curtailed, use
 :class:`~monee.problem.GeneralResiliencePerformanceMetric` on the solved
-network - it returns curtailed MW per carrier as a
+network: it returns curtailed MW per carrier as a
 ``(power, heat, gas)`` tuple:
 
 .. code-block:: python

@@ -5,7 +5,7 @@ Cross-cutting helpers used by load-shedding / dispatch problems.
 from __future__ import annotations
 
 from monee.model.core import Var
-from monee.model.grid import KGPS_KWHPERKG_TO_MW, GasGrid
+from monee.model.grid import DEFAULT_GAS_HHV_KWH_PER_KG, KGPS_KWHPERKG_TO_MW, GasGrid
 from monee.model.multi import (
     CHPControlNode,
     CHPHGControlNode,
@@ -18,7 +18,7 @@ from monee.model.multi import (
 )
 
 # Fallback HHV (kWh/kg) when a gas grid is missing ``higher_heating_value_kwh_per_kg``.
-_HHV_DEFAULT = 15.3
+_HHV_DEFAULT = DEFAULT_GAS_HHV_KWH_PER_KG
 
 
 def line_loading_limit(branch_model, side: str, max_loading: float):

@@ -98,12 +98,6 @@ class Bus(NodeModel):
 @model
 class Junction(NodeModel):
     def __init__(self) -> None:
-        # NOTE: deliberately does NOT call super().__init__(). Junction sits in
-        # the cooperative-init MRO of the coupling nodes (PowerToHeatControlNode,
-        # CHPControlNode, ... = MultiGridNodeModel, Junction, Bus); calling
-        # super() here would chain into Bus.__init__, which requires base_kv.
-        # t_k is report-only (= t_pu \cdot t_ref_k, never read by an equation); the real
-        # closure is attached in equations() where the grid t_ref_k is available.
         self.t_k = PostProcess(lambda v: float("nan"))
         self.t_pu = Var(1, min=0.3, max=2, name="t_pu")
         self.pressure_squared_pu = Var(1, min=0.5, max=2, name="pressure_squared_pu")

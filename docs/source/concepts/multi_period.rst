@@ -2,10 +2,10 @@
 Multi-period optimization
 ==========================
 
-Multi-period optimization builds a **single large problem** that jointly
-optimizes over *T* time periods in one shot.  All periods share the same solver
-model, so the optimizer can trade off actions across time - charging a battery
-cheaply now to discharge it at a more expensive future hour.
+Multi-period optimization builds one large problem that optimizes over *T*
+time periods at once.  All periods share the same solver model, so the optimizer
+trades off actions across time. It can charge a battery cheaply now to discharge
+it at a more expensive future hour.
 
 .. note::
 
@@ -24,19 +24,19 @@ Timeseries vs. multi-period
    * -
      - Timeseries simulation
      - Multi-period optimization
-   * - **Solve structure**
+   * - Solve structure
      - One NLP per step
      - One large NLP for all T periods
-   * - **Cross-time coupling**
+   * - Cross-time coupling
      - Constants (previous step's floats)
      - Coupled solver variables
-   * - **Optimality**
-     - Greedy - locally optimal per step
+   * - Optimality
+     - Greedy: locally optimal per step
      - Global across all T periods
-   * - **Scalability**
+   * - Scalability
      - Linear in T
      - Super-linear in T
-   * - **Typical use**
+   * - Typical use
      - Profile replay, forward simulation
      - Storage dispatch, ramp scheduling, linepack management
 
@@ -45,23 +45,26 @@ Timeseries vs. multi-period
 PeriodState
 ===========
 
-The coupling mechanism that makes the same ``inter_temporal_equations``
-implementation work in *both* contexts is :class:`~monee.simulation.step_state.PeriodState`.
+:class:`~monee.simulation.step_state.PeriodState` is the coupling mechanism that
+lets the same ``inter_temporal_equations`` implementation work in both contexts.
 
-In a timeseries solve, ``StepState.get(id, "e_mwh")`` returns a **float**.
+In a timeseries solve, ``StepState.get(id, "e_mwh")`` returns a float.
 
-In a multi-period solve, ``PeriodState.get(id, "e_mwh")`` returns a **live
-solver variable** from the previous period's network copy.  The constraint
-``e_mwh[t] == prev_e + dt * p_mw[t]`` therefore ties two solver variables
-together - creating a genuine coupling constraint.
+In a multi-period solve, ``PeriodState.get(id, "e_mwh")`` returns a live
+solver variable from the previous period's network copy.  The constraint
+``e_mwh[t] == prev_e + dt * p_mw[t]`` then ties two solver variables together,
+creating a genuine coupling constraint.
 
-.. code-block:: text
+.. mermaid::
 
-   period t-1:  ─── e_mwh[t-1] ◄──── PeriodState.get(id, "e_mwh", period=-1)
-                                            │
-   period t:    ─── e_mwh[t]   ◄────────── │ coupling constraint
-                                            │
-   e_mwh[t] == e_mwh[t-1] + dt * p_mw[t]  ↑
+   flowchart LR
+       subgraph prev["period t-1"]
+           E0["e_mwh"]
+       end
+       subgraph cur["period t"]
+           P["p_mw"] --> E1["e_mwh"]
+       end
+       E0 -->|"coupling constraint"| E1
 
 Both ``StepState`` and ``PeriodState`` implement the
 :class:`~monee.simulation.step_state.InterStepState` interface, so a model's
@@ -69,7 +72,7 @@ Both ``StepState`` and ``PeriodState`` implement the
 
 ----
 
-Quick start - battery dispatch
+Quick start: battery dispatch
 ================================
 
 .. testcode::
@@ -117,74 +120,18 @@ To solve with the optimizer choosing when to charge/discharge:
    )
    print(result)
 
-.. plot::
-   :caption: Battery optimal dispatch - the solver charges during off-peak hours and discharges during the midday peak
+Battery optimal dispatch: the solver charges during off-peak hours and discharges during the midday peak.
 
-   import monee.model as mm
-   import monee.express as mx
-   from monee.problem.core import OptimizationProblem
-   from monee.simulation import TimeseriesData, run_multi_period
-   import matplotlib.pyplot as plt
+.. only:: html
 
-   LOAD = [0.4, 0.5, 1.4, 1.8, 1.5, 0.4]
+   .. raw:: html
 
-   net = mx.create_multi_energy_network()
-   bus0 = mx.create_bus(net)
-   bus1 = mx.create_bus(net)
-   mx.create_ext_power_grid(net, bus0)
-   mx.create_line(net, bus0, bus1,
-                  length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-   mx.create_power_load(net, bus1, p_mw=0.0, q_mvar=0.0, name="load")
+      <iframe src="../_static/interactive/concepts_multi_period.html" width="100%" height="660" style="border:none;" loading="lazy" title="Multi-period battery dispatch"></iframe>
 
-   storage = mm.ElectricStorage(e_mwh_initial=2.0, e_mwh_max=4.0, p_max_mw=1.0)
-   bat = mx.create_el_child(net, storage, node_id=bus1, name="battery")
+.. only:: latex
 
-   td = TimeseriesData()
-   td.add_child_series_by_name("load", "p_mw", LOAD)
-
-   prob = OptimizationProblem()
-   prob.controllable_storages()
-   result = run_multi_period(net, td, optimization_problem=prob, dt_h=1.0,
-                             terminal_state={(bat, "e_mwh"): 2.0})
-
-   soc  = result.get_result_for_id(bat, "e_mwh")
-   disp = result.get_result_for_id(bat, "p_mw")
-   steps = list(range(len(LOAD)))
-
-   fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 6),
-                             gridspec_kw={"hspace": 0.4})
-
-   C_LOAD = "#f4a261"
-   C_CHG  = "#2c7bb6"
-   C_DIS  = "#d7191c"
-   C_SOC  = "#1a9641"
-
-   axes[0].step(steps, LOAD, where="post", lw=2, color=C_LOAD)
-   axes[0].fill_between(steps, 0, LOAD, step="post", color=C_LOAD, alpha=0.15)
-   axes[0].set_ylabel("Load  [MW]")
-   axes[0].set_title("Consumer demand", fontsize=10)
-   axes[0].grid(axis="y", alpha=0.3)
-
-   disp_vals = list(disp.values)
-   bar_colors = [C_CHG if v >= 0 else C_DIS for v in disp_vals]
-   axes[1].bar(steps, disp_vals, color=bar_colors, alpha=0.8, width=0.6)
-   axes[1].axhline(0, color="grey", lw=0.8)
-   axes[1].set_ylabel("Battery  [MW]\n+ charge  /  - discharge")
-   axes[1].set_title("Optimised dispatch", fontsize=10)
-   axes[1].grid(axis="y", alpha=0.3)
-
-   axes[2].plot(steps, soc.values, marker="o", lw=2, color=C_SOC)
-   axes[2].fill_between(steps, 0, soc.values, alpha=0.12, color=C_SOC)
-   axes[2].axhline(4.0, color="grey", ls="--", alpha=0.5, label="capacity (4 MWh)")
-   axes[2].set_ylabel("SoC  [MWh]")
-   axes[2].set_xlabel("Period")
-   axes[2].set_ylim(0, 4.5)
-   axes[2].set_xticks(steps)
-   axes[2].legend(fontsize=8)
-   axes[2].grid(axis="y", alpha=0.3)
-
-   fig.suptitle("Multi-period battery dispatch", fontsize=12, fontweight="bold")
-   plt.tight_layout()
+   .. image:: /_static/interactive/concepts_multi_period.png
+      :width: 100%
 
 ----
 
@@ -271,7 +218,7 @@ Force the optimizer to reach a target value at the last period:
    result = run_multi_period(
        net, td,
        initial_state ={(bat, "e_mwh"): 2.0},
-       terminal_state={(bat, "e_mwh"): 2.0},  # cyclic - return to start
+       terminal_state={(bat, "e_mwh"): 2.0},  # cyclic: return to start
    )
 
 ----
@@ -312,8 +259,8 @@ the first few steps before re-solving with an updated forecast:
 
    total_steps = 12 │ horizon = 6 │ execution_steps = 2
 
-   Solve window:    [0 … 5]  [2 … 7]  [4 … 9]  [6 … 11]
-   Execute:          0, 1     2, 3     4, 5     6, 7, 8, 9, 10, 11
+   Solve window:  [0 … 5] [2 … 7] [4 … 9] [6 … 11] [8 … 11] [10 … 11]
+   Execute:        0, 1    2, 3    4, 5    6, 7     8, 9     10, 11
 
 .. code-block:: python
 
@@ -340,7 +287,7 @@ Solver backends
 
 .. tab-set::
 
-   .. tab-item:: GEKKO (default)
+   .. tab-item:: GEKKO
 
       .. code-block:: python
 
@@ -349,7 +296,7 @@ Solver backends
          result = run_multi_period(net, td, solver=GekkoMultiPeriodSolver())
 
       Best for smooth NLP problems without integer variables.  Ships with
-      its own IPOPT binaries - no extra installation needed.
+      its own IPOPT binaries, no extra installation needed.
 
    .. tab-item:: Pyomo
 
@@ -385,8 +332,8 @@ the joint problem efficiently:
        inter_temporal_equations(net_t, ..., period_state)
        inter_period_equations(net_t, ..., period_state)
 
-At pass-2 time, ``PeriodState`` has access to **all** T period networks, so
-``get()`` can reference any period - past or future - without any special
+At pass-2 time, ``PeriodState`` has access to all T period networks, so
+``get()`` can reference any period (past or future) without any special
 handling in the model code.
 
 ----
@@ -409,7 +356,7 @@ See also
       :link-type: doc
       :shadow: sm
 
-      ``LumpedThermalCapacitance`` and ``GasLinepack`` - step-by-step
+      ``LumpedThermalCapacitance`` and ``GasLinepack``: step-by-step
       walkthroughs for both timeseries and multi-period use.
 
    .. grid-item-card:: NetworkAspect

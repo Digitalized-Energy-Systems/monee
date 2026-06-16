@@ -2,9 +2,9 @@
 Storage dispatch
 ================
 
-Attach battery, gas-storage, or thermal-storage components to a network and
-drive them either by an externally-prescribed schedule or by letting the
-optimizer choose the dispatch.
+Attach a battery, gas storage, or thermal storage to a network, then drive it
+either with a prescribed schedule or by letting the optimizer choose the
+dispatch.
 
 For the physics background see :doc:`../concepts/timeseries` and
 :doc:`../concepts/multi_period`.
@@ -35,17 +35,17 @@ Storage models at a glance
      - ``m_stored_kg``
      - ``m_stored_kg_initial``, ``m_stored_kg_max``, ``flow_max_kgs``
 
-All three follow the **load convention**: positive dispatch = charging
+All three follow the load convention: positive dispatch = charging
 (consuming from the network), negative dispatch = discharging (injecting
 into the network).
 
 By default the dispatch attribute (``p_mw`` or ``mass_flow_kgs``) is a plain
-Python float - fixed at zero - so the model acts as an idle element in a
-plain energy-flow solve.  Activate it in one of two ways:
+Python float fixed at zero, so the model sits idle in an energy-flow solve.
+Activate it in one of two ways:
 
-* **Prescribed dispatch** - register the dispatch series via
+* Prescribed dispatch: register the dispatch series via
   ``TimeseriesData`` and call :func:`~monee.simulation.run_timeseries`.
-* **Optimised dispatch** - call
+* Optimised dispatch: call
   :meth:`~monee.problem.core.OptimizationProblem.controllable_storages`
   and pass the problem to :func:`~monee.simulation.run_multi_period`.
 
@@ -63,7 +63,7 @@ Prescribed dispatch in timeseries
    import monee.express as mx
    from monee.simulation import TimeseriesData, run_timeseries
 
-   # ── Build a simple two-bus power network ─────────────────────────────────
+   # Build a simple two-bus power network
    net = mx.create_multi_energy_network()
    bus0 = mx.create_bus(net)
    bus1 = mx.create_bus(net)
@@ -72,7 +72,7 @@ Prescribed dispatch in timeseries
                   length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
    mx.create_power_load(net, bus1, p_mw=0.8, q_mvar=0.0)
 
-   # ── Attach a 10-MWh / 2-MW battery at bus1 ───────────────────────────────
+   # Attach a 10-MWh / 2-MW battery at bus1
    storage = mm.ElectricStorage(
        e_mwh_initial=5.0,     # start at 50 % SoC
        e_mwh_max=10.0,        # usable capacity
@@ -80,7 +80,7 @@ Prescribed dispatch in timeseries
    )
    bat_id = mx.create_el_child(net, storage, node_id=bus1, name="battery")
 
-   # ── Schedule charge (+) / discharge (-) ──────────────────────────────────
+   # Schedule charge (+) / discharge (-)
    td = TimeseriesData()
    td.add_child_series(bat_id, "p_mw", [1.0, 0.5, -1.0, -1.5, 0.0, 0.5])
 
@@ -92,64 +92,25 @@ Prescribed dispatch in timeseries
 
    SoC [MWh]: [6.0, 6.5, 5.5, 4.0, 4.0, 4.5]
 
-.. plot::
-   :caption: Battery SoC and dispatch - prescribed schedule
+Battery SoC and dispatch (prescribed schedule).
 
-   import monee.model as mm
-   import monee.express as mx
-   from monee.simulation import TimeseriesData, run_timeseries
-   import matplotlib.pyplot as plt
+.. only:: html
 
-   DISPATCH = [1.0, 0.5, -1.0, -1.5, 0.0, 0.5]
+   .. raw:: html
 
-   net = mx.create_multi_energy_network()
-   bus0 = mx.create_bus(net)
-   bus1 = mx.create_bus(net)
-   mx.create_ext_power_grid(net, bus0)
-   mx.create_line(net, bus0, bus1, length_m=500,
-                  r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-   mx.create_power_load(net, bus1, p_mw=0.8, q_mvar=0.0)
-   storage = mm.ElectricStorage(e_mwh_initial=5.0, e_mwh_max=10.0, p_max_mw=2.0)
-   bat_id = mx.create_el_child(net, storage, node_id=bus1, name="battery")
+      <iframe src="../_static/interactive/storage_prescribed.html" width="100%" height="500" style="border:none;" loading="lazy" title="Electric storage prescribed dispatch"></iframe>
 
-   td = TimeseriesData()
-   td.add_child_series(bat_id, "p_mw", DISPATCH)
-   result = run_timeseries(net, td)
-   soc = result.get_result_for_id(bat_id, "e_mwh")
+.. only:: latex
 
-   steps = range(len(DISPATCH))
-   fig, (ax_d, ax_s) = plt.subplots(2, 1, sharex=True, figsize=(8, 5),
-                                     gridspec_kw={"hspace": 0.35})
-
-   C_CHG = "#2c7bb6"
-   C_DIS = "#d7191c"
-
-   colors = [C_CHG if v >= 0 else C_DIS for v in DISPATCH]
-   ax_d.bar(steps, DISPATCH, color=colors, alpha=0.8, width=0.6)
-   ax_d.axhline(0, color="grey", lw=0.8)
-   ax_d.set_ylabel("Dispatch  [MW]\n+ charge  /  - discharge")
-   ax_d.set_title("Prescribed battery dispatch", fontsize=10)
-   ax_d.grid(axis="y", alpha=0.3)
-
-   ax_s.plot(steps, soc.values, marker="o", lw=2, color="#1a9641")
-   ax_s.fill_between(steps, 0, soc.values, alpha=0.12, color="#1a9641")
-   ax_s.axhline(10.0, color="grey", ls="--", alpha=0.5, label="capacity (10 MWh)")
-   ax_s.set_ylabel("State of charge  [MWh]")
-   ax_s.set_xlabel("Hour")
-   ax_s.set_ylim(0, 11)
-   ax_s.set_xticks(list(steps))
-   ax_s.legend(fontsize=8)
-   ax_s.grid(axis="y", alpha=0.3)
-
-   fig.suptitle("Electric storage - prescribed dispatch", fontsize=12, fontweight="bold")
-   plt.tight_layout()
+   .. image:: /_static/interactive/storage_prescribed.png
+      :width: 100%
 
 Optimised dispatch
 ------------------
 
 Pass ``OptimizationProblem.controllable_storages()`` to
-:func:`~monee.simulation.run_multi_period` and the solver freely chooses
-charge/discharge at every period:
+:func:`~monee.simulation.run_multi_period` and the solver chooses
+charge or discharge at every period:
 
 .. testcode::
 
@@ -196,80 +157,26 @@ charge/discharge at every period:
           terminal_state={(bat2_id, "e_mwh"): 2.0},
       )
 
-.. plot::
-   :caption: Optimised battery dispatch - the solver charges during cheap off-peak hours and discharges during the peak
+Optimised dispatch against a price signal: the battery charges in cheap hours and discharges into the expensive peak.
 
-   import monee.model as mm
-   import monee.express as mx
-   from monee.problem.core import OptimizationProblem
-   from monee.simulation import TimeseriesData, run_multi_period
-   import matplotlib.pyplot as plt
+.. only:: html
 
-   LOAD = [0.4, 0.5, 1.4, 1.8, 1.5, 0.4]
+   .. raw:: html
 
-   net2 = mx.create_multi_energy_network()
-   b0 = mx.create_bus(net2)
-   b1 = mx.create_bus(net2)
-   mx.create_ext_power_grid(net2, b0)
-   mx.create_line(net2, b0, b1, length_m=500,
-                  r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-   mx.create_power_load(net2, b1, p_mw=0.0, q_mvar=0.0, name="load")
-   bat2 = mm.ElectricStorage(e_mwh_initial=2.0, e_mwh_max=4.0, p_max_mw=1.0)
-   bat2_id = mx.create_el_child(net2, bat2, node_id=b1, name="battery2")
+      <iframe src="../_static/interactive/storage_dispatch.html" width="100%" height="660" style="border:none;" loading="lazy" title="Optimised battery dispatch"></iframe>
 
-   td2 = TimeseriesData()
-   td2.add_child_series_by_name("load", "p_mw", LOAD)
+.. only:: latex
 
-   prob = OptimizationProblem()
-   prob.controllable_storages()
-   result = run_multi_period(net2, td2, optimization_problem=prob, dt_h=1.0,
-                             terminal_state={(bat2_id, "e_mwh"): 2.0})
-
-   soc  = result.get_result_for_id(bat2_id, "e_mwh")
-   disp = result.get_result_for_id(bat2_id, "p_mw")
-   steps = range(len(LOAD))
-
-   fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 6),
-                             gridspec_kw={"hspace": 0.4})
-
-   C_LOAD = "#f4a261"
-   C_CHG  = "#2c7bb6"
-   C_DIS  = "#d7191c"
-   C_SOC  = "#1a9641"
-
-   axes[0].step(steps, LOAD, where="post", lw=2, color=C_LOAD)
-   axes[0].fill_between(steps, 0, LOAD, step="post", color=C_LOAD, alpha=0.15)
-   axes[0].set_ylabel("Load  [MW]")
-   axes[0].set_title("Consumer demand", fontsize=10)
-   axes[0].grid(axis="y", alpha=0.3)
-
-   disp_vals = list(disp.values)
-   bar_colors = [C_CHG if v >= 0 else C_DIS for v in disp_vals]
-   axes[1].bar(steps, disp_vals, color=bar_colors, alpha=0.8, width=0.6)
-   axes[1].axhline(0, color="grey", lw=0.8)
-   axes[1].set_ylabel("Battery  [MW]\n+ charge  /  - discharge")
-   axes[1].set_title("Optimised dispatch", fontsize=10)
-   axes[1].grid(axis="y", alpha=0.3)
-
-   axes[2].plot(steps, soc.values, marker="o", lw=2, color=C_SOC)
-   axes[2].fill_between(steps, 0, soc.values, alpha=0.12, color=C_SOC)
-   axes[2].axhline(4.0, color="grey", ls="--", alpha=0.5, label="capacity (4 MWh)")
-   axes[2].set_ylabel("SoC  [MWh]")
-   axes[2].set_xlabel("Hour")
-   axes[2].set_ylim(0, 4.5)
-   axes[2].set_xticks(list(steps))
-   axes[2].legend(fontsize=8)
-   axes[2].grid(axis="y", alpha=0.3)
-
-   fig.suptitle("Electric storage - optimised dispatch", fontsize=12, fontweight="bold")
-   plt.tight_layout()
+   .. image:: /_static/interactive/storage_dispatch.png
+      :width: 100%
 
 Round-trip efficiency
 ---------------------
 
-Pass ``efficiency_charge`` and ``efficiency_discharge`` (both 0–1) to model
-realistic round-trip losses.  The model introduces separate charge and
-discharge variables so the efficiency is applied in the correct direction:
+Pass ``efficiency_charge`` and ``efficiency_discharge`` (both 0 to 1) to model
+round-trip losses. In optimised dispatch the model splits dispatch into
+separate charge and discharge variables, so each efficiency is applied in the
+correct direction:
 
 .. code-block:: python
 
@@ -281,16 +188,16 @@ discharge variables so the efficiency is applied in the correct direction:
        efficiency_discharge=0.95,   # 5 % loss on the way out
    )
 
-When ``p_mw`` is prescribed (plain energy flow), the efficiency is applied
-based on the sign of the fixed dispatch value - no extra variables are created.
+With a prescribed ``p_mw``, the efficiency is chosen from the sign of the fixed
+dispatch value and no extra variables are created.
 
 ----
 
 Gas storage
 ===========
 
-``GasStorage`` attaches to a gas junction.  The state variable is
-``m_stored_kg`` (stored gas mass in kg).
+``GasStorage`` attaches to a gas junction. Its state variable is
+``m_stored_kg``, the stored gas mass in kg.
 
 Prescribed discharge
 --------------------
@@ -333,57 +240,18 @@ Prescribed discharge
    where ``dt_s = dt_h * 3600``.  At 1 h per step:
    1000 - 0.1 × 3600 = 640 kg after step 1.
 
-.. plot::
-   :caption: Gas storage - charge and discharge cycle over 8 hours
+Gas storage: charge and discharge cycle over 8 hours.
 
-   import monee.model as mm
-   import monee.express as mx
-   from monee.simulation import TimeseriesData, run_timeseries
-   import matplotlib.pyplot as plt
+.. only:: html
 
-   # Realistic 8-step cycle: charge 2 h, hold 2 h, discharge 2 h, hold 2 h
-   DISPATCH = [0.05, 0.05, 0.0, 0.0, -0.05, -0.05, 0.0, 0.0]  # kg/s
+   .. raw:: html
 
-   net_g = mx.create_multi_energy_network()
-   j0 = mx.create_gas_junction(net_g)
-   j1 = mx.create_gas_junction(net_g)
-   mx.create_gas_ext_grid(net_g, j0)
-   mx.create_gas_pipe(net_g, j0, j1, diameter_m=0.3, length_m=5000)
-   mx.create_gas_sink(net_g, j1, mass_flow_kgs=0.05)
-   tank = mm.GasStorage(m_stored_kg_initial=1000.0, m_stored_kg_max=5000.0,
-                        flow_max_kgs=0.2)
-   tank_id = mx.create_gas_child(net_g, tank, node_id=j1, name="tank")
+      <iframe src="../_static/interactive/storage_gas.html" width="100%" height="500" style="border:none;" loading="lazy" title="Gas storage charge/discharge cycle"></iframe>
 
-   td_g = TimeseriesData()
-   td_g.add_child_series(tank_id, "mass_flow_kgs", DISPATCH)
-   result_g = run_timeseries(net_g, td_g)
-   stored = result_g.get_result_for_id(tank_id, "m_stored_kg")
+.. only:: latex
 
-   steps = range(len(DISPATCH))
-   fig, (ax_d, ax_s) = plt.subplots(2, 1, sharex=True, figsize=(8, 5),
-                                     gridspec_kw={"hspace": 0.35})
-
-   C_CHG = "#2c7bb6"
-   C_DIS = "#d7191c"
-   colors = [C_CHG if v > 0 else (C_DIS if v < 0 else "lightgrey") for v in DISPATCH]
-   ax_d.bar(steps, DISPATCH, color=colors, alpha=0.8, width=0.6)
-   ax_d.axhline(0, color="grey", lw=0.8)
-   ax_d.set_ylabel("Net flow  [kg/s]\n+ charge  /  - discharge")
-   ax_d.set_title("Prescribed gas storage dispatch", fontsize=10)
-   ax_d.grid(axis="y", alpha=0.3)
-
-   ax_s.plot(steps, stored.values, marker="o", lw=2, color="#1a9641")
-   ax_s.fill_between(steps, 0, stored.values, alpha=0.12, color="#1a9641")
-   ax_s.axhline(1000.0, color="grey", ls="--", alpha=0.5, label="initial (1 000 kg)")
-   ax_s.axhline(5000.0, color="#d7191c", ls=":", alpha=0.4, label="capacity (5 000 kg)")
-   ax_s.set_ylabel("Stored mass  [kg]")
-   ax_s.set_xlabel("Hour")
-   ax_s.set_xticks(list(steps))
-   ax_s.legend(fontsize=8)
-   ax_s.grid(axis="y", alpha=0.3)
-
-   fig.suptitle("Gas storage - charge / discharge cycle", fontsize=12, fontweight="bold")
-   plt.tight_layout()
+   .. image:: /_static/interactive/storage_gas.png
+      :width: 100%
 
 Optimised gas dispatch
 ----------------------
@@ -404,8 +272,9 @@ Optimised gas dispatch
 Thermal storage
 ===============
 
-``ThermalStorage`` attaches to a water/heat junction.  An optional
-``loss_factor_per_h`` models standing heat losses (e.g. tank insulation):
+``ThermalStorage`` attaches to a water junction. An optional
+``loss_factor_per_h`` models standing heat losses, for example imperfect tank
+insulation:
 
 .. testcode::
 
@@ -450,13 +319,13 @@ API reference
    * - Symbol
      - Description
    * - ``mm.ElectricStorage(e_mwh_initial, e_mwh_max, p_max_mw, ...)``
-     - Battery attached to a power bus.  State: ``e_mwh``.
+     - Battery attached to a power bus. State: ``e_mwh``.
    * - ``mm.GasStorage(m_stored_kg_initial, m_stored_kg_max, flow_max_kgs, ...)``
-     - Gas tank/cavern attached to a gas junction.  State: ``m_stored_kg``.
+     - Gas tank or cavern attached to a gas junction. State: ``m_stored_kg``.
    * - ``mm.ThermalStorage(m_stored_kg_initial, m_stored_kg_max, flow_max_kgs, ...)``
-     - Thermal tank attached to a water junction.  State: ``m_stored_kg``.
+     - Thermal tank attached to a water junction. State: ``m_stored_kg``.
    * - ``ElectricStorage.make_controllable()``
-     - Convert ``p_mw`` into a ``Var`` for optimisation.  Called automatically
+     - Convert ``p_mw`` into a ``Var`` for optimisation. Called automatically
        by ``OptimizationProblem.controllable_storages()``.
    * - ``GasStorage.make_controllable()``
      - Convert ``mass_flow_kgs`` into a ``Var`` for optimisation.
@@ -477,6 +346,6 @@ API reference
 
 .. seealso::
 
-   * :doc:`timeseries` - timeseries simulation workflow
-   * :doc:`multi_period` - multi-period optimisation with storage dispatch
-   * :doc:`../concepts/temporal_extensions` - GasLinepack and LTC extensions
+   * :doc:`timeseries`: timeseries simulation workflow
+   * :doc:`multi_period`: multi-period optimisation with storage dispatch
+   * :doc:`../concepts/temporal_extensions`: GasLinepack and LTC extensions

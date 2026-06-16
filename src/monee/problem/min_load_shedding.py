@@ -26,7 +26,12 @@ from monee.model.child import (
     Sink,
     Source,
 )
-from monee.model.grid import KGPS_KWHPERKG_TO_MW, GasGrid, WaterGrid
+from monee.model.grid import (
+    DEFAULT_GAS_HHV_KWH_PER_KG,
+    KGPS_KWHPERKG_TO_MW,
+    GasGrid,
+    WaterGrid,
+)
 from monee.model.multi import (
     CHPControlNode,
     CHPHGControlNode,
@@ -53,7 +58,7 @@ WEIGHT_GENERATOR = 0.1
 EXT_SLACK_WEIGHT_RATIO = 0.1
 
 # Fallback HHV (kWh/kg) for Sink/Source on a grid without higher_heating_value_kwh_per_kg.
-_HHV_DEFAULT = 15.3
+_HHV_DEFAULT = DEFAULT_GAS_HHV_KWH_PER_KG
 
 # Types that participate in the load-shedding objective.
 _DEMAND_TYPES = (

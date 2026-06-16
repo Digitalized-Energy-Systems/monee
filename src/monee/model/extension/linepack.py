@@ -14,7 +14,7 @@ from __future__ import annotations
 import math
 
 from monee.model.branch import GasPipe
-from monee.model.core import Var
+from monee.model.core import Var, set_initial_value
 from monee.model.grid import GasGrid
 
 from .core import NetworkAspect
@@ -39,13 +39,19 @@ class GasLinepack(NetworkAspect):
 
     @staticmethod
     def _nominal_pressure(grid: GasGrid) -> float:
-        """Nominal operating pressure [Pa]."""
-        return grid.pressure_ref_pa * grid.nominal_pressure_pu
+        """Nominal ABSOLUTE operating pressure [Pa] (gauge + ambient)."""
+        return (
+            grid.pressure_ref_pa * grid.nominal_pressure_pu
+            + getattr(grid, "pressure_ambient_pa", 0.0)
+        )
 
     @staticmethod
     def _max_pressure(grid: GasGrid) -> float:
-        """Maximum pressure [Pa] derived from the ``pressure_squared_pu_max`` grid bound."""
-        return grid.pressure_ref_pa * math.sqrt(grid.pressure_squared_pu_max)
+        """Maximum ABSOLUTE pressure [Pa] from the ``pressure_squared_pu_max`` bound."""
+        return (
+            grid.pressure_ref_pa * math.sqrt(grid.pressure_squared_pu_max)
+            + getattr(grid, "pressure_ambient_pa", 0.0)
+        )
 
     @staticmethod
     def _endpoint_ignored(branch, ignored_nodes: set) -> bool:
@@ -105,7 +111,7 @@ class GasLinepack(NetworkAspect):
                 continue
             prev_lp = step_state.get(branch.id, "linepack_kg")
             if prev_lp is not None:
-                branch.model.linepack_kg.value = prev_lp
+                set_initial_value(branch.model.linepack_kg, prev_lp)
 
     def equations(self, network, ignored_nodes: set) -> list:
         r""":math:`\text{linepack\_kg} = V_{pipe} \cdot \text{gas\_density\_kg\_per\_m3}`; pin ``net_pack_kgs = 0`` in

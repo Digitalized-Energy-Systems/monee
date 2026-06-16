@@ -29,12 +29,15 @@ def _ensure_smooth_flow_vars(model, friction_model, simulation=False):
 def _flow_and_pressure_eqs(
     formulation, branch, grid, from_node_model, to_node_model, **kwargs
 ):
-    """Smooth signed split, flow bounds, Darcy pressure drop and friction.
+    """Smooth signed split, flow bounds, and pressure drop.
+
+    Pressure drop is Darcy-Weisbach friction over ``length_m`` unless the branch
+    carries a ``loss_coefficient`` (pandapipes-style minor loss), in which case a
+    zero-length :math:`\\zeta \\cdot \\tfrac{\\rho}{2} v^2` drop is used instead.
 
     Returns ``(eqs, signed, mag)`` for the caller to append temperature physics.
     """
     sqrt_impl = kwargs["sqrt_impl"]
-    area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
     f_max_local = min(
         grid.max_mass_flow_kgs,
         hydraulicsmodel.calc_max_mass_flow(
@@ -43,16 +46,6 @@ def _flow_and_pressure_eqs(
     )
     signed = branch.mass_flow_kgs
     mag = branch.mass_flow_mag_kgs
-    drop_term, friction_eqs = smoothmodel.drop_term_and_eqs(
-        formulation.friction_model,
-        branch,
-        grid.dynamic_visc_pas,
-        area,
-        signed,
-        mag,
-        f_max_local,
-        **kwargs,
-    )
     eqs = [
         mag == smoothmodel.smooth_abs(signed, formulation.smoothing_eps, sqrt_impl),
         branch.mass_flow_pos_kgs == 0.5 * (mag + signed),
@@ -63,6 +56,35 @@ def _flow_and_pressure_eqs(
             signed <= f_max_local * branch.on_off,
             -signed <= f_max_local * branch.on_off,
         ]
+
+    loss_coefficient = getattr(branch, "loss_coefficient", None)
+    if loss_coefficient is not None:
+        # pandapipes heat_exchanger: zero-length minor loss, no friction factor.
+        eqs.append(
+            smoothmodel.minor_loss_pressure(
+                from_node_model.vars["pressure_pu"],
+                to_node_model.vars["pressure_pu"],
+                loss_coefficient,
+                signed,
+                mag,
+                branch.diameter_m,
+                grid.fluid_density_kg_per_m3,
+                grid.pressure_ref_pa,
+            )
+        )
+        return eqs, signed, mag
+
+    area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
+    drop_term, friction_eqs = smoothmodel.drop_term_and_eqs(
+        formulation.friction_model,
+        branch,
+        grid.dynamic_visc_pas,
+        area,
+        signed,
+        mag,
+        f_max_local,
+        **kwargs,
+    )
     eqs.append(
         smoothmodel.darcy_pressure(
             from_node_model.vars["pressure_pu"],

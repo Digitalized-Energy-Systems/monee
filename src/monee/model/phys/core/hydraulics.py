@@ -61,10 +61,6 @@ def calc_min_diameter_for_mass_flow(mass_flow_kgs, fluid_density_kg_per_m3, v_de
     return math.sqrt(4.0 * mass_flow_kgs / (math.pi * fluid_density_kg_per_m3 * v_design_mps))
 
 
-def calc_nikurdse(internal_diameter_m, roughness_m):
-    return 1 / (2 * np.log10(3.71 * internal_diameter_m / roughness_m)) ** 2
-
-
 # model.reynolds_scaled is stored as Re/1e6, so friction PWL breakpoints sit in [0,10]
 # rather than [0,1e7] - keeps the matrix coefficient range manageable.
 # Friction y-values are still computed at unscaled Re.
@@ -109,13 +105,6 @@ def friction_at_high_re(diameter_m: float, roughness_m: float) -> float:
     if term1 >= 1.0:
         return 0.0
     return 0.25 / math.log10(term1) ** 2
-
-
-def churchill_friction(Re, D, eps):
-    Re = max(Re, 1.0)
-    A = (2.457 * math.log(1.0 / ((7.0 / Re) ** 0.9 + 0.27 * eps / D))) ** 16
-    B = (37530.0 / Re) ** 16
-    return 8.0 * ((8.0 / Re) ** 12 + 1.0 / (A + B) ** 1.5) ** (1.0 / 12.0)
 
 
 def filter_near_linear(xs, ys, rtol=1e-6):

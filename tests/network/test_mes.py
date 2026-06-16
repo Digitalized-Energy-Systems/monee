@@ -15,12 +15,15 @@ from monee.model.formulation import (
     make_heat_convex_milp_formulation,
     make_smooth_nlp_formulation,
 )
+from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 from monee.network import generate_supply_return_mes_based_on_power_net
 from monee.problem.min_load_shedding import create_min_load_shedding_problem
 from monee.simulation.timeseries import TimeseriesData
 from monee.solver import GEKKOSolver
 
-GAS_HHV_MJ_PER_KG = 15.3 * 3.6
+# Match the gas grid the generators build (lgas) so the expected CP-output
+# computations use the same heating value as the sizing/physics.
+GAS_HHV_MJ_PER_KG = DEFAULT_GAS_HHV_MJ_PER_KG
 
 
 def _carrier_balance(mes):

@@ -13,8 +13,10 @@ from monee.solver import (
     resolve_multi_period_solver,
     resolve_solver,
 )
-from monee.solver.dispatch import _auto_backend
+from monee.solver.dispatch import _auto_backend, _casadi_available
 from monee.solver.gurobipy import GurobipySolver
+
+CASADI = _casadi_available()
 
 
 def _unavailable_pyomo_solvers(pyo_env):
@@ -31,16 +33,12 @@ def _unavailable_pyomo_solvers(pyo_env):
 # Auto-routing
 
 
-def test_auto_backend_gekko_for_apopt_bpopt_ipopt():
-    # WHEN
-    apopt_backend = _auto_backend("apopt")
-    bpopt_backend = _auto_backend("bpopt")
-    ipopt_backend = _auto_backend("ipopt")
-
-    # THEN
-    assert apopt_backend == "gekko"
-    assert bpopt_backend == "gekko"
-    assert ipopt_backend == "gekko"
+def test_auto_backend_routing_for_gekko_names():
+    # WHEN / THEN: apopt/bpopt stay on GEKKO; ipopt routes to CasADi when
+    # available (else GEKKO's bundled IPOPT).
+    assert _auto_backend("apopt") == "gekko"
+    assert _auto_backend("bpopt") == "gekko"
+    assert _auto_backend("ipopt") == ("casadi" if CASADI else "gekko")
 
 
 def test_auto_backend_pyomo_for_unknown_names():
@@ -60,13 +58,18 @@ def test_auto_backend_pyomo_for_unknown_names():
 # resolve_solver - defaults & instances
 
 
-def test_resolve_default_returns_gekko_ipopt():
+def test_resolve_default_returns_ipopt_backend():
     # WHEN
     s = resolve_solver()
 
-    # THEN
-    assert isinstance(s, GEKKOSolver)
-    assert s.solver == GEKKO_SOLVERS["ipopt"]
+    # THEN: default solver is IPOPT -> CasADi when available, else GEKKO's IPOPT.
+    if CASADI:
+        from monee.solver.casadi import CasADiSolver
+
+        assert isinstance(s, CasADiSolver)
+    else:
+        assert isinstance(s, GEKKOSolver)
+        assert s.solver == GEKKO_SOLVERS["ipopt"]
 
 
 def test_resolve_instance_returned_unchanged():
@@ -101,13 +104,18 @@ def test_resolve_string_apopt_routes_to_gekko():
     assert s.solver == GEKKO_SOLVERS["apopt"]
 
 
-def test_resolve_string_ipopt_routes_to_gekko_by_default():
+def test_resolve_string_ipopt_routes_to_ipopt_backend():
     # WHEN
     s = resolve_solver("ipopt")
 
-    # THEN
-    assert isinstance(s, GEKKOSolver)
-    assert s.solver == GEKKO_SOLVERS["ipopt"]
+    # THEN: 'ipopt' -> CasADi when available, else GEKKO's IPOPT.
+    if CASADI:
+        from monee.solver.casadi import CasADiSolver
+
+        assert isinstance(s, CasADiSolver)
+    else:
+        assert isinstance(s, GEKKOSolver)
+        assert s.solver == GEKKO_SOLVERS["ipopt"]
 
 
 def test_resolve_explicit_backend_pyomo_overrides_dual():
@@ -198,12 +206,17 @@ def test_resolve_gurobi_still_routes_to_pyomo_by_default():
 # resolve_multi_period_solver - same shape
 
 
-def test_resolve_multi_period_default_returns_gekko():
+def test_resolve_multi_period_default_returns_ipopt_backend():
     # WHEN
     s = resolve_multi_period_solver()
 
-    # THEN
-    assert isinstance(s, GekkoMultiPeriodSolver)
+    # THEN: default IPOPT -> CasADi multi-period when available, else GEKKO.
+    if CASADI:
+        from monee.solver.casadi import CasADiMultiPeriodSolver
+
+        assert isinstance(s, CasADiMultiPeriodSolver)
+    else:
+        assert isinstance(s, GekkoMultiPeriodSolver)
 
 
 def test_resolve_multi_period_instance_returned_unchanged():

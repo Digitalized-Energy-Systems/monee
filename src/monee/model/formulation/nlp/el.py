@@ -6,7 +6,7 @@ import math
 import numpy as np
 
 import monee.model.phys.nonlinear.ac as opfmodel
-from monee.model.core import PostProcess
+from monee.model.core import Intermediate, IntermediateEq, PostProcess
 
 from ..core import BranchFormulation, NodeFormulation
 
@@ -29,57 +29,46 @@ class AcPolarNlpNodeFormulation(NodeFormulation):
 
 
 class AcPolarNlpBranchFormulation(BranchFormulation):
+    def ensure_var(self, branch, simulation=False, grid=None):
+        # Current magnitude and line loading are report-only quantities: nothing
+        # in the power-flow model consumes them, and a line-loading limit (when
+        # present) is a *constraint* added by the optimisation problem. Declaring
+        # them as passive intermediates - instead of free Vars pinned by an
+        # equality - means they add no variables/constraints to the model unless
+        # such a constraint references them, in which case the defining
+        # expression inlines into it. Mirrors the MISOCP formulation. For a plain
+        # power flow / dispatch this removes 4 vars + 4 constraints (2 nonlinear)
+        # per branch and only evaluates them once, after the solve, for results.
+        branch.i_from_ka = Intermediate(0)
+        branch.i_to_ka = Intermediate(0)
+        branch.loading_from_pu = Intermediate(0)
+        branch.loading_to_pu = Intermediate(0)
+
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         y = np.linalg.pinv([[branch.br_r_pu + branch.br_x_pu * 1j]])[0][0]
         g, b = (np.real(y), np.imag(y))
 
+        # Built once and reused for both i_*_ka and loading_*_pu, so the sqrt
+        # node is shared (the two intermediates differ only by the /max_i_ka).
+        i_from_ka = (
+            branch.p_from_mw**2 + branch.q_from_mvar**2 + CURRENT_SMOOTHING_EPS_MW**2
+        ) ** 0.5 / (
+            from_node_model.vars["vm_pu"] * from_node_model.vars["base_kv"]
+        ) / SQRT_3
+        i_to_ka = (
+            branch.p_to_mw**2 + branch.q_to_mvar**2 + CURRENT_SMOOTHING_EPS_MW**2
+        ) ** 0.5 / (
+            to_node_model.vars["vm_pu"] * to_node_model.vars["base_kv"]
+        ) / SQRT_3
+
         return [
-            opfmodel.int_flow_from_p(
+            # All four P/Q flow equations, sharing the sub-terms common across
+            # them (vm_from*vm_to, the angle-difference sin/cos, vm**2) so the
+            # symbolic graph they contribute is ~halved (see ac.int_flows).
+            *opfmodel.int_flows(
                 p_from_var=branch.p_from_mw,
-                vm_from_pu=from_node_model.vars["vm_pu"],
-                vm_to_pu=to_node_model.vars["vm_pu"],
-                va_from_rad=from_node_model.vars["va_radians"],
-                va_to_rad=to_node_model.vars["va_radians"],
-                g_branch=g,
-                b_branch=b,
-                tap=branch.tap,
-                shift=branch.shift,
-                cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
-                sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
-                g_from=branch.g_fr_pu,
-                on_off=branch.on_off,
-            ),
-            opfmodel.int_flow_from_q(
                 q_from_var=branch.q_from_mvar,
-                vm_from_pu=from_node_model.vars["vm_pu"],
-                vm_to_pu=to_node_model.vars["vm_pu"],
-                va_from_rad=from_node_model.vars["va_radians"],
-                va_to_rad=to_node_model.vars["va_radians"],
-                g_branch=g,
-                b_branch=b,
-                tap=branch.tap,
-                shift=branch.shift,
-                cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
-                sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
-                b_from=branch.b_fr_pu,
-                on_off=branch.on_off,
-            ),
-            opfmodel.int_flow_to_p(
                 p_to_var=branch.p_to_mw,
-                vm_from_pu=from_node_model.vars["vm_pu"],
-                vm_to_pu=to_node_model.vars["vm_pu"],
-                va_from_rad=from_node_model.vars["va_radians"],
-                va_to_rad=to_node_model.vars["va_radians"],
-                g_branch=g,
-                b_branch=b,
-                tap=branch.tap,
-                shift=branch.shift,
-                cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
-                sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
-                g_to_pu=branch.g_to_pu,
-                on_off=branch.on_off,
-            ),
-            opfmodel.int_flow_to_q(
                 q_to_var=branch.q_to_mvar,
                 vm_from_pu=from_node_model.vars["vm_pu"],
                 vm_to_pu=to_node_model.vars["vm_pu"],
@@ -91,24 +80,16 @@ class AcPolarNlpBranchFormulation(BranchFormulation):
                 shift=branch.shift,
                 cos_impl=kwargs["cos_impl"] if "cos_impl" in kwargs else math.cos,
                 sin_impl=kwargs["sin_impl"] if "sin_impl" in kwargs else math.sin,
+                g_from=branch.g_fr_pu,
+                b_from=branch.b_fr_pu,
+                g_to_pu=branch.g_to_pu,
                 b_to_pu=branch.b_to_pu,
                 on_off=branch.on_off,
             ),
-            branch.i_from_ka
-            == (
-                branch.p_from_mw**2
-                + branch.q_from_mvar**2
-                + CURRENT_SMOOTHING_EPS_MW**2
-            )
-            ** 0.5
-            / (from_node_model.vars["vm_pu"] * from_node_model.vars["base_kv"])
-            / SQRT_3,
-            branch.i_to_ka
-            == (branch.p_to_mw**2 + branch.q_to_mvar**2 + CURRENT_SMOOTHING_EPS_MW**2)
-            ** 0.5
-            / (to_node_model.vars["vm_pu"] * to_node_model.vars["base_kv"])
-            / SQRT_3,
-            # Loading lives here so MISOCP can swap in its current_pu_squared form.
-            branch.loading_from_pu == branch.i_from_ka / branch.max_i_ka,
-            branch.loading_to_pu == branch.i_to_ka / branch.max_i_ka,
+            # Report-only intermediates: inline into a line-loading limit when one
+            # references them, otherwise evaluated post-solve for results only.
+            IntermediateEq("i_from_ka", i_from_ka),
+            IntermediateEq("i_to_ka", i_to_ka),
+            IntermediateEq("loading_from_pu", i_from_ka / branch.max_i_ka),
+            IntermediateEq("loading_to_pu", i_to_ka / branch.max_i_ka),
         ]

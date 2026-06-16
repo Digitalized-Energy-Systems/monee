@@ -25,7 +25,7 @@ from monee.model.formulation import (
 from tests.util import create_g2h_net, create_water_loop
 
 GEKKO_IPOPT = 3
-FRICTION_MODELS = ["constant", "pwl", "nonlinear"]
+FRICTION_MODELS = ["constant", "pwl", "nonlinear", "hybrid"]
 
 
 def _gurobipy_available() -> bool:
@@ -419,6 +419,219 @@ def test_infeasible_model_reports_iis():
     assert report is not None
     summary = report.summary()
     assert "impossible_c" in summary or "x_var" in summary
+
+
+@requires_gurobi
+def test_ltc_timeseries_on_gurobi_backend_does_not_crash():
+    """Regression: a timeseries solve with the LumpedThermalCapacitance extension
+    on the Gurobi backend used to crash in ``ext.activate_timeseries`` - it warm-
+    started ``node.model.t_pu.value = prev`` after ``t_pu`` had become a gurobipy
+    Var (which has no ``.value``). The warm start now routes through
+    ``set_initial_value``, which writes ``.Start`` for gurobipy vars."""
+    from monee.model import LumpedThermalCapacitance
+    from monee.model.formulation import make_heat_nlp_formulation
+    from monee.simulation import TimeseriesData, run_timeseries
+    from monee.solver.gurobipy import GurobipySolver
+    from tests.util import child_id_by_type
+
+    # GIVEN a water loop with thermal capacitance, on a Gurobi-compatible heat NLP
+    net, _, _, _ = create_water_loop(source_t_k=356)
+    net.add_extension(LumpedThermalCapacitance())
+    net.apply_formulation(make_heat_nlp_formulation())
+    sink_id = child_id_by_type(net, mm.Sink)
+    td = TimeseriesData()
+    td.add_child_series(sink_id, "mass_flow_kgs", [10.0, 6.0, 8.0, 12.0])
+
+    # WHEN  (previously raised AttributeError: 'gurobipy.Var' has no 'value')
+    result = run_timeseries(net, td, solver=GurobipySolver())
+
+    # THEN every step solves and the carried junction temperature stays finite
+    assert not result.failed_steps
+    t_last = result.get_result_for(mm.Junction, "t_pu").to_numpy()[-1]
+    assert math.isfinite(float(t_last.max()))
+
+
+# --------------------------------------------------------------------------- #
+# Timeseries build-once model-reuse fast path
+# --------------------------------------------------------------------------- #
+
+# A no-op step hook makes a run ineligible for the fast path (forces the
+# per-step rebuild loop), so it serves as the "rebuild" reference.
+_NOOP_HOOK = lambda *a, **k: None  # noqa: E731
+
+
+def _el_two_bus_net():
+    """ext-grid at b0, a load + generator at b1 on a single MISOCP line."""
+    from monee.model.child import PowerGenerator, PowerLoad
+    from monee.model.node import Bus
+
+    net = mm.Network(mm.PowerGrid(name="power", sn_mva=1))
+    b0 = net.node(
+        Bus(base_kv=1),
+        grid=mm.EL,
+        child_ids=[net.child(mm.ExtPowerGrid(p_mw=0, q_mvar=0, vm_pu=1, va_degree=0))],
+    )
+    load_id = net.child(PowerLoad(p_mw=1.0, q_mvar=0.0))
+    b1 = net.node(
+        Bus(base_kv=1),
+        grid=mm.EL,
+        child_ids=[load_id, net.child(PowerGenerator(p_mw=0.5, q_mvar=0))],
+    )
+    net.branch(
+        mm.PowerLine(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1),
+        b0,
+        b1,
+    )
+    net.apply_formulation(EL_MISOCP_FORMULATION)
+    return net, load_id
+
+
+def _el_net_with_storage(e_initial=5.0, e_max=10.0, p_max_mw=2.0):
+    from monee.model.child import PowerLoad
+    from monee.model.node import Bus
+    from monee.model.storage import ElectricStorage
+
+    net = mm.Network(mm.PowerGrid(name="power", sn_mva=1))
+    b0 = net.node(
+        Bus(base_kv=1),
+        grid=mm.EL,
+        child_ids=[net.child(mm.ExtPowerGrid(p_mw=0, q_mvar=0, vm_pu=1, va_degree=0))],
+    )
+    load_id = net.child(PowerLoad(p_mw=2.0, q_mvar=0.0))
+    storage_id = net.child(
+        ElectricStorage(e_mwh_initial=e_initial, e_mwh_max=e_max, p_max_mw=p_max_mw),
+        name="storage",
+    )
+    b1 = net.node(Bus(base_kv=1), grid=mm.EL, child_ids=[load_id, storage_id])
+    net.branch(
+        mm.PowerLine(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1),
+        b0,
+        b1,
+    )
+    net.apply_formulation(EL_MISOCP_FORMULATION)
+    return net, storage_id
+
+
+@requires_gurobi
+def test_run_timeseries_gurobipy_fast_path_matches_rebuild(monkeypatch):
+    """The build-once fast path engages for a plain (memory-less) gurobipy run
+    and yields identical results to the per-step rebuild loop."""
+    import numpy as np
+
+    import monee
+    import monee.simulation.timeseries as tsmod
+    from monee.simulation import TimeseriesData
+    from monee.solver.gurobipy import GurobipySolver
+
+    n = 4
+    calls = {"reuse": 0}
+    orig = tsmod._run_gurobipy_reuse
+    monkeypatch.setattr(
+        tsmod,
+        "_run_gurobipy_reuse",
+        lambda *a, **k: (calls.__setitem__("reuse", calls["reuse"] + 1) or orig(*a, **k)),
+    )
+
+    net, load_id = _el_two_bus_net()
+    profile = [1.0, 1.5, 0.8, 1.2]
+
+    td_fast = TimeseriesData()
+    td_fast.add_child_series(load_id, "p_mw", profile)
+    res_fast = monee.run_timeseries(net, td_fast, solver=GurobipySolver())
+
+    net2, load_id2 = _el_two_bus_net()
+    td_slow = TimeseriesData()
+    td_slow.add_child_series(load_id2, "p_mw", profile)
+    res_slow = monee.run_timeseries(
+        net2, td_slow, solver=GurobipySolver(), step_hooks=[_NOOP_HOOK]
+    )
+
+    assert calls["reuse"] == 1  # fast path engaged for the first (no-hook) run
+    assert res_fast.failed_steps == [] and res_slow.failed_steps == []
+    vf = res_fast.get_result_for(mm.Bus, "vm_pu").to_numpy()
+    vs = res_slow.get_result_for(mm.Bus, "vm_pu").to_numpy()
+    assert vf.shape == vs.shape
+    assert np.nanmax(np.abs(vf - vs)) < 1e-6
+
+
+@requires_gurobi
+def test_run_timeseries_gurobipy_fast_path_handles_storage_coupling(monkeypatch):
+    """Unlike the CasADi backend, the gurobipy fast path *stays engaged* for a
+    temporally-coupled network (storage SoC): the carried state is wired as a
+    per-step parameter, reproducing the rebuild loop exactly (including the
+    inter-step SoC invariant)."""
+    import numpy as np
+
+    import monee
+    import monee.simulation.timeseries as tsmod
+    from monee.simulation import TimeseriesData
+    from monee.solver.gurobipy import GurobipySolver
+
+    calls = {"reuse": 0}
+    orig = tsmod._run_gurobipy_reuse
+    monkeypatch.setattr(
+        tsmod,
+        "_run_gurobipy_reuse",
+        lambda *a, **k: (calls.__setitem__("reuse", calls["reuse"] + 1) or orig(*a, **k)),
+    )
+
+    dispatch = [1.0, -0.5, 0.8, 0.3]
+
+    net, sid = _el_net_with_storage()
+    td = TimeseriesData()
+    td.add_child_series(sid, "p_mw", dispatch)
+    res_fast = monee.run_timeseries(net, td, solver=GurobipySolver())
+
+    net2, sid2 = _el_net_with_storage()
+    td2 = TimeseriesData()
+    td2.add_child_series(sid2, "p_mw", dispatch)
+    res_slow = monee.run_timeseries(
+        net2, td2, solver=GurobipySolver(), step_hooks=[_NOOP_HOOK]
+    )
+
+    assert calls["reuse"] == 1  # temporal coupling does NOT disable the gurobi fast path
+    assert res_fast.failed_steps == []
+    e_fast = res_fast.get_result_for_id(sid, "e_mwh").to_numpy()
+    e_slow = res_slow.get_result_for_id(sid2, "e_mwh").to_numpy()
+    assert np.nanmax(np.abs(e_fast - e_slow)) < 1e-6
+
+    # Inter-step SoC invariant e[t] == e[t-1] + dt_h * p[t] (dt_h = 1.0): proves
+    # the carried state was actually coupled, not just re-bounded.
+    p_fast = res_fast.get_result_for_id(sid, "p_mw").to_numpy()
+    for t in range(1, len(dispatch)):
+        assert abs(e_fast[t] - (e_fast[t - 1] + p_fast[t])) < 1e-6
+
+
+@requires_gurobi
+def test_run_timeseries_gurobipy_falls_back_when_hooks_present(monkeypatch):
+    """Step hooks observe per-step state, so the standard per-step loop must run
+    instead of the build-once fast path."""
+    import monee
+    import monee.simulation.timeseries as tsmod
+    from monee.simulation import TimeseriesData
+    from monee.solver.gurobipy import GurobipySolver
+
+    calls = {"reuse": 0}
+    orig = tsmod._run_gurobipy_reuse
+    monkeypatch.setattr(
+        tsmod,
+        "_run_gurobipy_reuse",
+        lambda *a, **k: (calls.__setitem__("reuse", calls["reuse"] + 1) or orig(*a, **k)),
+    )
+
+    net, load_id = _el_two_bus_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 1.5, 0.8])
+    seen = []
+    monee.run_timeseries(
+        net,
+        td,
+        solver=GurobipySolver(),
+        step_hooks=[lambda *a: seen.append(a[1])],
+    )
+
+    assert calls["reuse"] == 0  # fast path skipped because hooks are present
+    assert seen == [0, 1, 2]
 
 
 if __name__ == "__main__":

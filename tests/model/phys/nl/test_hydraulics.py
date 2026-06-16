@@ -24,19 +24,6 @@ def test_calc_pipe_area_sub_1():
     # THEN
     assert math.isclose(area, 0.007853981633974483)
 
-
-def test_calc_nikurdse_friction_factor():
-    # GIVEN
-    diameter = 2
-    roughness_m = 0.7
-
-    # WHEN
-    nikurdse_friction = ml.calc_nikurdse(diameter, roughness_m)
-
-    # THEN
-    assert math.isclose(nikurdse_friction, 0.23781164943674166, rel_tol=1e-3)
-
-
 def test_balance_equation():
     # GIVEN
     mass_flows = [1, -1, 2, -2]

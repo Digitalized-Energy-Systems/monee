@@ -94,12 +94,7 @@ class Source(NoVarChildModel):
     """Fixed-setpoint mass-flow source. Constructor takes positive magnitude; sign is internal.
 
     ``t_k`` (optional) is the temperature of the injected stream. Without it the
-    injection is credited at the junction's own (mixed) temperature - matching
-    pandapipes' temperature-less ``source`` - which leaves the junction
-    temperature structurally undetermined when the source is its only inflow:
-    in monee's simultaneous NLP that rank deficiency can break the solve
-    (APOPT) or yield an arbitrary temperature (SCIP/IPOPT disagree). Set
-    ``t_k`` whenever the source feeds a heat grid and its temperature matters.
+    injection is credited at the junction's own (mixed) temperature.
     """
 
     def __init__(self, mass_flow_kgs, t_k=None, **kwargs) -> None:

@@ -31,6 +31,7 @@ QCP/SOCP machinery still recognises the cones.
 
 import logging
 import math
+import time
 import types
 
 from monee.model import (
@@ -46,6 +47,7 @@ from monee.model.formulation.registry import attach_formulations
 from monee.problem.core import OptimizationProblem
 
 from .core import (
+    InterStepState,
     SolverInterface,
     SolverResult,
     StepState,
@@ -917,3 +919,431 @@ class GurobipySolver(SolverInterface):
         if isinstance(e, (int, float)):
             return abs(e)
         return self._nlfunc.sqrt(self._nlfunc.square(e))
+
+
+# Temporal-coupling hooks a model / formulation / extension may expose for the
+# sequential timeseries (the persistent driver wires these against a parameter
+# step-state so the previous-step value enters as a per-step parameter).
+_TEMPORAL_METHODS = ("inter_temporal_equations", "inter_step_equations")
+
+
+class _ParamStepState(InterStepState):
+    """A :class:`~monee.solver.core.InterStepState` whose :meth:`get` returns a
+    *fixed* Gurobi variable (``lb == ub``, i.e. a parameter) instead of the
+    previous step's float.
+
+    The inter-step equations (e.g. ``e_mwh == prev_e + dt*p``) then reference
+    that parameter, so the model is built **once** and the carried state is
+    updated per step by re-bounding the parameter - the sequential analogue of
+    multi-period's live-variable coupling (``PeriodState``).
+    """
+
+    def __init__(self, gm, initial_vals, dt_h: float = 1.0):
+        self._gm = gm
+        self._initial = initial_vals  # {(component_id, attr): value}
+        self.dt_h = dt_h
+        self.params: dict = {}  # {(component_id, attr): gurobi Var}
+
+    def get(self, component_id, attr: str, step: int = -1):
+        key = (component_id, attr)
+        if key not in self.params:
+            init = float(self._initial.get(key, 0.0))
+            self.params[key] = self._gm.addVar(
+                lb=init, ub=init, name=f"prev__{component_id}__{attr}"
+            )
+        return self.params[key]
+
+
+class GurobipyTimeseries:
+    """Build-once / re-bound-per-step Gurobi timeseries driver (MILP/MIQCQP/
+    MISOCP/smooth-NLP).
+
+    Unlike :func:`monee.run_timeseries`, which reconstructs the whole model on
+    every step, this driver assembles the gurobipy model **once** and, across the
+    timeseries, only mutates the time-varying inputs in place
+    (``var.LB``/``var.UB``) and re-:meth:`~gurobipy.Model.optimize`. Two levers:
+
+    1. **Model reuse** - every time-varying attribute (from a
+       :class:`~monee.simulation.timeseries.TimeseriesData`) is turned into a
+       fixed decision variable (``lb == ub == value``) so it can be re-bounded
+       per step without touching the constraint structure.
+    2. **Carried state as a parameter** - inter-step coupling
+       (``state[t] == prev_state + dt*flow[t]``) makes ``prev_state`` a fixed
+       Gurobi variable too, fed from the prior step's solved value. This handles
+       storage SoC, the :class:`LumpedThermalCapacitance` extension's thermal
+       inertia, linepack, ... exactly as the rebuild loop does, but without the
+       rebuild.
+
+    The integer solution is additionally carried forward as a MIP start
+    (``Var.Start``) so Gurobi reuses the previous step's discrete decisions - the
+    big lever for the temporally-correlated binaries in storage / DHS models.
+
+    This reuses :class:`GurobipySolver`'s build passes verbatim; only the
+    persistent-model bookkeeping is added.
+
+    Args:
+        carry_mip_start: seed each step's integer variables with the previous
+            step's solution (``Var.Start``). Turn off to isolate the model-reuse
+            win from the warm-start win.
+        params: extra Gurobi parameters merged over
+            :data:`DEFAULT_GUROBI_PARAMS` (same semantics as
+            :class:`GurobipySolver`).
+    """
+
+    def __init__(
+        self,
+        input_network,
+        timeseries_data,
+        optimization_problem=None,
+        formulation=None,
+        simulation=False,
+        steps=None,
+        carry_mip_start=True,
+        params: dict | None = None,
+    ):
+        self._td = timeseries_data
+        self.carry_mip_start = carry_mip_start
+        gp, GRB, nlfunc = _require_gurobipy()
+        self._gp, self._GRB = gp, GRB
+
+        gs = GurobipySolver(params=params)
+        gs._gp, gs._GRB, gs._nlfunc = gp, GRB, nlfunc
+        gs._simulation = simulation
+        self._gs = gs
+
+        gm = gp.Model("monee_ts")
+        gm.setParam("OutputFlag", 0)
+        for key, val in gs._params.items():
+            gm.setParam(key, val)
+        self._gm = gm
+
+        network = input_network.copy()
+        for ext in network.extensions:
+            ext.prepare(network)
+        attach_formulations(network, formulation, simulation=simulation)
+        islanding = next(
+            (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
+            None,
+        )
+        ignored = set()
+        if optimization_problem is None:
+            ignored = find_ignored_nodes(network, islanding)
+            if ignored:
+                mark_ignored_components(network, ignored)
+        if optimization_problem is not None:
+            optimization_problem._apply(network)
+
+        nodes = network.nodes
+        for node in nodes:
+            if ignore_node(node, network, ignored):
+                continue
+            for child in network.childs_by_ids(node.child_ids):
+                if child.active:
+                    child.model.overwrite(node.model, node.grid)
+        branches, compounds = network.branches, network.compounds
+        pin_floating_hydraulic_gauges(network, ignored)
+        mark_heat_balance_slacks(network, ignored)
+        mark_he_flow_prescription(network, ignored)
+
+        # Capture initial values of all Var attributes (before they become
+        # Gurobi vars) so carried-state parameters can seed step 0.
+        self._initial_vals: dict = {}
+        for node in nodes:
+            if ignore_node(node, network, ignored):
+                continue
+            self._cap_initials(node.id, node.model)
+            for child in network.childs_by_ids(node.child_ids):
+                if not ignore_child(child, ignored):
+                    self._cap_initials(child.id, child.model)
+        for branch in branches:
+            if not ignore_branch(branch, network, ignored):
+                self._cap_initials(branch.id, branch.model)
+
+        # Turn every time-varying attribute into a *fixed* decision variable
+        # (lb == ub == value) so it injects as a Gurobi Var we can re-bound per
+        # step without rebuilding any constraint.
+        self._param_targets: list = []  # (model, attr, series)
+        self._declare_param_targets(network, timeseries_data)
+
+        inject_vars(
+            lambda model, comp, cat: gs.inject_gurobi_vars_attr(
+                gm, model, prefix=f"{cat}_{comp.id}"
+            ),
+            nodes,
+            branches,
+            compounds,
+            network,
+            ignored,
+        )
+        gm.update()
+
+        # Temporal setup must precede equation building: extensions like LTC use
+        # activate_timeseries() to mark components (e.g. _ltc_active) so the
+        # canonical balance is dropped in favour of the inter-temporal equation.
+        # Pass step_state=None so only the marking runs (no float warm-start
+        # assignment, which would clash with our parameter variables).
+        self._carried: list = []  # (prev_param_gvar, current_state_gvar)
+        has_temporal = any(
+            hasattr(m, meth)
+            for m in self._iter_models(network, nodes, branches, compounds, ignored)
+            for meth in _TEMPORAL_METHODS
+        ) or any(
+            hasattr(ext, meth)
+            for ext in network.extensions
+            for meth in (*_TEMPORAL_METHODS, "activate_timeseries")
+        )
+        self._param_state = None
+        if has_temporal:
+            gs.mark_temporal_components(network, ignored)
+            for ext in network.extensions:
+                if hasattr(ext, "activate_timeseries"):
+                    ext.activate_timeseries(network, ignored, step_state=None)
+
+        aux, user = [], []
+        gs.init_branches(branches)
+        gs.process_equations_nodes_childs(gm, network, nodes, ignored, aux)
+        gs.process_equations_branches(gm, network, branches, ignored, aux)
+        gs.process_equations_compounds(gm, network, compounds, ignored, aux)
+        if optimization_problem is not None:
+            gs.process_oxf_components(gm, network, optimization_problem, user)
+        else:
+            gs.process_internal_oxf_components(gm, network, user)
+
+        # --- inter-step (carried-state) coupling ---
+        # Wire the inter-step equations against a parameter step-state so the
+        # previous-step state (storage SoC, LTC junction temperature, ...)
+        # enters as a per-step parameter rather than a baked-in constant.
+        if has_temporal:
+            self._param_state = _ParamStepState(gm, self._initial_vals)
+            # model-level coupling (e.g. storage)
+            gs.process_inter_step_equations(
+                gm,
+                network,
+                nodes,
+                branches,
+                compounds,
+                ignored,
+                self._param_state,
+                optimization_problem=optimization_problem,
+            )
+            # extension-level coupling (e.g. LTC thermal inertia, linepack)
+            for ext in network.extensions:
+                for meth in _TEMPORAL_METHODS:
+                    if hasattr(ext, meth):
+                        gs._add_equations(
+                            gm,
+                            getattr(ext, meth)(network, ignored, self._param_state),
+                        )
+
+        for ext in network.extensions:
+            gs._add_equations(gm, ext.equations(network, ignored))
+        gs._set_objective(gm, user + aux)
+        gm.update()
+        self._obj_exprs = user + aux
+
+        # Link each carried-state parameter to the live variable that produces
+        # its next value (e.g. prev_e parameter <- this step's e_mwh variable).
+        if self._param_state is not None:
+            for (cid, attr), pvar in self._param_state.params.items():
+                model = self._model_by_id(network, cid, attr)
+                if model is not None:
+                    self._carried.append((pvar, model.__dict__[attr]))
+
+        self._network, self._nodes = network, nodes
+        self._branches, self._compounds, self._ignored = branches, compounds, ignored
+
+        # Registry of every solved Gurobi object on the models (vars + passive
+        # intermediate expressions), so per-step extraction reads the live model
+        # rather than the (mutated) model attributes.
+        self._reg: list = []  # (model, key, gobj, kind, is_int)
+        self._int_vars: list = []  # gurobi Var objects that are integer/binary
+        self._params: list = []  # (gurobi Var, series)
+        ptargets = {(id(m), a): s for (m, a, s) in self._param_targets}
+        for model in self._active_models():
+            for key, val in list(model.__dict__.items()):
+                if isinstance(val, gp.Var):
+                    is_int = val.VType in (GRB.INTEGER, GRB.BINARY)
+                    self._reg.append((model, key, val, "var", is_int))
+                    if is_int:
+                        self._int_vars.append(val)
+                    s = ptargets.get((id(model), key))
+                    if s is not None:
+                        self._params.append((val, s))
+                elif isinstance(val, (gp.LinExpr, gp.QuadExpr, gp.NLExpr)):
+                    self._reg.append((model, key, val, "expr", False))
+
+        self.n_vars = gm.NumVars
+        self.n_int = gm.NumIntVars + gm.NumBinVars
+        self.n_constr = gm.NumConstrs
+        length = timeseries_data.length
+        length = length() if callable(length) else length
+        self.steps = steps if steps is not None else length
+        # Per-step / cumulative state.
+        self._prev_int = None
+        self._last_objective = None
+        self.objectives: list = []
+        self.last_solve_total_s = None
+        self.last_status_ok = None
+        self.last_step_success = None
+
+    # ------------------------------------------------------------------ #
+    def _cap_initials(self, comp_id, model):
+        for key, val in model.__dict__.items():
+            if isinstance(val, (Var, Const, Intermediate)):
+                self._initial_vals[(comp_id, key)] = val.value
+
+    @staticmethod
+    def _iter_models(network, nodes, branches, compounds, ignored):
+        for branch in branches:
+            if not ignore_branch(branch, network, ignored):
+                yield branch.model
+        for node in nodes:
+            if ignore_node(node, network, ignored):
+                continue
+            yield node.model
+            for child in network.childs_by_ids(node.child_ids):
+                if not ignore_child(child, ignored):
+                    yield child.model
+        for compound in compounds:
+            if not ignore_compound(compound, ignored):
+                yield compound.model
+
+    def _model_by_id(self, network, cid, attr):
+        """Find the component (child / node / branch) with id *cid* whose *attr*
+        is a live Gurobi Var - disambiguates node vs child id collisions."""
+        for accessor in ("child_by_id", "node_by_id", "branch_by_id"):
+            try:
+                comp = getattr(network, accessor)(cid)
+            except Exception:
+                comp = None
+            if comp is not None and isinstance(
+                comp.model.__dict__.get(attr), self._gp.Var
+            ):
+                return comp.model
+        return None
+
+    # ------------------------------------------------------------------ #
+    def _declare_param_targets(self, network, td):
+        def add(model, attr):
+            cur = getattr(model, attr)
+            cur = (
+                cur.value
+                if isinstance(cur, (Var, Const, Intermediate))
+                else float(cur)
+            )
+            setattr(
+                model, attr, Var(value=float(cur), min=float(cur), max=float(cur))
+            )
+
+        for cid, attrs in td._child_id_to_series.items():
+            model = network.child_by_id(cid).model
+            for attr, series in attrs.items():
+                add(model, attr)
+                self._param_targets.append((model, attr, series))
+        for nid, attrs in td._node_id_to_series.items():
+            model = network.node_by_id(nid).model
+            for attr, series in attrs.items():
+                add(model, attr)
+                self._param_targets.append((model, attr, series))
+        for bid, attrs in td._branch_id_to_series.items():
+            model = network.branch_by_id(bid).model
+            for attr, series in attrs.items():
+                add(model, attr)
+                self._param_targets.append((model, attr, series))
+
+    def _active_models(self):
+        net, ign = self._network, self._ignored
+        for branch in self._branches:
+            if not ignore_branch(branch, net, ign):
+                yield branch.model
+        for node in self._nodes:
+            if ignore_node(node, net, ign):
+                continue
+            yield node.model
+            for child in net.childs_by_ids(node.child_ids):
+                if not ignore_child(child, ign):
+                    yield child.model
+        for compound in self._compounds:
+            if not ignore_compound(compound, ign):
+                yield compound.model
+
+    # ------------------------------------------------------------------ #
+    def _solve_step(self, t: int) -> bool:
+        """Re-bound the time-varying inputs (and carried state) for step *t*,
+        re-solve the persistent model (warm-started), and scatter the solution
+        into the network models. Returns whether the solve succeeded."""
+        gs, gm = self._gs, self._gm
+        for gvar, series in self._params:
+            v = float(series[t])
+            gvar.LB = v
+            gvar.UB = v
+        # carry state forward: set prev-state parameters from the last step's
+        # solved values (step 0 keeps the captured initial state).
+        if t > 0:
+            for pvar, cur in self._carried:
+                val = gs._var_value(cur)
+                pvar.LB = val
+                pvar.UB = val
+        if self.carry_mip_start and self._prev_int is not None:
+            for gvar, val in zip(self._int_vars, self._prev_int):
+                gvar.Start = val
+
+        gm.optimize()
+        ok = gm.Status in (self._GRB.OPTIMAL, self._GRB.SUBOPTIMAL) or gm.SolCount > 0
+        self._last_objective = (
+            self._gs._obj_value(gm, self._obj_exprs) if ok else float("nan")
+        )
+
+        # extract solution for results (reads live Gurobi objects, then
+        # overwrites the model attrs with plain monee values)
+        for model, key, gobj, kind, is_int in self._reg:
+            if kind == "var":
+                v = gs._var_value(gobj)
+                model.__dict__[key] = Var(
+                    value=int(round(v)) if is_int else v,
+                    min=None if gobj.LB <= -self._GRB.INFINITY else gobj.LB,
+                    max=None if gobj.UB >= self._GRB.INFINITY else gobj.UB,
+                    integer=is_int,
+                )
+            else:
+                model.__dict__[key] = Intermediate(value=gs._expr_value(gobj))
+        apply_post_process_all(
+            self._nodes, self._branches, self._compounds, self._network
+        )
+        if ok:
+            self._prev_int = [gs._var_value(v) for v in self._int_vars]
+        return ok
+
+    def step_result(self, t: int) -> SolverResult:
+        """Solve step *t* and return a :class:`SolverResult` for the network at
+        that step (used by the :func:`monee.run_timeseries` reuse fast path)."""
+        ok = self._solve_step(t)
+        self.last_step_success = ok
+        violations = compute_bound_violations(
+            self._nodes, self._branches, self._compounds, self._network
+        )
+        return SolverResult(
+            self._network,
+            self._network.as_result_dataframe_dict(),
+            self._last_objective,
+            ok,
+            violations,
+            mode_used="optimization",
+        )
+
+    def run(self):
+        """Solve every timestep, reusing the persistent model. Returns a list of
+        per-step ``{type_name: DataFrame}`` dicts (like
+        :attr:`SolverResult.dataframes`)."""
+        results, solve_total, ok_all = [], 0.0, True
+        self.objectives = []
+        for t in range(self.steps):
+            t0 = time.perf_counter()
+            ok = self._solve_step(t)
+            solve_total += time.perf_counter() - t0
+            ok_all = ok_all and ok
+            self.objectives.append(self._last_objective)
+            results.append(self._network.as_result_dataframe_dict())
+        self.last_solve_total_s = solve_total
+        self.last_status_ok = ok_all
+        return results

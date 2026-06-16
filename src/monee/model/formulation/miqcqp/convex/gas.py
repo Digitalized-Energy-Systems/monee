@@ -47,11 +47,8 @@ class RelaxedWeymouthBranchFormulation(BranchFormulation):
         p_to = p0 + (1 / (2 * p0)) * (to_node_model.vars["pressure_squared_pu"] - x0)
         p_avg = 0.5 * (p_from + p_to)
 
-        gas_density_kg_per_m3 = (
-            grid.pressure_ref_pa
-            * grid.molar_mass
-            / (grid.universal_gas_constant * grid.t_k)
-        )
+        p_amb = getattr(grid, "pressure_ambient_pa", 0.0)
+        gas_density_kg_per_m3 = ogfmodel.reference_gas_density(grid)
         f_max_local = min(
             grid.max_mass_flow_kgs,
             hydraulicsmodel.calc_max_mass_flow(
@@ -67,9 +64,23 @@ class RelaxedWeymouthBranchFormulation(BranchFormulation):
             branch.mass_flow_pos_kgs_squared <= f_max_local**2 * branch.on_off,
             branch.mass_flow_neg_kgs_squared <= f_max_local**2 * branch.on_off,
             ogfmodel.pipe_weymouth(
-                p_squared_i=from_node_model.vars["pressure_squared_pu"]
+                # ABSOLUTE squared pressure (Pa^2). In gauge mode the offset uses
+                # the LINEARIZED pressure p_from/p_to (affine in pressure_squared_pu,
+                # the same linearization used for the density above) so the
+                # constraint stays conic; a no-op when the grid's ambient is 0.
+                p_squared_i=ogfmodel.abs_psq_pu(
+                    from_node_model.vars["pressure_squared_pu"],
+                    p_from,
+                    p_amb,
+                    grid.pressure_ref_pa,
+                )
                 * grid.pressure_ref_pa**2,
-                p_squared_j=to_node_model.vars["pressure_squared_pu"]
+                p_squared_j=ogfmodel.abs_psq_pu(
+                    to_node_model.vars["pressure_squared_pu"],
+                    p_to,
+                    p_amb,
+                    grid.pressure_ref_pa,
+                )
                 * grid.pressure_ref_pa**2,
                 f_a_pos_sq=branch.mass_flow_pos_kgs_squared,
                 f_a_neg_sq=branch.mass_flow_neg_kgs_squared,
@@ -79,11 +90,11 @@ class RelaxedWeymouthBranchFormulation(BranchFormulation):
                 compressibility=grid.compressibility,
                 on_off=branch.on_off,
                 friction=branch.friction,
+                r_specific=grid.universal_gas_constant / grid.molar_mass,
                 **kwargs,
             ),
             branch.gas_density_kg_per_m3
-            == grid.pressure_ref_pa
-            * p_avg
+            == (grid.pressure_ref_pa * p_avg + p_amb)
             * grid.molar_mass
             / (grid.universal_gas_constant * grid.t_k),
         ]

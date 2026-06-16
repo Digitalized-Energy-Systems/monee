@@ -15,7 +15,7 @@ No-op in single-step solves.
 import math
 
 from monee.model.child import GridFormingMixin
-from monee.model.core import Var
+from monee.model.core import Var, set_initial_value
 from monee.model.grid import WaterGrid
 from monee.model.node import Junction
 from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
@@ -115,7 +115,8 @@ class LumpedThermalCapacitance(NetworkAspect):
             if self._ltc_rho_v[node.id] <= 0.0:
                 continue
             node.model._ltc_active = True
-            # Warm-start; t_pu may be a backend variable after inject_vars.
+            # Warm-start; t_pu is a backend variable after inject_vars, so route
+            # through set_initial_value (handles gurobipy's .Start vs .value).
             if step_state is not None:
                 prev_t = step_state.get(node.id, "t_pu")
                 if (
@@ -123,7 +124,7 @@ class LumpedThermalCapacitance(NetworkAspect):
                     and hasattr(node.model, "t_pu")
                     and node.model.t_pu is not None
                 ):
-                    node.model.t_pu.value = prev_t
+                    set_initial_value(node.model.t_pu, prev_t)
 
     def inter_temporal_equations(
         self, network, ignored_nodes: set, temporal_state

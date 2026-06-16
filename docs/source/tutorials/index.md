@@ -14,10 +14,10 @@ simulation or optimisation. Each tutorial builds on the {doc}`../quickstart`.
 
 A feeder serves a factory and a warehouse.  An upstream fault caps supply at
 0.6 MW.  Define controllables, a differentiated-cost objective, and a power
-constraint - the optimiser sheds the cheapest load first.
+constraint, then let the optimiser shed the cheapest load first.
 :::
 
-:::{grid-item-card} 02 · Solar feeder - day-ahead
+:::{grid-item-card} 02 · Solar feeder: day-ahead
 :link: 02_timeseries_simulation
 :link-type: doc
 :shadow: sm

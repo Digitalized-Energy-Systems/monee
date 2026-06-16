@@ -1,7 +1,7 @@
 monee.model.phys
 ================
 
-:mod:`monee.model.phys` is the **pure-math layer** of monee: stateless,
+:mod:`monee.model.phys` is the pure-math layer of monee: stateless,
 solver-agnostic functions that take plain variables or expressions and return
 the relational expressions assembled by the formulation classes in
 :mod:`monee.model.formulation`. The modules contain no classes, no solver
@@ -42,7 +42,7 @@ Gas flow (Weymouth)
    :members:
    :undoc-members:
 
-Water flow (Darcy–Weisbach)
+Water flow (Darcy-Weisbach)
 ---------------------------
 
 .. automodule:: monee.model.phys.nonlinear.wf

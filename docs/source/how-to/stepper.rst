@@ -1,21 +1,21 @@
-﻿=============================================
+=============================================
 Externally paced co-simulation (Stepper)
 =============================================
 
-Use a **Stepper** when an *external* program decides when and how far the
-simulation advances - typically a **co-simulation framework** such as
+Use a Stepper when an external program decides when and how far the
+simulation advances. A typical case is a co-simulation framework such as
 `mosaik <https://mosaik.offis.de/>`_, where monee is one simulator among many
-and the orchestrator dictates the clock.  Unlike
+and the orchestrator owns the clock. Unlike
 :func:`~monee.run_timeseries`, which loops over a fixed number of steps on its
 own, a :class:`~monee.simulation.Stepper` exposes a single
-:meth:`~monee.simulation.Stepper.step` method that you call whenever your
-framework wants the network to advance - by one hour, by fifteen minutes, or
+:meth:`~monee.simulation.Stepper.step` method. You call it whenever your
+framework wants the network to advance: by one hour, by fifteen minutes, or
 by any other positive duration, varying freely from call to call.
 
 Between calls the Stepper keeps a persistent
 :class:`~monee.simulation.StepState`, so storage state of charge, gas
-linepack, and LTC tap positions carry over from one step to the next exactly
-as they do in a regular timeseries run.
+linepack, and LTC tap positions carry over from one step to the next, exactly
+as in a regular timeseries run.
 
 For the architectural background on sequential simulation see
 :doc:`../concepts/timeseries`.
@@ -34,7 +34,7 @@ When to use which driver
      - :func:`~monee.run_timeseries`
      - :func:`~monee.run_multi_period`
    * - Who paces the loop
-     - The **caller** (co-simulation framework)
+     - The caller (co-simulation framework)
      - monee (internal loop)
      - monee (single joint solve)
    * - Step size
@@ -64,7 +64,7 @@ forward at whatever pace you like:
    import monee.express as mx
    from monee.simulation import TimeseriesData
 
-   # â”€â”€ Electricity grid â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€
+   # Electricity grid
    net = mx.create_multi_energy_network()
    bus0 = mx.create_bus(net)
    bus1 = mx.create_bus(net)
@@ -104,7 +104,7 @@ Constructing a Stepper
        net,
        *,
        solver=None,                  # name string, SolverInterface, or None
-       backend=None,                 # "gekko" or "pyomo"
+       backend=None,                 # "casadi", "gekko", "pyomo", or "gurobipy"
        optimization_problem=None,    # applied at every step
        timeseries_data=None,         # source for ts_index slices
        initial_state=None,           # {(component_id, attr): float}
@@ -116,26 +116,27 @@ Constructing a Stepper
 The constructor mirrors :func:`~monee.run_timeseries`:
 
 * ``solver`` / ``backend`` are resolved once, exactly as in
-  :func:`~monee.solve` - a solver name string such as ``"ipopt"`` or
-  ``"scip"``, a solver instance, or ``None`` for the GEKKO/IPOPT default.
+  :func:`~monee.solve`: a solver name string such as ``"ipopt"`` or
+  ``"scip"``, a solver instance, or ``None`` for the default (IPOPT on CasADi
+  when installed, otherwise GEKKO's bundled IPOPT).
 * ``optimization_problem`` lets every step solve an optimization instead of a
   plain energy flow.
 * ``initial_state`` seeds the :class:`~monee.simulation.StepState` with
-  fallback values - for example a starting storage state of charge
-  ``{(bat_id, "e_mwh"): 2.0}`` - used until the attribute has been written by
+  fallback values (for example a starting storage state of charge
+  ``{(bat_id, "e_mwh"): 2.0}``) used until the attribute has been written by
   a prior solve.
-* ``max_history`` bounds memory for open-ended runs: every step retains a
+* ``max_history`` bounds memory for open-ended runs. Every step retains a
   full solved network copy (in the ``StepState`` and in the history), so an
-  unbounded co-simulation grows memory step by step.  Set ``max_history`` to
-  the longest lookback your inter-step physics needs (the built-in storage,
-  linepack, and LTC couplings only ever read the previous step, so e.g.
-  ``max_history=8`` is generous) and old steps are dropped as new ones
-  arrive.  ``step_count`` and ``t_h`` keep counting across dropped steps;
-  :meth:`~monee.simulation.Stepper.to_timeseries_result` then only covers
-  the retained window.
+  unbounded co-simulation grows memory step by step. Set ``max_history`` to
+  the longest lookback your inter-step physics needs, then old steps are
+  dropped as new ones arrive. The built-in storage, linepack, and LTC
+  couplings only read the previous step, so a small value such as
+  ``max_history=8`` is generous. ``step_count`` and ``t_h`` keep counting
+  across dropped steps; :meth:`~monee.simulation.Stepper.to_timeseries_result`
+  then covers only the retained window.
 
 The Stepper never mutates the base network: every step works on a fresh
-``net.copy()``.  After a successful solve the result network is pushed into
+``net.copy()``. After a successful solve the result network is pushed into
 the persistent ``StepState``, which is how storage, linepack, and LTC state
 carry across calls.
 
@@ -149,39 +150,39 @@ Stepping
    step(dt_h, *, data_overrides=None, ts_index=None) -> StepResult
 
 ``step`` advances the simulation clock by ``dt_h`` hours and solves one
-snapshot.  Inputs for the step come from two optional sources, applied in
+snapshot. Inputs for the step come from two optional sources, applied in
 this order:
 
-1. ``ts_index`` - apply row ``ts_index`` of the constructor's
-   :class:`~monee.simulation.TimeseriesData` to the network copy.  Because
-   the *caller* paces the simulation, the row index is explicit rather than
-   an internal counter - you may revisit, skip, or interpolate rows as your
+1. ``ts_index``: apply row ``ts_index`` of the constructor's
+   :class:`~monee.simulation.TimeseriesData` to the network copy. Because the
+   caller paces the simulation, the row index is explicit rather than an
+   internal counter, so you may revisit, skip, or interpolate rows as your
    framework requires.
-2. ``data_overrides`` - a mapping ``{(component_id, attribute): value}``
-   applied *after* the timeseries slice, so overrides win on conflicts.
-   This is the natural channel for values arriving live from other
-   simulators (e.g. setpoints computed by an agent system).
+2. ``data_overrides``: a mapping ``{(component_id, attribute): value}``
+   applied after the timeseries slice, so overrides win on conflicts. This is
+   the natural channel for values arriving live from other simulators (for
+   example setpoints computed by an agent system).
 
 .. code-block:: python
 
    r = c.step(
        0.25,
-       ts_index=3,                                  # profile row first â€¦
-       data_overrides={(load_id, "p_mw"): 0.3},     # â€¦ then live inputs win
+       ts_index=3,                                  # profile row first,
+       data_overrides={(load_id, "p_mw"): 0.3},     # then live inputs win
    )
 
 Two validation rules are deliberate:
 
-* ``dt_h <= 0`` raises ``ValueError`` - time must move forward.
+* ``dt_h <= 0`` raises ``ValueError``: time must move forward.
 * An unknown component id in ``data_overrides`` raises ``KeyError``; a known
-  id whose models lack the attribute raises ``AttributeError``.  In a
-  co-simulation, a misspelled id or attribute is a **wiring bug**, not a
+  id whose models lack the attribute raises ``AttributeError``. In a
+  co-simulation, a misspelled id or attribute is a wiring bug, not a
   transient condition, so it always raises regardless of ``on_step_error``.
 
 .. note::
 
    Like :class:`~monee.simulation.TimeseriesData`, overrides that target a
-   solver ``Var`` pin its ``value``/``min``/``max`` to the given value - the
+   solver ``Var`` pin its ``value``/``min``/``max`` to the given value: the
    quantity stays a variable, so it remains visible to ``StepState`` and the
    result tables.
 
@@ -190,10 +191,10 @@ Two validation rules are deliberate:
 Reading values back
 ===================
 
-A co-simulation adapter needs the full *set / step / get* contract:
-``data_overrides`` is the *set* side, :meth:`~monee.simulation.Stepper.step`
-the *step* side, and :meth:`~monee.simulation.Stepper.get` the *get* side -
-the values you publish back to the orchestrator after each step:
+A co-simulation adapter needs the full set, step, get contract:
+``data_overrides`` is the set side, :meth:`~monee.simulation.Stepper.step` the
+step side, and :meth:`~monee.simulation.Stepper.get` the get side. Use ``get``
+for the values you publish back to the orchestrator after each step:
 
 .. code-block:: python
 
@@ -203,9 +204,9 @@ the values you publish back to the orchestrator after each step:
 
 ``get`` reads from the persistent ``StepState``: by default the most recent
 successful solve (``step=-1``); negative values index relative to the latest
-solve, non-negative values are absolute step indices.  It returns ``None``
+solve, non-negative values are absolute step indices. It returns ``None``
 (or the ``initial_state`` fallback) when no solve has written the attribute
-yet - or when the requested step has been dropped under ``max_history``.
+yet, or when the requested step has been dropped under ``max_history``.
 
 For tabular post-processing of whole runs, prefer the ``StepResult`` returned
 by each ``step`` call or :meth:`~monee.simulation.Stepper.to_timeseries_result`.
@@ -218,11 +219,10 @@ Error handling
 With the default ``on_step_error="raise"``, a solver failure propagates to
 the caller and neither the history nor the clock changes.
 
-With ``on_step_error="skip"``, a failure is logged, a *failed*
+With ``on_step_error="skip"``, a failure is logged, a failed
 :class:`~monee.simulation.StepResult` (``failed=True``, ``error`` set) is
-appended to the history, and **time still advances** by ``dt_h`` - the
-external clock and the Stepper's clock stay in sync even across failed
-steps:
+appended to the history, and time still advances by ``dt_h``. The external
+clock and the Stepper's clock stay in sync even across failed steps:
 
 .. code-block:: python
 
@@ -286,10 +286,10 @@ After the run, wrap the accumulated history in the standard
    idx = pd.date_range("2024-01-01", periods=c.step_count, freq="h")
    ts_result = c.to_timeseries_result(datetime_index=idx)
 
-Everything documented in :doc:`timeseries` for result querying -
-:meth:`~monee.simulation.TimeseriesResult.get_result_for`,
+Everything documented in :doc:`timeseries` for result querying
+(:meth:`~monee.simulation.TimeseriesResult.get_result_for`,
 :meth:`~monee.simulation.TimeseriesResult.get_result_for_id`,
-``ts_result[component_id]``, ``failed_steps``, the notebook HTML repr -
+``ts_result[component_id]``, ``failed_steps``, the notebook HTML repr)
 works unchanged.
 
 .. tip::

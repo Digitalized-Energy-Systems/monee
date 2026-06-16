@@ -6,13 +6,16 @@ from geopy import distance
 import monee.express as mx
 import monee.model as mm
 import monee.model.phys.core.hydraulics as hyd
+from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 
 REF_PA = 1000000
 REF_TEMP = 356
 DEFAULT_LENGTH = 100
 
-# Default lgas HHV: 15.3 kWh/kg · 3.6 MJ/kWh = 55.08 MJ/kg → 1 MW ≈ 1/55.08 kg/s.
-GAS_HHV_MJ_PER_KG = 15.3 * 3.6
+# Gas HHV [MJ/kg] for sizing gas demands from power magnitudes. Sourced from the
+# lgas grid definition so the sizing uses the SAME heating value as the coupling
+# physics (see monee.model.grid.DEFAULT_GAS_HHV_MJ_PER_KG).
+GAS_HHV_MJ_PER_KG = DEFAULT_GAS_HHV_MJ_PER_KG
 
 
 def _node_power_load_mw(power_net: mm.Network, node):
@@ -63,9 +66,7 @@ def create_heat_net_for_power(
     seed=None,
 ):
     rng = random.Random(seed) if seed is not None else random
-    heat_grid = mm.create_water_grid("water")
-    heat_grid.t_ref_k = REF_TEMP
-    heat_grid.pressure_ref_pa = REF_PA
+    heat_grid = mm.create_water_grid("water", t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA)
     target_net.set_default_grid("water", heat_grid)
 
     power_net_as_st = mm.to_spanning_tree(power_net)
@@ -183,11 +184,12 @@ def create_gas_net_for_power(
     length_scale=1,
     default_length=100,
     seed=None,
+    gas_type="lgas",
 ):
     rng = random.Random(seed) if seed is not None else random
-    gas_grid = mm.create_gas_grid("gas", type="lgas")
-    gas_grid.pressure_ref_pa = REF_PA
-    gas_grid.t_ref_k = REF_TEMP
+    gas_grid = mm.create_gas_grid(
+        "gas", type=gas_type, t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA
+    )
 
     target_net.set_default_grid("gas", gas_grid)
 
@@ -595,6 +597,9 @@ def create_mv_multi_cigre():
         default_diameter_m=0.64,
         length_scale=0.001,
         default_length=100000,
+        # This reference grid was tuned for the pre-2026 methane-like gas; keep
+        # it on that gas so the bench net stays feasible under realistic lgas.
+        gas_type="methane",
     )
     create_heat_net_for_power(
         monee_net,
@@ -673,10 +678,12 @@ def create_gas_tree_net_for_power(
 
     Returns ``{power_node_id → gas_junction_id}``.
     """
-    gas_grid = mm.create_gas_grid("gas", type="lgas")
-    gas_grid.pressure_ref_pa = REF_PA
-    gas_grid.t_ref_k = REF_TEMP
+    gas_grid = mm.create_gas_grid(
+        "gas", type="lgas", t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA
+    )
     target_net.set_default_grid("gas", gas_grid)
+    # HHV [MJ/kg] of this grid's gas fluid (sizing matches the gas physics).
+    gas_hhv_mj = gas_grid.higher_heating_value_kwh_per_kg * 3.6
 
     power_net_as_st = mm.to_spanning_tree(power_net)
 
@@ -709,7 +716,7 @@ def create_gas_tree_net_for_power(
         p_load_mw = _node_power_load_mw(power_net, node)
         if p_load_mw > 0 and gas_load_share > 0:
             mass_flow_kgs = max(
-                min_load_kgs, p_load_mw * gas_load_share / GAS_HHV_MJ_PER_KG
+                min_load_kgs, p_load_mw * gas_load_share / gas_hhv_mj
             )
             mx.create_sink(
                 target_net,
@@ -720,7 +727,7 @@ def create_gas_tree_net_for_power(
         p_gen_mw = _node_power_gen_mw(power_net, node)
         if p_gen_mw > 0 and gas_gen_share > 0:
             mass_flow_kgs = max(
-                min_source_kgs, p_gen_mw * gas_gen_share / GAS_HHV_MJ_PER_KG
+                min_source_kgs, p_gen_mw * gas_gen_share / gas_hhv_mj
             )
             mx.create_source(
                 target_net,
@@ -831,9 +838,7 @@ def create_heat_supply_return_net_for_power(
 
     Returns ``({power_node_id → supply_junction_id}, return_junction_id)``.
     """
-    heat_grid = mm.create_water_grid("water")
-    heat_grid.t_ref_k = REF_TEMP
-    heat_grid.pressure_ref_pa = REF_PA
+    heat_grid = mm.create_water_grid("water", t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA)
     if node_based_heat_loads:
         # Tighten McCormick-DHS envelopes
         heat_grid.t_pu_min_env = 0.75
@@ -1276,7 +1281,16 @@ def create_coupling_points_for_mes(
         target_nodes = [nid for nid in candidate_node_ids if rng.random() < density]
 
     created = []
-    
+
+    # HHV [MJ/kg] of the gas fluid actually registered on the net, so coupling-
+    # point sizing uses the same heating value as the gas physics regardless of
+    # which gas type the grid was built with.
+    gas_hhv_mj = (
+        mes_net.node_by_id(next(iter(bus_to_gas_junc.values()))).grid
+        .higher_heating_value_kwh_per_kg
+        * 3.6
+    )
+
     cp_power_out_mw = 0.0
     cp_gas_out_kgs = 0.0
     cp_heat_out_mw = 0.0
@@ -1296,11 +1310,11 @@ def create_coupling_points_for_mes(
         if unit_type == "chp":
             chp_p_target_mw = chp_p_share * cp_size_multiplier * p_ref_mw
             mass_flow_kgs = round(
-                chp_p_target_mw / max(chp_efficiency_power, 1e-3) / GAS_HHV_MJ_PER_KG,
+                chp_p_target_mw / max(chp_efficiency_power, 1e-3) / gas_hhv_mj,
                 6,
             )
-            cp_power_out_mw += mass_flow_kgs * GAS_HHV_MJ_PER_KG * chp_efficiency_power
-            cp_heat_out_mw += mass_flow_kgs * GAS_HHV_MJ_PER_KG * chp_efficiency_heat
+            cp_power_out_mw += mass_flow_kgs * gas_hhv_mj * chp_efficiency_power
+            cp_heat_out_mw += mass_flow_kgs * gas_hhv_mj * chp_efficiency_heat
             if use_hg_variants:
                 uid = mx.create_chp_hg(
                     mes_net,
@@ -1329,7 +1343,7 @@ def create_coupling_points_for_mes(
 
         elif unit_type == "p2g":
             p2g_p_in_mw = p2g_p_share * cp_size_multiplier * p_ref_mw
-            mass_flow_kgs = round(p2g_efficiency * p2g_p_in_mw / GAS_HHV_MJ_PER_KG, 6)
+            mass_flow_kgs = round(p2g_efficiency * p2g_p_in_mw / gas_hhv_mj, 6)
             cp_gas_out_kgs += mass_flow_kgs
             bid = mx.create_p2g(
                 mes_net,

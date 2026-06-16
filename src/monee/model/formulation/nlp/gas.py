@@ -1,12 +1,13 @@
 """Smooth Weymouth gas formulation: a non-convex NLP, binary-free."""
 
 import monee.model.phys.core.hydraulics as hydraulicsmodel
+import monee.model.phys.nonlinear.gf as ogfmodel
 import monee.model.phys.nonlinear.smooth as smoothmodel
 from monee.model.core import Const, Var
 
 from ..core import BranchFormulation
 
-FRICTION_MODELS = ("constant", "pwl", "nonlinear")
+FRICTION_MODELS = ("constant", "pwl", "nonlinear", "hybrid")
 
 
 def _seed_mag(model):
@@ -33,7 +34,10 @@ def _pin(model, *names):
 def _ensure_friction_vars(model, friction_model):
     """Set up the friction state for the chosen model, independent of any
     formulation applied earlier (which may have pinned these to ``Const``)."""
-    if friction_model == "constant":
+    if friction_model in ("constant", "hybrid"):
+        # Both carry the fully-rough factor as the turbulent coefficient. "hybrid"
+        # additionally adds a linear laminar term in the drop (see
+        # smooth.hybrid_drop_term); no Reynolds/friction variable is needed.
         model.friction = Const(
             hydraulicsmodel.friction_at_high_re(model.diameter_m, model.roughness_m)
         )
@@ -56,9 +60,15 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
     smooth split of ``m``, so no ``direction`` binary and no epigraph relaxation
     are needed. ``on_off`` stays an optional switch.
 
-    ``friction_model``: ``"constant"`` (turbulent asymptote per pipe),
-    ``"pwl"`` (odd spline of the drop term) or ``"nonlinear"`` (smooth laminar\ :math:`\leftrightarrow`
-    turbulent friction blend).
+    ``friction_model``:
+
+    * ``"constant"`` - fully-rough turbulent asymptote per pipe (Reynolds-independent).
+    * ``"hybrid"`` - laminar Hagen-Poiseuille term (:math:`64/Re`, linear in :math:`m`)
+      plus the fully-rough turbulent term; equals pandapipes' default ``nikuradse``
+      law and is QCQP-representable (see :func:`smooth.hybrid_drop_term`).
+    * ``"nonlinear"`` - smooth laminar\ :math:`\leftrightarrow` turbulent Swamee-Jain
+      blend (:math:`\approx` Colebrook), Reynolds-coupled.
+    * ``"pwl"`` - piecewise-linear (odd cubic spline) of the full drop term.
     """
 
     def __init__(
@@ -93,11 +103,7 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         sqrt_impl = kwargs["sqrt_impl"]
         area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
 
-        gas_density_kg_per_m3 = (
-            grid.pressure_ref_pa
-            * grid.molar_mass
-            / (grid.universal_gas_constant * grid.t_k)
-        )
+        gas_density_kg_per_m3 = ogfmodel.reference_gas_density(grid)
         f_max_local = min(
             grid.max_mass_flow_kgs,
             hydraulicsmodel.calc_max_mass_flow(
@@ -139,10 +145,13 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
                 signed <= f_max_local * branch.on_off,
                 -signed <= f_max_local * branch.on_off,
             ]
+        p_amb = getattr(grid, "pressure_ambient_pa", 0.0)
         eqs += [
             smoothmodel.weymouth_pressure(
                 psq_pu_i=from_node_model.vars["pressure_squared_pu"],
                 psq_pu_j=to_node_model.vars["pressure_squared_pu"],
+                p_pu_i=from_node_model.vars["pressure_pu"],
+                p_pu_j=to_node_model.vars["pressure_pu"],
                 drop_term=drop_term,
                 diameter_m=branch.diameter_m,
                 length_m=branch.length_m,
@@ -150,10 +159,12 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
                 compressibility=grid.compressibility,
                 pressure_ref_pa=grid.pressure_ref_pa,
                 on_off=branch.on_off,
+                r_specific=grid.universal_gas_constant / grid.molar_mass,
+                pressure_ambient_pa=p_amb,
             ),
+            # density uses ABSOLUTE pressure = (gauge p_avg)*p_ref + p_ambient
             branch.gas_density_kg_per_m3
-            == grid.pressure_ref_pa
-            * p_avg
+            == (grid.pressure_ref_pa * p_avg + p_amb)
             * grid.molar_mass
             / (grid.universal_gas_constant * grid.t_k),
         ]

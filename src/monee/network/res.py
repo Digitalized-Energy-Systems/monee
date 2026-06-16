@@ -86,7 +86,8 @@ def create_urban_district_net() -> mm.Network:
     mx.create_heat_exchanger(net, s3, r1, 0.2)
 
     # CHP: gas at G2 → power at B3, heat from r1→s1.
-    # heat_w = 0.40 × 0.008 kg/s × 3.6 × 15.3 kWh/kg × 1e6 = 176 256 W
+    # heat_w = 0.40 × 0.008 kg/s × 3.6 × 11.79011 kWh/kg × 1e6 ≈ 135 822 W
+    # (default gas is now lgas, HHV 11.79011 kWh/kg; was 15.3 for methane)
     mx.create_chp(
         net,
         power_node_id=b3,
@@ -779,7 +780,8 @@ def create_balanced_urban_mes_net() -> mm.Network:
     mx.create_heat_exchanger(net, s4, r4, 0.300)  # 300 kW P2H consumer
 
     # CHP: gas at G2 → power at B3, heat from r1→s1.
-    # heat_w = 0.40 × 0.026 kg/s × 3.6 × 15.3 kWh/kg × 1e6 ≈ 572 kW
+    # heat_w = 0.40 × 0.026 kg/s × 3.6 × 11.79011 kWh/kg × 1e6 ≈ 441 kW
+    # (default gas is now lgas, HHV 11.79011 kWh/kg; was 15.3 for methane)
     mx.create_chp(
         net,
         power_node_id=b3,
@@ -1086,7 +1088,7 @@ def create_resilient_urban_mes_net() -> mm.Network:
     mx.create_heat_exchanger(net, s6, r6, 0.300)  # 300 kW CHP2 consumer
 
     # CHP1: G2 → B3 (power), heat from r1→s1.
-    # heat_w ≈ 0.40 × 0.026 × 55.08 × 1e6 = 573 kW
+    # heat_w ≈ 0.40 × 0.026 × 42.44 × 1e6 = 441 kW  (lgas HHV 42.44 MJ/kg; was 55.08)
     mx.create_chp(
         net,
         power_node_id=b3,
@@ -1100,7 +1102,7 @@ def create_resilient_urban_mes_net() -> mm.Network:
         regulation=1,
     )
     # CHP2: G6 → B5 (power), heat from r2→s2.
-    # heat_w ≈ 0.40 × 0.018 × 55.08 × 1e6 = 397 kW
+    # heat_w ≈ 0.40 × 0.018 × 42.44 × 1e6 = 306 kW  (lgas HHV 42.44 MJ/kg; was 55.08)
     mx.create_chp(
         net,
         power_node_id=b5,
