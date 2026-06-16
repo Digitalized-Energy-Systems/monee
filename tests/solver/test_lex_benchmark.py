@@ -63,7 +63,9 @@ def _simbench_mes_net():
         ("urban", create_urban_district_net, {}),
         ("large_urban", create_large_urban_mes_net, {"n_districts": 4}),
         ("restoration", create_restoration_benchmark, {"misocp": True}),
-        ("simbench_rural_mes", _simbench_mes_net, None),
+        pytest.param(
+            ("simbench_rural_mes", _simbench_mes_net, None), marks=pytest.mark.pptest
+        ),
     ],
     ids=["urban", "large_urban", "restoration", "simbench_rural_mes"],
 )

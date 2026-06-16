@@ -1,12 +1,9 @@
 import networkx as nx
 import pytest
-import simbench
 
 import monee
 import monee.model as mm
 from monee import run_energy_flow, run_timeseries
-from monee.io.from_pandapower import from_pandapower_net
-from monee.io.from_simbench import obtain_simbench_profile_by_pp_net
 from monee.model import GasLinepack, LumpedThermalCapacitance
 from monee.model.core import value as mvalue
 from monee.model.formulation import (
@@ -237,6 +234,10 @@ def create_large_lv_simbench(
 ):
 
     def create():
+        import simbench
+
+        from monee.io.from_pandapower import from_pandapower_net
+
         net = simbench.get_simbench_net(simbench_code)
         mn = from_pandapower_net(net)
         mes = generate_supply_return_mes_based_on_power_net(
@@ -270,6 +271,10 @@ def create_large_mv_simbench(
 ):
 
     def create():
+        import simbench
+
+        from monee.io.from_pandapower import from_pandapower_net
+
         net = simbench.get_simbench_net(simbench_code)
         mn = from_pandapower_net(net)
         mes = generate_supply_return_mes_based_on_power_net(
@@ -326,6 +331,10 @@ def test_generate_synapse():
 def test_generate_mes():
 
     # GIVEN
+    import simbench
+
+    from monee.io.from_pandapower import from_pandapower_net
+
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     mn = from_pandapower_net(net)
     mes = generate_supply_return_mes_based_on_power_net(
@@ -404,6 +413,10 @@ def test_generate_mes():
 def test_generate_mes_min_load_shedding():
 
     # GIVEN
+    import simbench
+
+    from monee.io.from_pandapower import from_pandapower_net
+
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     mn = from_pandapower_net(net)
     mes = generate_supply_return_mes_based_on_power_net(
@@ -483,6 +496,10 @@ def test_generate_mes_min_load_shedding():
 def test_generate_mes_gas_extra_mesh_pipes_reduce_bridges():
 
     # GIVEN
+    import simbench
+
+    from monee.io.from_pandapower import from_pandapower_net
+
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     mn = from_pandapower_net(net)
     common = dict(
@@ -515,6 +532,10 @@ def test_generate_mes_gas_extra_mesh_pipes_reduce_bridges():
 def test_generate_mes_cp_size_multiplier_scales_uniformly():
 
     # GIVEN
+    import simbench
+
+    from monee.io.from_pandapower import from_pandapower_net
+
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     mn = from_pandapower_net(net)
     common = dict(
@@ -562,6 +583,10 @@ def test_generate_mes_cp_size_multiplier_scales_uniformly():
 def test_generate_mes_replace_primary_generation_invariant():
 
     # GIVEN
+    import simbench
+
+    from monee.io.from_pandapower import from_pandapower_net
+
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     mn = from_pandapower_net(net)
     common = dict(
@@ -624,6 +649,10 @@ def test_generate_mes_replace_primary_generation_invariant():
 def test_generate_mes_node_heat_gen_share_and_replacement():
 
     # GIVEN
+    import simbench
+
+    from monee.io.from_pandapower import from_pandapower_net
+
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     mn = from_pandapower_net(net)
     common = dict(
@@ -681,6 +710,10 @@ def test_generate_mes_node_heat_gen_share_and_replacement():
 def test_generate_mes_supply_slack_t_k_parameter():
 
     # GIVEN
+    import simbench
+
+    from monee.io.from_pandapower import from_pandapower_net
+
     net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     mn = from_pandapower_net(net)
 
@@ -706,6 +739,11 @@ def test_generate_mes_supply_slack_t_k_parameter():
 def test_generate_mes_storage_capabilities_timeseries():
 
     # GIVEN
+    import simbench
+
+    from monee.io.from_pandapower import from_pandapower_net
+    from monee.io.from_simbench import obtain_simbench_profile_by_pp_net
+
     pp_net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
     full_el_td = obtain_simbench_profile_by_pp_net(pp_net)
     mn = from_pandapower_net(pp_net)
