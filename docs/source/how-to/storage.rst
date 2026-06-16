@@ -216,7 +216,7 @@ Prescribed discharge
    mx.create_gas_sink(net_g, j1, mass_flow_kgs=0.05)
 
    tank = mm.GasStorage(
-       m_stored_kg_initial=1000.0,   # start with 1 tonne of gas
+       m_stored_kg_initial=2000.0,   # start with 2 tonnes of gas
        m_stored_kg_max=5000.0,       # capacity 5 tonnes
        flow_max_kgs=0.2,             # max charge/discharge rate
    )
@@ -232,7 +232,7 @@ Prescribed discharge
 
 .. testoutput::
 
-   Stored [kg]: [640.0, 280.0, -80.0, -440.0]
+   Stored [kg]: [1640.0, 1280.0, 920.0, 560.0]
 
 .. note::
 
