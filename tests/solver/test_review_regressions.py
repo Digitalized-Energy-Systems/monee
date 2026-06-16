@@ -13,7 +13,10 @@ import pytest
 import monee.model as mm
 from monee import LumpedThermalCapacitance, TimeseriesData, run_energy_flow
 from monee.model.child import ExtPowerGrid, PowerGenerator, PowerLoad
-from monee.model.formulation import EL_NLP_FORMULATION, make_heat_convex_milp_formulation
+from monee.model.formulation import (
+    EL_NLP_FORMULATION,
+    make_heat_convex_milp_formulation,
+)
 from monee.model.node import Bus
 
 
@@ -32,16 +35,20 @@ def _el_net(load_name="ts_load"):
     """ext-grid - line - (named load + gen). Converges as a plain power flow."""
     net = mm.Network(mm.PowerGrid(name="power", sn_mva=1))
     b0 = net.node(
-        Bus(base_kv=1), grid=mm.EL,
+        Bus(base_kv=1),
+        grid=mm.EL,
         child_ids=[net.child(ExtPowerGrid(p_mw=0, q_mvar=0, vm_pu=1, va_degree=0))],
     )
     lid = net.child(PowerLoad(p_mw=1.0, q_mvar=0.1), name=load_name)
     b1 = net.node(
-        Bus(base_kv=1), grid=mm.EL,
+        Bus(base_kv=1),
+        grid=mm.EL,
         child_ids=[lid, net.child(PowerGenerator(p_mw=0.5, q_mvar=0))],
     )
     net.branch(
-        mm.PowerLine(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1), b0, b1
+        mm.PowerLine(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1),
+        b0,
+        b1,
     )
     net.apply_formulation(EL_NLP_FORMULATION)
     return net, lid
@@ -49,9 +56,13 @@ def _el_net(load_name="ts_load"):
 
 def _water_ltc_net(first_step_steady_state):
     net = mm.Network()
-    n0 = net.node(mm.Junction(), mm.WATER, child_ids=[net.child(mm.ExtHydrGrid(t_k=356))])
+    n0 = net.node(
+        mm.Junction(), mm.WATER, child_ids=[net.child(mm.ExtHydrGrid(t_k=356))]
+    )
     n1 = net.node(
-        mm.Junction(), mm.WATER, child_ids=[net.child(mm.Source(mass_flow_kgs=5, t_k=356))]
+        mm.Junction(),
+        mm.WATER,
+        child_ids=[net.child(mm.Source(mass_flow_kgs=5, t_k=356))],
     )
     sink = net.child(mm.Sink(mass_flow_kgs=10))
     n2 = net.node(mm.Junction(), mm.WATER, child_ids=[sink])
@@ -212,9 +223,7 @@ def test_gurobipy_reuse_gated_out_for_ltc_steady_state():
     td_ss.add_child_series(sink_ss, "mass_flow_kgs", [10.0, 10.0])
     # first_step_steady_state -> rebuild loop only (build-once can't switch step-0).
     assert (
-        _gurobipy_reuse_eligible(
-            net_ss, GurobipySolver(), None, [], td_ss, {}, None
-        )
+        _gurobipy_reuse_eligible(net_ss, GurobipySolver(), None, [], td_ss, {}, None)
         is False
     )
 
@@ -224,8 +233,6 @@ def test_gurobipy_reuse_gated_out_for_ltc_steady_state():
     # Control: plain LTC temporal coupling stays eligible (the gurobipy reuse
     # path supports it) - so the gate is specific, not a blanket LTC exclusion.
     assert (
-        _gurobipy_reuse_eligible(
-            net_ok, GurobipySolver(), None, [], td_ok, {}, None
-        )
+        _gurobipy_reuse_eligible(net_ok, GurobipySolver(), None, [], td_ok, {}, None)
         is True
     )

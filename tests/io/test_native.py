@@ -77,7 +77,9 @@ def create_compound_test_network():
     # HEAT
     heating_grid = mm.create_water_grid("heat")
     h_node_0 = pn.node(
-        mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow_kgs=0.1))], grid=heating_grid
+        mm.Junction(),
+        child_ids=[pn.child(mm.Source(mass_flow_kgs=0.1))],
+        grid=heating_grid,
     )
     h_node_1 = pn.node(
         mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())], grid=heating_grid

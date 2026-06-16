@@ -8,7 +8,9 @@ import math
 R_specific = 504.5
 
 
-def abs_psq_diff_pu(psq_pu_i, psq_pu_j, p_pu_i, p_pu_j, pressure_ambient_pa, pressure_ref_pa):
+def abs_psq_diff_pu(
+    psq_pu_i, psq_pu_j, p_pu_i, p_pu_j, pressure_ambient_pa, pressure_ref_pa
+):
     r"""Absolute squared-pressure difference (per-unit of :math:`p_{ref}^2`) when the
     node pressures are GAUGE.
 

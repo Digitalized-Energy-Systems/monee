@@ -1,4 +1,4 @@
-﻿import math
+import math
 
 import monee.model as mm
 import monee.problem as mp

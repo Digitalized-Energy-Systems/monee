@@ -57,7 +57,11 @@ def cp_input_rated_mw(component):
             gg = next((g for g in grid if isinstance(g, GasGrid)), None)
         elif isinstance(grid, GasGrid):
             gg = grid
-        return getattr(gg, "higher_heating_value_kwh_per_kg", _HHV_DEFAULT) if gg else _HHV_DEFAULT
+        return (
+            getattr(gg, "higher_heating_value_kwh_per_kg", _HHV_DEFAULT)
+            if gg
+            else _HHV_DEFAULT
+        )
 
     def _scalar(x):
         # Read the bound (or the value) off a Var; pass scalars through.
@@ -71,7 +75,10 @@ def cp_input_rated_mw(component):
 
     # ---- Gas-input CPs ----------------------------------------------------
     if isinstance(model, (CHPControlNode, CHPHGControlNode, GasToHeatControlNode)):
-        return ("gas", abs(_scalar(model.gas_mass_flow_kgs)) * KGPS_KWHPERKG_TO_MW * _hhv())
+        return (
+            "gas",
+            abs(_scalar(model.gas_mass_flow_kgs)) * KGPS_KWHPERKG_TO_MW * _hhv(),
+        )
     if isinstance(model, GasToPower):
         eff = max(getattr(model, "efficiency", 1.0), 1e-6)
         # el_mw is stored as -p_mw_setpoint (scalar).
@@ -88,6 +95,9 @@ def cp_input_rated_mw(component):
     if isinstance(model, PowerToGas):
         eff = max(getattr(model, "efficiency", 1.0), 1e-6)
         # gas_mass_flow_kgs stored as -mass_flow_setpoint_kgs; rated input power = output / η.
-        return ("power", abs(_scalar(model.gas_mass_flow_kgs)) * KGPS_KWHPERKG_TO_MW * _hhv() / eff)
+        return (
+            "power",
+            abs(_scalar(model.gas_mass_flow_kgs)) * KGPS_KWHPERKG_TO_MW * _hhv() / eff,
+        )
 
     return None

@@ -1,18 +1,12 @@
-﻿"""Tests for the CHP compound and CHPControlNode."""
+"""Tests for the CHP compound and CHPControlNode."""
 
 import math
 
-import monee.express as mx
 import monee.model as mm
 import monee.solver as ms
-from monee import run_energy_flow
 from monee.model.formulation import (
     EL_MISOCP_FORMULATION,
-    EL_NLP_FORMULATION,
-    make_gas_nlp_formulation,
-    make_heat_nlp_formulation,
 )
-from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
 
 
 def _build_chp_network(
@@ -115,7 +109,7 @@ def test_chp_basic_solve():
     # GIVEN
     net = _build_chp_network()
     net.apply_formulation(EL_MISOCP_FORMULATION)
-    
+
     # WHEN
     result = ms.PyomoSolver().solve(net)
 

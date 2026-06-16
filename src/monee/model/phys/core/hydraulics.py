@@ -1,7 +1,5 @@
 import math
 
-import numpy as np
-
 REY_BINS = [
     50,
     100,
@@ -50,7 +48,9 @@ def calc_max_mass_flow(diameter_m, fluid_density_kg_per_m3, v_max_mps):
     return calc_pipe_area(diameter_m) * fluid_density_kg_per_m3 * v_max_mps
 
 
-def calc_min_diameter_for_mass_flow(mass_flow_kgs, fluid_density_kg_per_m3, v_design_mps):
+def calc_min_diameter_for_mass_flow(
+    mass_flow_kgs, fluid_density_kg_per_m3, v_design_mps
+):
     r"""Smallest pipe diameter [m] carrying ``mass_flow_kgs`` at ``v_design_mps``.
 
     Inverse of :func:`calc_max_mass_flow`: :math:`D = \sqrt{4 \cdot m / (\pi \cdot \rho \cdot v)}`. Used to
@@ -58,7 +58,9 @@ def calc_min_diameter_for_mass_flow(mass_flow_kgs, fluid_density_kg_per_m3, v_de
     Returns 0 for degenerate inputs (:math:`m \le 0` or non-positive :math:`\rho/v`)."""
     if mass_flow_kgs <= 0 or fluid_density_kg_per_m3 <= 0 or v_design_mps <= 0:
         return 0.0
-    return math.sqrt(4.0 * mass_flow_kgs / (math.pi * fluid_density_kg_per_m3 * v_design_mps))
+    return math.sqrt(
+        4.0 * mass_flow_kgs / (math.pi * fluid_density_kg_per_m3 * v_design_mps)
+    )
 
 
 # model.reynolds_scaled is stored as Re/1e6, so friction PWL breakpoints sit in [0,10]
@@ -81,7 +83,9 @@ def pipe_mass_flow(max_v, min_v, v):
     return min_v <= v <= max_v
 
 
-def flow_rate_equation(mean_flow_velocity, flow_rate, diameter, fluid_density_kg_per_m3):
+def flow_rate_equation(
+    mean_flow_velocity, flow_rate, diameter, fluid_density_kg_per_m3
+):
     return mean_flow_velocity == flow_rate / (
         fluid_density_kg_per_m3 * (diameter**2 * math.pi / 4)
     )

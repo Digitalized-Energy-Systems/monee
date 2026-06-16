@@ -230,9 +230,7 @@ def test_misocp_optimization_matches_pyomo_gurobi():
     prob = _make_shedding_problem()
 
     # WHEN
-    r_native = GurobipySolver().solve(
-        _build_misocp_net(), optimization_problem=prob
-    )
+    r_native = GurobipySolver().solve(_build_misocp_net(), optimization_problem=prob)
     r_pyomo = ms.PyomoSolver("gurobi").solve(
         _build_misocp_net(), optimization_problem=_make_shedding_problem()
     )
@@ -240,7 +238,9 @@ def test_misocp_optimization_matches_pyomo_gurobi():
     # THEN
     assert r_native.success and r_pyomo.success
     # Same model, same solver - objectives must agree.
-    assert math.isclose(r_native.objective, r_pyomo.objective, rel_tol=1e-4, abs_tol=1e-4)
+    assert math.isclose(
+        r_native.objective, r_pyomo.objective, rel_tol=1e-4, abs_tol=1e-4
+    )
 
 
 @requires_gurobi
@@ -529,7 +529,7 @@ def test_run_timeseries_gurobipy_fast_path_matches_rebuild(monkeypatch):
     monkeypatch.setattr(
         tsmod,
         "_run_gurobipy_reuse",
-        lambda *a, **k: (calls.__setitem__("reuse", calls["reuse"] + 1) or orig(*a, **k)),
+        lambda *a, **k: calls.__setitem__("reuse", calls["reuse"] + 1) or orig(*a, **k),
     )
 
     net, load_id = _el_two_bus_net()
@@ -572,7 +572,7 @@ def test_run_timeseries_gurobipy_fast_path_handles_storage_coupling(monkeypatch)
     monkeypatch.setattr(
         tsmod,
         "_run_gurobipy_reuse",
-        lambda *a, **k: (calls.__setitem__("reuse", calls["reuse"] + 1) or orig(*a, **k)),
+        lambda *a, **k: calls.__setitem__("reuse", calls["reuse"] + 1) or orig(*a, **k),
     )
 
     dispatch = [1.0, -0.5, 0.8, 0.3]
@@ -589,7 +589,9 @@ def test_run_timeseries_gurobipy_fast_path_handles_storage_coupling(monkeypatch)
         net2, td2, solver=GurobipySolver(), step_hooks=[_NOOP_HOOK]
     )
 
-    assert calls["reuse"] == 1  # temporal coupling does NOT disable the gurobi fast path
+    assert (
+        calls["reuse"] == 1
+    )  # temporal coupling does NOT disable the gurobi fast path
     assert res_fast.failed_steps == []
     e_fast = res_fast.get_result_for_id(sid, "e_mwh").to_numpy()
     e_slow = res_slow.get_result_for_id(sid2, "e_mwh").to_numpy()
@@ -616,7 +618,7 @@ def test_run_timeseries_gurobipy_falls_back_when_hooks_present(monkeypatch):
     monkeypatch.setattr(
         tsmod,
         "_run_gurobipy_reuse",
-        lambda *a, **k: (calls.__setitem__("reuse", calls["reuse"] + 1) or orig(*a, **k)),
+        lambda *a, **k: calls.__setitem__("reuse", calls["reuse"] + 1) or orig(*a, **k),
     )
 
     net, load_id = _el_two_bus_net()

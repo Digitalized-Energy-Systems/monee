@@ -39,18 +39,24 @@ def create_g2h_net():
     # drop large enough to keep the pressure<->flow coupling well-conditioned for
     # the default IMODE=3 solve.
     pn.branch(
-        mm.GasPipe(diameter_m=0.3, length_m=1000, temperature_ext_k=300, roughness_m=1e-4),
+        mm.GasPipe(
+            diameter_m=0.3, length_m=1000, temperature_ext_k=300, roughness_m=1e-4
+        ),
         g_node_0,
         g_node_1,
     )
     pn.branch(
-        mm.GasPipe(diameter_m=0.3, length_m=1500, temperature_ext_k=300, roughness_m=1e-4),
+        mm.GasPipe(
+            diameter_m=0.3, length_m=1500, temperature_ext_k=300, roughness_m=1e-4
+        ),
         g_node_0,
         g_node_2,
     )
 
     w_node_0 = pn.node(
-        mm.Junction(), grid=mm.WATER_KEY, child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))]
+        mm.Junction(),
+        grid=mm.WATER_KEY,
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))],
     )
     w_node_1 = pn.node(
         mm.Junction(), child_ids=[pn.child(mm.ConsumeHydrGrid(1))], grid=mm.WATER_KEY

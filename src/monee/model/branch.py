@@ -189,7 +189,11 @@ class WaterPipe(BranchModel):
         )
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
-        return [IntermediateEq("mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs)]
+        return [
+            IntermediateEq(
+                "mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs
+            )
+        ]
 
 
 @model
@@ -229,7 +233,9 @@ class HeatExchanger(BranchModel):
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         eqs = [
-            IntermediateEq("mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs),
+            IntermediateEq(
+                "mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs
+            ),
         ]
         if self._calc_mass_flow:
             eqs.append(
@@ -316,7 +322,9 @@ class PassiveHeatExchanger(BranchModel):
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         return [
-            IntermediateEq("mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs),
+            IntermediateEq(
+                "mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs
+            ),
             self.q_mw == self.q_mw_set * self.regulation,
         ]
 
@@ -325,9 +333,13 @@ class PassiveHeatExchanger(BranchModel):
 class PassiveHeatExchangerLoad(PassiveHeatExchanger):
     """Passive heat exchanger that consumes heat (load, ``q_mw > 0``)."""
 
-    def __init__(self, q_mw, diameter_m, temperature_ext_k=293, loss_coefficient=None) -> None:
+    def __init__(
+        self, q_mw, diameter_m, temperature_ext_k=293, loss_coefficient=None
+    ) -> None:
         super().__init__(
-            q_mw, diameter_m, temperature_ext_k=temperature_ext_k,
+            q_mw,
+            diameter_m,
+            temperature_ext_k=temperature_ext_k,
             loss_coefficient=loss_coefficient,
         )
 
@@ -336,9 +348,13 @@ class PassiveHeatExchangerLoad(PassiveHeatExchanger):
 class PassiveHeatExchangerGenerator(PassiveHeatExchanger):
     """Passive heat exchanger that injects heat (generator, ``q_mw < 0``)."""
 
-    def __init__(self, q_mw, diameter_m, temperature_ext_k=293, loss_coefficient=None) -> None:
+    def __init__(
+        self, q_mw, diameter_m, temperature_ext_k=293, loss_coefficient=None
+    ) -> None:
         super().__init__(
-            q_mw, diameter_m, temperature_ext_k=temperature_ext_k,
+            q_mw,
+            diameter_m,
+            temperature_ext_k=temperature_ext_k,
             loss_coefficient=loss_coefficient,
         )
 
@@ -369,14 +385,20 @@ class GasPipe(BranchModel):
         self.velocity_mps = Var(1, min=-100, max=100, name="velocity_mps")
         # reynolds_scaled = Re/1e6 (see REYNOLDS_SCALE); 1e-3 \approx laminar floor.
         self.reynolds_scaled = Var(1e-3, min=0, max=10, name="reynolds_scaled")
-        self.gas_density_kg_per_m3 = Var(1, min=0, max=100, name="gas_density_kg_per_m3")
+        self.gas_density_kg_per_m3 = Var(
+            1, min=0, max=100, name="gas_density_kg_per_m3"
+        )
         self.friction = (
             Var(0.02, min=0, max=7, name="friction") if friction is None else friction
         )
         self.q_mw = 0
 
     def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):
-        return [IntermediateEq("mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs)]
+        return [
+            IntermediateEq(
+                "mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs
+            )
+        ]
 
 
 @model
@@ -391,7 +413,9 @@ class GasCompressor(BranchModel):
         self.compression_ratio = compression_ratio
         self.max_flow_kgs = max_flow_kgs
         self.mass_flow_kgs = Intermediate(0.1)
-        self.mass_flow_neg_kgs = Var(0.1, min=0, max=max_flow_kgs, name="mass_flow_neg_kgs")
+        self.mass_flow_neg_kgs = Var(
+            0.1, min=0, max=max_flow_kgs, name="mass_flow_neg_kgs"
+        )
         self.on_off = 1
 
     def equations(self, grid: GasGrid, from_node_model, to_node_model, **kwargs):

@@ -184,8 +184,7 @@ def __getattr__(name):
             else factories[name].__name__
         )
         warnings.warn(
-            f"monee.model.formulation.{name} is deprecated; use "
-            f"{replacement} instead.",
+            f"monee.model.formulation.{name} is deprecated; use {replacement} instead.",
             DeprecationWarning,
             stacklevel=2,
         )

@@ -103,7 +103,9 @@ def create_heat_net_for_power(
                 * power_scale,
                 diameter_m=default_diameter_m,
             )
-            end_sink_mass_flow = mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10
+            end_sink_mass_flow = (
+                mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10
+            )
             node_demand_kgs[node.id] += end_sink_mass_flow
             mx.create_sink(
                 target_net,
@@ -170,7 +172,9 @@ def create_heat_net_for_power(
     # max_mass_flow_kgs is the grid-level per-branch cap: it must at least admit the slack
     # trunk's design flow or the sized diameters are moot. Leaf pipes stay
     # tightly capped through their velocity_mps-based per-pipe bound.
-    heat_grid.max_mass_flow_kgs = max(heat_grid.max_mass_flow_kgs, design_flow_headroom * subtree_kgs[root])
+    heat_grid.max_mass_flow_kgs = max(
+        heat_grid.max_mass_flow_kgs, design_flow_headroom * subtree_kgs[root]
+    )
     return (bus_index_to_junction_index, bus_index_to_end_junction_index)
 
 
@@ -715,9 +719,7 @@ def create_gas_tree_net_for_power(
     for node in power_net_as_st.nodes:
         p_load_mw = _node_power_load_mw(power_net, node)
         if p_load_mw > 0 and gas_load_share > 0:
-            mass_flow_kgs = max(
-                min_load_kgs, p_load_mw * gas_load_share / gas_hhv_mj
-            )
+            mass_flow_kgs = max(min_load_kgs, p_load_mw * gas_load_share / gas_hhv_mj)
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
@@ -726,9 +728,7 @@ def create_gas_tree_net_for_power(
 
         p_gen_mw = _node_power_gen_mw(power_net, node)
         if p_gen_mw > 0 and gas_gen_share > 0:
-            mass_flow_kgs = max(
-                min_source_kgs, p_gen_mw * gas_gen_share / gas_hhv_mj
-            )
+            mass_flow_kgs = max(min_source_kgs, p_gen_mw * gas_gen_share / gas_hhv_mj)
             mx.create_source(
                 target_net,
                 node_id=bus_index_to_junction_index[node.id],
@@ -856,7 +856,9 @@ def create_heat_supply_return_net_for_power(
     def _auto_diameter(mass_flow_kgs):
         """Capacity-sized diameter [m] for ``mass_flow_kgs``, floored."""
         d = hyd.calc_min_diameter_for_mass_flow(
-            mass_flow_kgs * auto_diameter_headroom, heat_grid.fluid_density_kg_per_m3, auto_v
+            mass_flow_kgs * auto_diameter_headroom,
+            heat_grid.fluid_density_kg_per_m3,
+            auto_v,
         )
         return max(d, auto_floor_m)
 
@@ -968,7 +970,9 @@ def create_heat_supply_return_net_for_power(
             # Design flow same as the LinearHX would compute internally:
             # m = q / (c · ΔT) with c = 4180 J/(kg·K), ΔT = 30 K default.
             m_design = heat_mw * 1e6 / (4180.0 * 30.0)
-            mx.create_water_sink(target_net, supply_id, mass_flow_kgs=round(m_design, 6))
+            mx.create_water_sink(
+                target_net, supply_id, mass_flow_kgs=round(m_design, 6)
+            )
         else:
             mx.create_heat_exchanger(
                 target_net,
@@ -1286,8 +1290,9 @@ def create_coupling_points_for_mes(
     # point sizing uses the same heating value as the gas physics regardless of
     # which gas type the grid was built with.
     gas_hhv_mj = (
-        mes_net.node_by_id(next(iter(bus_to_gas_junc.values()))).grid
-        .higher_heating_value_kwh_per_kg
+        mes_net.node_by_id(
+            next(iter(bus_to_gas_junc.values()))
+        ).grid.higher_heating_value_kwh_per_kg
         * 3.6
     )
 

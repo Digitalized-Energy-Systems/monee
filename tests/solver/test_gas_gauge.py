@@ -62,7 +62,9 @@ def test_gauge_reduces_gas_drop():
     # p_ref, same derived Z), the drop scales by the (p_i+p_j) absolute-sum ratio
     # ~ 20 / 22.0265 = 0.908.
     drop_abs = _drop_bar(ms.GEKKOSolver().solve(_gas_pipe_net(0.0)))
-    drop_gauge = _drop_bar(ms.GEKKOSolver().solve(_gas_pipe_net(STANDARD_ATMOSPHERE_PA)))
+    drop_gauge = _drop_bar(
+        ms.GEKKOSolver().solve(_gas_pipe_net(STANDARD_ATMOSPHERE_PA))
+    )
     assert drop_gauge < drop_abs
     assert math.isclose(drop_gauge / drop_abs, 0.908, abs_tol=0.02)
 
@@ -70,7 +72,9 @@ def test_gauge_reduces_gas_drop():
 # The convex MIQCQP uses constant (fully-rough) friction, so compare it against
 # the NLP on the SAME friction model to isolate the gauge linearization.
 def _nlp_constant(ambient_pa):
-    return _gas_pipe_net(ambient_pa, formulation=make_gas_nlp_formulation(friction_model="constant"))
+    return _gas_pipe_net(
+        ambient_pa, formulation=make_gas_nlp_formulation(friction_model="constant")
+    )
 
 
 @pytest.mark.skipif(not _gurobipy_available(), reason="gurobipy not available")

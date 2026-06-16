@@ -164,7 +164,9 @@ class GasStorage(ChildModel):
 
     def equations(self, grid, node, **kwargs):
         if self._lossy and isinstance(self.mass_flow_kgs, Var):
-            return [self.mass_flow_kgs == self.flow_charge_kgs - self.flow_discharge_kgs]
+            return [
+                self.mass_flow_kgs == self.flow_charge_kgs - self.flow_discharge_kgs
+            ]
         return []
 
     def inter_temporal_equations(

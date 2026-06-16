@@ -163,10 +163,6 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
             # the to-side report is approximate (off by r \cdot ell, x \cdot ell).
             IntermediateEq("i_from_ka", i_mag_pu * I_base_from),
             IntermediateEq("i_to_ka", i_mag_pu * I_base_to),
-            IntermediateEq(
-                "loading_from_pu", i_mag_pu * I_base_from / branch.max_i_ka
-            ),
-            IntermediateEq(
-                "loading_to_pu", i_mag_pu * I_base_to / branch.max_i_ka
-            ),
+            IntermediateEq("loading_from_pu", i_mag_pu * I_base_from / branch.max_i_ka),
+            IntermediateEq("loading_to_pu", i_mag_pu * I_base_to / branch.max_i_ka),
         ]

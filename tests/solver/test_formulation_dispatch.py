@@ -50,7 +50,9 @@ def test_resolve_formulation_passthrough_and_none():
 
 def test_resolve_formulation_sequence_merges_left_to_right():
     merged = resolve_formulation(["smooth_nlp", "el_misocp"])
-    branch_form = merged.lookup(mm.GenericPowerBranch(1, 0, 1e-3, 1e-3, 0, 0, 0, 0), None)
+    branch_form = merged.lookup(
+        mm.GenericPowerBranch(1, 0, 1e-3, 1e-3, 0, 0, 0, 0), None
+    )
     assert isinstance(branch_form, MISOCPElectricityBranchFormulation)
 
 

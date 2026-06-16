@@ -24,6 +24,7 @@ def test_calc_pipe_area_sub_1():
     # THEN
     assert math.isclose(area, 0.007853981633974483)
 
+
 def test_balance_equation():
     # GIVEN
     mass_flows = [1, -1, 2, -2]

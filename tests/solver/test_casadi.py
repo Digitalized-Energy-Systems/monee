@@ -240,7 +240,9 @@ def test_temporal_timeseries_storage_matches_gekko():
     net_c, sid_c = _el_net_with_storage()
     td_c = TimeseriesData()
     td_c.add_child_series(sid_c, "p_mw", dispatch)
-    res_c = monee.run_timeseries(net_c, td_c, steps=3, backend="casadi", simulation=True)
+    res_c = monee.run_timeseries(
+        net_c, td_c, steps=3, backend="casadi", simulation=True
+    )
 
     net_g, sid_g = _el_net_with_storage()
     td_g = TimeseriesData()

@@ -83,7 +83,8 @@ def soc_rel_lorentz(
     return [
         var_soc_sum == 0.5 * (Wp + var_ell_pu),
         var_soc_diff == 0.5 * (Wp - var_ell_pu),
-        var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2 + var_soc_diff**2 <= var_soc_sum**2,
+        var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2 + var_soc_diff**2
+        <= var_soc_sum**2,
     ]
 
 

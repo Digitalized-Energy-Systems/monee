@@ -107,7 +107,9 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         f_max_local = min(
             grid.max_mass_flow_kgs,
             hydraulicsmodel.calc_max_mass_flow(
-                branch.diameter_m, gas_density_kg_per_m3, getattr(grid, "v_max_mps", 20.0)
+                branch.diameter_m,
+                gas_density_kg_per_m3,
+                getattr(grid, "v_max_mps", 20.0),
             ),
         )
 

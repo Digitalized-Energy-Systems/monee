@@ -748,7 +748,9 @@ def create_balanced_urban_mes_net() -> mm.Network:
 
     mx.create_ext_hydr_grid(net, g0, max_import_kgs=0.06)
     mx.create_sink(net, g3, mass_flow_kgs=0.015)  # ~0.83 MW direct gas consumer
-    mx.create_sink(net, g4, mass_flow_kgs=0.010)  # ~0.55 MW P2G injection node + consumer
+    mx.create_sink(
+        net, g4, mass_flow_kgs=0.010
+    )  # ~0.55 MW P2G injection node + consumer
 
     mx.create_gas_pipe(net, g0, g1, diameter_m=0.15, length_m=400)
     mx.create_gas_pipe(net, g1, g2, diameter_m=0.12, length_m=300)
@@ -975,12 +977,16 @@ def create_balanced_urban_mes_timeseries(
     for child in net.childs_by_type(mm.Sink):
         if isinstance(child.grid, GasGrid):
             mf_rated = child.model.mass_flow_kgs
-            td.add_child_series(child.id, "mass_flow_kgs", [mf_rated * f for f in g_series])
+            td.add_child_series(
+                child.id, "mass_flow_kgs", [mf_rated * f for f in g_series]
+            )
 
     # q_mw_set is stored in MW with sign convention: negative = consumer.
     for branch in net.branches_by_type(mm.HeatExchangerLoad):
         heat_mw_rated = branch.model.q_mw_set  # e.g. -0.8 for an 800 kW consumer
-        td.add_branch_series(branch.id, "q_mw_set", [heat_mw_rated * f for f in h_series])
+        td.add_branch_series(
+            branch.id, "q_mw_set", [heat_mw_rated * f for f in h_series]
+        )
 
     return td
 

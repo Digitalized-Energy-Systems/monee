@@ -59,7 +59,9 @@ def test_linepack_auto_capacity():
     v_pipe = math.pi / 4 * 0.5**2 * 5000
     R, M, T = grid.universal_gas_constant, grid.molar_mass, grid.t_k
     rho_nominal = grid.pressure_ref_pa * grid.nominal_pressure_pu * M / (R * T)
-    rho_max = grid.pressure_ref_pa * math.sqrt(grid.pressure_squared_pu_max) * M / (R * T)
+    rho_max = (
+        grid.pressure_ref_pa * math.sqrt(grid.pressure_squared_pu_max) * M / (R * T)
+    )
     expected_initial = v_pipe * rho_nominal
     expected_max = v_pipe * rho_max
 

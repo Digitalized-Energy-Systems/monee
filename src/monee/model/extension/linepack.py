@@ -40,17 +40,15 @@ class GasLinepack(NetworkAspect):
     @staticmethod
     def _nominal_pressure(grid: GasGrid) -> float:
         """Nominal ABSOLUTE operating pressure [Pa] (gauge + ambient)."""
-        return (
-            grid.pressure_ref_pa * grid.nominal_pressure_pu
-            + getattr(grid, "pressure_ambient_pa", 0.0)
+        return grid.pressure_ref_pa * grid.nominal_pressure_pu + getattr(
+            grid, "pressure_ambient_pa", 0.0
         )
 
     @staticmethod
     def _max_pressure(grid: GasGrid) -> float:
         """Maximum ABSOLUTE pressure [Pa] from the ``pressure_squared_pu_max`` bound."""
-        return (
-            grid.pressure_ref_pa * math.sqrt(grid.pressure_squared_pu_max)
-            + getattr(grid, "pressure_ambient_pa", 0.0)
+        return grid.pressure_ref_pa * math.sqrt(grid.pressure_squared_pu_max) + getattr(
+            grid, "pressure_ambient_pa", 0.0
         )
 
     @staticmethod
@@ -59,8 +57,7 @@ class GasLinepack(NetworkAspect):
         3-tuples, so they never match the scalar node ids in ``ignored_nodes`` -
         check the endpoints instead (mirrors islanding/core.py)."""
         return (
-            branch.from_node_id in ignored_nodes
-            or branch.to_node_id in ignored_nodes
+            branch.from_node_id in ignored_nodes or branch.to_node_id in ignored_nodes
         )
 
     def prepare(self, network) -> None:
@@ -90,7 +87,10 @@ class GasLinepack(NetworkAspect):
             lp_max = max(lp_max, lp_initial * 1.05)
             bm.linepack_kg = Var(lp_initial, min=0, max=lp_max, name="linepack_kg")
             bm.net_pack_kgs = Var(
-                0, min=-grid.max_mass_flow_kgs, max=grid.max_mass_flow_kgs, name="net_pack_kgs"
+                0,
+                min=-grid.max_mass_flow_kgs,
+                max=grid.max_mass_flow_kgs,
+                name="net_pack_kgs",
             )
 
             self._pipe_volume[branch.id] = v_pipe
@@ -123,7 +123,10 @@ class GasLinepack(NetworkAspect):
             if branch.ignored or self._endpoint_ignored(branch, ignored_nodes):
                 continue
             bm = branch.model
-            eqs.append(bm.linepack_kg == self._pipe_volume[branch.id] * bm.gas_density_kg_per_m3)
+            eqs.append(
+                bm.linepack_kg
+                == self._pipe_volume[branch.id] * bm.gas_density_kg_per_m3
+            )
 
             if not self._timeseries_active:
                 eqs.append(bm.net_pack_kgs == 0)

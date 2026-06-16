@@ -1,4 +1,4 @@
-﻿import numpy as np
+import numpy as np
 
 import monee.model as mm
 import monee.problem as mp

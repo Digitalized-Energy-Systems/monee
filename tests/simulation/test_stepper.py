@@ -1,4 +1,4 @@
-﻿"""
+"""
 Tests for :class:`monee.simulation.stepper.Stepper`.
 
 Covers the externally-paced co-simulation API: variable ``dt_h``,
@@ -17,6 +17,7 @@ import monee.model as mm
 from monee.simulation import Stepper, StepState, TimeseriesData, run_timeseries
 from tests.util import child_id_by_type
 
+
 def _power_net(p_load: float = 1.0):
     net = mm.Network()
     b1 = mx.create_bus(net, base_kv=20.0)
@@ -33,6 +34,7 @@ def _power_net(p_load: float = 1.0):
         parallel=1,
     )
     return net
+
 
 def test_Stepper_default_constructs_and_steps():
     stepper = Stepper(_power_net())
@@ -169,6 +171,7 @@ def test_step_state_prior_solve_wins_over_initial():
     # The state.get lookup keys on node.id (which equals bid here).
     state.push(net)
     assert math.isclose(state.get(bid, "vm_pu"), 1.02, rel_tol=1e-9)
+
 
 def test_Stepper_on_step_error_skip_records_failure():
     """``on_step_error='skip'`` swallows solver exceptions and records them."""

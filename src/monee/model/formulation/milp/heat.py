@@ -89,7 +89,8 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
             # the system, so the energy balance runs on the actual flow
             # magnitude instead.
             flow_eqs = [
-                branch.mass_flow_mag_kgs == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs
+                branch.mass_flow_mag_kgs
+                == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs
             ]
             balance_flow_kgs = branch.mass_flow_mag_kgs
         else:
@@ -122,7 +123,9 @@ def _branch_m_U(branch, grid):
     explicit = getattr(branch, "m_U_design", None)
     velocity_cap = min(
         grid.max_mass_flow_kgs,
-        calc_max_mass_flow(branch.diameter_m, grid.fluid_density_kg_per_m3, grid.v_max_mps),
+        calc_max_mass_flow(
+            branch.diameter_m, grid.fluid_density_kg_per_m3, grid.v_max_mps
+        ),
     )
     if explicit is None:
         return velocity_cap
@@ -417,8 +420,7 @@ class McCormickHeatExchangerFormulation(FixedFlowHeatExchangerFormulation):
         scale_mw = C_WATER * grid.t_ref_k / 1e6
         eqs = self._he_equations(branch, grid, from_node_model)
         eqs += [
-            branch.H_out_mw
-            == scale_mw * branch.mass_flow_design_kgs * branch.t_in_pu,
+            branch.H_out_mw == scale_mw * branch.mass_flow_design_kgs * branch.t_in_pu,
             branch.H_in_mw == branch.H_out_mw - branch.q_mw_delivered,
         ]
         return eqs

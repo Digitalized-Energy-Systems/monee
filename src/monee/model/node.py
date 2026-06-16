@@ -30,10 +30,7 @@ class Bus(NodeModel):
                 model.vars["p_to_mw"] * model.vars["on_off"]
                 for model in to_branch_models
             ]
-            + [
-                model.vars["p_mw"] * model.vars["regulation"]
-                for model in child_models
-            ]
+            + [model.vars["p_mw"] * model.vars["regulation"] for model in child_models]
         )
         signed_reactive_power = (
             [
@@ -104,9 +101,7 @@ class Junction(NodeModel):
         self.pressure_pu = Var(1, min=0.5, max=2, name="pressure_pu")
         self.mass_flow_kgs = Intermediate(1)
 
-    def calc_signed_mass_flow(
-        self, from_branch_models, to_branch_models, child_models
-    ):
+    def calc_signed_mass_flow(self, from_branch_models, to_branch_models, child_models):
         return (
             [
                 model.vars["from_mass_flow_kgs"] * model.vars["on_off"]
@@ -177,7 +172,10 @@ class Junction(NodeModel):
 
             # node is FROM-end of these branches
             for bm in from_branch_models:
-                if "mass_flow_pos_kgs" not in bm.vars or "mass_flow_neg_kgs" not in bm.vars:
+                if (
+                    "mass_flow_pos_kgs" not in bm.vars
+                    or "mass_flow_neg_kgs" not in bm.vars
+                ):
                     continue
                 mpos = bm.vars["mass_flow_pos_kgs"] * bm.vars.get("on_off", 1)
                 mneg = bm.vars["mass_flow_neg_kgs"] * bm.vars.get("on_off", 1)
@@ -188,7 +186,10 @@ class Junction(NodeModel):
 
             # node is TO-end of these branches
             for bm in to_branch_models:
-                if "mass_flow_pos_kgs" not in bm.vars or "mass_flow_neg_kgs" not in bm.vars:
+                if (
+                    "mass_flow_pos_kgs" not in bm.vars
+                    or "mass_flow_neg_kgs" not in bm.vars
+                ):
                     continue
                 mpos = bm.vars["mass_flow_pos_kgs"] * bm.vars.get("on_off", 1)
                 mneg = bm.vars["mass_flow_neg_kgs"] * bm.vars.get("on_off", 1)
@@ -214,7 +215,9 @@ class Junction(NodeModel):
             # Node q_mw_heat (HeatGenerator/HeatLoad) \to kg/s \cdot t_pu via c \cdot t_ref_k/1e6.
             # grid may be None (compound heat balance); scale only used if needed.
             scale_mw_per_kgs = (
-                SPECIFIC_HEAT_CAP_WATER * grid.t_ref_k / 1e6 if grid is not None else None
+                SPECIFIC_HEAT_CAP_WATER * grid.t_ref_k / 1e6
+                if grid is not None
+                else None
             )
             for nm in child_models:
                 if "q_mw_heat" not in nm.vars:

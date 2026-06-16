@@ -49,8 +49,11 @@ def _two_bus_net(max_i_ka=0.12, gen_mw=1.0):
     b1 = net.node(Bus(base_kv=20), grid=mm.EL, child_ids=[lid, gid])
     net.branch(
         mm.PowerLine(
-            length_m=2000, r_ohm_per_m=1.5e-4, x_ohm_per_m=2e-4,
-            parallel=1, max_i_ka=max_i_ka,
+            length_m=2000,
+            r_ohm_per_m=1.5e-4,
+            x_ohm_per_m=2e-4,
+            parallel=1,
+            max_i_ka=max_i_ka,
         ),
         b0,
         b1,
@@ -92,9 +95,7 @@ def test_current_and_loading_reported_and_match_formula(name, solver_cls):
     )
 
 
-@pytest.mark.skipif(
-    _casadi_solver_cls() is None, reason="casadi backend not installed"
-)
+@pytest.mark.skipif(_casadi_solver_cls() is None, reason="casadi backend not installed")
 def test_reporting_quantities_are_not_decision_variables():
     """The current/loading reporting quantities must not enter the NLP as free
     variables (they are passive intermediates now)."""
@@ -103,7 +104,8 @@ def test_reporting_quantities_are_not_decision_variables():
     solver = CasADiSolver()
     solver.solve(net, simulation=True)
     reporting = [
-        e for e in solver._reg
+        e
+        for e in solver._reg
         if any(t in str(e["name"]) for t in ("i_from_ka", "i_to_ka", "loading"))
     ]
     assert reporting == [], f"reporting quantities materialised as vars: {reporting}"

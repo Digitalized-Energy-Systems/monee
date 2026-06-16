@@ -354,7 +354,11 @@ def test_generate_mes():
     # WHEN
     (p_def, p_load), (q_def, q_load), (g_def, g_sink) = _carrier_balance(mes)
     mes.apply_formulation(EL_MISOCP_FORMULATION)
-    mes.apply_formulation(make_heat_convex_milp_formulation(num_partitions=1, include_heat_exchangers=False))
+    mes.apply_formulation(
+        make_heat_convex_milp_formulation(
+            num_partitions=1, include_heat_exchangers=False
+        )
+    )
     problem = create_min_load_shedding_problem(
         bounds_vm=(0.9, 1.1),
         bounds_pressure=(0.9, 1.1),
@@ -414,7 +418,11 @@ def test_generate_mes_min_load_shedding():
     # num_partitions=4 tightens the piecewise-McCormick relaxation enough to keep
     # junction temperatures inside the [0.75, 1.15] envelope asserted below; with
     # num_partitions=1 the LP corner legitimately drops to the 0.7 problem bound.
-    mes.apply_formulation(make_heat_convex_milp_formulation(num_partitions=4, include_heat_exchangers=False))
+    mes.apply_formulation(
+        make_heat_convex_milp_formulation(
+            num_partitions=4, include_heat_exchangers=False
+        )
+    )
     problem = create_min_load_shedding_problem(
         bounds_vm=(0.9, 1.5),
         bounds_pressure=(0.9, 1.5),
@@ -710,7 +718,11 @@ def test_generate_mes_storage_capabilities_timeseries():
         heat_kwargs={"node_based_heat_loads": True},
     )
     mes.apply_formulation(EL_MISOCP_FORMULATION)
-    mes.apply_formulation(make_heat_convex_milp_formulation(num_partitions=1, include_heat_exchangers=False))
+    mes.apply_formulation(
+        make_heat_convex_milp_formulation(
+            num_partitions=1, include_heat_exchangers=False
+        )
+    )
     mes.apply_formulation(make_gas_milp_pwl_formulation())
     mes.add_extension(GasLinepack())
     mes.add_extension(LumpedThermalCapacitance())

@@ -119,5 +119,8 @@ class PwlWeymouthBranchFormulation(BranchFormulation):
             abs_psq_diff * grid.pressure_ref_pa**2 * C_sq * branch.on_off
             == branch.phi_pwl_neg - branch.phi_pwl_pos,
             #
-            branch.gas_density_kg_per_m3 == (grid.pressure_ref_pa * p_avg + p_amb) * grid.molar_mass / (grid.universal_gas_constant * grid.t_k),
+            branch.gas_density_kg_per_m3
+            == (grid.pressure_ref_pa * p_avg + p_amb)
+            * grid.molar_mass
+            / (grid.universal_gas_constant * grid.t_k),
         ]

@@ -100,7 +100,9 @@ def _is_zeroed(regulation):
 
 @model
 class GasToHeatControlNode(MultiGridNodeModel, Junction):
-    def __init__(self, gas_mass_flow_kgs, efficiency_heat, hhv, regulation=1, **kwargs) -> None:
+    def __init__(
+        self, gas_mass_flow_kgs, efficiency_heat, hhv, regulation=1, **kwargs
+    ) -> None:
         super().__init__(**kwargs)
         self.efficiency_heat = efficiency_heat
         self._hhv = hhv
@@ -293,8 +295,12 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
 
         # Initialize at the setpoint solution (see GasToHeatControlNode).
         if isinstance(mass_flow_capacity_kgs, (int, float)):
-            el_mw_init = -efficiency_power * mass_flow_capacity_kgs * KGPS_KWHPERKG_TO_MW * hhv
-            heat_mw_init = -efficiency_heat * mass_flow_capacity_kgs * KGPS_KWHPERKG_TO_MW * hhv
+            el_mw_init = (
+                -efficiency_power * mass_flow_capacity_kgs * KGPS_KWHPERKG_TO_MW * hhv
+            )
+            heat_mw_init = (
+                -efficiency_heat * mass_flow_capacity_kgs * KGPS_KWHPERKG_TO_MW * hhv
+            )
         else:
             el_mw_init, heat_mw_init = -1, -1e-3
         self.el_mw = Var(min(el_mw_init, -1e-6), max=0, name="chp_el_mw")
@@ -413,9 +419,9 @@ class CHP(MultiGridCompoundModel):
         if activation_flag:
             # Don't overwrite when controllable_cps has promoted the attr to a
             # Var - restore only the case where set_active(False) zeroed it.
-            if isinstance(self._control_node.gas_mass_flow_kgs, (int, float)) and not isinstance(
-                self._control_node.gas_mass_flow_kgs, bool
-            ):
+            if isinstance(
+                self._control_node.gas_mass_flow_kgs, (int, float)
+            ) and not isinstance(self._control_node.gas_mass_flow_kgs, bool):
                 self._control_node.gas_mass_flow_kgs = self.mass_flow_setpoint_kgs
             if isinstance(
                 self._control_node.regulation, (int, float)
@@ -448,8 +454,18 @@ class CHP(MultiGridCompoundModel):
             grid=[power_node.grid, heat_node.grid, gas_node.grid],
             position=power_node.position,
         )
-        heat_mw = self.efficiency_heat * _num_or(self.mass_flow_kgs, 1.0) * KGPS_KWHPERKG_TO_MW * hhv
-        el_mw = self.efficiency_power * _num_or(self.mass_flow_kgs, 1.0) * KGPS_KWHPERKG_TO_MW * hhv
+        heat_mw = (
+            self.efficiency_heat
+            * _num_or(self.mass_flow_kgs, 1.0)
+            * KGPS_KWHPERKG_TO_MW
+            * hhv
+        )
+        el_mw = (
+            self.efficiency_power
+            * _num_or(self.mass_flow_kgs, 1.0)
+            * KGPS_KWHPERKG_TO_MW
+            * hhv
+        )
         network.branch(
             GenericTransferBranch(flow_init_kgs=_num_or(self.mass_flow_kgs, 1.0)),
             gas_node.id,
@@ -500,7 +516,9 @@ class GasToHeat(MultiGridCompoundModel):
         self._gas_grid = gas_node.grid
         hhv = gas_node.grid.higher_heating_value_kwh_per_kg
         # m = |q| / (eff \cdot KGPS_KWHPERKG_TO_MW \cdot hhv)
-        self.gas_mass_flow_kgs = abs(self.heat_energy_mw) / (self.efficiency * KGPS_KWHPERKG_TO_MW * hhv)
+        self.gas_mass_flow_kgs = abs(self.heat_energy_mw) / (
+            self.efficiency * KGPS_KWHPERKG_TO_MW * hhv
+        )
         self._control_node = GasToHeatControlNode(
             self.gas_mass_flow_kgs,
             self.efficiency,
@@ -635,7 +653,11 @@ class GasToPower(MultiGridBranchModel):
 @model
 class PowerToGas(MultiGridBranchModel):
     def __init__(
-        self, efficiency, mass_flow_setpoint_kgs, consume_q_mvar_setpoint=0, regulation=1
+        self,
+        efficiency,
+        mass_flow_setpoint_kgs,
+        consume_q_mvar_setpoint=0,
+        regulation=1,
     ) -> None:
         super().__init__()
         self.efficiency = efficiency
@@ -645,7 +667,9 @@ class PowerToGas(MultiGridBranchModel):
         self.on_off = 1
         self.p_from_mw = Var(1, min=0, name="p2g_p_from_mw")
         self.q_from_mvar = consume_q_mvar_setpoint
-        self.to_mass_flow_kgs = Var(self.gas_mass_flow_kgs, max=0, name="p2g_to_mass_flow")
+        self.to_mass_flow_kgs = Var(
+            self.gas_mass_flow_kgs, max=0, name="p2g_to_mass_flow"
+        )
         self.regulation = regulation
 
     def loss_percent(self):
@@ -656,13 +680,19 @@ class PowerToGas(MultiGridBranchModel):
             self.to_mass_flow_kgs
             == -self.efficiency
             * self.p_from_mw
-            * (1 / (grids[GasGrid].higher_heating_value_kwh_per_kg * KGPS_KWHPERKG_TO_MW)),
+            * (
+                1
+                / (grids[GasGrid].higher_heating_value_kwh_per_kg * KGPS_KWHPERKG_TO_MW)
+            ),
             self.p_from_mw >= 0,
             self.p_from_mw == self.el_mw,
             self.gas_mass_flow_kgs * self.regulation
             == -self.efficiency
             * self.el_mw
-            * (1 / (grids[GasGrid].higher_heating_value_kwh_per_kg * KGPS_KWHPERKG_TO_MW)),
+            * (
+                1
+                / (grids[GasGrid].higher_heating_value_kwh_per_kg * KGPS_KWHPERKG_TO_MW)
+            ),
         ]
 
 
@@ -829,7 +859,9 @@ class GasToHeatHG(MultiGridBranchModel):
 
     def init(self, grids):
         hhv = grids[GasGrid].higher_heating_value_kwh_per_kg
-        self.gas_mass_flow_kgs = abs(self.heat_energy_mw) / (self.efficiency * KGPS_KWHPERKG_TO_MW * hhv)
+        self.gas_mass_flow_kgs = abs(self.heat_energy_mw) / (
+            self.efficiency * KGPS_KWHPERKG_TO_MW * hhv
+        )
 
     def loss_percent(self):
         return 1 - self.efficiency
@@ -838,7 +870,10 @@ class GasToHeatHG(MultiGridBranchModel):
         hhv = grids[GasGrid].higher_heating_value_kwh_per_kg
         return [
             self.q_mw_heat
-            == -self.efficiency * self.gas_mass_flow_kgs * self.regulation * (KGPS_KWHPERKG_TO_MW * hhv),
+            == -self.efficiency
+            * self.gas_mass_flow_kgs
+            * self.regulation
+            * (KGPS_KWHPERKG_TO_MW * hhv),
             self.from_mass_flow_kgs == self.gas_mass_flow_kgs * self.regulation,
         ]
 

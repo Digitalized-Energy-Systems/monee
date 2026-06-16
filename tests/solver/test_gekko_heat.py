@@ -2,11 +2,11 @@ import math
 
 import monee.model as mm
 import monee.solver as ms
-from tests.util import create_water_loop
-
 from monee import run_energy_flow
 from monee.model.formulation import make_heat_nlp_formulation
 from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER as CP
+from tests.util import create_water_loop
+
 
 def create_branching_two_pipe_heat_example():
     pn = mm.Network()
@@ -197,7 +197,9 @@ def create_two_pipes_with_he_no_branching():
         child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.3))],
     )
     g_node_1 = pn.node(
-        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=10))]
+        mm.Junction(),
+        mm.WATER,
+        child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=10))],
     )
     g_node_2 = pn.node(mm.Junction(), mm.WATER)
     g_node_3 = pn.node(
@@ -424,14 +426,24 @@ def create_supply_return_parallel_he():
     pn = mm.Network()
 
     s0 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))])
-    s1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))])
-    s2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))])
+    s1 = pn.node(
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))]
+    )
+    s2 = pn.node(
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))]
+    )
 
     r0 = pn.node(
-        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=10))]
+        mm.Junction(),
+        mm.WATER,
+        child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=10))],
     )
-    r1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=3))])
-    r2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=3))])
+    r1 = pn.node(
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=3))]
+    )
+    r2 = pn.node(
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=3))]
+    )
 
     pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s0, s1)
     pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s1, s2)
@@ -457,7 +469,9 @@ def create_supply_return_parallel_he_real(q_mw_coeff=1):
     s2 = pn.node(mm.Junction(), mm.WATER)
 
     r0 = pn.node(
-        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=10))]
+        mm.Junction(),
+        mm.WATER,
+        child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=10))],
     )
     r1 = pn.node(mm.Junction(), mm.WATER)
     r2 = pn.node(mm.Junction(), mm.WATER)
@@ -517,8 +531,12 @@ def test_passive_he_minor_loss_matches_analytic():
     q_mw, mdot, zeta, dia = 0.1, 2.0, 5.0, 0.1
     grid = mm.create_water_grid("heat")
     net = mm.Network()
-    a = net.node(mm.Junction(), grid=grid, child_ids=[net.child(mm.ExtHydrGrid(t_k=350))])
-    b = net.node(mm.Junction(), grid=grid, child_ids=[net.child(mm.Sink(mass_flow_kgs=mdot))])
+    a = net.node(
+        mm.Junction(), grid=grid, child_ids=[net.child(mm.ExtHydrGrid(t_k=350))]
+    )
+    b = net.node(
+        mm.Junction(), grid=grid, child_ids=[net.child(mm.Sink(mass_flow_kgs=mdot))]
+    )
     net.branch(
         mm.PassiveHeatExchanger(q_mw=q_mw, diameter_m=dia, loss_coefficient=zeta), a, b
     )
@@ -541,8 +559,14 @@ def test_passive_he_minor_loss_matches_analytic():
 def test_passive_he_zero_loss_coefficient_is_lossless():
 
     net = mm.Network()
-    a = net.node(mm.Junction(), grid=mm.WATER_KEY, child_ids=[net.child(mm.ExtHydrGrid(t_k=350))])
-    b = net.node(mm.Junction(), grid=mm.WATER_KEY, child_ids=[net.child(mm.Sink(mass_flow_kgs=2.0))])
+    a = net.node(
+        mm.Junction(), grid=mm.WATER_KEY, child_ids=[net.child(mm.ExtHydrGrid(t_k=350))]
+    )
+    b = net.node(
+        mm.Junction(),
+        grid=mm.WATER_KEY,
+        child_ids=[net.child(mm.Sink(mass_flow_kgs=2.0))],
+    )
     net.branch(
         mm.PassiveHeatExchanger(q_mw=0.01, diameter_m=0.1, loss_coefficient=0.0), a, b
     )
@@ -551,4 +575,6 @@ def test_passive_he_zero_loss_coefficient_is_lossless():
     result = run_energy_flow(net)
     assert result.success
     j = result.dataframes["Junction"]
-    assert math.isclose(j["pressure_pa"].iloc[0], j["pressure_pa"].iloc[1], abs_tol=1e-3)
+    assert math.isclose(
+        j["pressure_pa"].iloc[0], j["pressure_pa"].iloc[1], abs_tol=1e-3
+    )

@@ -65,8 +65,10 @@ class BilinearDarcyWeisbachBranchFormulation(BranchFormulation):
         # Unidirectional pipes pin direction=0 below, eliminating that binary.
         eqs = [
             # Epigraph relaxation kept tight by the \varepsilon term in minimize().
-            branch.mass_flow_pos_kgs * branch.mass_flow_pos_kgs <= branch.mass_flow_pos_kgs_squared,
-            branch.mass_flow_neg_kgs * branch.mass_flow_neg_kgs <= branch.mass_flow_neg_kgs_squared,
+            branch.mass_flow_pos_kgs * branch.mass_flow_pos_kgs
+            <= branch.mass_flow_pos_kgs_squared,
+            branch.mass_flow_neg_kgs * branch.mass_flow_neg_kgs
+            <= branch.mass_flow_neg_kgs_squared,
             branch.mass_flow_pos_kgs <= f_max_local * branch.direction,
             branch.mass_flow_neg_kgs <= f_max_local * (1 - branch.direction),
             branch.mass_flow_pos_kgs <= f_max_local * branch.on_off,
@@ -87,8 +89,10 @@ class BilinearDarcyWeisbachBranchFormulation(BranchFormulation):
                 friction=branch.friction / grid.pressure_ref_pa,
                 **kwargs,
             ),
-            branch.mass_flow_mag_kgs == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs,
-            branch.alpha * (branch.mass_flow_mag_kgs + UA_C) == branch.mass_flow_mag_kgs,
+            branch.mass_flow_mag_kgs
+            == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs,
+            branch.alpha * (branch.mass_flow_mag_kgs + UA_C)
+            == branch.mass_flow_mag_kgs,
             branch.t_out_pu
             == branch.temperature_ext_k / grid.t_ref_k
             + branch.alpha * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref_k)
@@ -196,7 +200,10 @@ class PwlDarcyWeisbachBranchFormulation(BranchFormulation):
         )
 
         K = branch.length_m / (
-            2.0 * grid.fluid_density_kg_per_m3 * branch._pipe_area**2 * branch.diameter_m
+            2.0
+            * grid.fluid_density_kg_per_m3
+            * branch._pipe_area**2
+            * branch.diameter_m
         )
 
         return [
@@ -205,12 +212,14 @@ class PwlDarcyWeisbachBranchFormulation(BranchFormulation):
             branch.mass_flow_pos_kgs <= m_max * branch.on_off,
             branch.mass_flow_neg_kgs <= m_max * branch.on_off,
             branch.mass_flow_mag_kgs <= m_max,
-            branch.mass_flow_mag_kgs == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs,
+            branch.mass_flow_mag_kgs
+            == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs,
             (from_node_model.vars["pressure_pu"] - to_node_model.vars["pressure_pu"])
             * grid.pressure_ref_pa
             * branch.on_off
             == K * (branch.phi_pwl_neg - branch.phi_pwl_pos),
-            branch.alpha * (branch.mass_flow_mag_kgs + UA_C) == branch.mass_flow_mag_kgs,
+            branch.alpha * (branch.mass_flow_mag_kgs + UA_C)
+            == branch.mass_flow_mag_kgs,
             branch.t_out_pu
             == branch.temperature_ext_k / grid.t_ref_k
             + branch.alpha * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref_k),
@@ -251,8 +260,10 @@ class BilinearPassiveHeatExchangerFormulation(BilinearDarcyWeisbachBranchFormula
 
         return [
             # Epigraph relaxation kept tight by the \varepsilon term in minimize().
-            branch.mass_flow_pos_kgs * branch.mass_flow_pos_kgs <= branch.mass_flow_pos_kgs_squared,
-            branch.mass_flow_neg_kgs * branch.mass_flow_neg_kgs <= branch.mass_flow_neg_kgs_squared,
+            branch.mass_flow_pos_kgs * branch.mass_flow_pos_kgs
+            <= branch.mass_flow_pos_kgs_squared,
+            branch.mass_flow_neg_kgs * branch.mass_flow_neg_kgs
+            <= branch.mass_flow_neg_kgs_squared,
             branch.mass_flow_pos_kgs <= f_max_local * branch.direction,
             branch.mass_flow_neg_kgs <= f_max_local * (1 - branch.direction),
             branch.mass_flow_pos_kgs <= f_max_local * branch.on_off,
@@ -272,7 +283,8 @@ class BilinearPassiveHeatExchangerFormulation(BilinearDarcyWeisbachBranchFormula
                 friction=branch.friction / grid.pressure_ref_pa,
                 **kwargs,
             ),
-            branch.mass_flow_mag_kgs == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs,
+            branch.mass_flow_mag_kgs
+            == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs,
             branch.mass_flow_mag_kgs * branch.t_inc_pu
             == -branch.q_mw * 1e6 / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * grid.t_ref_k),
             branch.t_out_pu

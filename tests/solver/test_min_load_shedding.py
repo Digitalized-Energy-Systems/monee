@@ -1,4 +1,4 @@
-﻿import monee
+import monee
 from monee.model.core import Var
 from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.model.multi import (

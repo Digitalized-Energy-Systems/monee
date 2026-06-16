@@ -326,7 +326,11 @@ def _shedding_mw(model, gas_mw_factor=None, cp_rated_mw=None):
 
     if isinstance(model, (Sink, Source)):
         mf = nan_to_zero(model.mass_flow_kgs)
-        factor = gas_mw_factor if gas_mw_factor is not None else KGPS_KWHPERKG_TO_MW * _HHV_DEFAULT
+        factor = (
+            gas_mw_factor
+            if gas_mw_factor is not None
+            else KGPS_KWHPERKG_TO_MW * _HHV_DEFAULT
+        )
         if isinstance(model, Sink):
             return mf * factor * (1 - reg)
         return (-mf) * factor * (1 - reg)
@@ -429,7 +433,9 @@ def create_min_load_shedding_problem(
     if check_vm:
         problem.bounds(bounds_vm, lambda m, _: type(m) is Bus, ["vm_pu"])
     if check_pressure:
-        problem.bounds(bounds_pressure, lambda m, _: type(m) is Junction, ["pressure_pu"])
+        problem.bounds(
+            bounds_pressure, lambda m, _: type(m) is Junction, ["pressure_pu"]
+        )
     if check_t:
         problem.bounds(
             bounds_t,
@@ -484,7 +490,8 @@ def create_min_load_shedding_problem(
             return False
         grids = g if isinstance(g, list) else [g]
         return any(
-            gg is not None and hasattr(gg, "higher_heating_value_kwh_per_kg") for gg in grids
+            gg is not None and hasattr(gg, "higher_heating_value_kwh_per_kg")
+            for gg in grids
         )
 
     # Populated by _objective_models, read by _data_attacher.

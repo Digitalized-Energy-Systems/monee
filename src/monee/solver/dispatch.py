@@ -145,8 +145,7 @@ def _dispatch_backend(
         return gurobipy_factory()
 
     raise ValueError(
-        f"Unknown backend {chosen_backend!r}; expected 'gekko', 'pyomo' or "
-        "'gurobipy'."
+        f"Unknown backend {chosen_backend!r}; expected 'gekko', 'pyomo' or 'gurobipy'."
     )
 
 

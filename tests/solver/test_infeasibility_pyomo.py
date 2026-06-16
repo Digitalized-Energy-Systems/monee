@@ -3,6 +3,13 @@
 import pyomo.environ as pyo
 import pytest
 
+import monee.model as mm
+from monee.model import Network
+from monee.model.child import ExtPowerGrid, PowerLoad
+from monee.model.node import Bus
+from monee.problem.core import Constraints, OptimizationProblem
+from monee.simulation.multi_period import run_multi_period
+from monee.simulation.timeseries import TimeseriesData
 from monee.solver.infeasibility.pyo import (
     InfeasibilityReport,
     _parse_var_name,
@@ -12,17 +19,8 @@ from monee.solver.infeasibility.pyo import (
     collect_variables_at_bounds,
     diagnose_infeasibility,
 )
-from tests.util import solver_available
-
-import monee.model as mm
-from monee.model import Network
-from monee.model.child import ExtPowerGrid, PowerLoad
-from monee.model.node import Bus
-from monee.problem.core import Constraints, OptimizationProblem
-from monee.simulation.multi_period import run_multi_period
-from monee.simulation.timeseries import TimeseriesData
-
 from monee.solver.pyo import PyomoSolver
+from tests.util import solver_available
 
 # These tests exercise the diagnostics against a real solver run via raw
 # pyo.SolverFactory, which needs the standalone executable (the pyscipopt
@@ -242,7 +240,10 @@ def test_infeasible_multi_period_pyomo():
 
     # WHEN / THEN
     # ipopt detects nonlinear infeasibility much faster than SCIP
-    with pytest.raises(RuntimeError, match="CasADi/IPOPT multi-period solve did not converge \(return status: 'Infeasible_Problem_Detected'\)\."):
+    with pytest.raises(
+        RuntimeError,
+        match="CasADi/IPOPT multi-period solve did not converge \(return status: 'Infeasible_Problem_Detected'\)\.",
+    ):
         run_multi_period(
             net,
             td,

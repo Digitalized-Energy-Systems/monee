@@ -47,7 +47,9 @@ def _heat_grid_main(pn):
     )
     j_hub = pn.node(mm.Junction(), grid=water_grid)
     j_sink = pn.node(
-        mm.Junction(), grid=water_grid, child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.05))]
+        mm.Junction(),
+        grid=water_grid,
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.05))],
     )
     pn.branch(mm.WaterPipe(**_PIPE), j_ext, j_hub)
     pn.branch(mm.WaterPipe(**_PIPE), j_hub, j_sink)
@@ -92,7 +94,9 @@ def _heat_grid_full(pn):
     )
     j_supply = pn.node(mm.Junction(), grid=water_grid)
     j_return = pn.node(
-        mm.Junction(), grid=water_grid, child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.05))]
+        mm.Junction(),
+        grid=water_grid,
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.05))],
     )
     pn.branch(mm.WaterPipe(**_PIPE), j_ext, j_supply)
     pn.branch(mm.WaterPipe(**_PIPE), j_supply, j_return)

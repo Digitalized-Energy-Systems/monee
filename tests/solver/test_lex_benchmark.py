@@ -48,7 +48,11 @@ def _simbench_mes_net():
             heat_kwargs={"node_based_heat_loads": True},
         )
         mes.apply_formulation(EL_MISOCP_FORMULATION)
-        mes.apply_formulation(make_heat_convex_milp_formulation(num_partitions=1, include_heat_exchangers=False))
+        mes.apply_formulation(
+            make_heat_convex_milp_formulation(
+                num_partitions=1, include_heat_exchangers=False
+            )
+        )
         _SIMBENCH_TEMPLATE = mes
     return copy.deepcopy(_SIMBENCH_TEMPLATE)
 

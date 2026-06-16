@@ -1,4 +1,4 @@
-﻿"""Inactive branches (on_off=0) in the MISOCP formulation must carry zero current and power."""
+"""Inactive branches (on_off=0) in the MISOCP formulation must carry zero current and power."""
 
 import math
 

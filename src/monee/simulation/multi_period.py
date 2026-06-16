@@ -14,6 +14,10 @@ from monee.model.extension.islanding.core import NetworkIslandingConfig
 from monee.model.formulation.registry import attach_formulations
 from monee.simulation.step_state import PeriodState
 from monee.simulation.timeseries import TimeseriesData
+
+# Shared result-rendering helpers, imported from the solver's public reporting
+# surface (the simulation layer renders the same kind of result tables).
+from monee.solver.core import TABLE_CSS as _TABLE_CSS
 from monee.solver.core import (
     SolverResult,
     find_ignored_nodes,
@@ -23,10 +27,6 @@ from monee.solver.core import (
     mark_ignored_components,
     withdraw_vars,
 )
-
-# Shared result-rendering helpers, imported from the solver's public reporting
-# surface (the simulation layer renders the same kind of result tables).
-from monee.solver.core import TABLE_CSS as _TABLE_CSS
 from monee.solver.core import col_summary as _col_summary
 from monee.solver.core import display_df as _display_df
 from monee.solver.dispatch import resolve_multi_period_solver

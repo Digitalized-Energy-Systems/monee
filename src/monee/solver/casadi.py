@@ -316,8 +316,8 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         self._simulation: bool = False
         self._reg: list = []
         # in-process timing (no subprocess at any layer):
-        self.last_build_s = None   # nlpsol construction: graph -> derivative fns
-        self.last_solve_s = None   # the IPOPT solve() call
+        self.last_build_s = None  # nlpsol construction: graph -> derivative fns
+        self.last_solve_s = None  # the IPOPT solve() call
         self.last_engine_s = None  # build + solve (the GEKKO "engine" analogue)
         self.last_iters = None
 
@@ -429,18 +429,14 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         # and flag temporal models so their static-only equations are suppressed.
         if step_state is not None:
             for ext in network.extensions:
-                ext.activate_timeseries(
-                    network, ignored_nodes, step_state=step_state
-                )
+                ext.activate_timeseries(network, ignored_nodes, step_state=step_state)
             self.mark_temporal_components(network, ignored_nodes)
 
         # --- equation assembly (reuses monee's unchanged passes) ---
         objs_exprs: list = []
         self.init_branches(branches)
         self.process_equations_nodes_childs(m, network, nodes, ignored_nodes)
-        self.process_equations_branches(
-            m, network, branches, ignored_nodes, objs_exprs
-        )
+        self.process_equations_branches(m, network, branches, ignored_nodes, objs_exprs)
         self.process_equations_compounds(m, network, compounds, ignored_nodes)
         if optimization_problem is not None:
             self.process_oxf_components(m, network, optimization_problem)
@@ -461,7 +457,9 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
                 optimization_problem=optimization_problem,
             )
             for ext in network.extensions:
-                m.Equations(ext.inter_step_equations(network, ignored_nodes, step_state))
+                m.Equations(
+                    ext.inter_step_equations(network, ignored_nodes, step_state)
+                )
                 m.Equations(
                     ext.inter_temporal_equations(network, ignored_nodes, step_state)
                 )
@@ -492,7 +490,9 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         # duplicate graph nodes before the autodiff build, which both shrinks the
         # nlpsol construction and speeds per-iteration evaluation.
         f, g = ca.cse([f, g])
-        solver = ca.nlpsol("monee_casadi", "ipopt", {"x": X, "f": f, "g": g}, _IPOPT_OPTS)
+        solver = ca.nlpsol(
+            "monee_casadi", "ipopt", {"x": X, "f": f, "g": g}, _IPOPT_OPTS
+        )
         self.last_build_s = time.perf_counter() - t0
 
         t0 = time.perf_counter()
@@ -524,9 +524,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             if isinstance(val, CasSym)
         ]
         if leftover:
-            F = ca.Function(
-                "intval", [X], [ca.vertcat(*[e for _, _, e in leftover])]
-            )
+            F = ca.Function("intval", [X], [ca.vertcat(*[e for _, _, e in leftover])])
             vals = np.array(F(ca.DM(x_opt))).flatten()
             for (model, key, _), v in zip(leftover, vals):
                 model.__dict__[key] = Intermediate(value=float(v))
@@ -606,7 +604,7 @@ class CasADiTimeseries:
         # Declare every time-varying attribute as a CasADi parameter, replacing
         # whatever value (float/Var) it currently holds, so it flows into the
         # graph symbolically and can be set per step without a rebuild.
-        self._params = []   # (model, key, param_sx, series)
+        self._params = []  # (model, key, param_sx, series)
         self._declare_params(network, timeseries_data)
 
         objs: list = []
@@ -625,7 +623,11 @@ class CasADiTimeseries:
         self._branches, self._compounds, self._ignored = branches, compounds, ignored
         self._var_entries = reg
         X = ca.vertcat(*[r["sx"] for r in reg])
-        P = ca.vertcat(*[p[2] for p in self._params]) if self._params else ca.SX.zeros(0)
+        P = (
+            ca.vertcat(*[p[2] for p in self._params])
+            if self._params
+            else ca.SX.zeros(0)
+        )
         self._lbx = ca.DM([r["lb"] for r in reg])
         self._ubx = ca.DM([r["ub"] for r in reg])
         self._x = ca.DM([r["x0"] for r in reg])  # warm-start state
@@ -751,7 +753,7 @@ class CasADiTimeseries:
             r["model"].__dict__[r["key"]] = Var(
                 value=float(xv[i]), min=r["vmin"], max=r["vmax"], name=r["name"]
             )
-        for (model, key, _psx, series) in self._params:
+        for model, key, _psx, series in self._params:
             model.__dict__[key] = float(series[t])
         if self._F_inter is not None:
             ivals = np.array(self._F_inter(sol["x"], pvals)).flatten()
@@ -968,9 +970,7 @@ class CasADiMultiPeriodSolver:
             for (model, key, _), v in zip(leftover, vals):
                 model.__dict__[key] = Intermediate(value=float(v))
         for net_t in net_copies:
-            apply_post_process_all(
-                net_t.nodes, net_t.branches, net_t.compounds, net_t
-            )
+            apply_post_process_all(net_t.nodes, net_t.branches, net_t.compounds, net_t)
 
         objective = float(sol["f"]) if m.obj_terms else 0.0
         return MultiPeriodResult(

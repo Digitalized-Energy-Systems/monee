@@ -52,8 +52,20 @@ def test_sgens_import_as_distinct_generators_without_positive_reactive():
         for c in monee_net.childs
         if isinstance(c.model, (mm.PowerGenerator, mm.PowerLoad))
     ]
-    assert abs(sum(c.model.p_mw for c in childs) - (net.load.p_mw.sum() - net.sgen.p_mw.sum())) < 1e-6
-    assert abs(sum(c.model.q_mvar for c in childs) - (net.load.q_mvar.sum() - net.sgen.q_mvar.sum())) < 1e-6
+    assert (
+        abs(
+            sum(c.model.p_mw for c in childs)
+            - (net.load.p_mw.sum() - net.sgen.p_mw.sum())
+        )
+        < 1e-6
+    )
+    assert (
+        abs(
+            sum(c.model.q_mvar for c in childs)
+            - (net.load.q_mvar.sum() - net.sgen.q_mvar.sum())
+        )
+        < 1e-6
+    )
 
     # The caller's net is not mutated.
     assert len(net.sgen) == n_sgen

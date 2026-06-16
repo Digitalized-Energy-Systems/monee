@@ -176,9 +176,7 @@ def _single_pipe_gas_net(gas_type):
     g1 = pn.node(
         mm.Junction(), grid=gas, child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.2))]
     )
-    pn.branch(
-        mm.GasPipe(diameter_m=0.3, length_m=5000, temperature_ext_k=300), g0, g1
-    )
+    pn.branch(mm.GasPipe(diameter_m=0.3, length_m=5000, temperature_ext_k=300), g0, g1)
     return pn
 
 

@@ -57,7 +57,9 @@ def test_junction_mass_flow():
     junction = Junction()
     to_model = GasPipe(diameter_m=10, length_m=10, temperature_ext_k=234, roughness_m=1)
     to_model.to_mass_flow_kgs = 10
-    from_model = GasPipe(diameter_m=10, length_m=10, temperature_ext_k=234, roughness_m=1)
+    from_model = GasPipe(
+        diameter_m=10, length_m=10, temperature_ext_k=234, roughness_m=1
+    )
     from_model.from_mass_flow_kgs = 3
 
     # WHEN

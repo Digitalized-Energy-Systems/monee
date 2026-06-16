@@ -65,13 +65,21 @@ def test_int_flows_matches_individual_functions():
         ref_qt = ac.int_flow_to_q(_Capture(), b_to_pu=c["b_to_pu"], **common)
 
         combined = ac.int_flows(
-            _Capture(), _Capture(), _Capture(), _Capture(),
-            g_from=c["g_from"], b_from=c["b_from"],
-            g_to_pu=c["g_to_pu"], b_to_pu=c["b_to_pu"], **common,
+            _Capture(),
+            _Capture(),
+            _Capture(),
+            _Capture(),
+            g_from=c["g_from"],
+            b_from=c["b_from"],
+            g_to_pu=c["g_to_pu"],
+            b_to_pu=c["b_to_pu"],
+            **common,
         )
 
         for got, ref, label in zip(
-            combined, (ref_pf, ref_qf, ref_pt, ref_qt), ("p_from", "q_from", "p_to", "q_to")
+            combined,
+            (ref_pf, ref_qf, ref_pt, ref_qt),
+            ("p_from", "q_from", "p_to", "q_to"),
         ):
             assert math.isclose(got, ref, rel_tol=1e-12, abs_tol=1e-12), (
                 f"{label}: combined={got!r} individual={ref!r} for {c!r}"

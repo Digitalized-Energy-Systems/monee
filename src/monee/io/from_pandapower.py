@@ -136,8 +136,8 @@ def _pp_bus_to_node_id(net):
     lookups = getattr(net, "_pd2ppc_lookups", None)
     bus_lookup = None if lookups is None else lookups.get("bus")
     mapping = {}
-    for bus in net.bus.index:
-        bus = int(bus)
+    for raw_bus in net.bus.index:
+        bus = int(raw_bus)
         if bus_lookup is not None and 0 <= bus < len(bus_lookup):
             ppc_idx = int(bus_lookup[bus])
             if ppc_idx >= 0:

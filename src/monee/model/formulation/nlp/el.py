@@ -20,7 +20,6 @@ CURRENT_SMOOTHING_EPS_MW = 1e-4
 
 
 class AcPolarNlpNodeFormulation(NodeFormulation):
-
     def ensure_var(self, model, simulation=False, grid=None):
         # Some multi-grid control nodes subclass Bus (so they match here) without
         # a vm_pu attribute - only act on real voltage buses.
@@ -51,15 +50,17 @@ class AcPolarNlpBranchFormulation(BranchFormulation):
         # Built once and reused for both i_*_ka and loading_*_pu, so the sqrt
         # node is shared (the two intermediates differ only by the /max_i_ka).
         i_from_ka = (
-            branch.p_from_mw**2 + branch.q_from_mvar**2 + CURRENT_SMOOTHING_EPS_MW**2
-        ) ** 0.5 / (
-            from_node_model.vars["vm_pu"] * from_node_model.vars["base_kv"]
-        ) / SQRT_3
+            (branch.p_from_mw**2 + branch.q_from_mvar**2 + CURRENT_SMOOTHING_EPS_MW**2)
+            ** 0.5
+            / (from_node_model.vars["vm_pu"] * from_node_model.vars["base_kv"])
+            / SQRT_3
+        )
         i_to_ka = (
-            branch.p_to_mw**2 + branch.q_to_mvar**2 + CURRENT_SMOOTHING_EPS_MW**2
-        ) ** 0.5 / (
-            to_node_model.vars["vm_pu"] * to_node_model.vars["base_kv"]
-        ) / SQRT_3
+            (branch.p_to_mw**2 + branch.q_to_mvar**2 + CURRENT_SMOOTHING_EPS_MW**2)
+            ** 0.5
+            / (to_node_model.vars["vm_pu"] * to_node_model.vars["base_kv"])
+            / SQRT_3
+        )
 
         return [
             # All four P/Q flow equations, sharing the sub-terms common across

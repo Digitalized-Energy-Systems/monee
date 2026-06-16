@@ -76,6 +76,7 @@ from monee import (
 )
 from monee.io.matpower import read_matpower_case
 from monee.model import Network, Var
+from monee.model.branch import GenericPowerBranch
 from monee.model.child import ExtPowerGrid, PowerGenerator, PowerLoad
 from monee.model.formulation import (
     EL_MISOCP_FORMULATION,
@@ -86,7 +87,6 @@ from monee.model.formulation import (
     make_heat_convex_milp_formulation,
     make_heat_nlp_formulation,
 )
-from monee.model.branch import GenericPowerBranch
 from monee.model.node import Bus
 from monee.model.storage import ElectricStorage
 from monee.problem import create_min_load_shedding_problem
@@ -181,8 +181,14 @@ def _feeder(n_bus, lat_len=6):
     net = pp.create_empty_network(sn_mva=1.0)
     b0 = pp.create_bus(net, vn_kv=20.0, min_vm_pu=0.9, max_vm_pu=1.1, name="slack")
     pp.create_ext_grid(
-        net, b0, vm_pu=1.0, va_degree=0.0,
-        min_p_mw=-1e3, max_p_mw=1e3, min_q_mvar=-1e3, max_q_mvar=1e3,
+        net,
+        b0,
+        vm_pu=1.0,
+        va_degree=0.0,
+        min_p_mw=-1e3,
+        max_p_mw=1e3,
+        min_q_mvar=-1e3,
+        max_q_mvar=1e3,
     )
     made, lateral, j = 1, 0, 0
     while made < n_bus:
@@ -190,16 +196,29 @@ def _feeder(n_bus, lat_len=6):
         for _ in range(min(lat_len, n_bus - made)):
             bb = pp.create_bus(net, vn_kv=20.0, min_vm_pu=0.9, max_vm_pu=1.1)
             pp.create_line_from_parameters(
-                net, prev, bb, length_km=0.8, r_ohm_per_km=0.15,
-                x_ohm_per_km=0.2, c_nf_per_km=0.0, max_i_ka=10.0,
+                net,
+                prev,
+                bb,
+                length_km=0.8,
+                r_ohm_per_km=0.15,
+                x_ohm_per_km=0.2,
+                c_nf_per_km=0.0,
+                max_i_ka=10.0,
             )
             pp.create_load(net, bb, p_mw=0.3, q_mvar=0.06)
             prev = bb
             made += 1
         if lateral % 2 == 0:
             gi = pp.create_gen(
-                net, prev, p_mw=0.4, min_p_mw=0.0, max_p_mw=0.8,
-                min_q_mvar=-2, max_q_mvar=2, vm_pu=1.0, controllable=True,
+                net,
+                prev,
+                p_mw=0.4,
+                min_p_mw=0.0,
+                max_p_mw=0.8,
+                min_q_mvar=-2,
+                max_q_mvar=2,
+                vm_pu=1.0,
+                controllable=True,
             )
             pp.create_poly_cost(net, gi, "gen", cp1_eur_per_mw=10.0 + 5.0 * j)
             j += 1
@@ -258,8 +277,9 @@ def _build_econ_dispatch(pp_net, max_i_ka=None, max_loading=None):
     prob = OptimizationProblem()
     obj = Objectives()
     obj.select(
-        lambda m: isinstance(m, (PowerGenerator, ExtPowerGrid))
-        and hasattr(m, "_cost_coeffs")
+        lambda m: (
+            isinstance(m, (PowerGenerator, ExtPowerGrid)) and hasattr(m, "_cost_coeffs")
+        )
     ).calculate(lambda models: sum(_poly(m._cost_coeffs, -m.p_mw) for m in models))
     prob.objectives = obj
     cons = Constraints()
@@ -279,12 +299,17 @@ def _water_loop(source_t_k=330):
     without the test package on sys.path.
     """
     net = mm.Network()
-    n0 = net.node(mm.Junction(), mm.WATER, child_ids=[net.child(mm.ExtHydrGrid(t_k=356))])
+    n0 = net.node(
+        mm.Junction(), mm.WATER, child_ids=[net.child(mm.ExtHydrGrid(t_k=356))]
+    )
     n1 = net.node(
-        mm.Junction(), mm.WATER,
+        mm.Junction(),
+        mm.WATER,
         child_ids=[net.child(mm.Source(mass_flow_kgs=5, t_k=source_t_k))],
     )
-    n2 = net.node(mm.Junction(), mm.WATER, child_ids=[net.child(mm.Sink(mass_flow_kgs=10))])
+    n2 = net.node(
+        mm.Junction(), mm.WATER, child_ids=[net.child(mm.Sink(mass_flow_kgs=10))]
+    )
     pipe = dict(diameter_m=0.3, length_m=100.0)
     net.branch(mm.WaterPipe(**pipe), n0, n1)
     net.branch(mm.WaterPipe(**pipe), n1, n2)
@@ -301,22 +326,51 @@ def _g2h_net():
 
     pn = mm.Network()
     gas_grid = mm.create_gas_grid("gas", type="lgas")
-    g0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow_kgs=1))], grid=gas_grid)
+    g0 = pn.node(
+        mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow_kgs=1))], grid=gas_grid
+    )
     g1 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())], grid=gas_grid)
-    g2 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))], grid=gas_grid)
-    pn.branch(mm.GasPipe(diameter_m=0.3, length_m=100, temperature_ext_k=300, roughness_m=0.01), g0, g1)
-    pn.branch(mm.GasPipe(diameter_m=0.3, length_m=150, temperature_ext_k=300, roughness_m=0.01), g0, g2)
+    g2 = pn.node(
+        mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))], grid=gas_grid
+    )
+    pn.branch(
+        mm.GasPipe(
+            diameter_m=0.3, length_m=100, temperature_ext_k=300, roughness_m=0.01
+        ),
+        g0,
+        g1,
+    )
+    pn.branch(
+        mm.GasPipe(
+            diameter_m=0.3, length_m=150, temperature_ext_k=300, roughness_m=0.01
+        ),
+        g0,
+        g2,
+    )
 
-    w0 = pn.node(mm.Junction(), grid=mm.WATER_KEY, child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))])
-    w1 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ConsumeHydrGrid(1))], grid=mm.WATER_KEY)
+    w0 = pn.node(
+        mm.Junction(),
+        grid=mm.WATER_KEY,
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))],
+    )
+    w1 = pn.node(
+        mm.Junction(), child_ids=[pn.child(mm.ConsumeHydrGrid(1))], grid=mm.WATER_KEY
+    )
     w2 = pn.node(mm.Junction(), grid=mm.WATER_KEY)
-    w3 = pn.node(mm.Junction(), grid=mm.WATER_KEY, child_ids=[pn.child(mm.ExtHydrGrid(t_k=359))])
+    w3 = pn.node(
+        mm.Junction(), grid=mm.WATER_KEY, child_ids=[pn.child(mm.ExtHydrGrid(t_k=359))]
+    )
     pn.branch(mm.WaterPipe(diameter_m=0.15, length_m=100), w0, w1)
     pn.branch(mm.WaterPipe(diameter_m=0.15, length_m=200), w3, w2)
 
     mx.create_g2h(
-        pn, gas_node_id=g2, heat_node_id=w2, heat_return_node_id=w1,
-        heat_energy_mw=0.010, diameter_m=0.4, efficiency=0.9,
+        pn,
+        gas_node_id=g2,
+        heat_node_id=w2,
+        heat_return_node_id=w1,
+        heat_energy_mw=0.010,
+        diameter_m=0.4,
+        efficiency=0.9,
     )
     return pn
 
@@ -364,7 +418,9 @@ def _el_ts_net():
         child_ids=[lid, net.child(PowerGenerator(p_mw=0.5, q_mvar=0))],
     )
     net.branch(
-        mm.PowerLine(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1), b0, b1
+        mm.PowerLine(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1),
+        b0,
+        b1,
     )
     net.apply_formulation(EL_NLP_FORMULATION)
     return net, lid
@@ -383,7 +439,9 @@ def _el_storage_ts_net():
     )
     b1 = net.node(Bus(base_kv=1), grid=mm.EL, child_ids=[lid, sid])
     net.branch(
-        mm.PowerLine(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1), b0, b1
+        mm.PowerLine(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1),
+        b0,
+        b1,
     )
     net.apply_formulation(EL_NLP_FORMULATION)
     return net, sid
@@ -413,9 +471,13 @@ def _water_ltc_net(formulation):
     (net, sink_id).
     """
     net = mm.Network()
-    n0 = net.node(mm.Junction(), mm.WATER, child_ids=[net.child(mm.ExtHydrGrid(t_k=356))])
+    n0 = net.node(
+        mm.Junction(), mm.WATER, child_ids=[net.child(mm.ExtHydrGrid(t_k=356))]
+    )
     n1 = net.node(
-        mm.Junction(), mm.WATER, child_ids=[net.child(mm.Source(mass_flow_kgs=5, t_k=356))]
+        mm.Junction(),
+        mm.WATER,
+        child_ids=[net.child(mm.Source(mass_flow_kgs=5, t_k=356))],
     )
     sink = net.child(mm.Sink(mass_flow_kgs=10))
     n2 = net.node(mm.Junction(), mm.WATER, child_ids=[sink])
@@ -463,8 +525,12 @@ def _row(group, case, sector, problem, ba, ta, ra, bb, tb, rb, probe, size):
         time_a_ms=round(ta * 1000, 1),
         time_b_ms=round(tb * 1000, 1),
         speedup=round(ta / tb, 2) if tb else float("nan"),
-        ok_a=bool(getattr(ra, "success", False) or getattr(ra, "failed_steps", None) == []),
-        ok_b=bool(getattr(rb, "success", False) or getattr(rb, "failed_steps", None) == []),
+        ok_a=bool(
+            getattr(ra, "success", False) or getattr(ra, "failed_steps", None) == []
+        ),
+        ok_b=bool(
+            getattr(rb, "success", False) or getattr(rb, "failed_steps", None) == []
+        ),
         cross_err=err,
         size=size,
     )
@@ -477,81 +543,218 @@ def run_nlp_suite():
     A, B = "GEKKO", "CasADi"
 
     # A1 EL power flow (single sector)
-    for name, loader in [("cigre_mv", ppn.create_cigre_network_mv),
-                         ("mv_oberrhein", ppn.mv_oberrhein)]:
+    for name, loader in [
+        ("cigre_mv", ppn.create_cigre_network_mv),
+        ("mv_oberrhein", ppn.mv_oberrhein),
+    ]:
         ng = _mnet(loader)
-        rg, tg = _time(lambda: run_energy_flow(ng, solver=GEKKOSolver(), simulation=True))
+        rg, tg = _time(
+            lambda: run_energy_flow(ng, solver=GEKKOSolver(), simulation=True)
+        )
         nc = _mnet(loader)
-        rc, tc = _time(lambda: run_energy_flow(nc, solver=CasADiSolver(), simulation=True))
-        rows.append(_row("A", f"EL PF · {name}", "electricity", "power flow",
-                         A, tg, rg, B, tc, rc, _probe_bus_vm, _n_bus(rg)))
-        print(f"  {rows[-1]['case']:28s} {A} {tg*1000:7.1f}ms  {B} {tc*1000:7.1f}ms  x{rows[-1]['speedup']}")
+        rc, tc = _time(
+            lambda: run_energy_flow(nc, solver=CasADiSolver(), simulation=True)
+        )
+        rows.append(
+            _row(
+                "A",
+                f"EL PF · {name}",
+                "electricity",
+                "power flow",
+                A,
+                tg,
+                rg,
+                B,
+                tc,
+                rc,
+                _probe_bus_vm,
+                _n_bus(rg),
+            )
+        )
+        print(
+            f"  {rows[-1]['case']:28s} {A} {tg * 1000:7.1f}ms  {B} {tc * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+        )
 
     # A2 EL OPF economic dispatch (single sector)
     for n in (40, 80):
         mg, pg = _build_econ_dispatch(_feeder(n))
-        rg, tg = _time(lambda: run_energy_flow_optimization(mg, pg, solver=GEKKOSolver()))
+        rg, tg = _time(
+            lambda: run_energy_flow_optimization(mg, pg, solver=GEKKOSolver())
+        )
         mc, pc_ = _build_econ_dispatch(_feeder(n))
-        rc, tc = _time(lambda: run_energy_flow_optimization(mc, pc_, solver=CasADiSolver()))
-        rows.append(_row("A", f"EL OPF · feeder_{n}", "electricity", "optimization",
-                         A, tg, rg, B, tc, rc, _probe_objective, _n_bus(rg)))
-        print(f"  {rows[-1]['case']:28s} {A} {tg*1000:7.1f}ms  {B} {tc*1000:7.1f}ms  x{rows[-1]['speedup']}")
+        rc, tc = _time(
+            lambda: run_energy_flow_optimization(mc, pc_, solver=CasADiSolver())
+        )
+        rows.append(
+            _row(
+                "A",
+                f"EL OPF · feeder_{n}",
+                "electricity",
+                "optimization",
+                A,
+                tg,
+                rg,
+                B,
+                tc,
+                rc,
+                _probe_objective,
+                _n_bus(rg),
+            )
+        )
+        print(
+            f"  {rows[-1]['case']:28s} {A} {tg * 1000:7.1f}ms  {B} {tc * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+        )
 
     # A3 Heat power flow (single sector)
-    rg, tg = _time(lambda: run_energy_flow(_heat_loop_nlp(), solver=GEKKOSolver(), simulation=True))
-    rc, tc = _time(lambda: run_energy_flow(_heat_loop_nlp(), solver=CasADiSolver(), simulation=True))
-    rows.append(_row("A", "Heat PF · water loop", "heat", "power flow",
-                     A, tg, rg, B, tc, rc, _probe_ext_hydr_flow, None))
-    print(f"  {rows[-1]['case']:28s} {A} {tg*1000:7.1f}ms  {B} {tc*1000:7.1f}ms  x{rows[-1]['speedup']}")
+    rg, tg = _time(
+        lambda: run_energy_flow(_heat_loop_nlp(), solver=GEKKOSolver(), simulation=True)
+    )
+    rc, tc = _time(
+        lambda: run_energy_flow(
+            _heat_loop_nlp(), solver=CasADiSolver(), simulation=True
+        )
+    )
+    rows.append(
+        _row(
+            "A",
+            "Heat PF · water loop",
+            "heat",
+            "power flow",
+            A,
+            tg,
+            rg,
+            B,
+            tc,
+            rc,
+            _probe_ext_hydr_flow,
+            None,
+        )
+    )
+    print(
+        f"  {rows[-1]['case']:28s} {A} {tg * 1000:7.1f}ms  {B} {tc * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+    )
 
     # A4 Multi-sector power flow (gas + heat)
-    rg, tg = _time(lambda: run_energy_flow(_g2h_nlp(), solver=GEKKOSolver(), simulation=False))
-    rc, tc = _time(lambda: run_energy_flow(_g2h_nlp(), solver=CasADiSolver(), simulation=False))
-    rows.append(_row("A", "Multi-sector PF · g2h", "gas+heat", "power flow",
-                     A, tg, rg, B, tc, rc, _probe_ext_hydr_flow, None))
-    print(f"  {rows[-1]['case']:28s} {A} {tg*1000:7.1f}ms  {B} {tc*1000:7.1f}ms  x{rows[-1]['speedup']}")
+    rg, tg = _time(
+        lambda: run_energy_flow(_g2h_nlp(), solver=GEKKOSolver(), simulation=False)
+    )
+    rc, tc = _time(
+        lambda: run_energy_flow(_g2h_nlp(), solver=CasADiSolver(), simulation=False)
+    )
+    rows.append(
+        _row(
+            "A",
+            "Multi-sector PF · g2h",
+            "gas+heat",
+            "power flow",
+            A,
+            tg,
+            rg,
+            B,
+            tc,
+            rc,
+            _probe_ext_hydr_flow,
+            None,
+        )
+    )
+    print(
+        f"  {rows[-1]['case']:28s} {A} {tg * 1000:7.1f}ms  {B} {tc * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+    )
 
     # A5 EL timeseries (memory-less)
     N = 12
     prof = (1.0 + 0.3 * np.sin(np.linspace(0, 2 * np.pi, N))).tolist()
+
     def _ts(solver):
         net, lid = _el_ts_net()
         td = TimeseriesData()
         td.add_child_series(lid, "p_mw", prof)
         return run_timeseries(net, td, solver=solver)
+
     rg, tg = _time(lambda: _ts(GEKKOSolver()), repeats=1)
     rc, tc = _time(lambda: _ts(CasADiSolver()), repeats=1)
-    rows.append(_row("A", f"EL timeseries ({N} steps)", "electricity", "timeseries",
-                     A, tg, rg, B, tc, rc, _probe_ts_bus_vm, N))
-    print(f"  {rows[-1]['case']:28s} {A} {tg*1000:7.1f}ms  {B} {tc*1000:7.1f}ms  x{rows[-1]['speedup']}")
+    rows.append(
+        _row(
+            "A",
+            f"EL timeseries ({N} steps)",
+            "electricity",
+            "timeseries",
+            A,
+            tg,
+            rg,
+            B,
+            tc,
+            rc,
+            _probe_ts_bus_vm,
+            N,
+        )
+    )
+    print(
+        f"  {rows[-1]['case']:28s} {A} {tg * 1000:7.1f}ms  {B} {tc * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+    )
 
     # A6 EL timeseries + storage coupling (carried SoC)
     disp = [1.0, -0.5, 0.8, 0.3, -0.6, 1.0, -0.4, 0.5, -0.9, 0.7, -0.3, 0.4]
+
     def _ts_stor(solver):
         net, sid = _el_storage_ts_net()
         td = TimeseriesData()
         td.add_child_series(sid, "p_mw", disp)
         return run_timeseries(net, td, solver=solver), sid
+
     (rg, sidg), tg = _time(lambda: _ts_stor(GEKKOSolver()), repeats=1)
     (rc, sidc), tc = _time(lambda: _ts_stor(CasADiSolver()), repeats=1)
-    rows.append(_row("A", f"EL ts + storage ({len(disp)})", "electricity", "timeseries+coupling",
-                     A, tg, rg, B, tc, rc,
-                     lambda r: _probe_ts_storage_soc(r, sidg if r is rg else sidc), len(disp)))
-    print(f"  {rows[-1]['case']:28s} {A} {tg*1000:7.1f}ms  {B} {tc*1000:7.1f}ms  x{rows[-1]['speedup']}")
+    rows.append(
+        _row(
+            "A",
+            f"EL ts + storage ({len(disp)})",
+            "electricity",
+            "timeseries+coupling",
+            A,
+            tg,
+            rg,
+            B,
+            tc,
+            rc,
+            lambda r: _probe_ts_storage_soc(r, sidg if r is rg else sidc),
+            len(disp),
+        )
+    )
+    print(
+        f"  {rows[-1]['case']:28s} {A} {tg * 1000:7.1f}ms  {B} {tc * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+    )
 
     # A7 Gas timeseries + linepack coupling (carried pipe mass)
     NL = 8
     mdot = [0.2, 0.25, 0.15, 0.3, 0.2, 0.28, 0.18, 0.22]
+
     def _ts_lp(solver):
         net, sid = _gas_linepack_net(make_gas_nlp_formulation())
         td = TimeseriesData()
         td.add_child_series(sid, "mass_flow_kgs", mdot)
         return run_timeseries(net, td, solver=solver)
+
     rg, tg = _time(lambda: _ts_lp(GEKKOSolver()), repeats=1)
     rc, tc = _time(lambda: _ts_lp(CasADiSolver()), repeats=1)
-    rows.append(_row("A", f"Gas ts + linepack ({NL})", "gas", "timeseries+coupling",
-                     A, tg, rg, B, tc, rc, _probe_ts_linepack, NL))
-    print(f"  {rows[-1]['case']:28s} {A} {tg*1000:7.1f}ms  {B} {tc*1000:7.1f}ms  x{rows[-1]['speedup']}")
+    rows.append(
+        _row(
+            "A",
+            f"Gas ts + linepack ({NL})",
+            "gas",
+            "timeseries+coupling",
+            A,
+            tg,
+            rg,
+            B,
+            tc,
+            rc,
+            _probe_ts_linepack,
+            NL,
+        )
+    )
+    print(
+        f"  {rows[-1]['case']:28s} {A} {tg * 1000:7.1f}ms  {B} {tc * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+    )
     return rows
 
 
@@ -562,65 +765,185 @@ def run_miqcqp_suite():
     A, B = "pyomo-gurobi", "gurobipy"
 
     # B1 EL power flow (single sector, MISOCP)
-    ra, ta = _time(lambda: run_energy_flow(_urban_misocp(), solver=PyomoSolver("gurobi")))
+    ra, ta = _time(
+        lambda: run_energy_flow(_urban_misocp(), solver=PyomoSolver("gurobi"))
+    )
     rb, tb = _time(lambda: run_energy_flow(_urban_misocp(), solver=GurobipySolver()))
-    rows.append(_row("B", "EL PF · urban (MISOCP)", "electricity", "power flow",
-                     A, ta, ra, B, tb, rb, _probe_bus_vm, _n_bus(ra)))
-    print(f"  {rows[-1]['case']:30s} {A} {ta*1000:7.1f}ms  {B} {tb*1000:7.1f}ms  x{rows[-1]['speedup']}")
+    rows.append(
+        _row(
+            "B",
+            "EL PF · urban (MISOCP)",
+            "electricity",
+            "power flow",
+            A,
+            ta,
+            ra,
+            B,
+            tb,
+            rb,
+            _probe_bus_vm,
+            _n_bus(ra),
+        )
+    )
+    print(
+        f"  {rows[-1]['case']:30s} {A} {ta * 1000:7.1f}ms  {B} {tb * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+    )
 
     # B2 EL OPF load shedding (single sector)
-    ra, ta = _time(lambda: run_energy_flow_optimization(_urban_misocp(), _shedding_problem(), solver=PyomoSolver("gurobi")))
-    rb, tb = _time(lambda: run_energy_flow_optimization(_urban_misocp(), _shedding_problem(), solver=GurobipySolver()))
-    rows.append(_row("B", "EL OPF · urban shedding", "electricity", "optimization",
-                     A, ta, ra, B, tb, rb, _probe_objective, _n_bus(ra)))
-    print(f"  {rows[-1]['case']:30s} {A} {ta*1000:7.1f}ms  {B} {tb*1000:7.1f}ms  x{rows[-1]['speedup']}")
+    ra, ta = _time(
+        lambda: run_energy_flow_optimization(
+            _urban_misocp(), _shedding_problem(), solver=PyomoSolver("gurobi")
+        )
+    )
+    rb, tb = _time(
+        lambda: run_energy_flow_optimization(
+            _urban_misocp(), _shedding_problem(), solver=GurobipySolver()
+        )
+    )
+    rows.append(
+        _row(
+            "B",
+            "EL OPF · urban shedding",
+            "electricity",
+            "optimization",
+            A,
+            ta,
+            ra,
+            B,
+            tb,
+            rb,
+            _probe_objective,
+            _n_bus(ra),
+        )
+    )
+    print(
+        f"  {rows[-1]['case']:30s} {A} {ta * 1000:7.1f}ms  {B} {tb * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+    )
 
     # B3 Multi-sector power flow (MIQCQP)
     ra, ta = _time(lambda: run_energy_flow(_g2h_miqcqp(), solver=PyomoSolver("gurobi")))
     rb, tb = _time(lambda: run_energy_flow(_g2h_miqcqp(), solver=GurobipySolver()))
-    rows.append(_row("B", "Multi-sector PF · g2h", "el+gas+heat", "power flow",
-                     A, ta, ra, B, tb, rb, _probe_ext_hydr_flow, None))
-    print(f"  {rows[-1]['case']:30s} {A} {ta*1000:7.1f}ms  {B} {tb*1000:7.1f}ms  x{rows[-1]['speedup']}")
+    rows.append(
+        _row(
+            "B",
+            "Multi-sector PF · g2h",
+            "el+gas+heat",
+            "power flow",
+            A,
+            ta,
+            ra,
+            B,
+            tb,
+            rb,
+            _probe_ext_hydr_flow,
+            None,
+        )
+    )
+    print(
+        f"  {rows[-1]['case']:30s} {A} {ta * 1000:7.1f}ms  {B} {tb * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+    )
 
     # B4 Multi-sector OPF load shedding (MIQCQP)
-    ra, ta = _time(lambda: run_energy_flow_optimization(_g2h_miqcqp(), _shedding_problem(), solver=PyomoSolver("gurobi")))
-    rb, tb = _time(lambda: run_energy_flow_optimization(_g2h_miqcqp(), _shedding_problem(), solver=GurobipySolver()))
-    rows.append(_row("B", "Multi-sector OPF · g2h", "el+gas+heat", "optimization",
-                     A, ta, ra, B, tb, rb, _probe_objective, None))
-    print(f"  {rows[-1]['case']:30s} {A} {ta*1000:7.1f}ms  {B} {tb*1000:7.1f}ms  x{rows[-1]['speedup']}")
+    ra, ta = _time(
+        lambda: run_energy_flow_optimization(
+            _g2h_miqcqp(), _shedding_problem(), solver=PyomoSolver("gurobi")
+        )
+    )
+    rb, tb = _time(
+        lambda: run_energy_flow_optimization(
+            _g2h_miqcqp(), _shedding_problem(), solver=GurobipySolver()
+        )
+    )
+    rows.append(
+        _row(
+            "B",
+            "Multi-sector OPF · g2h",
+            "el+gas+heat",
+            "optimization",
+            A,
+            ta,
+            ra,
+            B,
+            tb,
+            rb,
+            _probe_objective,
+            None,
+        )
+    )
+    print(
+        f"  {rows[-1]['case']:30s} {A} {ta * 1000:7.1f}ms  {B} {tb * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+    )
 
     # B5 Gas timeseries + linepack coupling (convex MIQCQP)
     NL = 8
     mdot = [0.2, 0.25, 0.15, 0.3, 0.2, 0.28, 0.18, 0.22]
+
     def _ts_lp(solver):
         net, sid = _gas_linepack_net(GAS_CONVEX_MIQCQP_FORMULATION)
         td = TimeseriesData()
         td.add_child_series(sid, "mass_flow_kgs", mdot)
         return run_timeseries(net, td, solver=solver)
+
     ra, ta = _time(lambda: _ts_lp(PyomoSolver("gurobi")), repeats=1)
     rb, tb = _time(lambda: _ts_lp(GurobipySolver()), repeats=1)
-    rows.append(_row("B", f"Gas ts + linepack ({NL})", "gas", "timeseries+coupling",
-                     A, ta, ra, B, tb, rb, _probe_ts_linepack, NL))
-    print(f"  {rows[-1]['case']:30s} {A} {ta*1000:7.1f}ms  {B} {tb*1000:7.1f}ms  x{rows[-1]['speedup']}")
+    rows.append(
+        _row(
+            "B",
+            f"Gas ts + linepack ({NL})",
+            "gas",
+            "timeseries+coupling",
+            A,
+            ta,
+            ra,
+            B,
+            tb,
+            rb,
+            _probe_ts_linepack,
+            NL,
+        )
+    )
+    print(
+        f"  {rows[-1]['case']:30s} {A} {ta * 1000:7.1f}ms  {B} {tb * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+    )
 
     # B6 Heat timeseries + LTC coupling (convex MILP); Gurobi-only - GEKKO NLP diverges
     NT = 8
     mdot_w = [10.0, 10.0, 6.0, 6.0, 8.0, 12.0, 9.0, 7.0]
+
     def _ts_ltc(solver):
         net, sid = _water_ltc_net(make_heat_convex_milp_formulation())
         td = TimeseriesData()
         td.add_child_series(sid, "mass_flow_kgs", mdot_w)
         return run_timeseries(net, td, solver=solver)
+
     ra, ta = _time(lambda: _ts_ltc(PyomoSolver("gurobi")), repeats=1)
     rb, tb = _time(lambda: _ts_ltc(GurobipySolver()), repeats=1)
-    rows.append(_row("B", f"Heat ts + LTC ({NT})", "heat", "timeseries+coupling",
-                     A, ta, ra, B, tb, rb, _probe_ts_junction_t, NT))
-    print(f"  {rows[-1]['case']:30s} {A} {ta*1000:7.1f}ms  {B} {tb*1000:7.1f}ms  x{rows[-1]['speedup']}")
+    rows.append(
+        _row(
+            "B",
+            f"Heat ts + LTC ({NT})",
+            "heat",
+            "timeseries+coupling",
+            A,
+            ta,
+            ra,
+            B,
+            tb,
+            rb,
+            _probe_ts_junction_t,
+            NT,
+        )
+    )
+    print(
+        f"  {rows[-1]['case']:30s} {A} {ta * 1000:7.1f}ms  {B} {tb * 1000:7.1f}ms  x{rows[-1]['speedup']}"
+    )
     return rows
 
 
 # Plot.
-def make_plot(df: pd.DataFrame, out_html: str, out_png: str, out_svg: str | None = None):
+def make_plot(
+    df: pd.DataFrame, out_html: str, out_png: str, out_svg: str | None = None
+):
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -651,11 +974,13 @@ def make_plot(df: pd.DataFrame, out_html: str, out_png: str, out_svg: str | None
     # backends and the bottom-row x-axis titles label the columns, so per-row
     # titles would only clutter and overlap the banners.
     fig = make_subplots(
-        rows=2, cols=2,
+        rows=2,
+        cols=2,
         column_widths=[0.62, 0.38],
         row_heights=[c / total_cases for c in counts],
         shared_yaxes=True,  # case labels render once, on the far left only
-        horizontal_spacing=0.06, vertical_spacing=0.12,
+        horizontal_spacing=0.06,
+        vertical_spacing=0.12,
     )
 
     for r, (g, _title) in enumerate(groups, start=1):
@@ -667,49 +992,74 @@ def make_plot(df: pd.DataFrame, out_html: str, out_png: str, out_svg: str | None
         # solve-time bars, grouped reference vs native
         fig.add_trace(
             go.Bar(
-                y=cases, x=sub.time_a_ms, name=ba, orientation="h",
-                marker_color=color.get(ba, "#888"), marker_line_width=0,
-                legendgroup=ba, showlegend=True, cliponaxis=False,
+                y=cases,
+                x=sub.time_a_ms,
+                name=ba,
+                orientation="h",
+                marker_color=color.get(ba, "#888"),
+                marker_line_width=0,
+                legendgroup=ba,
+                showlegend=True,
+                cliponaxis=False,
                 text=[f"{v:.0f}" for v in sub.time_a_ms],
                 textposition="outside",
                 textfont={"size": 23, "color": TEXT},
                 hovertemplate=f"{ba}: %{{x:.1f}} ms<extra></extra>",
             ),
-            row=r, col=1,
+            row=r,
+            col=1,
         )
         fig.add_trace(
             go.Bar(
-                y=cases, x=sub.time_b_ms, name=bb, orientation="h",
-                marker_color=color.get(bb, "#888"), marker_line_width=0,
-                legendgroup=bb, showlegend=True, cliponaxis=False,
+                y=cases,
+                x=sub.time_b_ms,
+                name=bb,
+                orientation="h",
+                marker_color=color.get(bb, "#888"),
+                marker_line_width=0,
+                legendgroup=bb,
+                showlegend=True,
+                cliponaxis=False,
                 text=[f"{v:.0f}" for v in sub.time_b_ms],
                 textposition="outside",
                 textfont={"size": 23, "color": TEXT},
                 hovertemplate=f"{bb}: %{{x:.1f}} ms<extra></extra>",
             ),
-            row=r, col=1,
+            row=r,
+            col=1,
         )
         spd = sub.speedup
         fig.add_trace(
             go.Bar(
-                y=cases, x=spd, orientation="h", showlegend=False, cliponaxis=False,
-                marker_color=[color.get(bb, "#888") if v >= 1 else "#d62728" for v in spd],
+                y=cases,
+                x=spd,
+                orientation="h",
+                showlegend=False,
+                cliponaxis=False,
+                marker_color=[
+                    color.get(bb, "#888") if v >= 1 else "#d62728" for v in spd
+                ],
                 marker_line_width=0,
-                text=[f"×{v:.1f}" for v in spd], textposition="outside",
+                text=[f"×{v:.1f}" for v in spd],
+                textposition="outside",
                 textfont={"size": 23, "color": TEXT},
                 hovertemplate="speedup ×%{x:.2f}<extra></extra>",
             ),
-            row=r, col=2,
+            row=r,
+            col=2,
         )
         # headroom so the outside value labels on the longest bars aren't clipped
         tvals = sub[["time_a_ms", "time_b_ms"]].to_numpy(dtype=float)
         fig.update_xaxes(
-            type="log", row=r, col=1,
+            type="log",
+            row=r,
+            col=1,
             title_text="solve time (ms, log)" if last_row else None,
             range=[np.log10(np.nanmin(tvals) * 0.5), np.log10(np.nanmax(tvals) * 3.4)],
         )
         fig.update_xaxes(
-            row=r, col=2,
+            row=r,
+            col=2,
             title_text="× faster (native vs reference)" if last_row else None,
             range=[0, float(np.nanmax(spd)) * 1.32],
         )
@@ -717,36 +1067,72 @@ def make_plot(df: pd.DataFrame, out_html: str, out_png: str, out_svg: str | None
 
         # group banner over the left column, anchored to the subplot's domain
         fig.add_annotation(
-            text=f"<b>{_title}</b>", row=r, col=1,
-            xref="x domain", yref="y domain", x=0, y=1.0, yshift=22,
-            showarrow=False, font={"size": 27, "color": TEXT}, xanchor="left",
+            text=f"<b>{_title}</b>",
+            row=r,
+            col=1,
+            xref="x domain",
+            yref="y domain",
+            x=0,
+            y=1.0,
+            yshift=22,
+            showarrow=False,
+            font={"size": 27, "color": TEXT},
+            xanchor="left",
         )
 
     # Uniform axis cosmetics on every subplot.
-    fig.update_xaxes(showgrid=True, gridcolor=GRID, gridwidth=1, zeroline=False,
-                     showline=True, linecolor=AXIS_LINE, linewidth=1, ticks="outside",
-                     ticklen=4, tickcolor=AXIS_LINE, tickfont={"size": 24, "color": TEXT},
-                     title_font={"size": 26, "color": TEXT})
-    fig.update_yaxes(showgrid=False, zeroline=False, showline=False,
-                     tickfont={"size": 24, "color": TEXT}, automargin=True)
+    fig.update_xaxes(
+        showgrid=True,
+        gridcolor=GRID,
+        gridwidth=1,
+        zeroline=False,
+        showline=True,
+        linecolor=AXIS_LINE,
+        linewidth=1,
+        ticks="outside",
+        ticklen=4,
+        tickcolor=AXIS_LINE,
+        tickfont={"size": 24, "color": TEXT},
+        title_font={"size": 26, "color": TEXT},
+    )
+    fig.update_yaxes(
+        showgrid=False,
+        zeroline=False,
+        showline=False,
+        tickfont={"size": 24, "color": TEXT},
+        automargin=True,
+    )
 
     fig.update_layout(
         title={
             "text": "<b>monee backend performance comparison</b><br>"
-                    f"<span style='font-size:27px;color:{TEXT}'>solver-backend "
-                    "shoot-outs across representative cases: solve time and speedup</span>",
-            "x": 0.5, "xanchor": "center", "y": 0.978, "yanchor": "top",
+            f"<span style='font-size:27px;color:{TEXT}'>solver-backend "
+            "shoot-outs across representative cases: solve time and speedup</span>",
+            "x": 0.5,
+            "xanchor": "center",
+            "y": 0.978,
+            "yanchor": "top",
             "font": {"size": 35, "color": TEXT},
         },
-        barmode="group", bargap=0.25, bargroupgap=0.1,
+        barmode="group",
+        bargap=0.25,
+        bargroupgap=0.1,
         template="plotly_white",
-        height=int(70 * total_cases + 110 * len(groups) + 170), width=1280,
-        legend={"orientation": "h", "yanchor": "bottom", "y": 1.012,
-                "xanchor": "right", "x": 1.0, "font": {"size": 25, "color": TEXT},
-                "bgcolor": "rgba(0,0,0,0)"},
+        height=int(70 * total_cases + 110 * len(groups) + 170),
+        width=1280,
+        legend={
+            "orientation": "h",
+            "yanchor": "bottom",
+            "y": 1.012,
+            "xanchor": "right",
+            "x": 1.0,
+            "font": {"size": 25, "color": TEXT},
+            "bgcolor": "rgba(0,0,0,0)",
+        },
         margin={"l": 235, "r": 60, "t": 215, "b": 70},
         font={"family": "Inter, Segoe UI, Helvetica, Arial", "size": 21, "color": TEXT},
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
         uniformtext={"mode": "hide", "minsize": 11},
     )
 
@@ -789,9 +1175,16 @@ def main():
     # Warm up each backend once to keep import, licence, and JIT costs out of
     # the timings.
     with _silent():
-        for s in (GEKKOSolver(), CasADiSolver(), PyomoSolver("gurobi"), GurobipySolver()):
+        for s in (
+            GEKKOSolver(),
+            CasADiSolver(),
+            PyomoSolver("gurobi"),
+            GurobipySolver(),
+        ):
             try:
-                run_energy_flow(_mnet(ppn.create_cigre_network_mv), solver=s, simulation=True)
+                run_energy_flow(
+                    _mnet(ppn.create_cigre_network_mv), solver=s, simulation=True
+                )
             except Exception:
                 pass
 
@@ -801,8 +1194,19 @@ def main():
     df.to_csv(CSV_PATH, index=False)
 
     show = df[
-        ["group", "case", "problem", "backend_a", "time_a_ms",
-         "backend_b", "time_b_ms", "speedup", "cross_err", "ok_a", "ok_b"]
+        [
+            "group",
+            "case",
+            "problem",
+            "backend_a",
+            "time_a_ms",
+            "backend_b",
+            "time_b_ms",
+            "speedup",
+            "cross_err",
+            "ok_a",
+            "ok_b",
+        ]
     ]
     print("\n=== monee backend comparison ===\n")
     with pd.option_context("display.width", 220, "display.max_columns", 30):

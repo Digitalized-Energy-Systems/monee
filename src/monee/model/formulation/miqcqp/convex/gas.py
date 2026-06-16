@@ -16,7 +16,9 @@ class RelaxedWeymouthBranchFormulation(BranchFormulation):
     EPIGRAPH_TIGHTENING_EPS = 1e-5
 
     def ensure_var(self, model, simulation=False, grid=None):
-        f_const = hydraulicsmodel.friction_at_high_re(model.diameter_m, model.roughness_m)
+        f_const = hydraulicsmodel.friction_at_high_re(
+            model.diameter_m, model.roughness_m
+        )
 
         model.friction = Const(f_const)
         model.reynolds_scaled = Const(0.0)
@@ -31,8 +33,10 @@ class RelaxedWeymouthBranchFormulation(BranchFormulation):
         r"""Convex epigraph relaxation :math:`m^2 \le m_{sq}`; the exact sibling
         overrides this with the equality form."""
         return [
-            branch.mass_flow_pos_kgs * branch.mass_flow_pos_kgs <= branch.mass_flow_pos_kgs_squared,
-            branch.mass_flow_neg_kgs * branch.mass_flow_neg_kgs <= branch.mass_flow_neg_kgs_squared,
+            branch.mass_flow_pos_kgs * branch.mass_flow_pos_kgs
+            <= branch.mass_flow_pos_kgs_squared,
+            branch.mass_flow_neg_kgs * branch.mass_flow_neg_kgs
+            <= branch.mass_flow_neg_kgs_squared,
         ]
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):

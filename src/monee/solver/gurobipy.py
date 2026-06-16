@@ -720,9 +720,7 @@ class GurobipySolver(SolverInterface):
 
         s_star = gm.ObjVal
         slack = self._lex_cap_slack(s_star, self._params.get("MIPGap", 0.0))
-        self._add_temp_constr(
-            gm, sum(user_obj_exprs) <= s_star + slack, name="lex_cap"
-        )
+        self._add_temp_constr(gm, sum(user_obj_exprs) <= s_star + slack, name="lex_cap")
 
         # Phase 2: aux objective under the phase-1 cap.
         self._set_objective(gm, aux_obj_exprs)
@@ -1227,13 +1225,9 @@ class GurobipyTimeseries:
         def add(model, attr):
             cur = getattr(model, attr)
             cur = (
-                cur.value
-                if isinstance(cur, (Var, Const, Intermediate))
-                else float(cur)
+                cur.value if isinstance(cur, (Var, Const, Intermediate)) else float(cur)
             )
-            setattr(
-                model, attr, Var(value=float(cur), min=float(cur), max=float(cur))
-            )
+            setattr(model, attr, Var(value=float(cur), min=float(cur), max=float(cur)))
 
         for cid, attrs in td._child_id_to_series.items():
             model = network.child_by_id(cid).model

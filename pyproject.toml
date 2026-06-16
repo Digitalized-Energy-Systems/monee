@@ -87,6 +87,10 @@ ignore = ["E501"]
 "__init__.py" = [
     "I001", # allow unsorted imports in __init__.py
     "F401", # allow unused imports in __init__.py
+    "E402", # __init__ interleaves computed aliases with imports
+]
+"benchmarks/*" = [
+    "E402", # scripts suppress warnings / patch compat before heavy imports
 ]
 "examples/*" = [
     "ARG",  # allow unused arguments

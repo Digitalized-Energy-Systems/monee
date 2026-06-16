@@ -1,4 +1,4 @@
-﻿"""Smooth (binary-free) gas/heat NLP formulations under GEKKO IPOPT."""
+"""Smooth (binary-free) gas/heat NLP formulations under GEKKO IPOPT."""
 
 import math
 
@@ -7,8 +7,8 @@ import pytest
 import monee.model as mm
 import monee.solver as ms
 from monee.model.formulation import (
-    make_heat_nlp_formulation,
     make_gas_nlp_formulation,
+    make_heat_nlp_formulation,
 )
 from tests.util import create_g2h_net
 
@@ -39,12 +39,8 @@ def _heat_only_net():
 
 
 def _apply_smooth(network, friction_model):
-    network.apply_formulation(
-        make_gas_nlp_formulation(friction_model=friction_model)
-    )
-    network.apply_formulation(
-        make_heat_nlp_formulation(friction_model=friction_model)
-    )
+    network.apply_formulation(make_gas_nlp_formulation(friction_model=friction_model))
+    network.apply_formulation(make_heat_nlp_formulation(friction_model=friction_model))
 
 
 def _simbench_mes():

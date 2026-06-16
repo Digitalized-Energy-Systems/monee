@@ -51,8 +51,8 @@ from __future__ import annotations
 
 import monee.express as mx
 import monee.model as mm
-from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 from monee.model import GasLinepack, LumpedThermalCapacitance
+from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 
 # -- electrical line catalogue --
 _HV_LINE = dict(length_m=5000, r_ohm_per_m=3e-5, x_ohm_per_m=4e-5, parallel=1)

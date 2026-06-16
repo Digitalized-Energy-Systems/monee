@@ -1,4 +1,4 @@
-﻿"""Tests for the lexicographic (two-phase) objective solve in PyomoSolver."""
+"""Tests for the lexicographic (two-phase) objective solve in PyomoSolver."""
 
 import pytest
 
