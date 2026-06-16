@@ -1,6 +1,11 @@
 class Formulation:
-    def ensure_var(self, model):
-        pass
+    def ensure_var(self, model, simulation=False, grid=None):
+        """Declare/adjust the model's Vars for this formulation.
+
+        ``grid`` is the component's grid (None for grid-less components); it
+        lets formulations express grid-derived bounds on the Var abstraction
+        itself instead of mutating backend variables in ``equations()``.
+        """
 
 
 class BranchFormulation(Formulation):
@@ -75,3 +80,30 @@ class NetworkFormulation:
         self.node_type_to_formulations = _or_dict(node_type_to_formulations)
         self.child_type_to_formulations = _or_dict(child_type_to_formulations)
         self.compound_type_to_formulations = _or_dict(compound_type_to_formulations)
+
+    def items(self):
+        """All ``(model_type | (model_type, grid_type), formulation)`` pairs."""
+        return (
+            list(self.branch_type_to_formulations.items())
+            + list(self.node_type_to_formulations.items())
+            + list(self.child_type_to_formulations.items())
+            + list(self.compound_type_to_formulations.items())
+        )
+
+    def lookup(self, model, grid) -> Formulation | None:
+        """The registered formulation matching *model* (and *grid*), or None.
+
+        Mirrors :meth:`monee.model.network.Network.apply_formulation` matching:
+        ``isinstance`` on the model type, exact type match on the grid when the
+        key is a ``(model_type, grid_type)`` tuple; on multiple matches the
+        last registration wins.
+        """
+        found = None
+        for type_or_tuple, formulation in self.items():
+            if isinstance(type_or_tuple, tuple):
+                tc, tg = type_or_tuple
+            else:
+                tc, tg = type_or_tuple, None
+            if isinstance(model, tc) and (tg is None or type(grid) is tg):
+                found = formulation
+        return found

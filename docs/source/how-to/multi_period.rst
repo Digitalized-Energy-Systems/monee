@@ -2,13 +2,13 @@
 Multi-period optimization
 ==========================
 
-Task-focused examples for multi-period solves, storage dispatch, and
-rolling-horizon MPC.  For the architectural background see
+Worked examples for multi-period solves, storage dispatch, and
+rolling-horizon MPC. For the architectural background see
 :doc:`../concepts/multi_period`.
 
 ----
 
-Battery dispatch — 6-hour horizon
+Battery dispatch: 6-hour horizon
 ==================================
 
 .. testcode::
@@ -17,7 +17,7 @@ Battery dispatch — 6-hour horizon
    import monee.express as mx
    from monee.simulation import TimeseriesData
 
-   # ── Network ───────────────────────────────────────────────────────────
+   # Network
    net = mx.create_multi_energy_network()
    bus0 = mx.create_bus(net)
    bus1 = mx.create_bus(net)
@@ -33,7 +33,7 @@ Battery dispatch — 6-hour horizon
    )
    bat = mx.create_el_child(net, storage, node_id=bus1, name="battery")
 
-   # ── Load profile ──────────────────────────────────────────────────────
+   # Load profile
    td = TimeseriesData()
    td.add_child_series_by_name("load", "p_mw",
                                 [0.4, 0.5, 1.4, 1.8, 1.5, 0.4])
@@ -66,74 +66,18 @@ Solve and inspect:
    SoC  [MWh]: [...]
    Disp [MW]: [...]
 
-.. plot::
-   :caption: Battery optimal dispatch — the solver shifts charge to off-peak hours to serve the midday peak
+The solver shifts charging to off-peak hours to serve the midday peak.
 
-   import monee.model as mm
-   import monee.express as mx
-   from monee.problem.core import OptimizationProblem
-   from monee.simulation import TimeseriesData, run_multi_period
-   import matplotlib.pyplot as plt
+.. only:: html
 
-   LOAD = [0.4, 0.5, 1.4, 1.8, 1.5, 0.4]
+   .. raw:: html
 
-   net = mx.create_multi_energy_network()
-   bus0 = mx.create_bus(net)
-   bus1 = mx.create_bus(net)
-   mx.create_ext_power_grid(net, bus0)
-   mx.create_line(net, bus0, bus1, length_m=500,
-                  r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-   mx.create_power_load(net, bus1, p_mw=0.0, q_mvar=0.0, name="load")
-   storage = mm.ElectricStorage(e_mwh_initial=2.0, e_mwh_max=4.0, p_max_mw=1.0)
-   bat = mx.create_el_child(net, storage, node_id=bus1, name="battery")
+      <iframe src="../_static/interactive/howto_multi_period_1.html" width="100%" height="660" style="border:none;" loading="lazy" title="Battery optimal dispatch over 6-hour horizon"></iframe>
 
-   td = TimeseriesData()
-   td.add_child_series_by_name("load", "p_mw", LOAD)
+.. only:: latex
 
-   prob = OptimizationProblem()
-   prob.controllable_storages()
-   result = run_multi_period(net, td, optimization_problem=prob, dt_h=1.0,
-                             terminal_state={(bat, "e_mwh"): 2.0})
-
-   soc  = result.get_result_for_id(bat, "e_mwh")
-   disp = result.get_result_for_id(bat, "p_mw")
-   steps = range(len(LOAD))
-
-   fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 6),
-                             gridspec_kw={"hspace": 0.4})
-
-   C_LOAD = "#f4a261"
-   C_CHG  = "#2c7bb6"
-   C_DIS  = "#d7191c"
-   C_SOC  = "#1a9641"
-
-   axes[0].step(steps, LOAD, where="post", lw=2, color=C_LOAD)
-   axes[0].fill_between(steps, 0, LOAD, step="post", color=C_LOAD, alpha=0.15)
-   axes[0].set_ylabel("Load  [MW]")
-   axes[0].set_title("Consumer demand", fontsize=10)
-   axes[0].grid(axis="y", alpha=0.3)
-
-   disp_vals = list(disp.values)
-   bar_colors = [C_CHG if v >= 0 else C_DIS for v in disp_vals]
-   axes[1].bar(steps, disp_vals, color=bar_colors, alpha=0.8, width=0.6)
-   axes[1].axhline(0, color="grey", lw=0.8)
-   axes[1].set_ylabel("Battery  [MW]\n+ charge  /  - discharge")
-   axes[1].set_title("Optimised dispatch", fontsize=10)
-   axes[1].grid(axis="y", alpha=0.3)
-
-   axes[2].plot(steps, soc.values, marker="o", lw=2, color=C_SOC)
-   axes[2].fill_between(steps, 0, soc.values, alpha=0.12, color=C_SOC)
-   axes[2].axhline(4.0, color="grey", ls="--", alpha=0.4, label="capacity (4 MWh)")
-   axes[2].set_ylabel("SoC  [MWh]")
-   axes[2].set_xlabel("Hour")
-   axes[2].set_ylim(0, 4.5)
-   axes[2].set_xticks(list(steps))
-   axes[2].legend(fontsize=8)
-   axes[2].grid(axis="y", alpha=0.3)
-
-   fig.suptitle("Battery — optimal dispatch over 6-hour horizon",
-                fontsize=12, fontweight="bold")
-   plt.tight_layout()
+   .. image:: /_static/interactive/howto_multi_period_1.png
+      :width: 100%
 
 ----
 
@@ -212,7 +156,7 @@ Jointly optimize a CHP unit serving both electrical and heat demand:
    j_return = mx.create_water_junction(net_mes)
    mx.create_gas_ext_grid(net_mes, j_gas)
    mx.create_ext_hydr_grid(net_mes, j_supply)
-   mx.create_water_sink(net_mes, j_return, mass_flow=0.0, name="heat_load")
+   mx.create_water_sink(net_mes, j_return, mass_flow_kgs=0.0, name="heat_load")
 
    mx.create_chp(net_mes,
                  power_node_id=bus_load,
@@ -222,105 +166,46 @@ Jointly optimize a CHP unit serving both electrical and heat demand:
                  diameter_m=0.1,
                  efficiency_power=0.35,
                  efficiency_heat=0.45,
-                 mass_flow_setpoint=0.1)
+                 mass_flow_setpoint_kgs=0.1)
 
    el_prof   = [0.8, 1.0, 1.4, 1.8, 1.6, 1.2]
    heat_prof = [0.4, 0.5, 0.7, 0.9, 0.8, 0.6]
 
    td_mes = TimeseriesData()
    td_mes.add_child_series_by_name("el_load",   "p_mw",     el_prof)
-   td_mes.add_child_series_by_name("heat_load", "mass_flow", heat_prof)
+   td_mes.add_child_series_by_name("heat_load", "mass_flow_kgs", heat_prof)
 
 Solve and query CHP dispatch:
 
 .. testcode::
 
+   import monee.problem as mp
    from monee.simulation import run_multi_period
 
-   result_mes = run_multi_period(net_mes, td_mes, dt_h=1.0)
-   chp_reg = result_mes.get_result_for(mm.CHP, "regulation")
+   prob = mp.OptimizationProblem()
+   prob.controllable_cps(["regulation"])
+
+   result_mes = run_multi_period(net_mes, td_mes, dt_h=1.0,
+                                 optimization_problem=prob)
+   chp_reg = result_mes.get_result_for(mm.CHPControlNode, "regulation")
    print(chp_reg.shape)
 
 .. testoutput::
-   :options: +SKIP
 
    (6, 1)
 
-.. plot::
-   :caption: CHP multi-period dispatch — regulation tracks the combined electrical and heat demand
+Regulation tracks the combined electrical and heat demand.
 
-   import monee.model as mm
-   import monee.express as mx
-   from monee.simulation import TimeseriesData, run_multi_period
-   import matplotlib.pyplot as plt
+.. only:: html
 
-   EL_PROF   = [0.8, 1.0, 1.4, 1.8, 1.6, 1.2]
-   HEAT_PROF = [0.4, 0.5, 0.7, 0.9, 0.8, 0.6]
+   .. raw:: html
 
-   net_mes = mx.create_multi_energy_network()
+      <iframe src="../_static/interactive/howto_multi_period_chp.html" width="100%" height="660" style="border:none;" loading="lazy" title="CHP multi-period dispatch"></iframe>
 
-   bus_slack = mx.create_bus(net_mes)
-   bus_load  = mx.create_bus(net_mes)
-   mx.create_ext_power_grid(net_mes, bus_slack)
-   mx.create_line(net_mes, bus_slack, bus_load,
-                  length_m=200, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
-   mx.create_power_load(net_mes, bus_load, p_mw=0.0, q_mvar=0.0, name="el_load")
+.. only:: latex
 
-   j_gas    = mx.create_gas_junction(net_mes)
-   j_supply = mx.create_water_junction(net_mes)
-   j_return = mx.create_water_junction(net_mes)
-   mx.create_gas_ext_grid(net_mes, j_gas)
-   mx.create_ext_hydr_grid(net_mes, j_supply)
-   mx.create_water_sink(net_mes, j_return, mass_flow=0.0, name="heat_load")
-
-   mx.create_chp(net_mes,
-                 power_node_id=bus_load,
-                 gas_node_id=j_gas,
-                 heat_node_id=j_supply,
-                 heat_return_node_id=j_return,
-                 diameter_m=0.1,
-                 efficiency_power=0.35,
-                 efficiency_heat=0.45,
-                 mass_flow_setpoint=0.1)
-
-   td_mes = TimeseriesData()
-   td_mes.add_child_series_by_name("el_load",   "p_mw",      EL_PROF)
-   td_mes.add_child_series_by_name("heat_load", "mass_flow",  HEAT_PROF)
-
-   result_mes = run_multi_period(net_mes, td_mes, dt_h=1.0)
-   chp_reg = result_mes.get_result_for(mm.CHP, "regulation").iloc[:, 0]
-
-   steps = list(range(len(EL_PROF)))
-   fig, axes = plt.subplots(3, 1, sharex=True, figsize=(8, 6),
-                             gridspec_kw={"hspace": 0.4})
-
-   C_EL   = "#2c7bb6"
-   C_HEAT = "#d7191c"
-   C_CHP  = "#1a9641"
-
-   axes[0].step(steps, EL_PROF, where="post", lw=2, color=C_EL, label="Electric")
-   axes[0].fill_between(steps, 0, EL_PROF, step="post", color=C_EL, alpha=0.15)
-   axes[0].set_ylabel("Load  [MW]")
-   axes[0].set_title("Electrical demand", fontsize=10)
-   axes[0].grid(axis="y", alpha=0.3)
-
-   axes[1].step(steps, HEAT_PROF, where="post", lw=2, color=C_HEAT)
-   axes[1].fill_between(steps, 0, HEAT_PROF, step="post", color=C_HEAT, alpha=0.15)
-   axes[1].set_ylabel("Mass flow  [kg/s]")
-   axes[1].set_title("Heat demand", fontsize=10)
-   axes[1].grid(axis="y", alpha=0.3)
-
-   axes[2].plot(steps, chp_reg.values, marker="o", lw=2, color=C_CHP)
-   axes[2].fill_between(steps, 0, chp_reg.values, alpha=0.12, color=C_CHP)
-   axes[2].set_ylabel("CHP regulation  [-]")
-   axes[2].set_xlabel("Period")
-   axes[2].set_ylim(0, 1.1)
-   axes[2].set_xticks(steps)
-   axes[2].set_title("CHP dispatch", fontsize=10)
-   axes[2].grid(axis="y", alpha=0.3)
-
-   fig.suptitle("CHP multi-period dispatch", fontsize=12, fontweight="bold")
-   plt.tight_layout()
+   .. image:: /_static/interactive/howto_multi_period_chp.png
+      :width: 100%
 
 ----
 
@@ -343,83 +228,31 @@ required feed-source capacity:
    j1 = mx.create_gas_junction(net_lp)
    j2 = mx.create_gas_junction(net_lp)
    mx.create_gas_ext_grid(net_lp, j0)
-   mx.create_gas_sink(net_lp, j2, mass_flow=0.3, name="consumer")
+   mx.create_gas_sink(net_lp, j2, mass_flow_kgs=0.3, name="consumer")
 
    pipe_id = mx.create_gas_pipe(net_lp, j0, j1,
                                 diameter_m=0.5, length_m=50_000)
    mx.create_gas_pipe(net_lp, j1, j2,
                       diameter_m=0.3, length_m=10_000)
 
-   net_lp.add_extension(GasLinepack(overrides={
-       pipe_id: dict(linepack_kg_initial=5_000, linepack_kg_max=15_000)
-   }))
+   net_lp.add_extension(GasLinepack())
 
    td_lp = TimeseriesData()
-   td_lp.add_child_series_by_name("consumer", "mass_flow",
+   td_lp.add_child_series_by_name("consumer", "mass_flow_kgs",
                                    [0.3, 0.3, 0.6, 0.9, 0.8, 0.4])
 
-.. plot::
-   :caption: Gas linepack buffers the demand peak — stored mass rises at low demand, drains during the peak
+Stored mass rises at low demand and drains during the peak.
 
-   import monee.model as mm
-   import monee.express as mx
-   from monee.model import GasLinepack
-   from monee.simulation import TimeseriesData, run_multi_period
-   import matplotlib.pyplot as plt
+.. only:: html
 
-   DEMAND = [0.3, 0.3, 0.6, 0.9, 0.8, 0.4]
+   .. raw:: html
 
-   net_lp = mx.create_multi_energy_network()
-   j0 = mx.create_gas_junction(net_lp)
-   j1 = mx.create_gas_junction(net_lp)
-   j2 = mx.create_gas_junction(net_lp)
-   mx.create_gas_ext_grid(net_lp, j0)
-   mx.create_gas_sink(net_lp, j2, mass_flow=0.3, name="consumer")
-   pipe_id = mx.create_gas_pipe(net_lp, j0, j1,
-                                diameter_m=0.5, length_m=50_000)
-   mx.create_gas_pipe(net_lp, j1, j2, diameter_m=0.3, length_m=10_000)
-   net_lp.add_extension(GasLinepack(overrides={
-       pipe_id: dict(linepack_kg_initial=5_000, linepack_kg_max=15_000)
-   }))
-   td_lp = TimeseriesData()
-   td_lp.add_child_series_by_name("consumer", "mass_flow", DEMAND)
+      <iframe src="../_static/interactive/howto_multi_period_linepack.html" width="100%" height="500" style="border:none;" loading="lazy" title="Gas linepack buffers demand peak"></iframe>
 
-   result = run_multi_period(net_lp, td_lp, dt_h=1.0)
-   lp = result.get_result_for_id(pipe_id, "linepack_kg")
+.. only:: latex
 
-   steps = range(len(DEMAND))
-   fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(8, 5),
-                                   gridspec_kw={"hspace": 0.35})
-
-   C_LP  = "#2c7bb6"
-   C_DEM = "#f4a261"
-
-   lp_vals = list(lp.values)
-   lp0 = 5_000
-   ax1.plot(steps, lp_vals, marker="o", lw=2, color=C_LP)
-   ax1.fill_between(steps, lp0, lp_vals,
-                    where=[v < lp0 for v in lp_vals],
-                    color="#d7191c", alpha=0.20, label="discharging")
-   ax1.fill_between(steps, lp0, lp_vals,
-                    where=[v >= lp0 for v in lp_vals],
-                    color=C_LP, alpha=0.20, label="charging")
-   ax1.axhline(lp0, color="grey", ls="--", alpha=0.6, label=f"initial ({lp0:,} kg)")
-   ax1.set_ylabel("Linepack  [kg]")
-   ax1.set_title("Pipeline stored mass", fontsize=10)
-   ax1.set_xticks(list(steps))
-   ax1.legend(fontsize=8)
-   ax1.grid(axis="y", alpha=0.3)
-
-   ax2.step(steps, DEMAND, where="post", lw=2, color=C_DEM)
-   ax2.fill_between(steps, 0, DEMAND, step="post", color=C_DEM, alpha=0.15)
-   ax2.set_ylabel("Demand  [kg/s]")
-   ax2.set_title("Consumer demand", fontsize=10)
-   ax2.set_xlabel("Hour")
-   ax2.set_xticks(list(steps))
-   ax2.grid(axis="y", alpha=0.3)
-
-   fig.suptitle("Gas linepack buffers demand peak", fontsize=12, fontweight="bold")
-   plt.tight_layout()
+   .. image:: /_static/interactive/howto_multi_period_linepack.png
+      :width: 100%
 
 ----
 
@@ -450,7 +283,7 @@ Re-solve every step with a 6-step lookahead to model real-time dispatch:
 
 .. tip::
 
-   Increase ``execution_steps`` to reduce computation.  ``execution_steps=1``
+   Increase ``execution_steps`` to reduce computation. ``execution_steps=1``
    (re-solve every step) gives the closest approximation to a true online MPC
    but is *T/execution_steps* times more expensive than a full-horizon solve.
 
@@ -459,9 +292,9 @@ Re-solve every step with a 6-step lookahead to model real-time dispatch:
 Time-varying pricing
 ====================
 
-Use ``add_objective_data`` to register per-period prices.  The objective
-lambda reads ``model.price`` which is set by ``TimeseriesData`` before each
-period's equations are assembled:
+Register per-period prices with ``add_objective_data``. The objective
+lambda reads ``model.price``, which ``TimeseriesData`` sets before each
+period's equations are assembled.
 
 .. code-block:: python
 
@@ -509,7 +342,7 @@ Use ``when_period`` to restrict a constraint to specific periods:
    prob.constraints = cons
 
 ``when_period`` accepts a callable ``(t: int) -> bool`` or a collection of
-period indices (set, list, range).  In single-period solves the filter has
+period indices (set, list, range). In single-period solves the filter has
 no effect.
 
 ----
@@ -517,12 +350,11 @@ no effect.
 Cross-period constraints (temporal_equation)
 =============================================
 
-Use ``temporal_equation`` to define constraints that couple variables across
-periods — ramp rates, custom storage dynamics, look-ahead limits, etc.
+Use ``temporal_equation`` to couple variables across periods: ramp rates,
+custom storage dynamics, look-ahead limits, and so on.
 
-The lambda receives ``(model, component_id, temporal_state)`` where
-*temporal_state* provides access to variables from other periods via
-``temporal_state.get(component_id, attribute)``.
+The lambda receives ``(model, component_id, temporal_state)``. Read variables
+from other periods with ``temporal_state.get(component_id, attribute)``.
 
 .. code-block:: python
 
@@ -548,20 +380,20 @@ The lambda receives ``(model, component_id, temporal_state)`` where
 .. note::
 
    ``temporal_state.get()`` returns ``None`` when the requested period is
-   before the horizon start (t < 0).  Always guard against this — return
+   before the horizon start (t < 0). Always guard against this; return
    an empty list to skip the constraint at the first period.
 
 ``temporal_equation`` composes with ``when_period``:
 
 .. code-block:: python
 
-   # Ramp limit only during peak hours (periods 2–4)
+   # Ramp limit only during peak hours (periods 2 to 4)
    cons.select_types(mm.ExtPowerGrid).temporal_equation(
        ramp_limit
    ).when_period(range(2, 5))
 
 These constraints are evaluated during inter-period equation assembly,
-alongside the built-in storage and thermal-mass coupling.  They are
+alongside the built-in storage and thermal-mass coupling. They are
 silently skipped in single-period solves.
 
 ----
@@ -571,7 +403,7 @@ Solver selection
 
 .. tab-set::
 
-   .. tab-item:: GEKKO (default, continuous NLP)
+   .. tab-item:: GEKKO (continuous NLP, IPOPT fallback)
 
       .. code-block:: python
 
@@ -640,7 +472,9 @@ Results
    * - ``MultiPeriodResult.objective``
      - Global objective value
    * - ``GekkoMultiPeriodSolver``
-     - GEKKO / IPOPT backend (default)
+     - GEKKO / IPOPT backend (fallback when CasADi is unavailable)
+   * - ``CasADiMultiPeriodSolver``
+     - In-process CasADi / IPOPT backend (default when CasADi is installed)
    * - ``PyomoMultiPeriodSolver``
      - Pyomo backend (use for MIP / islanding)
 
@@ -664,9 +498,9 @@ OptimizationProblem
      - Let the solver freely curtail loads (load shedding / demand response)
    * - ``prob.controllable_cps(["regulation"])``
      - Let the solver freely modulate CHP, P2H, P2G coupling points
-   * - ``prob.controllable(attrs, condition=...)``
+   * - ``prob.controllable(attrs, component_condition=...)``
      - General-purpose: free any attribute on matching components
-   * - ``prob.bounds((lo, hi), condition, attrs)``
+   * - ``prob.bounds((lo, hi), component_condition, attributes)``
      - Override min/max bounds of specific ``Var`` attributes
    * - ``prob.objectives``
      - Set / get the ``Objectives`` object for the solver objective function
@@ -678,7 +512,7 @@ PeriodState
 
 ``PeriodState`` is passed to ``inter_temporal_equations`` in multi-period solves.
 Unlike ``StepState`` (which returns floats), ``PeriodState.get()`` returns
-**live solver variables** — so equations that read from it become algebraic
+live solver variables, so equations that read from it become algebraic
 cross-period constraints inside the joint solve.
 
 .. list-table::
@@ -687,9 +521,9 @@ cross-period constraints inside the joint solve.
 
    * - Symbol
      - Description
-   * - ``state.get(component_id, attr, period=-1)``
-     - Solver variable at a given period.  Negative = relative to current
-       period; non-negative = absolute index (``0..T-1``).
+   * - ``state.get(component_id, attr, step=-1)``
+     - Solver variable at a given period. Negative ``step`` is relative to the
+       current period; non-negative is an absolute index (``0..T-1``).
    * - ``state.has(component_id, attr)``
      - ``True`` if a non-``None`` value exists
    * - ``state.dt_h``

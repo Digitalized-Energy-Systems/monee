@@ -58,11 +58,11 @@ _SKIP: frozenset[str] = _META_COLS | _ID_COLS | frozenset({"_type"})
 def _fmt(v) -> str:
     """Format a result value concisely for display."""
     if v is None:
-        return "—"
+        return "-"
     try:
         f = float(v)
         if math.isnan(f):
-            return "—"
+            return "-"
         return f"{f:.4g}"
     except (TypeError, ValueError):
         return str(v)
@@ -123,9 +123,9 @@ def _node_result_map(result: SolverResult) -> dict:
         if df.empty or "id" not in df.columns:
             continue
         if "node_id" in df.columns:
-            continue  # child — skip
+            continue  # child - skip
         if isinstance(df["id"].iloc[0], tuple):
-            continue  # branch — skip
+            continue  # branch - skip
         for _, row in df.iterrows():
             m[row["id"]] = {"_type": type_name, **row.to_dict()}
     return m
@@ -258,7 +258,7 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
     fall back to the CP accent colour.
     """
     # single-grid electrical loading
-    for col in ("loading_percent", "loading_from_percent"):
+    for col in ("loading_pu", "loading_from_pu"):
         v = row.get(col)
         if v is not None:
             try:
@@ -267,7 +267,7 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
                 pass
 
     # single-grid hydraulic mass flow
-    for col in ("mass_flow", "mass_flow_pos"):
+    for col in ("mass_flow_kgs", "mass_flow_pos_kgs"):
         v = row.get(col)
         if v is not None:
             try:
@@ -290,7 +290,7 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
                 pass
 
     # multi-grid: gas / hydraulic flow
-    for col in ("gas_kgps", "from_mass_flow", "to_mass_flow"):
+    for col in ("gas_mass_flow_kgs", "from_mass_flow_kgs", "to_mass_flow_kgs"):
         v = row.get(col)
         if v is not None:
             try:
@@ -301,7 +301,7 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
                 pass
 
     # multi-grid: heat
-    for col in ("heat_mw", "q_mw"):
+    for col in ("q_mw", "q_mw_heat"):
         v = row.get(col)
         if v is not None:
             try:
@@ -318,7 +318,9 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
 
 
 def _compute_layout(graph: nx.Graph, network, use_monee_positions: bool) -> dict:
-    if use_monee_positions:
+    if use_monee_positions and all(
+        graph.nodes[nid]["internal_node"].position is not None for nid in graph.nodes
+    ):
         return {
             nid: (
                 graph.nodes[nid]["internal_node"].position[0],
@@ -338,6 +340,13 @@ def _compute_layout(graph: nx.Graph, network, use_monee_positions: bool) -> dict
             break
         except Exception:
             continue
+
+    if pos is None:
+        # Graphviz/pygraphviz unavailable - fall back to pure-networkx layouts.
+        try:
+            pos = nx.kamada_kawai_layout(graph)
+        except Exception:
+            pos = nx.spring_layout(graph, seed=42)
 
     return pos
 

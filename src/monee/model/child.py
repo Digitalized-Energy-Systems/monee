@@ -15,17 +15,6 @@ class GridFormingMixin:
 class NoVarChildModel(ChildModel):
     """:class:`ChildModel` with only scalar parameters and no equations of its own."""
 
-    def set(self, n, value):
-        user_attributes = [
-            attr
-            for attr in dir(self)
-            if not attr.startswith("__") and (not callable(getattr(self, attr)))
-        ]
-        if n < 0 or n >= len(user_attributes):
-            raise IndexError(f"No user-defined attribute at index {n}")
-        attr_name = user_attributes[n]
-        setattr(self, attr_name, value)
-
     def equations(self, grid, node, **kwargs):
         return []
 
@@ -35,11 +24,11 @@ class PowerGenerator(NoVarChildModel):
     """Fixed-setpoint active/reactive generator. Constructor takes positive magnitudes; sign is internal."""
 
     def __init__(self, p_mw, q_mvar, **kwargs) -> None:
-        # Compound models pass solver Vars for p_mw — only validate plain numerics.
+        # Compound models pass solver Vars for p_mw - only validate plain numerics.
         if isinstance(p_mw, (int, float)) and p_mw < 0:
             raise ValueError(
                 f"PowerGenerator expects a positive generation magnitude; "
-                f"got p_mw={p_mw}.  Pass the absolute value — the sign is "
+                f"got p_mw={p_mw}.  Pass the absolute value - the sign is "
                 f"handled internally (load convention)."
             )
         super().__init__(**kwargs)
@@ -82,7 +71,7 @@ class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
         node_model.vm_pu_squared = Const(self.vm_pu * self.vm_pu)
         node_model.va_degree = Const(self.va_degree)
         # The slack bus is the angle reference: pin the angle decision variable
-        # (va_degree is a derived Intermediate) — removes the free global-gauge
+        # (va_degree is a derived Intermediate) - removes the free global-gauge
         # DOF, improving conditioning and squareness. Skipped when electricity
         # islanding manages bus angles itself (energisation-gated), which it
         # flags in its prepare() before this runs.
@@ -102,30 +91,37 @@ class PowerLoad(NoVarChildModel):
 
 @model
 class Source(NoVarChildModel):
-    """Fixed-setpoint mass-flow source. Constructor takes positive magnitude; sign is internal."""
+    """Fixed-setpoint mass-flow source. Constructor takes positive magnitude; sign is internal.
 
-    def __init__(self, mass_flow, **kwargs) -> None:
-        # Internal callers may pass solver Vars — only validate plain numerics.
-        if isinstance(mass_flow, (int, float)) and mass_flow < 0:
+    ``t_k`` (optional) is the temperature of the injected stream. Without it the
+    injection is credited at the junction's own (mixed) temperature.
+    """
+
+    def __init__(self, mass_flow_kgs, t_k=None, **kwargs) -> None:
+        # Internal callers may pass solver Vars - only validate plain numerics.
+        if isinstance(mass_flow_kgs, (int, float)) and mass_flow_kgs < 0:
             raise ValueError(
                 f"Source expects a positive injection magnitude; "
-                f"got mass_flow={mass_flow}.  Pass the absolute value — the "
+                f"got mass_flow_kgs={mass_flow_kgs}.  Pass the absolute value - the "
                 f"sign is handled internally (load convention)."
             )
         super().__init__(**kwargs)
-        self.mass_flow = -mass_flow
+        self.mass_flow_kgs = -mass_flow_kgs
+        # Distinct from the ExtHydrGrid/ConsumeHydrGrid ``t_k`` attribute:
+        # those pin the node temperature; this only types the inflow enthalpy.
+        self.injection_t_k = t_k
 
 
 @model
 class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
     """
     External hydraulic slack source. Pins pressure (and optionally temperature),
-    leaves mass_flow as a free Var. Load convention: negative mass_flow = injection.
+    leaves mass_flow_kgs as a free Var. Load convention: negative mass_flow_kgs = injection.
     """
 
     def __init__(
         self,
-        mass_flow=-1,
+        mass_flow_kgs=-1,
         pressure_pu=1,
         t_k=356,
         max_import_kgs=None,
@@ -134,8 +130,8 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = Var(
-            mass_flow,
+        self.mass_flow_kgs = Var(
+            mass_flow_kgs,
             min=None if max_import_kgs is None else -max_import_kgs,
             max=max_export_kgs,
             name="ext_grid_mass_flow",
@@ -150,18 +146,18 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
         node_model.pressure_pu = Const(self.pressure_pu)
         node_model.pressure_squared_pu = Const(self.pressure_pu**2)
         if self.pin_temperature:
-            node_model.t_pu = Const(self.t_k / grid.t_ref)
+            node_model.t_pu = Const(self.t_k / grid.t_ref_k)
             node_model.t_k = Const(self.t_k)
 
 
 @model
 class ConsumeHydrGrid(NoVarChildModel):
-    """Hydraulic demand point: fixed pressure setpoint plus a free mass_flow Var."""
+    """Hydraulic demand point: fixed pressure setpoint plus a free mass_flow_kgs Var."""
 
-    def __init__(self, mass_flow=0.1, pressure_pu=1, t_k=293, **kwargs) -> None:
+    def __init__(self, mass_flow_kgs=0.1, pressure_pu=1, t_k=293, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = Var(
-            mass_flow,
+        self.mass_flow_kgs = Var(
+            mass_flow_kgs,
             name="consume_ext_grid_mass_flow",
         )
         self.pressure_pu = pressure_pu
@@ -176,7 +172,7 @@ class HeatGenerator(NoVarChildModel):
         if isinstance(q_mw, (int, float)) and q_mw < 0:
             raise ValueError(
                 f"HeatGenerator expects a positive heat-generation magnitude; "
-                f"got q_mw={q_mw}.  Pass the absolute value — the sign is "
+                f"got q_mw={q_mw}.  Pass the absolute value - the sign is "
                 f"handled internally (load convention)."
             )
         super().__init__(**kwargs)
@@ -196,6 +192,6 @@ class HeatLoad(NoVarChildModel):
 class Sink(NoVarChildModel):
     """Fixed-setpoint mass-flow sink. Positive = consumption (load convention)."""
 
-    def __init__(self, mass_flow, **kwargs) -> None:
+    def __init__(self, mass_flow_kgs, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = mass_flow
+        self.mass_flow_kgs = mass_flow_kgs

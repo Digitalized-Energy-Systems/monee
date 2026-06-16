@@ -1,4 +1,8 @@
 import logging
+import math
+import os
+import shutil
+import tempfile
 import types
 
 import pyomo.environ as pyo
@@ -13,14 +17,18 @@ from monee.model import (
     Var,
 )
 from monee.model.extension.islanding.core import NetworkIslandingConfig
+from monee.model.formulation.registry import attach_formulations
 from monee.problem.core import OptimizationProblem
-from monee.simulation.step_state import StepState
+from monee.solver.infeasibility import diagnose_infeasibility
 
 from .core import (
     SolverInterface,
     SolverResult,
+    StepState,
+    apply_post_process_all,
     as_iter,
     compute_bound_violations,
+    filter_bool_eqs,
     filter_intermediate_eqs,
     find_ignored_nodes,
     ignore_branch,
@@ -28,9 +36,11 @@ from .core import (
     ignore_compound,
     ignore_node,
     inject_vars,
+    mark_he_flow_prescription,
     mark_heat_balance_slacks,
     mark_ignored_components,
     persist_solution,
+    pin_floating_hydraulic_gauges,
     withdraw_vars,
 )
 
@@ -39,9 +49,9 @@ _log = logging.getLogger(__name__)
 DEFAULT_SOLVER_OPTIONS = {}
 
 # Gurobi defaults tuned for McCormick-DHS + MISOCP electrical:
-#   ScaleFlag=2 — aggressive geometric scaling for the SOC/bilinear blocks;
-#   MIPFocus=2  — close the gap (the LP root bound is already at the optimum);
-#   MIPGap=1e-3 — ~kW precision at MW scale (default 1e-4 wastes B&B).
+#   ScaleFlag=2 - aggressive geometric scaling for the SOC/bilinear blocks;
+#   MIPFocus=2  - close the gap (the LP root bound is already at the optimum);
+#   MIPGap=1e-3 - ~kW precision at MW scale (default 1e-4 wastes B&B).
 # NumericFocus stays at 0: was net-negative once Reynolds/pressure_pa scaling fixed.
 PER_SOLVER_OPTIONS = {
     "gurobi": {
@@ -50,7 +60,119 @@ PER_SOLVER_OPTIONS = {
         "MIPGap": 1e-3,
         "TimeLimit": 300,
     },
+    # Dual presolve reductions make SCIP spuriously prove infeasibility on the
+    # ill-conditioned MISOCP load-shedding models (verified: identical model
+    # optimal with these off and with Gurobi, 'infeasible' with them on).
+    "scip": {
+        "misc/allowstrongdualreds": False,
+        "misc/allowweakdualreds": False,
+        "limits/time": 300,
+    },
 }
+
+
+def _classic_scip_available() -> bool:
+    """True iff the standalone ``scip``/``scipampl`` executable is on PATH.
+
+    Checked via ``shutil.which`` rather than ``SolverFactory("scip").available()``
+    so we don't trigger Pyomo's noisy "Could not locate the 'scip' executable"
+    warning just to decide which backend to use.
+    """
+    return bool(shutil.which("scip") or shutil.which("scipampl"))
+
+
+def _pyscipopt_available() -> bool:
+    """True iff the ``pyscipopt`` Python bindings (PyPI ``pyscipopt``) import."""
+    try:
+        import pyscipopt  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+class PyscipoptSolver:
+    """Drive SCIP through the ``pyscipopt`` bindings when the classic ``scip``
+    executable is absent..
+    """
+
+    def __init__(self):
+        self.options: dict = {}
+
+    def warm_start_capable(self) -> bool:
+        return False
+
+    def available(self, exception_flag: bool = False) -> bool:
+        return _pyscipopt_available()
+
+    def solve(self, model, tee: bool = False, **kwargs):
+        from pyscipopt import Model as ScipModel
+
+        tmpdir = tempfile.mkdtemp(prefix="monee_scip_")
+        nl_path = os.path.join(tmpdir, "model.nl")
+        try:
+            model.write(
+                nl_path,
+                format="nl",
+                io_options={"symbolic_solver_labels": True},
+            )
+
+            sm = ScipModel()
+            if not tee:
+                sm.hideOutput()
+            sm.readProblem(nl_path)
+            for key, value in self.options.items():
+                try:
+                    sm.setParam(key, value)
+                except Exception:
+                    _log.debug("pyscipopt: ignoring unknown SCIP option %r", key)
+
+            sm.optimize()
+
+            status = sm.getStatus()
+            has_solution = sm.getNSols() > 0
+            if has_solution:
+                # Strip whitespace from SCIP variable names: on Windows the
+                # pyomo-written .col label file has CRLF line endings, so
+                # SCIP's NL reader keeps a trailing '\r' in every name.
+                scip_vals = {var.name.strip(): sm.getVal(var) for var in sm.getVars()}
+                matched = 0
+                for var in model.component_data_objects(pyo.Var, active=True):
+                    val = scip_vals.get(var.name)
+                    if val is not None:
+                        var.set_value(val, skip_validation=True)
+                        matched += 1
+                if matched == 0 and scip_vals:
+                    _log.warning(
+                        "pyscipopt bridge: no SCIP variable names matched the "
+                        "pyomo model; solution write-back failed and the "
+                        "reported values are the variable initializations."
+                    )
+
+            return self._build_result(status, has_solution)
+        finally:
+            shutil.rmtree(tmpdir, ignore_errors=True)
+
+    @staticmethod
+    def _build_result(status: str, has_solution: bool):
+        """Map a SCIP status string onto the ``(status, termination_condition)``
+        pair that :func:`_classify_solve_result` inspects."""
+        if status == "optimal":
+            solver_status, tc = SolverStatus.ok, TerminationCondition.optimal
+        elif status == "infeasible":
+            solver_status, tc = SolverStatus.warning, TerminationCondition.infeasible
+        elif status == "unbounded":
+            solver_status, tc = SolverStatus.warning, TerminationCondition.unbounded
+        elif has_solution:
+            # A limit was hit (time/node/gap) but SCIP has a feasible incumbent;
+            # _classify_solve_result treats this as a usable witness solution.
+            solver_status, tc = SolverStatus.aborted, TerminationCondition.maxTimeLimit
+        else:
+            # Limit hit with no incumbent -> report as infeasible so the caller
+            # surfaces a diagnostic rather than reading unset Vars as a solution.
+            solver_status, tc = SolverStatus.warning, TerminationCondition.infeasible
+        return types.SimpleNamespace(
+            solver=types.SimpleNamespace(status=solver_status, termination_condition=tc)
+        )
 
 
 class PyomoPWLImpl:
@@ -101,8 +223,6 @@ def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
     if status == SolverStatus.ok:
         return True, None, status_str, tc_str
     if tc == TerminationCondition.infeasible:
-        from monee.solver.infeasibility import diagnose_infeasibility
-
         report = diagnose_infeasibility(
             pm, solver_name=solver_name, compute_mis_flag=True, tol=0.001
         )
@@ -114,14 +234,35 @@ def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
             report.summary(max_items=50),
         )
         return False, report, status_str, tc_str
-    _log.warning(
-        "%s returned non-ok status (status=%s, termination=%s); "
-        "using witness solution.",
+    # Only limit-type terminations come with a feasible incumbent worth using.
+    # Anything else (infeasibleOrUnbounded, unbounded, error, solverFailure...)
+    # has no witness: declaring success there means downstream code reads the
+    # variable *initializations* as a solution.
+    witness_terminations = {
+        TerminationCondition.maxTimeLimit,
+        TerminationCondition.maxIterations,
+        TerminationCondition.maxEvaluations,
+        TerminationCondition.feasible,
+        TerminationCondition.optimal,
+        TerminationCondition.locallyOptimal,
+        TerminationCondition.globallyOptimal,
+    }
+    if tc in witness_terminations:
+        _log.warning(
+            "%s returned non-ok status (status=%s, termination=%s); "
+            "using witness solution.",
+            phase_label,
+            status,
+            tc,
+        )
+        return True, None, status_str, tc_str
+    _log.error(
+        "%s failed without a usable solution (status=%s, termination=%s).",
         phase_label,
         status,
         tc,
     )
-    return True, None, status_str, tc_str
+    return False, None, status_str, tc_str
 
 
 class PyomoSolver(SolverInterface):
@@ -129,6 +270,9 @@ class PyomoSolver(SolverInterface):
 
     def __init__(self, solver_name: str = "scip"):
         self._solver_name = solver_name
+        # Per-solve simulation flag (set at the top of solve()); read by the
+        # equation-building passes to drop operational flow limits.
+        self._simulation: bool = False
 
     @staticmethod
     def inject_pyomo_vars_attr(
@@ -136,8 +280,6 @@ class PyomoSolver(SolverInterface):
     ):
         """Replace Var/Const with Pyomo Var / numeric. Clamps stale ``initialize``
         into ``[min, max]`` (suppresses W1002 when bounds tightened since last solve)."""
-        import math
-
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
                 init = value.value
@@ -167,8 +309,6 @@ class PyomoSolver(SolverInterface):
     def withdraw_pyomo_vars_attr(target: GenericModel):
         """Pyomo Var → :class:`Var`. Restores ``integer``, snaps bound-noise to
         bounds, replaces NaN/None with 0 so the next solve's warmstart survives."""
-        import math
-
         for key, value in target.__dict__.items():
             if isinstance(value, pyo.Var):
                 lb, ub = value.bounds if value.bounds is not None else (None, None)
@@ -200,8 +340,16 @@ class PyomoSolver(SolverInterface):
         # Trivial bool equations are not valid Pyomo Constraint expressions:
         # True = tautology (no-op); False = structural infeasibility from an
         # over-deactivated node/branch.  Skip both so the load-shedding
-        # objective can drive the solution instead of crashing construction.
+        # objective can drive the solution instead of crashing construction,
+        # but warn on False so a genuine modelling error is surfaced rather
+        # than silently masked (mirrors the GEKKO backend via filter_bool_eqs).
         if isinstance(expr, bool):
+            if expr is False:
+                _log.warning(
+                    "Dropping always-false (structurally infeasible) equation%s; "
+                    "this usually means a node/branch was over-deactivated.",
+                    f" ({name})" if name is not None else "",
+                )
             return
         if name is not None:
             setattr(pm, name, pyo.Constraint(expr=expr))
@@ -246,15 +394,44 @@ class PyomoSolver(SolverInterface):
                 setattr(pm, name, e)
                 setattr(model_obj, intermediate_eq.attr, e)
 
+    @staticmethod
+    def _make_solver(solver_name: str):
+        """Resolve ``solver_name`` to a solver object.
+
+        For ``scip``, transparently fall back to the :class:`PyscipoptSolver`
+        bridge when the standalone ``scip`` executable is missing but the
+        ``pyscipopt`` bindings are installed. Any other case defers to
+        :func:`pyo.SolverFactory` (which raises the usual informative error at
+        solve time if the solver is genuinely unavailable)."""
+        if (
+            solver_name == "scip"
+            and not _classic_scip_available()
+            and _pyscipopt_available()
+        ):
+            _log.info(
+                "Standalone 'scip' executable not found; solving via pyscipopt "
+                "(SCIP Python bindings) over an AMPL .nl round-trip."
+            )
+            return PyscipoptSolver()
+        return pyo.SolverFactory(solver_name)
+
     def solve(
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
+        draw_debug=False,
         exclude_unconnected_nodes: bool = False,
-        solver_name: str | None = None,
-        debug=False,
         step_state: StepState = None,
+        simulation: bool = False,
+        formulation=None,
+        solver_name: str | None = None,
+        **kwargs,
     ):
+        # Parameter names/order mirror SolverInterface.solve so that a caller
+        # passing draw_debug= (per the ABC) works on both backends. ``debug=``
+        # is accepted as a legacy alias; ``solver_name`` is a Pyomo-only extra.
+        debug = draw_debug or kwargs.pop("debug", False)
+        self._simulation = simulation
         if solver_name is None:
             solver_name = self._solver_name
         pm = pyo.ConcreteModel()
@@ -267,6 +444,17 @@ class PyomoSolver(SolverInterface):
 
         for ext in network.extensions:
             ext.prepare(network)
+
+        # Attach the effective formulations and declare their vars on the copy.
+        # In simulation mode this also squares the model (phantom DOFs pinned to
+        # Const, |m| warm-started, vm_pu_squared demoted to a PostProcess).
+        # Pyomo has no IMODE=1; a square system simply solves as the
+        # objective-free feasibility problem, yielding the same unique steady
+        # state GEKKO gets via IMODE=1 - kept consistent across backends so
+        # pyomo+ipopt is an equivalent NLP path. Runs BEFORE
+        # pin_floating_hydraulic_gauges / mark_heat_balance_slacks (which set
+        # pressure Consts a re-declare would overwrite).
+        attach_formulations(network, formulation, simulation=simulation)
 
         islanding_config = next(
             (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
@@ -295,11 +483,20 @@ class PyomoSolver(SolverInterface):
         branches = network.branches
         compounds = network.compounds
 
+        # Pin the pressure gauge of any hydraulic island without a grid-forming
+        # source - removes a rank-deficient free DOF.
+        pin_floating_hydraulic_gauges(network, ignored_nodes)
+
         # Drop each heat island's dependent nodal balance at its grid-forming
-        # node (heat slack) — result-preserving for the exact balance. Under
+        # node (heat slack) - result-preserving for the exact balance. Under
         # mccormick the Junction balance is already trivial and the relaxed
         # eq. 9a is kept, so this is a no-op there.
         mark_heat_balance_slacks(network, ignored_nodes)
+
+        # Decide per compound-internal SubHE whether the design flow prescribes
+        # the through-flow (supply/return islands with free-mass-flow slacks)
+        # or yields to a network-determined flow (e.g. a fixed sink downstream).
+        mark_he_flow_prescription(network, ignored_nodes)
 
         inject_vars(
             lambda model, comp, cat: PyomoSolver.inject_pyomo_vars_attr(
@@ -357,7 +554,7 @@ class PyomoSolver(SolverInterface):
             and len(pm.aux_obj_exprs) > 0
         )
 
-        solver = pyo.SolverFactory(solver_name)
+        solver = self._make_solver(solver_name)
         for k, v in DEFAULT_SOLVER_OPTIONS.items():
             solver.options[k] = v
         for k, v in PER_SOLVER_OPTIONS.get(solver_name, {}).items():
@@ -387,6 +584,7 @@ class PyomoSolver(SolverInterface):
         withdraw_vars(
             PyomoSolver.withdraw_pyomo_vars_attr, nodes, branches, compounds, network
         )
+        apply_post_process_all(nodes, branches, compounds, network)
         persist_solution(network, input_network)
         violations = compute_bound_violations(nodes, branches, compounds, network)
 
@@ -404,9 +602,8 @@ class PyomoSolver(SolverInterface):
             violations,
             solver_status=status_str,
             termination_condition=tc_str,
+            infeasibility_report=report if not success else None,
         )
-        if not success:
-            solver_result.infeasibility_report = report
         return solver_result
 
     # Slack added on top of solver MIPGap so the phase-2 cap never excludes
@@ -513,7 +710,9 @@ class PyomoSolver(SolverInterface):
             equations = compound.equations(network)
 
             if equations is not None:
-                equations = as_iter(equations)
+                equations = filter_bool_eqs(
+                    as_iter(equations), context=f"compound_{compound.id}"
+                )
                 self._process_intermediate_eqs(pm, compound, equations)
                 self._add_equations(
                     pm,
@@ -572,7 +771,7 @@ class PyomoSolver(SolverInterface):
             ):
                 pm.aux_obj_exprs.append(expr)
 
-            node_eqs = [eq for eq in equations if not isinstance(eq, bool)]
+            node_eqs = filter_bool_eqs(equations, context=f"node_{node.id}")
             self._process_intermediate_eqs(pm, node.model, node_eqs)
             self._add_equations(
                 pm, filter_intermediate_eqs(node_eqs), name_prefix=f"node_{node.id}"
@@ -583,7 +782,9 @@ class PyomoSolver(SolverInterface):
                     continue
                 for expr in child.minimize(grid, node, sqrt_impl=sqrt_impl):
                     pm.aux_obj_exprs.append(expr)
-                child_eqs = as_iter(child.equations(grid, node))
+                child_eqs = filter_bool_eqs(
+                    as_iter(child.equations(grid, node)), context=f"child_{child.id}"
+                )
                 self._process_intermediate_eqs(pm, child.model, child_eqs)
                 self._add_equations(
                     pm,
@@ -634,6 +835,7 @@ class PyomoSolver(SolverInterface):
                     log_impl=log_impl,
                     sqrt_impl=sqrt_impl,
                     pwl_impl=pwl_impl,
+                    simulation=self._simulation,
                 )
             )
 
@@ -645,6 +847,7 @@ class PyomoSolver(SolverInterface):
             ):
                 pm.aux_obj_exprs.append(expr)
 
+            branch_eqs = filter_bool_eqs(branch_eqs, context=f"branch_{branch.id}")
             self._process_intermediate_eqs(pm, branch.model, branch_eqs)
             self._add_equations(
                 pm,

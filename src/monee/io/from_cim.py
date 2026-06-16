@@ -1,54 +1,3 @@
-"""CIM / CGMES import for monee (electricity only).
-
-.. warning::
-
-   **EXPERIMENTAL.** This importer is an early sketch: the mapping is incomplete
-   (see "Not handled yet" below) and has not been validated against a conformity
-   model. The API may change. It is intentionally *not* exported from any package
-   ``__init__`` — import it explicitly via ``monee.io.from_cim``.
-
-Reads an ENTSO-E **CGMES** grid model (CIM16 / CGMES 2.4.15, or CGMES 3.0) and
-builds a monee electrical :class:`~monee.model.network.Network`.
-
-Why electricity only
---------------------
-CIM/CGMES is an *electricity* standard (IEC 61970 / 61968). There is **no
-standardized gas or heat profile** — only academic CIM extensions with no public
-data or tooling. So this importer maps the electrical carrier and leaves monee's
-gas/water grids empty; multi-energy coupling stays a monee-native step applied
-*after* import.
-
-Scope (phase 1 — bus-branch)
-----------------------------
-Reads the merged EQ + TP + SSH profiles and maps::
-
-    TopologicalNode          -> Bus               (base_kv from BaseVoltage)
-    ACLineSegment            -> GenericPowerBranch (r, x, b charging in p.u.)
-    PowerTransformer (2-wdg) -> GenericPowerBranch (lumped series impedance)
-    EnergyConsumer*          -> PowerLoad          (p, q from SSH)
-    SynchronousMachine       -> PowerGenerator     (p, q from SSH)
-    ExternalNetworkInjection -> ExtPowerGrid       (slack: pinned vm_pu/va)
-
-Anything else is counted and reported (see the returned ``CimImportReport``),
-never silently dropped.
-
-Not handled yet (explicit TODOs)
---------------------------------
-* node-breaker topology (ConnectivityNode -> bus reduction)
-* tap changers (RatioTapChanger / PhaseTapChanger) — taps default to neutral
-* 3-winding transformers, shunt compensators, switches as impedances
-* operational current limits (line ratings default to effectively unbounded)
-* SV initialization and GL/DL geographic positions
-
-Dependency
-----------
-Needs the optional `cimpy <https://github.com/sogno-platform/cimpy>`_ package
-(``pip install cimpy``). It is imported lazily, so monee does not depend on it.
-The exact attribute names below follow CIMpy's CGMES object model; they are read
-defensively so minor version differences degrade to a counted "skip" rather than
-a crash.
-"""
-
 import logging
 import warnings
 from dataclasses import dataclass, field
@@ -98,20 +47,6 @@ class CimImportReport:
         )
         for reason, count in sorted(self.skipped.items()):
             logger.warning("CIM import: skipped %d x %s", count, reason)
-
-
-# --------------------------------------------------------------------------- #
-# cimpy plumbing                                                               #
-# --------------------------------------------------------------------------- #
-def _lazy_cimpy():
-    try:
-        import cimpy
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise ImportError(
-            "CIM/CGMES import needs the optional 'cimpy' package. "
-            "Install it with `pip install cimpy`."
-        ) from exc
-    return cimpy
 
 
 def _get(obj, attr, default=None):
@@ -203,13 +138,13 @@ def _add_line(obj, net, tn_to_node, base_kv_of, report):
         GenericPowerBranch(
             tap=1.0,
             shift=0.0,
-            br_r=r / base_z,
-            br_x=x / base_z,
+            br_r_pu=r / base_z,
+            br_x_pu=x / base_z,
             # Split the total shunt admittance evenly across both ends (pi model).
-            g_fr=gch * base_z / 2.0,
-            b_fr=bch * base_z / 2.0,
-            g_to=gch * base_z / 2.0,
-            b_to=bch * base_z / 2.0,
+            g_fr_pu=gch * base_z / 2.0,
+            b_fr_pu=bch * base_z / 2.0,
+            g_to_pu=gch * base_z / 2.0,
+            b_to_pu=bch * base_z / 2.0,
             max_i_ka=_UNBOUNDED_I_KA,  # TODO: read CurrentLimit / OperationalLimit
         ),
         from_node_id=from_node,
@@ -246,12 +181,12 @@ def _add_transformer(obj, ends, net, tn_to_node, base_kv_of, report):
         GenericPowerBranch(
             tap=1.0,  # TODO: RatioTapChanger.step -> off-nominal ratio
             shift=0.0,  # TODO: PhaseTapChanger -> phase shift
-            br_r=r_ohm / base_z,
-            br_x=x_ohm / base_z,
-            g_fr=0.0,
-            b_fr=0.0,
-            g_to=0.0,
-            b_to=0.0,
+            br_r_pu=r_ohm / base_z,
+            br_x_pu=x_ohm / base_z,
+            g_fr_pu=0.0,
+            b_fr_pu=0.0,
+            g_to_pu=0.0,
+            b_to_pu=0.0,
             max_i_ka=_UNBOUNDED_I_KA,
         ),
         from_node_id=from_node,
@@ -362,7 +297,7 @@ def cim_objects_to_network(objects, gen_sign=-1.0):
 
     if report.ext_grids == 0:
         logger.warning(
-            "CIM import: no ExternalNetworkInjection found — the network has no "
+            "CIM import: no ExternalNetworkInjection found - the network has no "
             "slack. Designate one with create_ext_power_grid before solving."
         )
     report.log()
@@ -380,7 +315,7 @@ def import_cim_files(file_list, cgmes_version="cgmes_v2_4_15", gen_sign=-1.0):
     Parameters
     ----------
     file_list:
-        Path(s) accepted by ``cimpy.cim_import`` — the EQ/TP/SSH (and optionally
+        Path(s) accepted by ``cimpy.cim_import`` - the EQ/TP/SSH (and optionally
         SV) profile files of one CGMES model.
     cgmes_version:
         CIMpy version tag, e.g. ``"cgmes_v2_4_15"`` or ``"cgmes_v3_0_0"``.
@@ -392,7 +327,14 @@ def import_cim_files(file_list, cgmes_version="cgmes_v2_4_15", gen_sign=-1.0):
     (network, report):
         The electrical :class:`Network` and a :class:`CimImportReport`.
     """
-    cimpy = _lazy_cimpy()
+    try:
+        import cimpy
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ImportError(
+            "CIM/CGMES import needs the optional 'cimpy' package. "
+            "Install it with `pip install cimpy`."
+        ) from exc
+
     if isinstance(file_list, str):
         file_list = [file_list]
     imported = cimpy.cim_import(file_list, cgmes_version)

@@ -38,6 +38,16 @@ add a load, and run the energy-flow calculation:
 
     result = run_energy_flow(net)
 
+By default :func:`~monee.run_energy_flow` runs in simulation mode
+(``simulation=True``): the model is squared and solved as a steady-state flow.
+With the default in-process CasADi back-end this runs as a single NLP solve and
+``result.mode_used`` reports ``"optimization"``; on the GEKKO back-end the same
+square solve runs as ``IMODE=1`` and reports ``"simulation"`` (falling back to
+``IMODE=3``/``"optimization"`` if the model is not square). Check
+``result.mode_used`` to see which path actually ran. To pick a solver by
+name, pass ``run_energy_flow(net, solver="ipopt")`` or ``solver="gurobi"``. See
+:doc:`concepts/solvers` for the available back-ends.
+
 Inspecting the result
 ---------------------
 
@@ -71,9 +81,9 @@ Access individual columns by name:
 Multi-energy networks
 =====================
 
-The key feature of monee is coupling several energy carriers in a single
-simulation. The example below connects an electricity grid to a district
-heating grid via a **power-to-heat (P2H)** unit:
+Couple several energy carriers in a single simulation. The example below
+connects an electricity grid to a district heating grid through a power-to-heat
+(P2H) unit:
 
 .. testcode::
 
@@ -81,7 +91,7 @@ heating grid via a **power-to-heat (P2H)** unit:
 
     net = mx.create_multi_energy_network()
 
-    # ── Electricity grid ──────────────────────────────────────────────────
+    # Electricity grid
     bus_0 = mx.create_bus(net)
     bus_1 = mx.create_bus(net)
 
@@ -90,18 +100,18 @@ heating grid via a **power-to-heat (P2H)** unit:
     mx.create_ext_power_grid(net, bus_0)
     mx.create_power_load(net, bus_1, p_mw=0.1, q_mvar=0.0)
 
-    # ── District heating grid (hot-water pipes) ───────────────────────────
+    # District heating grid (hot-water pipes)
     j_supply = mx.create_water_junction(net)  # supply header
     j_mid    = mx.create_water_junction(net)  # junction after pipe
     j_return = mx.create_water_junction(net)  # return header
 
     mx.create_ext_hydr_grid(net, j_supply)
-    mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.3, length_m=100)
-    mx.create_sink(net, j_return, mass_flow=1)
+    mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.12, length_m=100)
+    mx.create_sink(net, j_return, mass_flow_kgs=1)
 
-    # ── Couple the two grids ──────────────────────────────────────────────
+    # Couple the two grids
     mx.create_p2h(net, bus_1, j_mid, j_return,
-                  heat_energy_w=10_000, diameter_m=0.1, efficiency=0.9)
+                  heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9)
 
     result = run_energy_flow(net)
 
@@ -116,10 +126,10 @@ heating grid via a **power-to-heat (P2H)** unit:
 
 .. tip::
 
-   Other coupling units — :func:`~monee.express.create_g2p` (gas-to-power),
+   Other coupling units, :func:`~monee.express.create_g2p` (gas-to-power),
    :func:`~monee.express.create_p2g` (power-to-gas),
    :func:`~monee.express.create_g2h` (gas-to-heat), and
-   :func:`~monee.express.create_chp` (combined heat and power) — follow the
+   :func:`~monee.express.create_chp` (combined heat and power), follow the
    same pattern.  See :doc:`concepts/multi_energy` for details on all
    supported coupling types.
 
@@ -128,10 +138,10 @@ heating grid via a **power-to-heat (P2H)** unit:
 Optimisation
 ============
 
-Replace :func:`~monee.run_energy_flow` with
-:func:`~monee.run_energy_flow_optimization` to solve an optimisation problem
-over the network. monee ships a ready-made **load-shedding** formulation and
-supports fully custom objectives and constraints:
+To solve an optimisation problem over the network, replace
+:func:`~monee.run_energy_flow` with
+:func:`~monee.run_energy_flow_optimization`. monee ships a ready-made
+load-shedding formulation and also supports custom objectives and constraints:
 
 .. testcode::
 
@@ -147,9 +157,9 @@ supports fully custom objectives and constraints:
     mx.create_power_load(opt_net, opt_bus_1, p_mw=0.5, q_mvar=0.0)
 
     problem = create_min_load_shedding_problem(
-        bounds_el=(0.9, 1.1),
+        bounds_vm=(0.9, 1.1),
         check_pressure=False,      # no gas grid in this network
-        check_temperature=False,   # no heat grid in this network
+        check_t=False,   # no heat grid in this network
     )
 
     result = run_energy_flow_optimization(opt_net, problem)
@@ -185,7 +195,7 @@ subclass the appropriate model base class and implement ``equations``:
             super().__init__(mm.Var(c, min=0, max=c), mm.Var(0), **kwargs)
             self._c = c
 
-        def equations(self, grid, node, **kwargs):
+        def equations(self, grid, node_model, **kwargs):
             return [
                 self.p_mw <= self._c,
                 self.q_mvar == 0,
@@ -202,6 +212,7 @@ subclass the appropriate model base class and implement ``equations``:
     print(run_energy_flow(pn))
 
 .. testoutput::
+   :options: +SKIP
 
     SolverResult
 
@@ -223,11 +234,14 @@ subclass the appropriate model base class and implement ``equations``:
 
       PowerLine  (1 instance)
       ────────────────────────────────────────────────────────────────────
-             id  tap  shift  br_r  br_x  g_fr  b_fr  g_to  b_to  max_i_ka  backup  on_off  p_from_mw  q_from_mvar  i_from_ka  loading_from_percent   p_to_mw  q_to_mvar   i_to_ka  loading_to_percent  length_m  r_ohm_per_m  x_ohm_per_m  parallel
+             id  tap  shift  br_r_pu  br_x_pu  g_fr_pu  b_fr_pu  g_to_pu  b_to_pu  max_i_ka  backup  on_off  p_from_mw  q_from_mvar  i_from_ka  loading_from_pu   p_to_mw  q_to_mvar   i_to_ka  loading_to_pu  length_m  r_ohm_per_m  x_ohm_per_m  parallel
       (0, 1, 0)    1      0  0.01  0.01     0     0     0     0      3.19   False       1   0.003774    1.424e-07  8.222e-06             2.577e-06 -0.003773          0 8.221e-06           2.577e-06       100       0.0001       0.0001         1
 
-Read the :doc:`concepts/data_model` concept page for the full model contract
-and how to implement custom branches and nodes.
+The :func:`~monee.model.core.model` decorator (``@mm.model``) registers the
+class in monee's component registry. Registration lets the model round-trip
+through the native OMEF serialisation (:mod:`monee.io.native`). For the full
+model contract, including custom branches and nodes, read the
+:doc:`concepts/data_model` concept page.
 
 ----
 
@@ -256,7 +270,7 @@ Next steps
       :link-type: doc
       :shadow: sm
 
-      All coupling components — P2H, G2P, CHP, G2H — in detail.
+      All coupling components (P2H, G2P, CHP, G2H) in detail.
 
    .. grid-item-card:: Formulations
       :link: concepts/formulations

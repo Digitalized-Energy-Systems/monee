@@ -1,9 +1,9 @@
-import numpy as np
+﻿import numpy as np
 
 import monee.model as mm
 import monee.problem as mp
 from monee import TimeseriesData, run_energy_flow_optimization
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.network import create_urban_district_net
 
 BOUNDS_EL = (0.9, 1.1)
@@ -21,11 +21,7 @@ def _sinusoidal_profile(
     noise: float = 0.04,
     rng: np.random.Generator = None,
 ) -> np.ndarray:
-    """Bell-shaped daily demand curve with small Gaussian noise.
-
-    Profile peaks near the midpoint (noon) and troughs at the edges (night).
-    Clipped to [50 %, 200 %] of base to avoid unphysical values.
-    """
+    """Bell-shaped daily demand curve with small Gaussian noise, clipped to [50%, 200%] of base."""
     if rng is None:
         rng = np.random.default_rng()
     t = np.linspace(0, 2 * np.pi, n_steps, endpoint=False)
@@ -47,10 +43,10 @@ def _make_urban_district_timeseries(
         )
     for c in net.childs_by_type(mm.Sink):
         if c.grid.name == "gas":
-            base = float(mm.value(c.model.mass_flow))
+            base = float(mm.value(c.model.mass_flow_kgs))
             td.add_child_series(
                 c.id,
-                "mass_flow",
+                "mass_flow_kgs",
                 _sinusoidal_profile(n_steps, base, amplitude=0.30, rng=rng),
             )
     return td
@@ -58,14 +54,13 @@ def _make_urban_district_timeseries(
 
 def _solve(network):
     problem = mp.create_min_load_shedding_problem(
-        bounds_el=BOUNDS_EL,
-        bounds_heat=BOUNDS_HEAT,
-        bounds_gas=BOUNDS_GAS,
-        # The legacy formulation left the external grids unbounded
-        # (use_ext_grid_bounds=False); replicate with non-binding wide bounds.
-        ext_grid_el_bounds=(-100, 100),
-        ext_grid_gas_bounds=(-100, 100),
-        ext_grid_heat_bounds=(-100, 100),
+        bounds_vm=BOUNDS_EL,
+        bounds_t=BOUNDS_HEAT,
+        bounds_pressure=BOUNDS_GAS,
+        # legacy formulation left ext grids unbounded; replicate with non-binding wide bounds
+        bounds_ext_el=(-100, 100),
+        bounds_ext_gas=(-100, 100),
+        bounds_ext_heat=(-100, 100),
         include_ext_grids=True,
     )
     return run_energy_flow_optimization(
@@ -77,14 +72,19 @@ def _solve(network):
 
 
 def test_res_with_load_shedding():
+    # GIVEN
     net = create_urban_district_net()
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     td = _make_urban_district_timeseries(net, n_steps=TIME_STEPS, seed=SEED)
     td.apply_to_network(net, 0)
 
+    # WHEN
     result = _solve(net)
 
+    # THEN
+    assert result.success
     assert result is not None
+
     load_df = result.dataframes["PowerLoad"]
     assert (load_df["regulation"] >= 0).all(), "regulation must be non-negative"
     assert (load_df["regulation"] <= 1).all(), "regulation must be at most 1"

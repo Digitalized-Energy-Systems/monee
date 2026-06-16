@@ -3,7 +3,7 @@ import math
 import pytest
 
 from monee import (
-    MISOCP_NETWORK_FORMULATION,
+    EL_MISOCP_FORMULATION,
     GridFormingGenerator,
     PyomoSolver,
     enable_islanding,
@@ -18,44 +18,49 @@ def _build_two_island_network():
     """Return a 3-bus network with two disconnected electricity islands."""
     net = mm.Network()
 
-    bus_0 = mx.create_bus(net)  # island A — reference
-    bus_1 = mx.create_bus(net)  # island A — load
-    bus_2 = mx.create_bus(net)  # island B — isolated
+    bus_0 = mx.create_bus(net)
+    bus_1 = mx.create_bus(net)
+    bus_2 = mx.create_bus(net)
 
     mx.create_ext_power_grid(net, bus_0)
     mx.create_power_load(net, bus_1, p_mw=0.05, q_mvar=0)
 
-    # Island B: grid-forming generator absorbs its own load
     net.child_to(GridFormingGenerator(p_mw_max=1.0, q_mvar_max=0.5), bus_2)
     mx.create_power_load(net, bus_2, p_mw=0.08, q_mvar=0)
 
-    # Only line within island A; bus 2 is completely disconnected.
     mx.create_line(net, bus_0, bus_1, length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
 
     return net
 
 
 def test_islanding_el_converges():
-    """With islanding enabled, both islands must solve without error."""
+    # GIVEN
     net = _build_two_island_network()
     enable_islanding(net, electricity=True)
 
+    # WHEN
     result = run_energy_flow(net)
 
+    # THEN
+    assert result.success
     assert result is not None
 
 
 def test_islanding_el_gf_generator_supplies_island():
-    """The GridFormingGenerator on bus 2 should supply ≈ 0.08 MW to its island."""
+    # GIVEN
     net = _build_two_island_network()
     enable_islanding(net, electricity=True)
 
+    # WHEN
     result = run_energy_flow(net)
-    print(result)
+
+    # THEN
+    assert result.success
+
     gf_df = result.dataframes.get("GridFormingGenerator")
     assert gf_df is not None, "GridFormingGenerator not in result dataframes"
 
-    # The generator must absorb the island B load (negative sign convention for generation)
+    # Generator absorbs the island B load (negative sign convention for generation)
     gf_p_mw = gf_df["p_mw"].iloc[0]
     assert abs(gf_p_mw) == pytest.approx(0.08, abs=1e-3), (
         f"Expected GF generator p_mw ≈ -0.08 MW, got {gf_p_mw}"
@@ -63,37 +68,37 @@ def test_islanding_el_gf_generator_supplies_island():
 
 
 def test_islanding_disabled_bus2_ignored():
-    """Without islanding, bus 2 (no ExtPowerGrid in its component) is pre-filtered."""
+    # GIVEN
     net = _build_two_island_network()
-    # No enable_islanding → legacy behavior
 
+    # WHEN
     result = run_energy_flow(net)
 
-    # Bus 2 is disconnected from any ExtPowerGrid, so it should be ignored.
-    # The solver should still converge (bus 2 simply not in the solve).
+    # THEN
+    # Bus 2 has no ExtPowerGrid in its component, so it is pre-filtered
+    assert result.success
     assert result is not None
 
 
 def test_islanding_monee_benchmark():
-    net_multi: mm.Network = create_monee_benchmark_net()
-    net_multi.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    # GIVEN
+    net_islanding: mm.Network = create_monee_benchmark_net()
+    net_islanding.apply_formulation(EL_MISOCP_FORMULATION)
+    net_islanding.deactivate(net_islanding.get_branch_between(2, 3))
+    enable_islanding(net_islanding, electricity=True)
 
-    branch_tbd = net_multi.get_branch_between(2, 3)
-    net_multi.deactivate(branch_tbd)
-    enable_islanding(net_multi, electricity=True)
+    net_legacy: mm.Network = create_monee_benchmark_net()
+    net_legacy.apply_formulation(EL_MISOCP_FORMULATION)
+    net_legacy.deactivate(net_legacy.get_branch_between(2, 3))
 
-    result = run_energy_flow(net_multi, solver=PyomoSolver())
-    print(result)
+    # WHEN
+    result_islanding = run_energy_flow(net_islanding, solver=PyomoSolver())
+    result_legacy = run_energy_flow(net_legacy, solver=PyomoSolver())
 
-    assert result.dataframes["Bus"]["vm_pu"][3] == pytest.approx(0.999981)
+    # THEN
+    assert result_islanding.success
+    assert result_legacy.success
 
-    net_multi: mm.Network = create_monee_benchmark_net()
-    net_multi.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    assert result_islanding.dataframes["Bus"]["vm_pu"][3] == pytest.approx(0.999981)
 
-    branch_tbd = net_multi.get_branch_between(2, 3)
-    net_multi.deactivate(branch_tbd)
-
-    result = run_energy_flow(net_multi, solver=PyomoSolver())
-    print(result)
-
-    assert math.isnan(result.dataframes["Bus"]["vm_pu_squared"][3])
+    assert math.isnan(result_legacy.dataframes["Bus"]["vm_pu_squared"][3])

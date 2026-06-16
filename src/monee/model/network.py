@@ -19,19 +19,22 @@ from .core import (
     GenericModel,
     Intermediate,
     Node,
+    PostProcess,
     Var,
-)
-from .formulation import (
-    AC_NETWORK_FORMULATION,
-    NL_DARCY_WEISBACH_NETWORK_FORMULATION,
-    NL_WEYMOUTH_NETWORK_FORMULATION,
-    Formulation,
-    NetworkFormulation,
 )
 from .grid import create_gas_grid, create_power_grid, create_water_grid
 
 if TYPE_CHECKING:
     from .extension.core import NetworkAspect
+
+    # Imported only for typing: at runtime ``apply_formulation`` resolves the
+    # spec lazily via ``formulation.registry.resolve_formulation`` (a local
+    # import), so the model package no longer eagerly triggers the
+    # formulation -> branch/node import chain at load time.
+    from .formulation import (  # noqa: F401
+        Formulation,
+        NetworkFormulation,
+    )
 
 
 class Network:
@@ -58,20 +61,33 @@ class Network:
         self.__force_blacklist = False
         self.__collect_components = False
         self.__current_grid = active_grid
+        # Declarative network-level formulation choice. No default is seeded
+        # here: components without an explicit choice fall back to
+        # DEFAULT_SIMULATION_FORMULATION when the solver attaches formulations
+        # (see monee.model.formulation.registry.attach_formulations).
         self.__default_formulation: dict[tuple[type, type], Formulation] = {}
 
-        # default formulations
-        self.apply_formulation(AC_NETWORK_FORMULATION)
-        self.apply_formulation(NL_WEYMOUTH_NETWORK_FORMULATION)
-        self.apply_formulation(NL_DARCY_WEISBACH_NETWORK_FORMULATION)
+    def apply_formulation(self, network_formulation):
+        """Record *network_formulation* as the network-level default.
 
-    def apply_formulation(self, network_formulation: NetworkFormulation):
-        for type_or_tuple, formulation in (
-            list(network_formulation.branch_type_to_formulations.items())
-            + list(network_formulation.child_type_to_formulations.items())
-            + list(network_formulation.node_type_to_formulations.items())
-            + list(network_formulation.compound_type_to_formulations.items())
-        ):
+        Accepts the same spec as the solver's ``formulation`` argument
+        (:func:`~monee.model.formulation.registry.resolve_formulation`): a
+        registry key string (``"smooth_nlp"``), a :class:`NetworkFormulation`,
+        or a sequence of either (merged left to right).
+
+        Side-effect free: only the network's formulation map is updated -
+        components and their models are untouched. The choice materialises
+        when a solver runs ``attach_formulations`` on its solve-time copy. A
+        ``formulation`` argument passed to the solver overrides this choice;
+        per-component formulations passed to the builder methods override
+        both. Repeated calls merge: later registrations win per type key.
+        """
+        from .formulation.registry import resolve_formulation
+
+        network_formulation = resolve_formulation(network_formulation)
+        if network_formulation is None:
+            return
+        for type_or_tuple, formulation in network_formulation.items():
             tc, tg = None, None
             if isinstance(type_or_tuple, tuple):
                 tc, tg = type_or_tuple
@@ -80,12 +96,15 @@ class Network:
 
             self.__default_formulation[(tc, tg)] = formulation
 
-            for component in self.all_components():
-                # formulation for type tc, and if no grid type is provided or grid type of the component == tg
-                if isinstance(component.model, tc) and (
-                    tg is None or type(component.grid) is tg
-                ):
-                    component.formulation = formulation
+    def lookup_formulation(self, model, grid) -> Formulation | None:
+        """The network-level formulation for *model* (and *grid*) accumulated
+        from ``apply_formulation`` calls, or None. Last matching registration
+        wins, mirroring :meth:`NetworkFormulation.lookup`."""
+        found = None
+        for (tc, tg), formulation in self.__default_formulation.items():
+            if isinstance(model, tc) and (tg is None or type(grid) is tg):
+                found = formulation
+        return found
 
     def set_default_grid(self, key, grid):
         self._default_grid_models[key] = grid
@@ -205,11 +224,24 @@ class Network:
         return None
 
     def remove_node(self, node_id):
+        # nx.remove_node drops all incident edges from the graph but leaves
+        # the surviving neighbours' from_branch_ids/to_branch_ids pointing at
+        # those now-vanished edges. Detach them first so later
+        # branches_connected_to / components_connected_to on a neighbour does
+        # not call branch_by_id on a missing edge.
+        incident = [
+            (u, v, key)
+            for u, v, key in self._network_internal.edges(node_id, keys=True)
+        ]
+        for u, v, key in incident:
+            self.remove_branch_between(u, v, key=key)
         self._network_internal.remove_node(node_id)
 
     def remove_branch(self, branch_id):
         branch: Branch = self.branch_by_id(branch_id)
-        self.remove_branch_between(branch.from_node_id, branch.to_node_id)
+        self.remove_branch_between(
+            branch.from_node_id, branch.to_node_id, key=branch_id[2]
+        )
 
     def remove_compound(self, compound_id):
         compound: Compound = self.compound_by_id(compound_id)
@@ -382,11 +414,12 @@ class Network:
         child = Child(
             child_id,
             model,
-            formulation=self._or_default_formulation(model, formulation, None),
+            formulation=formulation,
             constraints=constraints,
             name=name,
             independent=not self.__collect_components,
         )
+        child.formulation_pinned = formulation is not None
         self.__insert_to_blacklist_if_forced(child)
         self.__insert_to_container_if_collect_toggled(child)
         self._child_dict[child_id] = child
@@ -438,13 +471,6 @@ class Network:
             return self.__current_grid
         return grid_or_name
 
-    def _or_default_formulation(self, model, formulation, grid):
-        if formulation is None:
-            for t, form in self.__default_formulation.items():
-                if isinstance(model, t[0]) and (t[1] is None or type(grid) is t[1]):
-                    return form
-        return formulation
-
     def node(
         self,
         model,
@@ -478,13 +504,14 @@ class Network:
             node_id,
             model,
             child_ids,
-            formulation=self._or_default_formulation(model, formulation, grid),
+            formulation=formulation,
             constraints=constraints,
             grid=grid,
             name=name,
             position=position,
             independent=not self.__collect_components,
         )
+        node.formulation_pinned = formulation is not None
         if child_ids is not None:
             for child_id in child_ids:
                 child = self.child_by_id(child_id)
@@ -522,7 +549,7 @@ class Network:
             model,
             from_node_id,
             to_node_id,
-            formulation=self._or_default_formulation(model, formulation, grid),
+            formulation=formulation,
             constraints=constraints,
             grid=grid
             or (
@@ -537,6 +564,7 @@ class Network:
             independent=not self.__collect_components,
             **kwargs,
         )
+        branch.formulation_pinned = formulation is not None
         self.__insert_to_blacklist_if_forced(branch)
         self.__insert_to_container_if_collect_toggled(branch)
         branch_id = (
@@ -583,12 +611,13 @@ class Network:
             self.__force_blacklist = False
         compound = Compound(
             compound_id=compound_id,
-            formulation=self._or_default_formulation(model, formulation, None),
+            formulation=formulation,
             model=model,
             constraints=constraints,
             connected_to=connected_node_ids,
             subcomponents=self.__collected_components,
         )
+        compound.formulation_pinned = formulation is not None
         self._compound_dict[compound_id] = compound
         self.__collected_components = []
         return compound_id
@@ -646,7 +675,7 @@ class Network:
         }
         for k, v in model_dict.items():
             result_value = v
-            if isinstance(v, Var | Const | Intermediate):
+            if isinstance(v, Var | Const | Intermediate | PostProcess):
                 result_value = v.value
             result_dict[k] = result_value
         return result_dict
@@ -722,11 +751,11 @@ class Network:
         new._compound_dict = {
             k: copy.deepcopy(v, memo) for k, v in self._compound_dict.items()
         }
-        # Constraints/objectives are stateless lambdas — share by reference.
+        # Constraints/objectives are stateless lambdas - share by reference.
         new._constraints = list(self._constraints)
         new._objectives = list(self._objectives)
         new._extensions = copy.deepcopy(self._extensions, memo)
-        # Compound-construction transients — deepcopy preserves consistency
+        # Compound-construction transients - deepcopy preserves consistency
         # if the copy ever lands mid-build.
         new._Network__blacklist = copy.deepcopy(self._Network__blacklist, memo)
         new._Network__collected_components = copy.deepcopy(
@@ -735,10 +764,10 @@ class Network:
         new._Network__force_blacklist = self._Network__force_blacklist
         new._Network__collect_components = self._Network__collect_components
         new._Network__current_grid = copy.deepcopy(self._Network__current_grid, memo)
-        # Default formulations are module-level singletons — share by reference.
+        # Default formulations are module-level singletons - share by reference.
         new._Network__default_formulation = dict(self._Network__default_formulation)
 
-        # Manual MultiGraph rebuild — networkx generic deepcopy is much slower.
+        # Manual MultiGraph rebuild - networkx generic deepcopy is much slower.
         g = nx.MultiGraph()
         new._network_internal = g
         for node_id, data in self._network_internal.nodes(data=True):
@@ -786,6 +815,17 @@ def to_spanning_tree(network: Network):
 def transform_network(network: Network, graph_transform):
     network = network.copy()
     network._network_internal = graph_transform(network.graph)
+    # The transform (e.g. minimum_spanning_tree) drops edges, leaving the
+    # surviving nodes' from_branch_ids/to_branch_ids referencing branches that
+    # no longer exist. Rebuild those lists from the reduced edge set so
+    # branches_connected_to / components_connected_to stay consistent.
+    for node in network.nodes:
+        node.from_branch_ids = []
+        node.to_branch_ids = []
+    for from_id, to_id, key in network._network_internal.edges(keys=True):
+        branch_id = (from_id, to_id, key)
+        network.node_by_id(from_id).add_from_branch_id(branch_id)
+        network.node_by_id(to_id).add_to_branch_id(branch_id)
     for child in list(network.childs):
         referenced = False
         for node in network.nodes:

@@ -27,12 +27,12 @@ Both the public, solver-visible attributes of a model *and* its JSON-encodable
 private attributes (e.g. a storage's ``_p_max`` / ``_lossy``) are serialized, so
 models whose behaviour is configured through private state round-trip faithfully.
 Private attributes holding object references (grids, sub-models) are skipped on
-purpose — they are rebuilt by the compound ``create()`` / branch ``init()`` hooks.
+purpose - they are rebuilt by the compound ``create()`` / branch ``init()`` hooks.
 
 Known limitations (not represented in the native format): user-supplied
 ``network.constraint`` / ``network.objective`` callables, network-level
 extensions registered via ``add_extension`` (linepack, LTC, islanding), and
-non-default formulations applied with ``apply_formulation`` — the latter are
+non-default formulations applied with ``apply_formulation`` - the latter are
 re-derived from the default formulation rules on load.
 """
 
@@ -41,7 +41,14 @@ import json
 import numbers
 
 from monee.model import Network
-from monee.model.core import Compound, Const, Intermediate, Var, component_list
+from monee.model.core import (
+    Compound,
+    Const,
+    Intermediate,
+    PostProcess,
+    Var,
+    component_list,
+)
 
 #: Bumped whenever the on-disk structure changes in a non-additive way.
 FORMAT_VERSION = 2
@@ -61,14 +68,12 @@ def _encodable(value):
     """Return ``True`` if *value* can be losslessly written to the native format."""
     if value is None or isinstance(value, (bool, str)):
         return True
-    if isinstance(value, (Var, Const, Intermediate)):
+    if isinstance(value, (Var, Const, Intermediate, PostProcess)):
         return True
     if isinstance(value, (list, tuple)):
         return all(_encodable(item) for item in value)
     if isinstance(value, dict):
-        return all(
-            isinstance(k, str) and _encodable(v) for k, v in value.items()
-        )
+        return all(isinstance(k, str) and _encodable(v) for k, v in value.items())
     # numbers.Number also covers numpy integer/float scalars.
     return isinstance(value, numbers.Number)
 
@@ -88,6 +93,10 @@ def _encode_value(value):
         return {_TYPE_KEY: "Const", "value": value.value}
     if isinstance(value, Intermediate):
         return {_TYPE_KEY: "Intermediate", "value": value.value}
+    if isinstance(value, PostProcess):
+        # Only the computed value is portable; the lambda is re-attached on the
+        # next solve (its model's equations()/__init__ recreate it).
+        return {_TYPE_KEY: "PostProcess", "value": value.value}
     if isinstance(value, dict):
         return {k: _encode_value(v) for k, v in value.items()}
     if isinstance(value, (list, tuple)):
@@ -111,6 +120,11 @@ def _decode_value(value):
             return Const(value["value"])
         if tag == "Intermediate":
             return Intermediate(value["value"])
+        if tag == "PostProcess":
+            # Carry the stored value via a constant lambda; the model's next
+            # solve re-attaches the real computation.
+            stored = value["value"]
+            return PostProcess(lambda _vals, _v=stored: _v, value=stored)
         if tag is not None:
             raise PersistenceException(f"Unknown encoded value type: {tag!r}")
 
@@ -144,7 +158,7 @@ def _decode_values(values_dict):
 
 def _json_default(obj):
     """Fallback encoder for stray objects (e.g. numpy scalars) in ``values``."""
-    if isinstance(obj, (Var, Const, Intermediate)):
+    if isinstance(obj, (Var, Const, Intermediate, PostProcess)):
         return _encode_value(obj)
     if hasattr(obj, "item"):  # numpy scalar
         return obj.item()
@@ -215,9 +229,7 @@ def native_dict_to_network(dict_struct) -> Network:
             network.deactivate_by_id(type(network.child_by_id(child_id)), child_id)
 
     for node_dict in dict_struct["nodes"]:
-        model = init_model(
-            node_dict["model_type"], _decode_values(node_dict["values"])
-        )
+        model = init_model(node_dict["model_type"], _decode_values(node_dict["values"]))
         position = node_dict.get("position")
         node_id = network.node(
             model,

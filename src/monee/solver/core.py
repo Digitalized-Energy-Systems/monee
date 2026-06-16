@@ -1,6 +1,8 @@
+import logging
 import math
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
+from types import SimpleNamespace
 
 import networkx as nx
 import pandas
@@ -17,11 +19,16 @@ from monee.model import (
     MultiGridCompoundModel,
     Network,
     Node,
+    PostProcess,
     Var,
     WaterPipe,
 )
 from monee.model.child import GridFormingMixin
+from monee.model.grid import GasGrid, PowerGrid, WaterGrid
+from monee.model.node import Junction
 from monee.problem.core import OptimizationProblem
+
+_log = logging.getLogger(__name__)
 
 # Display helpers (also imported by simulation.timeseries)
 
@@ -60,6 +67,15 @@ _TABLE_CSS = (
     "</style>"
 )
 
+# Public, documented aliases for the shared result-rendering helpers above.
+# The simulation layer (timeseries / multi_period) renders the same kind of
+# result tables, so these are part of the solver's public reporting surface
+# rather than backend-private internals.  The underscore-prefixed names are
+# retained for backwards compatibility.
+display_df = _display_df
+col_summary = _col_summary
+TABLE_CSS = _TABLE_CSS
+
 
 @dataclass
 class SolverResult:
@@ -86,6 +102,18 @@ class SolverResult:
     violations: dict[str, float] = field(default_factory=dict)
     solver_status: str | None = None
     termination_condition: str | None = None
+    #: Which solve mode actually ran: ``"simulation"`` (square IMODE=1
+    #: steady-state) or ``"optimization"`` (IMODE=3). When a simulation was
+    #: requested but the model was not square, this reads ``"optimization"`` -
+    #: the signal that the fast steady-state path silently fell back. ``None``
+    #: when the backend doesn't distinguish the two (e.g. Pyomo).
+    mode_used: str | None = None
+    #: Diagnostic infeasibility report when the solve failed (``success=False``);
+    #: ``None`` on success. Declaring it as a field gives both backends a single,
+    #: documented place to surface the report instead of the GEKKO-raises /
+    #: Pyomo-dynamic-attribute split. (GEKKO additionally raises
+    #: ``GekkoSolveError`` carrying the same report.)
+    infeasibility_report: object | None = None
 
     def summary(self):
         return repr(self)
@@ -173,7 +201,7 @@ class SolverResult:
                 index=False,
                 border=0,
                 classes=[],
-                na_rep="—",
+                na_rep="-",
                 float_format=lambda x: f"{x:.5g}",
             )
             sections.append(
@@ -226,6 +254,8 @@ class SolverInterface(ABC):
         draw_debug=False,
         exclude_unconnected_nodes=False,
         step_state=None,
+        simulation=False,
+        formulation=None,
     ) -> SolverResult:
         """
         Solve the energy-flow / optimisation problem for *input_network*.
@@ -237,6 +267,16 @@ class SolverInterface(ABC):
             draw_debug: If ``True``, emit debug output from the solver.
             exclude_unconnected_nodes: Legacy flag; prefer islanding config.
             step_state: Inter-step state from the previous timeseries step.
+            simulation: If ``True``, square the model (pin phantom vars, drop
+                operational flow limits) and solve it as a steady-state
+                simulation. GEKKO runs this as IMODE=1 (falling back to IMODE=3
+                if not square); backends without a simulation mode ignore it.
+            formulation: Solve-time formulation override - a registry key
+                string (``"smooth_nlp"``, ``"convex_miqcqp"``, …), a
+                :class:`~monee.model.formulation.core.NetworkFormulation`, or a
+                sequence of either (merged left to right). Overrides the
+                network-level ``apply_formulation`` choice; components without
+                any choice fall back to ``DEFAULT_SIMULATION_FORMULATION``.
 
         Returns:
             A :class:`SolverResult` with updated variable values and result DataFrames.
@@ -439,6 +479,242 @@ def filter_intermediate_eqs(eqs):
     return [eq for eq in eqs if type(eq) is not IntermediateEq]
 
 
+def filter_bool_eqs(eqs, context=None):
+    """Drop Python-``bool`` sentinel equations, identically for both backends.
+
+    An ``equations()`` body can collapse a constraint to a Python ``bool`` when
+    a component is over-deactivated (e.g. an attribute overwritten by a
+    :class:`Const` so ``a == b`` evaluates eagerly):
+
+    * ``True``  → tautology, a no-op; dropped silently.
+    * ``False`` → structurally infeasible (contradictory) constraint. Feeding it
+      into model construction either crashes the build (GEKKO) or - if it were
+      kept - injects an unsatisfiable constraint. We drop it so the
+      load-shedding objective can resolve the situation, but emit a warning so
+      the modelling error is surfaced rather than silently hidden.
+
+    *context* is an optional label (e.g. ``"node_3"``) included in the warning.
+    """
+    kept = []
+    for eq in eqs:
+        if isinstance(eq, bool):
+            if eq is False:
+                _log.warning(
+                    "Dropping always-false (structurally infeasible) equation%s; "
+                    "this usually means a node/branch was over-deactivated.",
+                    f" in {context}" if context is not None else "",
+                )
+            continue
+        kept.append(eq)
+    return kept
+
+
+def _process_intermediate_eqs(m, model, equations):
+    """Replace each ``Intermediate``-typed attribute with the backend's named
+    intermediate sub-expression (``m.Intermediate``), for backends whose model
+    object exposes that hook (GEKKO, CasADi)."""
+    for intermediate_eq in [eq for eq in equations if type(eq) is IntermediateEq]:
+        attr_intermediate_var = getattr(model, intermediate_eq.attr)
+        eq = (
+            intermediate_eq.eq() if callable(intermediate_eq.eq) else intermediate_eq.eq
+        )
+        if type(attr_intermediate_var) is Intermediate:
+            i = m.Intermediate(eq)
+            setattr(model, intermediate_eq.attr, i)
+
+
+class OperatorEquationAssembly:
+    """Equation-assembly passes shared by backends whose model object exposes
+    operator-overloaded symbols plus GEKKO-style hooks (``m.sin``/``m.cos``/...,
+    ``m.Equation(s)``, ``m.Obj``, ``m.Intermediate``): the GEKKO and CasADi
+    backends.
+
+    monee's component ``equations()`` bodies are backend-agnostic - they build
+    expressions from the injected variable objects and the math hooks passed in -
+    so a single set of passes drives both backends. Pyomo and Gurobi construct
+    constraints differently (their own intermediate handling / objective
+    accumulation) and provide their own overrides instead of using this mixin.
+
+    Hosts must set ``self._simulation`` (the per-solve simulation flag, read by
+    the branch pass to drop operational flow limits) and may override
+    :meth:`_pwl_impl`.
+    """
+
+    def _pwl_impl(self, m):
+        """Backend piecewise-linear/spline implementation handed to
+        ``branch.equations(..., pwl_impl=...)``. ``None`` when the backend has no
+        PWL support (e.g. CasADi); GEKKO overrides it with a cubic-spline impl."""
+        return None
+
+    def process_internal_oxf_components(self, m, network):
+        for constraint in network.constraints:
+            m.Equations(
+                filter_bool_eqs([constraint(network)], context="network constraint")
+            )
+        obj = None
+        for objective in network.objectives:
+            if obj is not None:
+                obj = obj + objective(network)
+            else:
+                obj = objective(network)
+        if obj is not None:
+            m.Obj(obj)
+
+    def process_oxf_components(
+        self,
+        m,
+        network: "Network",
+        optimization_problem,
+        period_index=None,
+    ):
+        if optimization_problem.constraints is not None and (
+            not optimization_problem.constraints.empty
+        ):
+            m.Equations(
+                filter_bool_eqs(
+                    optimization_problem.constraints.all(
+                        network, period_index=period_index
+                    ),
+                    context="optimization problem constraint",
+                )
+            )
+        obj = None
+        for objective in (
+            optimization_problem.objectives.all(network, period_index=period_index)
+            if optimization_problem.objectives is not None
+            else []
+        ):
+            if obj is not None:
+                obj = obj + objective
+            else:
+                obj = objective
+        if obj is not None:
+            m.Obj(obj)
+
+    def process_equations_compounds(self, m, network, compounds, ignored_nodes):
+        for compound in compounds:
+            if ignore_compound(compound, ignored_nodes):
+                continue
+
+            equations = compound.equations(network)
+
+            for expr in compound.minimize(network, sqrt_impl=m.sqrt):
+                m.Obj(expr)
+
+            if equations is not None:
+                compound_eqs = filter_bool_eqs(
+                    as_iter(equations), context=f"compound_{compound.id}"
+                )
+                _process_intermediate_eqs(m, compound, compound_eqs)
+                m.Equations(filter_intermediate_eqs(compound_eqs))
+
+    def process_equations_nodes_childs(
+        self, m, network: "Network", nodes, ignored_nodes
+    ):
+        for node in nodes:
+            if ignore_node(node, network, ignored_nodes):
+                continue
+            node_childs = network.childs_by_ids(node.child_ids)
+            grid = node.grid
+
+            from_branches = [
+                network.branch_by_id(branch_id).model
+                for branch_id in node.from_branch_ids
+                if not ignore_branch(
+                    network.branch_by_id(branch_id), network, ignored_nodes
+                )
+            ]
+            to_branches = [
+                network.branch_by_id(branch_id).model
+                for branch_id in node.to_branch_ids
+                if not ignore_branch(
+                    network.branch_by_id(branch_id), network, ignored_nodes
+                )
+            ]
+            connected_childs = [
+                child.model
+                for child in node_childs
+                if not ignore_child(child, ignored_nodes)
+            ]
+            equations = as_iter(
+                node.equations(
+                    grid,
+                    from_branches,
+                    to_branches,
+                    connected_childs,
+                    sin_impl=m.sin,
+                    cos_impl=m.cos,
+                    if_impl=m.if2,
+                    abs_impl=m.abs3,
+                    max_impl=m.max2,
+                    sign_impl=m.sign2,
+                    sqrt_impl=m.sqrt,
+                )
+            )
+            for expr in node.minimize(
+                grid, from_branches, to_branches, connected_childs, sqrt_impl=m.sqrt
+            ):
+                m.Obj(expr)
+
+            node_eqs = filter_bool_eqs(equations, context=f"node_{node.id}")
+            _process_intermediate_eqs(m, node.model, node_eqs)
+            m.Equations(filter_intermediate_eqs(node_eqs))
+
+            for child in node_childs:
+                if ignore_child(child, ignored_nodes):
+                    continue
+                child_eqs = filter_bool_eqs(
+                    as_iter(child.equations(grid, node)),
+                    context=f"child_{child.id}",
+                )
+
+                for expr in child.minimize(grid, node, sqrt_impl=m.sqrt):
+                    m.Obj(expr)
+
+                _process_intermediate_eqs(m, child.model, child_eqs)
+                m.Equations(filter_intermediate_eqs(child_eqs))
+
+    def process_equations_branches(
+        self, m, network, branches, ignored_nodes, objs_exprs
+    ):
+        pwl_impl = self._pwl_impl(m)
+        for branch in branches:
+            if ignore_branch(branch, network, ignored_nodes):
+                continue
+            grid = branch.grid
+
+            branch_eqs = as_iter(
+                branch.equations(
+                    grid,
+                    network.node_by_id(branch.from_node_id).model,
+                    network.node_by_id(branch.to_node_id).model,
+                    sin_impl=m.sin,
+                    cos_impl=m.cos,
+                    if_impl=m.if3,
+                    abs_impl=m.abs3,
+                    max_impl=m.max2,
+                    sign_impl=m.sign3,
+                    log_impl=m.log10,
+                    sqrt_impl=m.sqrt,
+                    exp_impl=m.exp,
+                    pwl_impl=pwl_impl,
+                    simulation=self._simulation,
+                )
+            )
+
+            for expr in branch.minimize(
+                grid,
+                network.node_by_id(branch.from_node_id).model,
+                network.node_by_id(branch.to_node_id).model,
+                sqrt_impl=m.sqrt,
+            ):
+                objs_exprs.append(expr)
+
+            branch_eqs = filter_bool_eqs(branch_eqs, context=f"branch_{branch.id}")
+            _process_intermediate_eqs(m, branch.model, branch_eqs)
+            m.Equations(filter_intermediate_eqs(branch_eqs))
+
+
 def inject_nans(target: GenericModel):
     """Replace Var/Const fields with NaN placeholders; zero regulation."""
     for key, value in target.__dict__.items():
@@ -469,16 +745,82 @@ def mark_ignored_components(network, ignored_nodes):
             compound.ignored = True
             # Children attached to *external* nodes (e.g. SubHG at the heat
             # node of a broken CHPHG) wouldn't be caught by the node-loop
-            # above — their host node may still be in the active grid.
+            # above - their host node may still be in the active grid.
             # Mark them directly so ignore_child filters them out.
             for sc in compound.subcomponents:
                 if isinstance(sc, Child):
                     sc.ignored = True
 
 
+def _carrier_node_ids(network: Network, ignored_nodes, grid_type) -> set:
+    """Active, non-ignored node ids belonging to a single hydraulic carrier."""
+    return {
+        n.id
+        for n in network.nodes
+        if isinstance(n.grid, grid_type) and n.active and n.id not in ignored_nodes
+    }
+
+
+def _carrier_islands(network: Network, node_ids: set):
+    """Connected components of the active-pipe subgraph restricted to *node_ids*
+    (pipes only ever join same-carrier nodes, so each component is one island)."""
+    g = nx.Graph()
+    g.add_nodes_from(node_ids)
+    for branch in network.branches:
+        if (
+            branch.active
+            and branch.from_node_id in node_ids
+            and branch.to_node_id in node_ids
+        ):
+            g.add_edge(branch.from_node_id, branch.to_node_id)
+    return nx.connected_components(g)
+
+
+def _island_grid_forming_node(network: Network, island):
+    """Return the id of an island node carrying an active grid-forming child, or
+    ``None`` if the island has no pressure/temperature reference."""
+    for nid in island:
+        node = network.node_by_id(nid)
+        childs = network.childs_by_ids(node.child_ids)
+        if any(isinstance(c.model, GridFormingMixin) and c.active for c in childs):
+            return nid
+    return None
+
+
+def pin_floating_hydraulic_gauges(network: Network, ignored_nodes):
+    """Pin one node's pressure per energized gas/water island that has no
+    grid-forming source.
+
+    A grid-forming child (``ExtHydrGrid`` / ``GridFormingSource``) pins an
+    absolute pressure reference via its ``overwrite``. An island with none
+    references pressure only through the (relative) pipe pressure-drop equations
+    - its absolute level is a free gauge degree of freedom, which IPOPT can only
+    resolve by regularising a rank-deficient block (slow, fragile). Such islands
+    arise routinely: e.g. a heat-exchanger-fed return loop, where the coupling HE
+    transfers mass and temperature but imposes no pressure drop.
+
+    Pinning any one node's pressure to the carrier nominal removes the
+    rank-deficiency without changing flows or pressure *differences* (only the
+    arbitrary absolute level). Temperature is left free: where present it is
+    referenced through the heat-exchanger coupling, not a nodal pin.
+    """
+    for grid_type in (GasGrid, WaterGrid):
+        ids = _carrier_node_ids(network, ignored_nodes, grid_type)
+        for island in _carrier_islands(network, ids):
+            if _island_grid_forming_node(network, island) is not None:
+                continue
+            node = network.node_by_id(min(island))
+            nominal = getattr(node.grid, "nominal_pressure_pu", 1.0)
+            model = node.model
+            if isinstance(getattr(model, "pressure_pu", None), Var):
+                model.pressure_pu = Const(nominal)
+            if isinstance(getattr(model, "pressure_squared_pu", None), Var):
+                model.pressure_squared_pu = Const(nominal**2)
+
+
 def mark_heat_balance_slacks(network: Network, ignored_nodes):
     """Mark one grid-forming reference node per energized heat island so its
-    (dependent) nodal heat balance is dropped — the heat carrier's slack,
+    (dependent) nodal heat balance is dropped - the heat carrier's slack,
     mirroring the free mass-flow / angle slack the other carriers already have.
 
     The nodal heat balances over a connected island are linearly dependent (one
@@ -486,30 +828,74 @@ def mark_heat_balance_slacks(network: Network, ignored_nodes):
     connected components of the active water subgraph; references are
     ``GridFormingMixin`` children, matching the islanding extension's criterion.
     """
-    from monee.model.grid import WaterGrid
-
-    heat_ids = {
-        n.id
-        for n in network.nodes
-        if isinstance(n.grid, WaterGrid) and n.active and n.id not in ignored_nodes
-    }
+    heat_ids = _carrier_node_ids(network, ignored_nodes, WaterGrid)
     if not heat_ids:
         return
-    g = nx.Graph()
-    g.add_nodes_from(heat_ids)
-    for branch in network.branches:
-        if not branch.active:
-            continue
-        a, b = branch.from_node_id, branch.to_node_id
-        if a in heat_ids and b in heat_ids:
-            g.add_edge(a, b)
-    for island in nx.connected_components(g):
+    for island in _carrier_islands(network, heat_ids):
+        ref = _island_grid_forming_node(network, island)
+        if ref is not None:
+            network.node_by_id(ref).model._drop_heat_balance = True
+
+
+def _island_has_free_mass_flow_child(network: Network, island) -> bool:
+    """True if any active child on the island leaves its mass flow to the solver
+    (slack-like: ``ExtHydrGrid`` / ``ConsumeHydrGrid``), i.e. the island can
+    absorb an arbitrary through-flow."""
+    for nid in island:
+        node = network.node_by_id(nid)
+        for child in network.childs_by_ids(node.child_ids):
+            if child.active and isinstance(
+                getattr(child.model, "mass_flow_kgs", None), Var
+            ):
+                return True
+    return False
+
+
+def mark_he_flow_prescription(network: Network, ignored_nodes):
+    """Decide for each dynamic heat exchanger (compound-internal ``SubHE``)
+    whether it prescribes its design mass flow or yields to the network.
+
+    A SubHE bridges water islands through its multi-grid control node (the
+    islands stay separate because :func:`_carrier_islands` only spans pure
+    water nodes). In a supply/return structure every adjacent island has a
+    slack child with a free mass flow (``ExtHydrGrid`` / ``ConsumeHydrGrid``),
+    so the through-flow is otherwise undetermined and the design flow must
+    prescribe it. If any adjacent island lacks such a slack (e.g. a
+    fixed-mass-flow ``Sink`` fed only through the compound), that island's
+    balance already fixes the through-flow - pinning it to the design flow
+    would over-determine the system, so the HE yields and its energy balance
+    runs on the actual flow instead (``_he_flow_prescribed = False``)."""
+    dyn_he_branches = [
+        b
+        for b in network.branches
+        if b.active and getattr(b.model, "_calc_mass_flow", False)
+    ]
+    if not dyn_he_branches:
+        return
+    water_ids = _carrier_node_ids(network, ignored_nodes, WaterGrid)
+    node_to_island: dict = {}
+    island_free: list = []
+    for idx, island in enumerate(_carrier_islands(network, water_ids)):
+        island_free.append(_island_has_free_mass_flow_child(network, island))
         for nid in island:
-            node = network.node_by_id(nid)
-            childs = network.childs_by_ids(node.child_ids)
-            if any(isinstance(c.model, GridFormingMixin) and c.active for c in childs):
-                node.model._drop_heat_balance = True
-                break
+            node_to_island[nid] = idx
+    for branch in dyn_he_branches:
+        endpoints = [branch.from_node_id, branch.to_node_id]
+        # Water-side endpoints contribute their island directly; the other
+        # endpoint is the compound's control node - collect the islands of its
+        # water neighbours (reached via the compound's transfer branches).
+        adjacent = {node_to_island[nid] for nid in endpoints if nid in node_to_island}
+        for cn_id in (nid for nid in endpoints if nid not in node_to_island):
+            for b in network.branches:
+                if not b.active:
+                    continue
+                if b.from_node_id == cn_id and b.to_node_id in node_to_island:
+                    adjacent.add(node_to_island[b.to_node_id])
+                elif b.to_node_id == cn_id and b.from_node_id in node_to_island:
+                    adjacent.add(node_to_island[b.from_node_id])
+        branch.model._he_flow_prescribed = (
+            all(island_free[i] for i in adjacent) if adjacent else True
+        )
 
 
 def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
@@ -559,6 +945,31 @@ def withdraw_vars(withdraw_fn, nodes, branches, compounds, network):
             withdraw_fn(child.model)
     for compound in compounds:
         withdraw_fn(compound.model)
+
+
+def apply_post_process(model: GenericModel) -> None:
+    """Evaluate the model's :class:`PostProcess` attributes from its solved
+    values - runs after ``withdraw_vars`` and fully outside the solver. Lambdas
+    receive a namespace, so they read fields as ``v.vm_pu`` (not ``v["vm_pu"]``)."""
+    vals = SimpleNamespace(**model.values)
+    for attr in model.__dict__.values():
+        if isinstance(attr, PostProcess):
+            try:
+                attr.value = attr.fn(vals)
+            except Exception:
+                attr.value = float("nan")
+
+
+def apply_post_process_all(nodes, branches, compounds, network) -> None:
+    """Run :func:`apply_post_process` over every solved component."""
+    for branch in branches:
+        apply_post_process(branch.model)
+    for node in nodes:
+        apply_post_process(node.model)
+        for child in network.childs_by_ids(node.child_ids):
+            apply_post_process(child.model)
+    for compound in compounds:
+        apply_post_process(compound.model)
 
 
 def _copy_var_values(src, dst) -> None:
@@ -635,9 +1046,9 @@ def ignore_node(node, network: Network, ignored_nodes):
 
 def ignore_child(child, ignored_nodes):
     # ``child.ignored`` is set by ``mark_ignored_components`` when the child
-    # belongs to an ignored compound — without consulting it here, the child
+    # belongs to an ignored compound - without consulting it here, the child
     # would still appear in its host node's balance equations as a free Var
-    # (e.g. SubHG.q_mw_heat absorbing arbitrary heat at the heat node).
+    # (e.g. SubHG.heat_mw absorbing arbitrary heat at the heat node).
     return (not child.active) or (child.node_id in ignored_nodes) or child.ignored
 
 
@@ -647,9 +1058,9 @@ def ignore_compound(compound, ignored_nodes):
         value in ignored_nodes for value in compound.connected_to.values()
     )
     # Internal subcomponent turned off (e.g. user deactivates one of a
-    # CHPHG's internal transfer branches): the ControlNode's power balance —
-    # degenerate when its from-branches are gone — otherwise collides with
-    # its el_mw / q_mw_heat coupling rows and the LP is infeasible.
+    # CHPHG's internal transfer branches): the ControlNode's power balance -
+    # degenerate when its from-branches are gone - otherwise collides with
+    # its el_mw / heat_mw coupling rows and the LP is infeasible.
     internal_broken = any(
         not getattr(sc, "active", True) for sc in compound.subcomponents
     )
@@ -665,7 +1076,7 @@ def ignore_compound(compound, ignored_nodes):
 
 def generate_real_topology(nx_net):
     net_copy = nx_net.copy()
-    # keys=True targets the exact parallel edge — not always key 0.
+    # keys=True targets the exact parallel edge - not always key 0.
     for u, v, key, data in nx_net.edges(keys=True, data=True):
         branch = data["internal_branch"]
         if not branch.active or (
@@ -730,8 +1141,6 @@ def find_ignored_nodes(network: Network, islanding_config=None):
                 if islanding_config is not None and isinstance(
                     child.model, GridFormingMixin
                 ):
-                    from monee.model.grid import GasGrid, PowerGrid, WaterGrid
-
                     node_grid = int_node.grid
                     carrier_enabled = (
                         (
@@ -760,8 +1169,6 @@ def find_ignored_nodes(network: Network, islanding_config=None):
     # Iterate to fixed point. Skipped under islanding (topology there includes
     # inactive backup branches, so degree overstates connectivity).
     if islanding_config is None:
-        from monee.model.node import Junction
-
         # Compound port children (e.g. SubHG on a CHPHG heat node) carry no
         # demand of their own; they must not keep an otherwise-isolated
         # junction alive.
@@ -770,6 +1177,19 @@ def find_ignored_nodes(network: Network, islanding_config=None):
             for compound in network.compounds
             for sub in compound.subcomponents
             if isinstance(sub, Child)
+        }
+
+        # Attachment ports of active multi-grid compounds: remove_cps strips
+        # the compound's transfer branches from the pruning copy, so these
+        # nodes look like childless dead-ends here - but in the real solve the
+        # compound re-attaches and carries flow through them. Ports whose grid
+        # connection is genuinely gone are still caught by the
+        # connected-component check above.
+        compound_attachment_node_ids = {
+            node_id
+            for compound in network.compounds
+            if compound.active and isinstance(compound.model, MultiGridCompoundModel)
+            for node_id in compound.connected_to.values()
         }
 
         def _has_real_active_child(int_node):
@@ -783,8 +1203,8 @@ def find_ignored_nodes(network: Network, islanding_config=None):
         def _has_mass_flow_anchor(int_node):
             """A Junction at degree ≤ 1 needs a mass-flow-contributing child
             (Sink / Source / ExtHydrGrid) to anchor mass conservation.
-            Heat-only children (HeatLoad / HeatGenerator) don't qualify —
-            with no outgoing pipe their q_mw_heat term has no enthalpy
+            Heat-only children (HeatLoad / HeatGenerator) don't qualify -
+            with no outgoing pipe their heat_mw term has no enthalpy
             stream to balance against and the junction becomes infeasible."""
             for cid in int_node.child_ids:
                 if cid in compound_port_child_ids:
@@ -792,7 +1212,7 @@ def find_ignored_nodes(network: Network, islanding_config=None):
                 child = without_cps.child_by_id(cid)
                 if not child.active:
                     continue
-                if "mass_flow" in getattr(child.model, "vars", {}):
+                if "mass_flow_kgs" in getattr(child.model, "vars", {}):
                     return True
             return False
 
@@ -800,6 +1220,8 @@ def find_ignored_nodes(network: Network, islanding_config=None):
             new_stubs = set()
             for node_id in topology.nodes:
                 if node_id in ignored_nodes:
+                    continue
+                if node_id in compound_attachment_node_ids:
                     continue
                 int_node: Node = topology.nodes[node_id]["internal_node"]
                 active_degree = sum(
@@ -812,7 +1234,7 @@ def find_ignored_nodes(network: Network, islanding_config=None):
                     new_stubs.add(node_id)
                     continue
                 # Mass-balance dead-end: Junction at degree ≤ 1 whose only
-                # children are heat-only (q_mw_heat) — see _has_mass_flow_anchor.
+                # children are heat-only (heat_mw) - see _has_mass_flow_anchor.
                 if isinstance(int_node.model, Junction) and not _has_mass_flow_anchor(
                     int_node
                 ):
@@ -822,3 +1244,172 @@ def find_ignored_nodes(network: Network, islanding_config=None):
             ignored_nodes.update(new_stubs)
 
     return ignored_nodes
+
+
+# ---------------------------------------------------------------------------
+# Inter-step state carriers
+# ---------------------------------------------------------------------------
+# StepState (sequential timeseries, plain floats) and PeriodState (multi-period,
+# live solver vars) live here - in the solver's low-level core - rather than in
+# the simulation layer, because both solver backends accept a ``step_state`` and
+# must reference these types.  Hosting them here keeps the dependency direction
+# one-way (simulation -> solver) and avoids a circular import; the historical
+# import path ``monee.simulation.step_state`` re-exports them unchanged.
+
+
+def _find_model(net, component_id, attr=None):
+    """Return the model for *component_id*. Disambiguates node/child id collisions
+    by preferring a model that actually carries *attr*."""
+    candidates = []
+    for node in net.nodes:
+        if node.id == component_id:
+            candidates.append(node.model)
+        for child in net.childs_by_ids(node.child_ids):
+            if child.id == component_id:
+                candidates.append(child.model)
+    for branch in net.branches:
+        if branch.id == component_id:
+            candidates.append(branch.model)
+    for compound in net.compounds:
+        if compound.id == component_id:
+            candidates.append(compound.model)
+
+    if not candidates:
+        return None
+    if attr is not None and len(candidates) > 1:
+        with_attr = [m for m in candidates if hasattr(m, attr)]
+        if with_attr:
+            return with_attr[0]
+    return candidates[0]
+
+
+def _extract_value(val):
+    """Return a plain float from *val* (Var, Intermediate, float, int, or None)."""
+    if val is None:
+        return None
+
+    if isinstance(val, (Var, Intermediate, PostProcess)):
+        return val.value
+    if isinstance(val, (int, float)):
+        return float(val)
+    return val
+
+
+class InterStepState(ABC):
+    """Abstract base. ``step``: negative = relative to current, non-negative = absolute."""
+
+    dt_h: float = 1.0
+
+    @abstractmethod
+    def get(self, component_id, attr: str, step: int = -1):
+        """Float (StepState) / live var (PeriodState), or None if no data."""
+
+    def has(self, component_id, attr: str) -> bool:
+        return self.get(component_id, attr) is not None
+
+
+class StepState(InterStepState):
+    """All previously-solved network copies (sequential timeseries). ``get`` returns floats.
+
+    ``initial_state`` falls back when no prior solve has written the attribute.
+    ``max_steps`` caps how many solved networks are retained (``None`` =
+    unlimited): each network is a full copy, so an open-ended run (e.g. a
+    :class:`~monee.simulation.Stepper` paced by a co-simulation framework)
+    would otherwise grow memory without bound. Absolute ``step`` indices keep
+    their meaning when old networks are dropped; reading a dropped step falls
+    back to ``initial_state``."""
+
+    def __init__(
+        self, initial_state: dict | None = None, max_steps: int | None = None
+    ) -> None:
+        if max_steps is not None and max_steps < 1:
+            raise ValueError(f"max_steps must be >= 1 or None, got {max_steps}")
+        self._networks: list = []
+        self._dropped: int = 0
+        self._max_steps = max_steps
+        self.dt_h: float = 1.0
+        self._initial_state: dict = dict(initial_state) if initial_state else {}
+
+    def push(self, net) -> None:
+        self._networks.append(net)
+        if self._max_steps is not None and len(self._networks) > self._max_steps:
+            del self._networks[0]
+            self._dropped += 1
+
+    def get(self, component_id, attr: str, step: int = -1):
+        if self._networks:
+            if step < 0:
+                net = self._networks[step] if -step <= len(self._networks) else None
+            else:
+                # Absolute index: shift by dropped prefix; dropped → fallback.
+                idx = step - self._dropped
+                net = self._networks[idx] if 0 <= idx < len(self._networks) else None
+            if net is not None:
+                model = _find_model(net, component_id, attr)
+                if model is not None:
+                    val = _extract_value(getattr(model, attr, None))
+                    if val is not None:
+                        return val
+        return self._initial_state.get((component_id, attr))
+
+    def __len__(self) -> int:
+        """Logical number of solved steps (including dropped ones)."""
+        return self._dropped + len(self._networks)
+
+    def __repr__(self) -> str:
+        n = len(self)
+        return f"StepState({n} step{'s' if n != 1 else ''})"
+
+
+class PeriodState(InterStepState):
+    """All period networks (multi-period). ``get`` returns live solver vars after
+    injection, so reading from another period becomes an algebraic cross-period
+    constraint. Both past and future absolute indices are accessible.
+
+    .. note::
+       Absolute (non-negative) ``step`` indices are **window-local** under
+       :func:`~monee.simulation.multi_period.run_mpc`: ``self._networks`` is only
+       the current rolling window's networks, so ``step=0`` means the first
+       period of *this window*, not the global start of the run. This differs
+       from :class:`StepState`, whose absolute indices stay globally meaningful
+       via its dropped-prefix bookkeeping. Relative (negative) lookbacks behave
+       identically in both. Prefer relative indices in ``inter_step_equations``
+       if you need MPC-window-independent behaviour.
+    """
+
+    def __init__(
+        self,
+        networks: list,
+        current_t: int,
+        dt_h: float = 1.0,
+        initial_state: dict | None = None,
+    ) -> None:
+        self._networks = networks
+        self.current_t = current_t
+        self.dt_h = dt_h
+        self._initial_state: dict = initial_state or {}
+
+    @property
+    def T(self) -> int:
+        return len(self._networks)
+
+    def get(self, component_id, attr: str, step: int = -1):
+        actual_t = (self.current_t + step) if step < 0 else step
+
+        if actual_t < 0:
+            key = (component_id, attr)
+            if key in self._initial_state:
+                return self._initial_state[key]
+            return None
+
+        try:
+            net = self._networks[actual_t]
+        except IndexError:
+            return None
+        model = _find_model(net, component_id, attr)
+        if model is None:
+            return None
+        return getattr(model, attr, None)
+
+    def __repr__(self) -> str:
+        return f"PeriodState(T={self.T}, current_t={self.current_t}, dt_h={self.dt_h})"

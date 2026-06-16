@@ -10,7 +10,12 @@ from monee.model import Network
 from monee.model.core import Var
 from monee.simulation.core import solve
 from monee.simulation.step_state import StepState
-from monee.solver.core import _TABLE_CSS, _col_summary, _display_df
+
+# Shared result-rendering helpers, imported from the solver's public reporting
+# surface (the simulation layer renders the same kind of result tables).
+from monee.solver.core import TABLE_CSS as _TABLE_CSS
+from monee.solver.core import col_summary as _col_summary
+from monee.solver.core import display_df as _display_df
 from monee.solver.dispatch import resolve_solver
 
 _log = logging.getLogger(__name__)
@@ -530,24 +535,6 @@ class TimeseriesResult:
         )
 
 
-def apply_to_by_id(component, data: dict, timestep: int) -> None:
-    if component.id in data:
-        for attr, series in data[component.id].items():
-            setattr(component.model, attr, series[timestep])
-
-
-def apply_to_child(child, timeseries_data: TimeseriesData, timestep: int) -> None:
-    timeseries_data.apply_to_child(child, timestep)
-
-
-def apply_to_branch(branch, timeseries_data: TimeseriesData, timestep: int) -> None:
-    timeseries_data.apply_to_branch(branch, timestep)
-
-
-def apply_to_compound(compound, timeseries_data: TimeseriesData, timestep: int) -> None:
-    timeseries_data.apply_to_compound(compound, timestep)
-
-
 class StepHook(ABC):
     """Pre/post-step callbacks for timeseries runs. Both methods are optional no-ops."""
 
@@ -568,6 +555,242 @@ class StepHook(ABC):
         base_net: Network,
     ) -> None:
         """Called after the step's solve (success or failure)."""
+
+
+def _is_casadi_solver(solver) -> bool:
+    """True if *solver* is a CasADi backend instance (without hard-requiring the
+    optional casadi package: if casadi is absent the solver cannot be one)."""
+    try:
+        from monee.solver.casadi import CasADiSolver
+    except ImportError:
+        return False
+    return isinstance(solver, CasADiSolver)
+
+
+_TEMPORAL_METHODS = (
+    "inter_step_equations",
+    "inter_temporal_equations",
+    "inter_period_equations",
+)
+
+
+def _network_has_temporal_coupling(net: Network) -> bool:
+    """True if any component model/formulation or extension contributes
+    inter-step temporal coupling (storage SOC, ramp limits, linepack, LTC).
+
+    Models and formulations only define the temporal methods when they actually
+    couple across steps (the base classes do not), so ``hasattr`` is a reliable
+    signal there. Extensions declare no-op temporal methods on their base, so we
+    instead check whether the method is *overridden*.
+    """
+    from monee.model.extension.core import NetworkAspect
+
+    def _comp_temporal(comp) -> bool:
+        if any(hasattr(comp.model, m) for m in _TEMPORAL_METHODS):
+            return True
+        formulation = getattr(comp, "formulation", None)
+        return formulation is not None and any(
+            hasattr(formulation, m) for m in _TEMPORAL_METHODS
+        )
+
+    for node in net.nodes:
+        if _comp_temporal(node):
+            return True
+        for child in net.childs_by_ids(node.child_ids):
+            if _comp_temporal(child):
+                return True
+    for branch in net.branches:
+        if _comp_temporal(branch):
+            return True
+    for compound in net.compounds:
+        if _comp_temporal(compound):
+            return True
+    for ext in net.extensions:
+        if any(
+            getattr(type(ext), m, None) is not getattr(NetworkAspect, m, None)
+            for m in _TEMPORAL_METHODS
+        ):
+            return True
+    return False
+
+
+def _casadi_reuse_eligible(
+    net, solver, optimization_problem, step_hooks, timeseries_data, solver_kwargs
+) -> bool:
+    """Whether the build-once / re-solve CasADi graph-reuse path can replace the
+    per-step rebuild loop and produce identical results.
+
+    The parametric reuse driver only handles memory-less, id-addressed series on
+    a plain power flow, so it is gated to exactly those cases; anything else
+    (optimisation problem, step hooks observing temporal state, temporal coupling
+    in the network, name-addressed or compound series, or solver kwargs it cannot
+    honour) falls back to the standard loop.
+    """
+    if not _is_casadi_solver(solver):
+        return False
+    if optimization_problem is not None or step_hooks:
+        return False
+    # The reuse driver carries no inter-step state, so any temporal coupling
+    # (storage/linepack/LTC) must go through the per-step loop instead.
+    if _network_has_temporal_coupling(net):
+        return False
+    # CasADiTimeseries declares only id-addressed child/node/branch series as
+    # parameters; name-addressed and compound series are not wired.
+    td = timeseries_data
+    if (
+        td._child_name_to_series
+        or td._branch_name_to_series
+        or td._compound_id_to_series
+        or td._compound_name_to_series
+    ):
+        return False
+    # Only kwargs the reuse driver understands may be present.
+    if set(solver_kwargs) - {"simulation", "formulation"}:
+        return False
+    return True
+
+
+def _run_casadi_reuse(
+    net,
+    timeseries_data,
+    steps,
+    on_step_error,
+    progress_callback,
+    datetime_index,
+    solver_kwargs,
+) -> "TimeseriesResult":
+    """Build the CasADi NLP + IPOPT solver once and re-solve each step with a
+    warm start (no per-step rebuild/recompile). Equivalent results to the
+    standard loop for the gated cases (see :func:`_casadi_reuse_eligible`)."""
+    from monee.solver.casadi import CasADiTimeseries
+
+    ts = CasADiTimeseries(
+        net,
+        timeseries_data,
+        formulation=solver_kwargs.get("formulation"),
+        simulation=solver_kwargs.get("simulation", False),
+        steps=steps,
+    )
+    step_results: list[StepResult] = []
+    for step in range(steps):
+        try:
+            sr = StepResult(step=step, result=ts.step_result(step))
+        except Exception as exc:
+            if on_step_error == "raise":
+                raise
+            _log.warning("Step %d failed: %s", step, exc)
+            sr = StepResult(step=step, result=None, failed=True, error=exc)
+        step_results.append(sr)
+        if progress_callback is not None:
+            progress_callback(step, steps)
+    return TimeseriesResult(step_results, datetime_index=datetime_index)
+
+
+def _is_gurobipy_solver(solver) -> bool:
+    """True if *solver* is the native gurobipy backend instance (without
+    hard-requiring gurobipy: if it's absent the solver cannot be one)."""
+    try:
+        from monee.solver.gurobipy import GurobipySolver
+    except ImportError:
+        return False
+    return isinstance(solver, GurobipySolver)
+
+
+def _extension_needs_step0_structure_switch(net) -> bool:
+    """True if any active extension emits a STRUCTURALLY different first-step
+    equation (e.g. LumpedThermalCapacitance(first_step_steady_state=True) emits
+    ``net_heat == 0`` at step 0 vs the inertia equation later). The build-once
+    parameter model cannot switch equation structure between steps (its carried
+    state is a fixed Var that is never None), so such cases must use the rebuild
+    loop. Detected generically via a private flag rather than by type."""
+    for ext in net.extensions:
+        if getattr(ext, "_first_step_steady_state", False):
+            return True
+    return False
+
+
+def _gurobipy_reuse_eligible(
+    net,
+    solver,
+    optimization_problem,
+    step_hooks,
+    timeseries_data,
+    solver_kwargs,
+    datetime_index,
+) -> bool:
+    """Whether the build-once / re-bound-per-step gurobipy model-reuse path can
+    replace the per-step rebuild loop and produce identical results.
+
+    Unlike the CasADi fast path, the gurobipy driver *does* wire inter-step
+    temporal coupling (storage SoC, the LTC extension, linepack) as per-step
+    parameters, so temporally-coupled networks stay eligible. It is gated out of
+    the cases it does not reproduce identically: an optimisation problem, step
+    hooks observing temporal state, name-addressed or compound series (only
+    id-addressed child/node/branch series are declared as parameters), solver
+    kwargs it cannot honour, and a custom ``datetime_index`` (the persistent
+    model bakes ``dt_h`` in at build time, so non-default/variable step spacing
+    is left to the rebuild loop).
+    """
+    if not _is_gurobipy_solver(solver):
+        return False
+    if optimization_problem is not None or step_hooks:
+        return False
+    if datetime_index is not None:
+        return False
+    # Build-once param model can't reproduce an extension's step-0 structural
+    # switch (e.g. LTC first_step_steady_state); leave those to the rebuild loop.
+    if _extension_needs_step0_structure_switch(net):
+        return False
+    td = timeseries_data
+    if (
+        td._child_name_to_series
+        or td._branch_name_to_series
+        or td._compound_id_to_series
+        or td._compound_name_to_series
+    ):
+        return False
+    if set(solver_kwargs) - {"simulation", "formulation"}:
+        return False
+    return True
+
+
+def _run_gurobipy_reuse(
+    net,
+    solver,
+    timeseries_data,
+    steps,
+    on_step_error,
+    progress_callback,
+    datetime_index,
+    solver_kwargs,
+) -> "TimeseriesResult":
+    """Build the gurobipy model once and re-bound + re-solve each step (carrying
+    state and the integer solution forward) instead of rebuilding every step.
+    Equivalent results to the standard loop for the gated cases (see
+    :func:`_gurobipy_reuse_eligible`)."""
+    from monee.solver.gurobipy import GurobipyTimeseries
+
+    ts = GurobipyTimeseries(
+        net,
+        timeseries_data,
+        formulation=solver_kwargs.get("formulation"),
+        simulation=solver_kwargs.get("simulation", False),
+        steps=steps,
+        params=solver._params,
+    )
+    step_results: list[StepResult] = []
+    for step in range(steps):
+        try:
+            sr = StepResult(step=step, result=ts.step_result(step))
+        except Exception as exc:
+            if on_step_error == "raise":
+                raise
+            _log.warning("Step %d failed: %s", step, exc)
+            sr = StepResult(step=step, result=None, failed=True, error=exc)
+        step_results.append(sr)
+        if progress_callback is not None:
+            progress_callback(step, steps)
+    return TimeseriesResult(step_results, datetime_index=datetime_index)
 
 
 def run(
@@ -618,13 +841,69 @@ def run(
     # Resolve solver/backend once up-front; reused across every step.
     resolved_solver = resolve_solver(solver, backend=backend)
 
+    # CasADi graph-reuse fast path: build the NLP + IPOPT solver once and
+    # re-solve each step with a warm start instead of rebuilding/recompiling the
+    # whole model every step. Gated to the cases that produce identical results
+    # (plain power flow, id-addressed memory-less series, no hooks/optimisation).
+    if solve_flag and _casadi_reuse_eligible(
+        net,
+        resolved_solver,
+        optimization_problem,
+        step_hooks,
+        timeseries_data,
+        solver_kwargs,
+    ):
+        _log.debug("run_timeseries: using CasADi build-once graph-reuse fast path")
+        return _run_casadi_reuse(
+            net,
+            timeseries_data,
+            steps,
+            on_step_error,
+            progress_callback,
+            datetime_index,
+            solver_kwargs,
+        )
+
+    # gurobipy model-reuse fast path: build the gurobipy model once and re-bound
+    # the time-varying inputs (and carried inter-step state) per step instead of
+    # reconstructing the whole model every step. Gated to the cases that produce
+    # identical results (see :func:`_gurobipy_reuse_eligible`).
+    if solve_flag and _gurobipy_reuse_eligible(
+        net,
+        resolved_solver,
+        optimization_problem,
+        step_hooks,
+        timeseries_data,
+        solver_kwargs,
+        datetime_index,
+    ):
+        _log.debug("run_timeseries: using gurobipy build-once model-reuse fast path")
+        return _run_gurobipy_reuse(
+            net,
+            resolved_solver,
+            timeseries_data,
+            steps,
+            on_step_error,
+            progress_callback,
+            datetime_index,
+            solver_kwargs,
+        )
+
     step_results: list[StepResult] = []
     step_state = StepState()
 
     for step in range(steps):
-        if datetime_index is not None and step > 0:
-            delta = datetime_index[step] - datetime_index[step - 1]
-            step_state.dt_h = delta.total_seconds() / 3600.0
+        if datetime_index is not None:
+            # First step uses the first interval (matching the multi-period
+            # engine's _resolve_dt_h); later steps use the prior interval. Both
+            # engines then agree on dt_h for identical inputs. Falls back to the
+            # default 1.0 only when a single timestamp leaves no interval.
+            if step > 0:
+                delta = datetime_index[step] - datetime_index[step - 1]
+                step_state.dt_h = delta.total_seconds() / 3600.0
+            elif len(datetime_index) > 1:
+                delta = datetime_index[1] - datetime_index[0]
+                step_state.dt_h = delta.total_seconds() / 3600.0
 
         for hook in step_hooks:
             if isinstance(hook, StepHook):

@@ -7,7 +7,7 @@ import networkx as nx
 import plotly.graph_objects as go
 
 import monee.model as mm  # kept for Network type hint only
-from monee.model.core import Intermediate, IntermediateEq, Var
+from monee.model.core import Intermediate, IntermediateEq, PostProcess, Var
 
 # Import shared theme and layout helpers from result_visualization so the two
 # functions always look identical.
@@ -32,7 +32,36 @@ _SKIP_ATTRS: frozenset[str] = frozenset({"active", "independent", "ignored"})
 
 # Pyomo-like solver objects – hide these from hover text (they carry no useful
 # design-time information for the user).
-_SOLVER_TYPES = (Var, Intermediate, IntermediateEq)
+_SOLVER_TYPES = (Var, Intermediate, IntermediateEq, PostProcess)
+
+
+# Marker scaling
+
+
+def _adaptive_marker_px(graph: nx.Graph, pos: dict, nominal_px: int = 1000) -> float:
+    """Marker size (px) scaled to the layout density so symbols don't swallow
+    their neighbours. Uses the lower-quartile edge length relative to the
+    layout extent (different layout engines produce wildly different absolute
+    coordinates, so fixed pixel sizes only suit one of them)."""
+    if len(pos) < 2:
+        return 24.0
+    xs = [p[0] for p in pos.values()]
+    ys = [p[1] for p in pos.values()]
+    extent = max(max(xs) - min(xs), max(ys) - min(ys))
+    if extent <= 0:
+        return 24.0
+    edge_lengths = sorted(
+        ((pos[u][0] - pos[v][0]) ** 2 + (pos[u][1] - pos[v][1]) ** 2) ** 0.5
+        for u, v in graph.edges()
+    )
+    if not edge_lengths:
+        return 24.0
+    # 10th-percentile edge length: sizes markers to survive the densest
+    # region (e.g. a meshed electrical cluster) without collapsing everywhere
+    # else; the true minimum may be a near-coincident node pair, so avoid it.
+    short_edge = edge_lengths[len(edge_lengths) // 10]
+    # Markers at most ~65% of a short edge, in pixels of the nominal plot size.
+    return max(8.0, min(20.0, 0.65 * short_edge / extent * nominal_px))
 
 
 # Model parameter extraction
@@ -205,6 +234,7 @@ def plot_network(
     """
     graph: nx.Graph = network._network_internal
     pos = _compute_layout(graph, network, use_monee_positions)
+    marker_px = _adaptive_marker_px(graph, pos)
 
     # Node data – collected per grid type
     grid_data: dict[str, dict] = {
@@ -243,7 +273,7 @@ def plot_network(
                 showlegend=False,
                 marker=dict(
                     symbol=_GRID_SYMBOL[gtype],
-                    size=42,
+                    size=1.5 * marker_px,
                     color=color,
                     opacity=0.10,
                     line=dict(width=0),
@@ -262,12 +292,15 @@ def plot_network(
                 hovertext=d["hover"],
                 hoverinfo="text",
                 name=_GRID_LABEL[gtype],
+                # The curated legend_entries below carry the legend; without
+                # this the legend lists every grid type twice.
+                showlegend=False,
                 marker=dict(
                     symbol=_GRID_SYMBOL[gtype],
-                    size=24,
+                    size=marker_px,
                     color=color,
                     opacity=0.75,
-                    line=dict(width=3, color=color),
+                    line=dict(width=max(1.0, marker_px / 12), color=color),
                 ),
             )
         )
@@ -340,7 +373,7 @@ def plot_network(
         hoverinfo="text",
         showlegend=False,
         marker=dict(
-            size=9,
+            size=max(4.0, 0.35 * marker_px),
             color=mid_colors,
             symbol="circle",
             opacity=0.85,
@@ -435,6 +468,8 @@ def plot_network(
     )
 
     if write_to is not None:
-        fig.write_image(write_to)
+        # Fixed export size matching the nominal-pixel basis of the adaptive
+        # marker scaling (interactive autosize stays untouched).
+        fig.write_image(write_to, width=1230, height=1000)
 
     return fig

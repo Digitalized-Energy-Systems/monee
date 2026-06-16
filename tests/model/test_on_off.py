@@ -1,8 +1,11 @@
+import math
+
 from monee import mm, mx, run_energy_flow
 from monee.model import Var
 
 
 def test_on_off_el():
+    # GIVEN
     net = mm.Network()
 
     bus_0 = mx.create_bus(net)
@@ -29,15 +32,20 @@ def test_on_off_el():
         constraints=[my_constraint],
     )
 
-    result = run_energy_flow(net)
-
+    # WHEN
+    result = run_energy_flow(net, solver="apopt")
     print(result)
-    assert result.dataframes["PowerLine"]["p_from_mw"][1] == 0
+
+    # THEN
+    assert result.success
+
+    assert math.isclose(result.dataframes["PowerLine"]["p_from_mw"][1], 0, abs_tol=1e-9)
     assert result.dataframes["PowerLine"]["on_off"][1] == 0
     assert result.dataframes["PowerLine"]["on_off"][0] == 1
 
 
 def test_on_off_water():
+    # GIVEN
     net = mm.Network()
 
     j_0 = mx.create_water_junction(net)
@@ -62,19 +70,23 @@ def test_on_off_water():
         on_off=Var(1, max=1, min=0, integer=True, name="on_off"),
         constraints=[my_constraint],
     )
-    from monee import PyomoSolver
 
-    result = run_energy_flow(net, solver=PyomoSolver())
-
+    # WHEN
+    result = run_energy_flow(net, solver="scip")
     print(result)
-    assert result.dataframes["Sink"]["mass_flow"][0] < 0.000001
+
+    # THEN
+    assert result.success
+
+    assert result.dataframes["Sink"]["mass_flow_kgs"][0] < 0.000001
     assert (
-        result.dataframes["WaterPipe"]["mass_flow"][1] < 0.01
-        and result.dataframes["WaterPipe"]["mass_flow"][1] > -0.0009
+        result.dataframes["WaterPipe"]["mass_flow_kgs"][1] < 0.01
+        and result.dataframes["WaterPipe"]["mass_flow_kgs"][1] > -0.0009
     )
 
 
 def test_on_off_gas():
+    # GIVEN
     net = mm.Network()
 
     j_0 = mx.create_gas_junction(net)
@@ -88,7 +100,7 @@ def test_on_off_gas():
     def my_constraint(line, grid, fn, tn, **kwargs):
         return line.on_off == 0
 
-    mx.create_gas_pipe(net, j_0, j_1, diameter_m=0.1, length_m=1000, roughness=0.001)
+    mx.create_gas_pipe(net, j_0, j_1, diameter_m=0.1, length_m=1000, roughness_m=0.001)
 
     mx.create_gas_pipe(
         net,
@@ -100,13 +112,18 @@ def test_on_off_gas():
         constraints=[my_constraint],
     )
 
-    result = run_energy_flow(net)
-
+    # WHEN  (integer line switching needs an integer-aware solver, as in
+    # test_on_off_el; the default IPOPT backend - CasADi or GEKKO - relaxes the
+    # binary, so on_off would not come back exactly 0/1.)
+    result = run_energy_flow(net, solver="apopt")
     print(result)
 
-    assert result.dataframes["Sink"]["mass_flow"][0] == 0
+    # THEN
+    assert result.success
+
+    assert math.isclose(result.dataframes["Sink"]["mass_flow_kgs"][0], 0, abs_tol=1e-9)
     assert (
-        result.dataframes["GasPipe"]["mass_flow"][1] < 0.001
-        and result.dataframes["GasPipe"]["mass_flow"][1] > -0.0009
+        result.dataframes["GasPipe"]["mass_flow_kgs"][1] < 0.001
+        and result.dataframes["GasPipe"]["mass_flow_kgs"][1] > -0.0009
     )
     assert result.dataframes["GasPipe"]["on_off"][1] == 0

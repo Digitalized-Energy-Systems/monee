@@ -1,32 +1,14 @@
-"""Tests: deactivating each individual component in the urban residential district grid.
-
-One component (branch or compound) is deactivated per test.  The solver must:
-  * not crash,
-  * NaN-out nodes that are no longer reachable from an ExtGrid, and
-  * leave the rest of the network solved.
-
-Topology (create_urban_district_net)
--------------------------------------
-Power  (20 kV):  B0(gen) – B1(slack) – B2 – B3(CHP bus), B2 – B4(P2H bus)
-Gas:             G0(ext) – G1 – G2(CHP) – G3(G2P sink), G1 – G4(P2G sink)
-Heat:            H0(ext) – H1 – H4  [H2–H3 via HeatExchangerLoad; H4–H5 via P2H]
-CPs:             CHP(G2→B3, H1/H2), P2H(B4, H4/H5), P2G(B0→G4), G2P(G3→B2)
-
-Note on P2G / G2P
-------------------
-P2G and G2P are MultiGridBranchModel branches and are stripped from the
-topology graph by ``remove_cps`` before connectivity is evaluated.
-Deactivating them never isolates any node — only the coupling equations are
-removed.  Both domain grids remain fully connected.
-"""
+"""Deactivate individual urban-district components; unreachable nodes must be NaN'd, the rest solved."""
 
 import math
 
 import monee.model as mm
 import monee.problem as mp
-from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.network import create_urban_district_net
 from monee.solver import PyomoSolver
+from tests.util import assert_junction_nan as _assert_jct_nan
+from tests.util import assert_junction_solved as _assert_jct_solved
 
 
 class _Ids:
@@ -50,11 +32,18 @@ def _build():
     pipe_g2_g3 = next(p for p in g_pipes if p.model.length_m == 250)
     pipe_g1_g4 = next(p for p in g_pipes if p.model.length_m == 200)
 
-    # Heat branches
+    # Heat branches: supply chain s1-s2-s3 (two 100 m pipes) plus the
+    # HeatExchangerLoad consumer bridging supply→return (s3→r1).
+    def _ends(branch):
+        return {
+            net.node_by_id(branch.from_node_id).name,
+            net.node_by_id(branch.to_node_id).name,
+        }
+
     w_pipes = net.branches_by_type(mm.WaterPipe)
-    pipe_h0_h1 = next(p for p in w_pipes if p.model.length_m == 150)
-    pipe_h1_h4 = next(p for p in w_pipes if p.model.length_m == 100)
-    he_h2_h3 = net.branches_by_type(mm.HeatExchangerLoad)[0]
+    pipe_s1_s2 = next(p for p in w_pipes if _ends(p) == {"s1", "s2"})
+    pipe_s2_s3 = next(p for p in w_pipes if _ends(p) == {"s2", "s3"})
+    he_s3_r1 = net.branches_by_type(mm.HeatExchangerLoad)[0]
 
     # Cross-domain branches
     p2g = net.branches_by_type(mm.PowerToGas)[0]
@@ -62,7 +51,6 @@ def _build():
 
     # Compounds
     chp = net.compounds_by_type(mm.CHP)[0]
-    p2h = net.compounds_by_type(mm.PowerToHeat)[0]
 
     # Node IDs derived from branches / compounds
     ids = _Ids()
@@ -78,12 +66,10 @@ def _build():
     ids.g3 = pipe_g2_g3.to_node_id
     ids.g4 = pipe_g1_g4.to_node_id
 
-    ids.h0 = pipe_h0_h1.from_node_id
-    ids.h1 = pipe_h0_h1.to_node_id
-    ids.h2 = he_h2_h3.from_node_id
-    ids.h3 = he_h2_h3.to_node_id
-    ids.h4 = pipe_h1_h4.to_node_id
-    ids.h5 = p2h.connected_to["heat_return_node_id"]
+    ids.s1 = pipe_s1_s2.from_node_id
+    ids.s2 = pipe_s1_s2.to_node_id
+    ids.s3 = pipe_s2_s3.to_node_id
+    ids.r1 = he_s3_r1.to_node_id
 
     # Component references
     ids.line_b0_b1 = line_b0_b1
@@ -94,13 +80,12 @@ def _build():
     ids.pipe_g1_g2 = pipe_g1_g2
     ids.pipe_g2_g3 = pipe_g2_g3
     ids.pipe_g1_g4 = pipe_g1_g4
-    ids.pipe_h0_h1 = pipe_h0_h1
-    ids.pipe_h1_h4 = pipe_h1_h4
-    ids.he_h2_h3 = he_h2_h3
+    ids.pipe_s1_s2 = pipe_s1_s2
+    ids.pipe_s2_s3 = pipe_s2_s3
+    ids.he_s3_r1 = he_s3_r1
     ids.p2g = p2g
     ids.g2p = g2p
     ids.chp = chp
-    ids.p2h = p2h
 
     return net, ids
 
@@ -108,15 +93,6 @@ def _build():
 def _bus_vm(result, nid):
     df = result.dataframes["Bus"]
     return df.loc[df["id"] == nid, "vm_pu_squared"].iloc[0]
-
-
-def _jct_t(result, nid):
-    df = result.dataframes["Junction"]
-    return df.loc[df["id"] == nid, "t_pu"].iloc[0]
-
-
-def _ctrl_t(result, name):
-    return result.dataframes[name]["t_pu"].iloc[0]
 
 
 def _assert_bus_nan(result, nid, label):
@@ -129,38 +105,18 @@ def _assert_bus_solved(result, nid, label):
     assert not math.isnan(v), f"{label}: expected solved vm_pu, got NaN"
 
 
-def _assert_jct_nan(result, nid, label):
-    v = _jct_t(result, nid)
-    assert math.isnan(v), f"{label}: expected NaN t_pu, got {v}"
-
-
-def _assert_jct_solved(result, nid, label):
-    v = _jct_t(result, nid)
-    assert not math.isnan(v), f"{label}: expected solved t_pu, got NaN"
-
-
-def _assert_ctrl_nan(result, name, label):
-    v = _ctrl_t(result, name)
-    assert math.isnan(v), f"{label}: expected NaN {name}.t_pu, got {v}"
-
-
-def _assert_ctrl_solved(result, name, label):
-    v = _ctrl_t(result, name)
-    assert not math.isnan(v), f"{label}: expected solved {name}.t_pu, got NaN"
-
-
 def _assert_converge(result):
     assert result.success
 
 
 def _solve(net):
-    net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+    net.apply_formulation(EL_MISOCP_FORMULATION)
     problem = mp.create_min_load_shedding_problem(
         # Force ext_grid to contribute nothing → only 1 MW generator feeds B2.
-        ext_grid_el_bounds=(0, 0),
+        bounds_ext_el=(0, 0),
         include_ext_grids=True,
         # Disable non-electric checks to keep the test focused.
-        check_temperature=False,
+        check_t=False,
         check_pressure=False,
     )
 
@@ -170,157 +126,253 @@ def _solve(net):
 
 
 def test_deactivate_line_b0_b1():
-    """Line B0–B1 off → B0 (generator bus, leaf) isolated; slack B1 remains solved."""
+    # GIVEN
     net, ids = _build()
     ids.line_b0_b1.active = False
+
+    # WHEN
     result = _solve(net)
     print(result)
+
+    # THEN
     _assert_converge(result)
+
+    # B0 (generator bus, leaf) isolated; slack B1 stays solved
     _assert_bus_nan(result, ids.b0, "B0")
     _assert_bus_solved(result, ids.b1, "B1")
 
 
 def test_deactivate_line_b1_b2():
-    """Line B1–B2 off → B2/B3/B4 subtree isolated (no path to slack); B1 solved."""
+    # GIVEN
     net, ids = _build()
     ids.line_b1_b2.active = False
+
+    # WHEN
     result = _solve(net)
     print(result.full())
+
+    # THEN
     _assert_converge(result)
+
+    # B2/B3/B4 subtree isolated (no path to slack)
     _assert_bus_nan(result, ids.b2, "B2")
     _assert_bus_nan(result, ids.b3, "B3")
     _assert_bus_nan(result, ids.b4, "B4")
+
     _assert_bus_solved(result, ids.b1, "B1")
 
 
 def test_deactivate_line_b2_b3():
-    """Line B2–B3 off → B3 (CHP power bus, leaf) isolated; CHP NaN'd, B2 solved."""
+    # GIVEN
     net, ids = _build()
     ids.line_b2_b3.active = False
+
+    # WHEN
     result = _solve(net)
     print(result.full())
+
+    # THEN
     _assert_converge(result)
+
+    # B3 (CHP power bus, leaf) isolated
     _assert_bus_nan(result, ids.b3, "B3")
     _assert_bus_solved(result, ids.b2, "B2")
 
 
 def test_deactivate_line_b2_b4():
-    """Line B2–B4 off → B4 (P2H power bus, leaf) isolated; P2H NaN'd, B2 solved."""
+    # GIVEN
     net, ids = _build()
     ids.line_b2_b4.active = False
+
+    # WHEN
     result = _solve(net)
+
+    # THEN
     _assert_converge(result)
+
+    # B4 (4 MW load bus, leaf) isolated
     _assert_bus_nan(result, ids.b4, "B4")
     _assert_bus_solved(result, ids.b2, "B2")
 
 
 def test_deactivate_gas_pipe_g0_g1():
-    """Pipe G0–G1 off → whole gas subtree {G1–G4} isolated; G0 ext solved."""
+    # GIVEN
     net, ids = _build()
     ids.pipe_g0_g1.active = False
+
+    # WHEN
     result = _solve(net)
+
+    # THEN
     _assert_converge(result)
+
+    # whole gas subtree {G1–G4} isolated; G0 ext stays solved
     _assert_jct_nan(result, ids.g1, "G1")
     _assert_jct_nan(result, ids.g4, "G4")
     _assert_jct_solved(result, ids.g0, "G0")
 
 
 def test_deactivate_gas_pipe_g1_g2():
-    """Pipe G1–G2 off → G2 (CHP gas node) and G3 isolated; G1 and G4 remain solved."""
+    # GIVEN
     net, ids = _build()
     ids.pipe_g1_g2.active = False
+
+    # WHEN
     result = _solve(net)
+
+    # THEN
     _assert_converge(result)
+
+    # G2 (CHP gas node) and G3 isolated
     _assert_jct_nan(result, ids.g2, "G2")
     _assert_jct_nan(result, ids.g3, "G3")
+
     _assert_jct_solved(result, ids.g1, "G1")
     _assert_jct_solved(result, ids.g4, "G4")
 
 
 def test_deactivate_gas_pipe_g2_g3():
-    """Pipe G2–G3 off → G3 (G2P gas node, leaf) isolated; G2 remains solved."""
+    # GIVEN
     net, ids = _build()
     ids.pipe_g2_g3.active = False
+
+    # WHEN
     result = _solve(net)
+
+    # THEN
     _assert_converge(result)
+
+    # G3 (G2P gas node, leaf) isolated. G2 stays solved: it is the CHP's gas
+    # attachment port and still feeds the CHP via the active G1-G2 pipe
+    # (attachment ports of active compounds are exempt from leaf-stub pruning).
     _assert_jct_nan(result, ids.g3, "G3")
     _assert_jct_solved(result, ids.g2, "G2")
+    _assert_jct_solved(result, ids.g1, "G1")
 
 
 def test_deactivate_gas_pipe_g1_g4():
-    """Pipe G1–G4 off → G4 (P2G gas node, leaf) isolated; G1 remains solved."""
+    # GIVEN
     net, ids = _build()
     ids.pipe_g1_g4.active = False
+
+    # WHEN
     result = _solve(net)
+
+    # THEN
     _assert_converge(result)
+
+    # G4 (P2G gas node, leaf) isolated
     _assert_jct_nan(result, ids.g4, "G4")
     _assert_jct_solved(result, ids.g1, "G1")
 
 
 def test_deactivate_water_pipe_h0_h1():
-    """Pipe H0–H1 off → entire heat subtree {H1–H5} isolated; power and gas intact."""
+    # GIVEN
     net, ids = _build()
-    ids.pipe_h0_h1.active = False
+    ids.pipe_s1_s2.active = False
+
+    # WHEN
     result = _solve(net)
+
+    # THEN
     _assert_converge(result)
-    _assert_jct_nan(result, ids.h1, "H1")
+
+    # s2 and s3 become a childless dead-end chain and are leaf-stub pruned.
+    # r1 stays solved: connectivity analysis replaces the CHP with a synthetic
+    # return→supply pipe r1→s1 (remove_cps), and r1's ConsumeHydrGrid anchors
+    # its mass balance. s1 ext stays solved; power and gas intact.
+    _assert_jct_nan(result, ids.s2, "s2")
+    _assert_jct_nan(result, ids.s3, "s3")
+    _assert_jct_solved(result, ids.r1, "r1")
+    _assert_jct_solved(result, ids.s1, "s1")
     _assert_bus_solved(result, ids.b1, "B1")
     _assert_jct_solved(result, ids.g0, "G0")
 
 
 def test_deactivate_water_pipe_h1_h4():
-    """Pipe H1–H4 off → H4 (P2H heat_node) and H5 isolated; P2H NaN'd, H1 solved."""
+    # GIVEN
     net, ids = _build()
-    ids.pipe_h1_h4.active = False
+    ids.pipe_s2_s3.active = False
+
+    # WHEN
     result = _solve(net)
+
+    # THEN
     _assert_converge(result)
-    _assert_jct_nan(result, ids.h4, "H4")
-    _assert_jct_solved(result, ids.h1, "H1")
+
+    # s3 (HE supply node) is cut off; s2 then becomes a childless degree-1
+    # stub and is pruned too. s1 (ext grid) and r1 (kept alive via the
+    # synthetic CHP return→supply link plus its ConsumeHydrGrid) stay solved.
+    _assert_jct_nan(result, ids.s3, "s3")
+    _assert_jct_nan(result, ids.s2, "s2")
+    _assert_jct_solved(result, ids.s1, "s1")
+    _assert_jct_solved(result, ids.r1, "r1")
 
 
 def test_deactivate_heat_exchanger_h2_h3():
-    """Heat exchanger H2–H3 off → H3 (return-side Sink, leaf) isolated."""
+    # GIVEN
     net, ids = _build()
-    ids.he_h2_h3.active = False
+    ids.he_s3_r1.active = False
+
+    # WHEN
     result = _solve(net)
+
+    # THEN
     _assert_converge(result)
-    _assert_jct_nan(result, ids.h3, "H3")
+
+    # Without the HE, the supply spur s3 (and then s2) is a childless
+    # dead-end chain and gets leaf-stub pruned. r1 is NOT isolated: the
+    # connectivity analysis keeps the CHP's return→supply link (remove_cps
+    # inserts a synthetic pipe r1→s1) and r1's ConsumeHydrGrid anchors it.
+    _assert_jct_nan(result, ids.s3, "s3")
+    _assert_jct_nan(result, ids.s2, "s2")
+    _assert_jct_solved(result, ids.r1, "r1")
+    _assert_jct_solved(result, ids.s1, "s1")
 
 
 def test_deactivate_p2g():
-    """P2G branch off → no isolation; power and gas grids remain fully solved."""
+    # GIVEN
     net, ids = _build()
     ids.p2g.active = False
+
+    # WHEN
     result = _solve(net)
+
+    # THEN
     _assert_converge(result)
+
+    # P2G is a coupling branch: no isolation, both grids stay solved
     _assert_bus_solved(result, ids.b1, "B1")
     _assert_jct_solved(result, ids.g0, "G0")
 
 
 def test_deactivate_g2p():
-    """G2P branch off → no isolation; power and gas grids remain fully solved."""
+    # GIVEN
     net, ids = _build()
     ids.g2p.active = False
+
+    # WHEN
     result = _solve(net)
+
+    # THEN
     _assert_converge(result)
+
+    # G2P is a coupling branch: no isolation, both grids stay solved
     _assert_bus_solved(result, ids.b1, "B1")
     _assert_jct_solved(result, ids.g0, "G0")
 
 
 def test_deactivate_chp_compound():
-    """CHP compound off → CHPControlNode NaN'd; heat and gas grids still solved."""
+    # GIVEN
     net, ids = _build()
     net.deactivate(ids.chp)
+
+    # WHEN
     result = _solve(net)
+
+    # THEN
     _assert_converge(result)
-    _assert_jct_solved(result, ids.h1, "H1")
+
+    # heat and gas grids still solved without the CHP
+    _assert_jct_solved(result, ids.s2, "s2")
     _assert_jct_solved(result, ids.g1, "G1")
-
-
-def test_deactivate_p2h_compound():
-    """P2H compound off → PowerToHeatControlNode NaN'd; heat side still solved."""
-    net, ids = _build()
-    net.deactivate(ids.p2h)
-    result = _solve(net)
-    _assert_converge(result)
-    _assert_jct_solved(result, ids.h4, "H4")

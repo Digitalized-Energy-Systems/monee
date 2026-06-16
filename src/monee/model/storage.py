@@ -6,7 +6,7 @@ timesteps; ``inter_step_equations`` couples it to the previous step.
 
 Load convention: positive = charging (consume from network), negative = discharging.
 
-Dispatch (``p_mw`` / ``mass_flow``) is a plain float by default — fixed setpoint
+Dispatch (``p_mw`` / ``mass_flow_kgs``) is a plain float by default - fixed setpoint
 in energy-flow solves. Call :meth:`make_controllable` (or
 ``OptimizationProblem.controllable_storages()``) to promote it to a Var.
 """
@@ -27,8 +27,8 @@ class ElectricStorage(ChildModel):
     Battery/electric storage attached to a power bus.
 
     SoC update: ``e_mwh(t) = e_mwh(t-1) + dt_h * p_mw(t)``. With efficiency
-    losses, ``p_mw = p_charge_mw - p_discharge_mw`` (both ≥ 0) and SoC uses
-    ``η_c * p_charge - p_discharge / η_d``.
+    losses, ``p_mw = p_charge_mw - p_discharge_mw`` (both :math:`\ge` 0) and SoC uses
+    :math:`\eta_c \cdot p_{charge} - p_{discharge} / \eta_d`.
     """
 
     def __init__(
@@ -55,7 +55,10 @@ class ElectricStorage(ChildModel):
             max=e_mwh_max,
             name="e_mwh",
         )
-        self._lossy = efficiency_charge != 1.0 or efficiency_discharge != 1.0
+        self._lossy = (
+            abs(efficiency_charge - 1.0) > 1e-12
+            or abs(efficiency_discharge - 1.0) > 1e-12
+        )
         self._p_min = -p_max_mw * regulation
         self._p_max = p_max_mw * regulation
 
@@ -87,7 +90,7 @@ class ElectricStorage(ChildModel):
             prev_e = self._e_mwh_initial
         if self._lossy:
             if isinstance(self.p_mw, (int, float)):
-                # Plain energy flow: fixed p_mw — sign-based efficiency.
+                # Plain energy flow: fixed p_mw - sign-based efficiency.
                 p = float(self.p_mw)
                 delta = (
                     dt_h * self.efficiency_charge * p
@@ -109,8 +112,8 @@ class GasStorage(ChildModel):
     """
     Pressurised gas storage at a gas junction.
 
-    SoC update: ``m_stored_kg(t) = m_stored_kg(t-1) + dt_s * mass_flow(t)``.
-    Lossy: ``mass_flow = flow_charge_kgs - flow_discharge_kgs`` with
+    SoC update: ``m_stored_kg(t) = m_stored_kg(t-1) + dt_s * mass_flow_kgs(t)``.
+    Lossy: ``mass_flow_kgs = flow_charge_kgs - flow_discharge_kgs`` with
     ``η_c * charge - discharge / η_d`` in the SoC update.
     """
 
@@ -119,7 +122,7 @@ class GasStorage(ChildModel):
         m_stored_kg_initial,
         m_stored_kg_max,
         flow_max_kgs,
-        mass_flow_initial=0.0,
+        mass_flow_initial_kgs=0.0,
         efficiency_charge=1.0,
         efficiency_discharge=1.0,
         regulation=1,
@@ -130,22 +133,25 @@ class GasStorage(ChildModel):
         self.regulation = regulation
         self.efficiency_charge = efficiency_charge
         self.efficiency_discharge = efficiency_discharge
-        self.mass_flow = float(mass_flow_initial)
+        self.mass_flow_kgs = float(mass_flow_initial_kgs)
         self.m_stored_kg = Var(
             m_stored_kg_initial,
             min=0,
             max=m_stored_kg_max,
             name="m_stored_kg",
         )
-        self._lossy = efficiency_charge != 1.0 or efficiency_discharge != 1.0
+        self._lossy = (
+            abs(efficiency_charge - 1.0) > 1e-12
+            or abs(efficiency_discharge - 1.0) > 1e-12
+        )
         self._flow_min = -flow_max_kgs * regulation
         self._flow_max = flow_max_kgs * regulation
 
     def make_controllable(self):
-        """Promote ``mass_flow`` (and loss-split vars if lossy) into solver Vars."""
-        current = self.mass_flow
+        """Promote ``mass_flow_kgs`` (and loss-split vars if lossy) into solver Vars."""
+        current = self.mass_flow_kgs
         val = float(current) if isinstance(current, (int, float)) else 0.0
-        self.mass_flow = Var(
+        self.mass_flow_kgs = Var(
             val, min=self._flow_min, max=self._flow_max, name="storage_mass_flow"
         )
         if self._lossy:
@@ -157,8 +163,8 @@ class GasStorage(ChildModel):
             )
 
     def equations(self, grid, node, **kwargs):
-        if self._lossy and isinstance(self.mass_flow, Var):
-            return [self.mass_flow == self.flow_charge_kgs - self.flow_discharge_kgs]
+        if self._lossy and isinstance(self.mass_flow_kgs, Var):
+            return [self.mass_flow_kgs == self.flow_charge_kgs - self.flow_discharge_kgs]
         return []
 
     def inter_temporal_equations(
@@ -169,8 +175,8 @@ class GasStorage(ChildModel):
         if prev_m is None:
             prev_m = self._m_stored_kg_initial
         if self._lossy:
-            if isinstance(self.mass_flow, (int, float)):
-                f = float(self.mass_flow)
+            if isinstance(self.mass_flow_kgs, (int, float)):
+                f = float(self.mass_flow_kgs)
                 delta = (
                     dt_s * self.efficiency_charge * f
                     if f >= 0
@@ -183,7 +189,7 @@ class GasStorage(ChildModel):
                 + dt_s * self.efficiency_charge * self.flow_charge_kgs
                 - dt_s * self.flow_discharge_kgs / self.efficiency_discharge,
             ]
-        return [self.m_stored_kg == prev_m + dt_s * self.mass_flow]
+        return [self.m_stored_kg == prev_m + dt_s * self.mass_flow_kgs]
 
 
 @model
@@ -191,7 +197,7 @@ class ThermalStorage(ChildModel):
     """
     Thermal storage (e.g. hot-water tank) at a water junction.
 
-    SoC update: ``m_stored_kg(t) = m_stored_kg(t-1) - loss·dt_h·m_stored_kg(t-1) + dt_s·mass_flow(t)``.
+    SoC update: ``m_stored_kg(t) = m_stored_kg(t-1) - loss*dt_h*m_stored_kg(t-1) + dt_s*mass_flow_kgs(t)``.
     """
 
     def __init__(
@@ -199,7 +205,7 @@ class ThermalStorage(ChildModel):
         m_stored_kg_initial,
         m_stored_kg_max,
         flow_max_kgs,
-        mass_flow_initial=0.0,
+        mass_flow_initial_kgs=0.0,
         loss_factor_per_h=0.0,
         regulation=1,
         **kwargs,
@@ -208,7 +214,7 @@ class ThermalStorage(ChildModel):
         self._m_stored_kg_initial = m_stored_kg_initial
         self.regulation = regulation
         self.loss_factor_per_h = loss_factor_per_h
-        self.mass_flow = float(mass_flow_initial)
+        self.mass_flow_kgs = float(mass_flow_initial_kgs)
         self.m_stored_kg = Var(
             m_stored_kg_initial,
             min=0,
@@ -219,10 +225,10 @@ class ThermalStorage(ChildModel):
         self._flow_max = flow_max_kgs * regulation
 
     def make_controllable(self):
-        """Promote ``mass_flow`` into a solver Var."""
-        current = self.mass_flow
+        """Promote ``mass_flow_kgs`` into a solver Var."""
+        current = self.mass_flow_kgs
         val = float(current) if isinstance(current, (int, float)) else 0.0
-        self.mass_flow = Var(
+        self.mass_flow_kgs = Var(
             val,
             min=self._flow_min,
             max=self._flow_max,
@@ -241,4 +247,4 @@ class ThermalStorage(ChildModel):
         if prev_m is None:
             prev_m = self._m_stored_kg_initial
         loss = prev_m * self.loss_factor_per_h * dt_h
-        return [self.m_stored_kg == prev_m - loss + dt_s * self.mass_flow]
+        return [self.m_stored_kg == prev_m - loss + dt_s * self.mass_flow_kgs]

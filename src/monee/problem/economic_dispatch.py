@@ -6,22 +6,7 @@ from monee.problem.core import (
     Objectives,
     OptimizationProblem,
 )
-
-
-def _gen_cost(model):
-    """``cost · (-p_mw)`` (sign-flipped because PowerGenerator stores p_mw negative)."""
-    cost = getattr(model, "cost", None)
-    if cost is None:
-        return 0
-    return cost * (-model.p_mw)
-
-
-def _ext_grid_cost(model):
-    """``cost · p_mw`` (positive p_mw = import)."""
-    cost = getattr(model, "cost", None)
-    if cost is None:
-        return 0
-    return cost * model.p_mw
+from monee.problem.utils import line_loading_limit
 
 
 def create_economic_dispatch_problem(
@@ -53,12 +38,10 @@ def create_economic_dispatch_problem(
 
     if check_vm:
         problem.bounds(bounds_vm, lambda m, _: type(m) is Bus, ["vm_pu"])
-    if check_lp:
-        problem.bounds(
-            bounds_lp,
-            lambda m, _: isinstance(m, GenericPowerBranch),
-            ["loading_from_percent", "loading_to_percent"],
-        )
+    # The line-loading cap is enforced by the line_loading_limit *constraint*
+    # below (added when check_lp). loading_*_pu are passive intermediates in
+    # every electricity formulation (NLP and MISOCP), so a var-bounds override on
+    # them is a no-op - the constraint is the single enforcement path.
 
     objectives = Objectives()
 
@@ -86,8 +69,6 @@ def create_economic_dispatch_problem(
     constraints = Constraints()
 
     if check_lp:
-        from monee.problem.utils import line_loading_limit
-
         constraints.select_types(GenericPowerBranch).equation(
             lambda model: line_loading_limit(model, "from", bounds_lp[1])
         ).equation(lambda model: line_loading_limit(model, "to", bounds_lp[1]))

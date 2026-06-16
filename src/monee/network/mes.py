@@ -1,16 +1,21 @@
 import random
 
+import networkx as nx
 from geopy import distance
 
 import monee.express as mx
 import monee.model as mm
+import monee.model.phys.core.hydraulics as hyd
+from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 
 REF_PA = 1000000
 REF_TEMP = 356
 DEFAULT_LENGTH = 100
 
-# Default lgas HHV: 15.3 kWh/kg · 3.6 MJ/kWh = 55.08 MJ/kg → 1 MW ≈ 1/55.08 kg/s.
-GAS_HHV_MJ_PER_KG = 15.3 * 3.6
+# Gas HHV [MJ/kg] for sizing gas demands from power magnitudes. Sourced from the
+# lgas grid definition so the sizing uses the SAME heating value as the coupling
+# physics (see monee.model.grid.DEFAULT_GAS_HHV_MJ_PER_KG).
+GAS_HHV_MJ_PER_KG = DEFAULT_GAS_HHV_MJ_PER_KG
 
 
 def _node_power_load_mw(power_net: mm.Network, node):
@@ -52,57 +57,98 @@ def create_heat_net_for_power(
     power_net,
     target_net,
     heat_deployment_rate,
-    mass_flow_rate=0.075,
+    mass_flow_rate_kgs=0.075,
     default_diameter_m=0.12,
     length_scale=1,
     default_length=DEFAULT_LENGTH,
     power_scale=1,
+    design_flow_headroom=1.5,
+    seed=None,
 ):
-    heat_grid = mm.create_water_grid("water")
-    heat_grid.t_ref = REF_TEMP
-    heat_grid.pressure_ref = REF_PA
+    rng = random.Random(seed) if seed is not None else random
+    heat_grid = mm.create_water_grid("water", t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA)
     target_net.set_default_grid("water", heat_grid)
 
     power_net_as_st = mm.to_spanning_tree(power_net)
     bus_index_to_junction_index = {}
     bus_index_to_end_junction_index = {}
+    node_demand_kgs = {}
 
     for node in power_net_as_st.nodes:
         junc_id = mx.create_junction(target_net, position=node.position, grid=heat_grid)
+        sink_mass_flow = mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10
+        node_demand_kgs[node.id] = sink_mass_flow
         mx.create_sink(
             target_net,
             junc_id,
-            mass_flow=mass_flow_rate + random.random() * mass_flow_rate / 10,
+            mass_flow_kgs=sink_mass_flow,
         )
         bus_index_to_junction_index[node.id] = junc_id
         bus_index_to_end_junction_index[node.id] = junc_id
-        deployment_c_value = random.random()
+        deployment_c_value = rng.random()
         if deployment_c_value < heat_deployment_rate:
             bus_index_to_end_junction_index[node.id] = mx.create_junction(
                 target_net, position=node.position, grid=heat_grid
             )
-            mx.create_heat_exchanger(
+            # Passive: an in-line device on the distribution run - the tree
+            # flow is already fixed by the downstream sinks, so a design-flow
+            # prescribing HeatExchanger would over-determine the hydraulics.
+            mx.create_passive_heat_exchanger(
                 target_net,
                 from_node_id=bus_index_to_junction_index[node.id],
                 to_node_id=bus_index_to_end_junction_index[node.id],
-                q_mw=(-1 if random.random() > 0.8 else 1)
+                q_mw=(-1 if rng.random() > 0.8 else 1)
                 * -0.1
-                * random.random()
+                * rng.random()
                 * power_scale,
+                diameter_m=default_diameter_m,
             )
+            end_sink_mass_flow = mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10
+            node_demand_kgs[node.id] += end_sink_mass_flow
             mx.create_sink(
                 target_net,
                 bus_index_to_end_junction_index[node.id],
-                mass_flow=mass_flow_rate + random.random() * mass_flow_rate / 10,
+                mass_flow_kgs=end_sink_mass_flow,
             )
+
+    # Capacity-based trunk sizing (same design as the auto_diameter mode of
+    # create_heat_supply_return_net_for_power): every tree pipe must carry the
+    # cumulative downstream sink demand, so size its diameter for that flow at
+    # the grid's design velocity_mps - floored at default_diameter_m so leaf pipes
+    # are never thinned. Without this, a flat default diameter (or the grid
+    # max_mass_flow_kgs) caps the slack trunk below total demand and the net is infeasible
+    # by construction.
+    root = power_net_as_st.first_node()
+    parent = {root: None}
+    undirected = nx.Graph(power_net_as_st.graph)
+    for p, c in nx.bfs_edges(undirected, source=root):
+        parent[c] = p
+    subtree_kgs = dict(node_demand_kgs)
+    for c in reversed(list(nx.topological_sort(nx.bfs_tree(undirected, root)))):
+        if parent.get(c) is not None:
+            subtree_kgs[parent[c]] += subtree_kgs[c]
+
+    def _trunk_diameter(downstream_kgs):
+        d = hyd.calc_min_diameter_for_mass_flow(
+            downstream_kgs * design_flow_headroom,
+            heat_grid.fluid_density_kg_per_m3,
+            heat_grid.v_max_mps,
+        )
+        return max(d, default_diameter_m)
+
     for branch in power_net_as_st.branches:
+        # The endpoint whose tree-parent is the other endpoint sits downstream.
+        if parent.get(branch.to_node_id) == branch.from_node_id:
+            downstream = subtree_kgs[branch.to_node_id]
+        else:
+            downstream = subtree_kgs[branch.from_node_id]
         from_node_id = bus_index_to_end_junction_index[branch.from_node_id]
         to_node_id = bus_index_to_junction_index[branch.to_node_id]
         mx.create_water_pipe(
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=default_diameter_m,
+            diameter_m=_trunk_diameter(downstream),
             length_m=get_length(
                 target_net,
                 branch,
@@ -112,15 +158,19 @@ def create_heat_net_for_power(
             )
             * length_scale,
             temperature_ext_k=296.15,
-            roughness=0.001,
+            roughness_m=0.001,
             grid=heat_grid,
         )
     mx.create_ext_hydr_grid(
         target_net,
-        node_id=bus_index_to_junction_index[power_net_as_st.first_node()],
+        node_id=bus_index_to_junction_index[root],
         t_k=REF_TEMP,
         name="Grid Connection Heat",
     )
+    # max_mass_flow_kgs is the grid-level per-branch cap: it must at least admit the slack
+    # trunk's design flow or the sized diameters are moot. Leaf pipes stay
+    # tightly capped through their velocity_mps-based per-pipe bound.
+    heat_grid.max_mass_flow_kgs = max(heat_grid.max_mass_flow_kgs, design_flow_headroom * subtree_kgs[root])
     return (bus_index_to_junction_index, bus_index_to_end_junction_index)
 
 
@@ -133,10 +183,13 @@ def create_gas_net_for_power(
     default_diameter_m=0.3,
     length_scale=1,
     default_length=100,
+    seed=None,
+    gas_type="lgas",
 ):
-    gas_grid = mm.create_gas_grid("gas", type="lgas")
-    gas_grid.pressure_ref = REF_PA
-    gas_grid.t_ref = REF_TEMP
+    rng = random.Random(seed) if seed is not None else random
+    gas_grid = mm.create_gas_grid(
+        "gas", type=gas_type, t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA
+    )
 
     target_net.set_default_grid("gas", gas_grid)
 
@@ -164,17 +217,17 @@ def create_gas_net_for_power(
             grid=gas_grid,
         )
     for node in power_net_as_st.nodes:
-        deployment_c_value = random.random()
+        deployment_c_value = rng.random()
         if deployment_c_value <= gas_deployment_rate:
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
-                mass_flow=round(0.1 + 0.5 * random.random() * scaling, 2),
+                mass_flow_kgs=round(0.1 + 0.5 * rng.random() * scaling, 2),
             )
     mx.create_source(
         target_net,
         node_id=bus_index_to_junction_index[power_net_as_st.first_node()],
-        mass_flow=10 * scaling * source_scaling,
+        mass_flow_kgs=10 * scaling * source_scaling,
     )
     mx.create_ext_hydr_grid(
         target_net,
@@ -191,11 +244,13 @@ def create_p2h_in_combined_generated_network(
     bus_to_heat_junc,
     end_bus_to_heat_junc,
     p2h_density,
+    seed=None,
 ):
+    rng = random.Random(seed) if seed is not None else random
     for power_node in net_power.nodes:
         heat_junc = bus_to_heat_junc[power_node.id]
         heat_junc_two = end_bus_to_heat_junc[power_node.id]
-        if random.random() <= p2h_density:
+        if rng.random() <= p2h_density:
             if heat_junc != heat_junc_two and new_mes_net.has_branch_between(
                 heat_junc, heat_junc_two
             ):
@@ -218,13 +273,15 @@ def create_chp_in_combined_generated_network(
     end_bus_to_heat_junc,
     bus_to_gas_junc,
     chp_density,
+    seed=None,
 ):
+    rng = random.Random(seed) if seed is not None else random
     for power_node in net_power.nodes:
         heat_junc = bus_to_heat_junc[power_node.id]
         heat_junc_two = end_bus_to_heat_junc[power_node.id]
         gas_junc = bus_to_gas_junc[power_node.id]
-        efficiency = 0.8 + random.random() / 10
-        if random.random() <= chp_density:
+        efficiency = 0.8 + rng.random() / 10
+        if rng.random() <= chp_density:
             if heat_junc != heat_junc_two and new_mes_net.has_branch_between(
                 heat_junc, heat_junc_two
             ):
@@ -235,7 +292,7 @@ def create_chp_in_combined_generated_network(
                     heat_node_id=heat_junc_two,
                     heat_return_node_id=heat_junc,
                     gas_node_id=gas_junc,
-                    mass_flow_setpoint=0.015 * random.random(),
+                    mass_flow_setpoint_kgs=0.015 * rng.random(),
                     diameter_m=0.035,
                     efficiency_power=efficiency / 2,
                     efficiency_heat=efficiency / 2,
@@ -243,17 +300,18 @@ def create_chp_in_combined_generated_network(
 
 
 def create_p2g_in_combined_generated_network(
-    new_mes_net, net_power, bus_to_gas_junc, p2g_density
+    new_mes_net, net_power, bus_to_gas_junc, p2g_density, seed=None
 ):
+    rng = random.Random(seed) if seed is not None else random
     for power_node in net_power.nodes:
         gas_junc = bus_to_gas_junc[power_node.id]
-        if random.random() <= p2g_density:
+        if rng.random() <= p2g_density:
             mx.create_p2g(
                 new_mes_net,
                 from_node_id=power_node.id,
                 to_node_id=gas_junc,
                 efficiency=0.7,
-                mass_flow_setpoint=0.045 * random.random(),
+                mass_flow_setpoint_kgs=0.045 * rng.random(),
             )
 
 
@@ -264,16 +322,32 @@ def generate_mes_based_on_power_net(
     chp_density=0.1,
     p2g_density=0.02,
     p2h_density=0.1,
+    seed=None,
 ):
+    # Derive a distinct sub-seed per builder so a single `seed` makes the whole
+    # generation deterministic without coupling the per-builder RNG streams.
+    if seed is not None:
+        ss = random.Random(seed)
+        heat_seed, gas_seed, p2h_seed, chp_seed, p2g_seed = (
+            ss.random() for _ in range(5)
+        )
+    else:
+        heat_seed = gas_seed = p2h_seed = chp_seed = p2g_seed = None
+
     new_mes_net = net_power.copy()
     bus_to_heat_junc, end_bus_to_heat_junc = create_heat_net_for_power(
-        net_power, new_mes_net, heat_deployment_rate
+        net_power, new_mes_net, heat_deployment_rate, seed=heat_seed
     )
     bus_to_gas_junc = create_gas_net_for_power(
-        net_power, new_mes_net, gas_deployment_rate
+        net_power, new_mes_net, gas_deployment_rate, seed=gas_seed
     )
     create_p2h_in_combined_generated_network(
-        new_mes_net, net_power, bus_to_heat_junc, end_bus_to_heat_junc, p2h_density
+        new_mes_net,
+        net_power,
+        bus_to_heat_junc,
+        end_bus_to_heat_junc,
+        p2h_density,
+        seed=p2h_seed,
     )
     create_chp_in_combined_generated_network(
         new_mes_net,
@@ -282,9 +356,10 @@ def generate_mes_based_on_power_net(
         end_bus_to_heat_junc,
         bus_to_gas_junc,
         chp_density,
+        seed=chp_seed,
     )
     create_p2g_in_combined_generated_network(
-        new_mes_net, net_power, bus_to_gas_junc, p2g_density
+        new_mes_net, net_power, bus_to_gas_junc, p2g_density, seed=p2g_seed
     )
     return new_mes_net
 
@@ -404,45 +479,47 @@ def create_monee_benchmark_net():
     # # # heat
     bus_index_to_junction_index, bus_index_to_end_junction_index = (
         create_heat_net_for_power(
-            pn, new_mes, 1, mass_flow_rate=1, default_diameter_m=0.16
+            pn, new_mes, 1, mass_flow_rate_kgs=1, default_diameter_m=0.16
         )
     )
     new_water_junc = mx.create_water_junction(new_mes)
     mx.create_sink(
         new_mes,
         new_water_junc,
-        mass_flow=0.05,
+        mass_flow_kgs=0.05,
     )
     new_water_junc_2 = mx.create_water_junction(new_mes)
     mx.create_sink(
         new_mes,
         new_water_junc_2,
-        mass_flow=0.05,
+        mass_flow_kgs=0.05,
     )
-    mx.create_heat_exchanger(
+    mx.create_passive_heat_exchanger(
         new_mes,
         from_node_id=new_water_junc,
         to_node_id=new_water_junc_2,
         q_mw=0.03,
+        diameter_m=0.16,
     )
     new_water_junc_3 = mx.create_water_junction(new_mes)
     mx.create_sink(
         new_mes,
         new_water_junc_3,
-        mass_flow=0.06,
+        mass_flow_kgs=0.06,
     )
-    mx.create_heat_exchanger(
+    mx.create_passive_heat_exchanger(
         new_mes,
         from_node_id=new_water_junc_2,
         to_node_id=new_water_junc_3,
         q_mw=0.03,
+        diameter_m=0.16,
     )
     mx.create_p2g(
         new_mes,
         from_node_id=node_4,
         to_node_id=bus_to_gas_junc[node_4],
         efficiency=0.7,
-        mass_flow_setpoint=1,
+        mass_flow_setpoint_kgs=1,
         regulation=0,
     )
     mx.create_chp(
@@ -451,7 +528,7 @@ def create_monee_benchmark_net():
         heat_node_id=bus_index_to_junction_index[node_0],
         heat_return_node_id=new_water_junc,
         gas_node_id=bus_to_gas_junc[node_3],
-        mass_flow_setpoint=0.005,
+        mass_flow_setpoint_kgs=0.005,
         diameter_m=0.1,
         efficiency_power=0.5,
         efficiency_heat=0.5,
@@ -520,12 +597,15 @@ def create_mv_multi_cigre():
         default_diameter_m=0.64,
         length_scale=0.001,
         default_length=100000,
+        # This reference grid was tuned for the pre-2026 methane-like gas; keep
+        # it on that gas so the bench net stays feasible under realistic lgas.
+        gas_type="methane",
     )
     create_heat_net_for_power(
         monee_net,
         new_mes,
         0.5,
-        mass_flow_rate=25,
+        mass_flow_rate_kgs=25,
         default_diameter_m=0.68,
         power_scale=100,
         length_scale=0.001,
@@ -540,7 +620,7 @@ def create_mv_multi_cigre():
         from_node_id=4,
         to_node_id=21,
         efficiency=0.7,
-        mass_flow_setpoint=0.5,
+        mass_flow_setpoint_kgs=0.5,
         regulation=0.1,
     )
     mx.create_chp(
@@ -549,7 +629,7 @@ def create_mv_multi_cigre():
         heat_node_id=43,
         heat_return_node_id=44,
         gas_node_id=25,
-        mass_flow_setpoint=0.5,
+        mass_flow_setpoint_kgs=0.5,
         diameter_m=0.3,
         efficiency_power=0.58,
         efficiency_heat=0.4,
@@ -598,10 +678,12 @@ def create_gas_tree_net_for_power(
 
     Returns ``{power_node_id → gas_junction_id}``.
     """
-    gas_grid = mm.create_gas_grid("gas", type="lgas")
-    gas_grid.pressure_ref = REF_PA
-    gas_grid.t_ref = REF_TEMP
+    gas_grid = mm.create_gas_grid(
+        "gas", type="lgas", t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA
+    )
     target_net.set_default_grid("gas", gas_grid)
+    # HHV [MJ/kg] of this grid's gas fluid (sizing matches the gas physics).
+    gas_hhv_mj = gas_grid.higher_heating_value_kwh_per_kg * 3.6
 
     power_net_as_st = mm.to_spanning_tree(power_net)
 
@@ -633,31 +715,31 @@ def create_gas_tree_net_for_power(
     for node in power_net_as_st.nodes:
         p_load_mw = _node_power_load_mw(power_net, node)
         if p_load_mw > 0 and gas_load_share > 0:
-            mass_flow = max(
-                min_load_kgs, p_load_mw * gas_load_share / GAS_HHV_MJ_PER_KG
+            mass_flow_kgs = max(
+                min_load_kgs, p_load_mw * gas_load_share / gas_hhv_mj
             )
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
-                mass_flow=round(mass_flow, 4),
+                mass_flow_kgs=round(mass_flow_kgs, 4),
             )
 
         p_gen_mw = _node_power_gen_mw(power_net, node)
         if p_gen_mw > 0 and gas_gen_share > 0:
-            mass_flow = max(
-                min_source_kgs, p_gen_mw * gas_gen_share / GAS_HHV_MJ_PER_KG
+            mass_flow_kgs = max(
+                min_source_kgs, p_gen_mw * gas_gen_share / gas_hhv_mj
             )
             mx.create_source(
                 target_net,
                 node_id=bus_index_to_junction_index[node.id],
-                mass_flow=round(mass_flow, 4),
+                mass_flow_kgs=round(mass_flow_kgs, 4),
             )
 
     if extra_mesh_pipes > 0:
         # Add resilience tie pipes: pick non-adjacent junction pairs uniformly
         # at random and connect them with a smaller-diameter / longer pipe.
         # The point is to give every junction more than one path to the
-        # slack so single pipe failures don't isolate large subtrees — the
+        # slack so single pipe failures don't isolate large subtrees - the
         # main reason additive CPs underperform on a tree layout.
         rng = random.Random(mesh_seed) if mesh_seed is not None else random
         junctions = list(bus_index_to_junction_index.values())
@@ -716,6 +798,10 @@ def create_heat_supply_return_net_for_power(
     return_pin_temperature=False,
     node_heat_gen_share=1.0,
     supply_slack_t_k=REF_TEMP,
+    auto_diameter=False,
+    auto_diameter_v_mps=None,
+    auto_diameter_headroom=1.5,
+    auto_min_diameter_m=None,
 ):
     """Build a supply/return DHS grid on the spanning tree of ``power_net``.
 
@@ -724,12 +810,12 @@ def create_heat_supply_return_net_for_power(
     bridge supply and return.
 
     ``heat_plant_mode``:
-      * ``"closing_pipe"`` (default) — single supply slack + return-to-supply
+      * ``"closing_pipe"`` (default) - single supply slack + return-to-supply
         closing pipe. Robust under the LinearHeatExchanger formulation but the
         slack t-pin collapses some supply/return ΔT.
-      * ``"two_port"`` — second slack at the return junction. Cleaner physics
+      * ``"two_port"`` - second slack at the return junction. Cleaner physics
         but needs McCormick-DHS (``node_based_heat_loads=True``).
-      * ``"screening"`` — closing pipe plus an oversized return Sink; faster
+      * ``"screening"`` - closing pipe plus an oversized return Sink; faster
         but mass flow is no longer physical.
 
     Capacities scale from electrical magnitudes via ``heat_load_share`` /
@@ -737,26 +823,47 @@ def create_heat_supply_return_net_for_power(
     In node-based mode ``node_heat_gen_share`` distributes :class:`HeatGenerator`
     children at every PowerGenerator bus (set to 0.0 for slack-only).
 
+    ``auto_diameter`` (default off) sizes each supply pipe - and the return /
+    closing pipe - to the mass flow it must carry instead of the flat
+    ``default_diameter_m``.  The required flow is the cumulative downstream
+    consumer demand (the same per-pipe ``subtree`` total used for the
+    McCormick-DHS envelopes), so trunk pipes near the slack come out wider than
+    leaf pipes.  Each diameter is the smallest that keeps the design velocity_mps at
+    ``auto_diameter_v_mps`` (defaults to the grid's ``v_max_mps``) after a
+    ``auto_diameter_headroom`` margin on the flow, floored at
+    ``auto_min_diameter_m`` (defaults to ``default_diameter_m`` so leaf pipes are
+    never thinned below the flat default).  Without it, a large radial DHS (e.g.
+    simbench MV-urban: ~256 kg/s through 0.12 m pipes) is physically infeasible -
+    the trunk flow exceeds the velocity_mps cap and the Darcy pressure drop blows up.
+
     Returns ``({power_node_id → supply_junction_id}, return_junction_id)``.
     """
-    heat_grid = mm.create_water_grid("water")
-    heat_grid.t_ref = REF_TEMP
-    heat_grid.pressure_ref = REF_PA
+    heat_grid = mm.create_water_grid("water", t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA)
     if node_based_heat_loads:
-        # Tighten McCormick-DHS envelopes — τ ∈ [0.75, 1.15] covers loaded
-        # consumers (τ_L≈0.76 empirically at S=20) and HG-injecting CPs
-        # (τ_U up to ~1.05); v=2 m/s is the typical DHS design velocity.
+        # Tighten McCormick-DHS envelopes
         heat_grid.t_pu_min_env = 0.75
         heat_grid.t_pu_max_env = 1.15
         heat_grid.v_max_mps = 2.0
     target_net.set_default_grid("water", heat_grid)
 
+    auto_v = (
+        auto_diameter_v_mps if auto_diameter_v_mps is not None else heat_grid.v_max_mps
+    )
+    auto_floor_m = (
+        auto_min_diameter_m if auto_min_diameter_m is not None else default_diameter_m
+    )
+
+    def _auto_diameter(mass_flow_kgs):
+        """Capacity-sized diameter [m] for ``mass_flow_kgs``, floored."""
+        d = hyd.calc_min_diameter_for_mass_flow(
+            mass_flow_kgs * auto_diameter_headroom, heat_grid.fluid_density_kg_per_m3, auto_v
+        )
+        return max(d, auto_floor_m)
+
     power_net_as_st = mm.to_spanning_tree(power_net)
 
     # Orient supply pipes outward from the slack via BFS so every supply
     # junction has an incoming pipe (McCormick-DHS pins direction).
-    import networkx as nx
-
     slack_root = (
         slack_node_id if slack_node_id is not None else power_net_as_st.first_node()
     )
@@ -769,9 +876,6 @@ def create_heat_supply_return_net_for_power(
     bfs_edges = list(nx.bfs_edges(undirected, source=slack_root))
 
     if node_based_heat_loads:
-        # Prune to the Steiner subtree on consumer buses — McCormick-DHS forces
-        # ``mass_flow=H_in=H_out=0`` at dead-end junctions, pinning τ to ambient
-        # and propagating cold back along the tree.
         consumer_buses = {
             node.id
             for node in power_net_as_st.nodes
@@ -825,22 +929,13 @@ def create_heat_supply_return_net_for_power(
             )
             * length_scale,
             temperature_ext_k=296.15,
-            roughness=0.001,
+            roughness_m=0.001,
             grid=heat_grid,
         )
         supply_pipe_for_edge[(p, c)] = pipe_id
 
-    # Two-pass HX construction so HX-Generator capacities can be scaled to
-    # match the total HX-Load demand.  Without this scaling the network is
-    # systematically heat-deficient on grids where load_share > gen_share or
-    # where the per-bus floors push loads above gens (e.g. simbench LV-rural3
-    # has Σload_p ≈ 0.37 MW, Σgen_p ≈ 0.21 MW).  In the closed supply/return
-    # loop with slack mass = 0 this caps q_delivered at ≈ Σ HX-Gen, so the
-    # consumers under-deliver even at regulation = 1.  With the scaling, the
-    # generator side has enough heat-injection capacity that an active
-    # economic / shedding objective can drive each consumer to its design.
-    load_specs = []  # list of (supply_id, q_mw)
-    gen_specs = []  # list of (supply_id, q_mw_raw)
+    load_specs = []  # list of (supply_id, heat_mw)
+    gen_specs = []  # list of (supply_id, heat_mw_raw)
     for node in power_net_as_st.nodes:
         if node.id not in bus_index_to_supply_junction:
             continue
@@ -867,61 +962,39 @@ def create_heat_supply_return_net_for_power(
         gen_scale = 1.0
 
     # Create the HX-Loads (or node-based HeatLoad children).
-    for supply_id, q_mw in load_specs:
+    for supply_id, heat_mw in load_specs:
         if node_based_heat_loads:
-            # Node-based HeatLoad child (uses ``q_mw_heat`` on the junction).
-            # Compatible with the McCormick-DHS formulation, which only
-            # accounts for branch enthalpy via WaterPipe ``H_in_mw/H_out_mw``
-            # and node-level ``q_mw_heat``.  Pair every HeatLoad with a
-            # water Sink that drains the consumer's design mass flow —
-            # without it the consumer junction is a hydraulic dead-end
-            # (incoming pipe pinned to zero flow by McCormick-DHS), which
-            # makes the heat-load demand structurally infeasible.
-            mx.create_heat_load(target_net, supply_id, q_mw=q_mw)
+            mx.create_heat_load(target_net, supply_id, q_mw=heat_mw)
             # Design flow same as the LinearHX would compute internally:
             # m = q / (c · ΔT) with c = 4180 J/(kg·K), ΔT = 30 K default.
-            m_design = q_mw * 1e6 / (4180.0 * 30.0)
-            mx.create_water_sink(target_net, supply_id, mass_flow=round(m_design, 6))
+            m_design = heat_mw * 1e6 / (4180.0 * 30.0)
+            mx.create_water_sink(target_net, supply_id, mass_flow_kgs=round(m_design, 6))
         else:
-            # Branch-based HeatExchanger consumer: bridges supply junction
-            # to the shared return junction.  Compatible with the default
-            # LinearHeatExchanger formulation but NOT with McCormick-DHS.
             mx.create_heat_exchanger(
                 target_net,
                 from_node_id=supply_id,
                 to_node_id=return_junction,
-                q_mw=q_mw,
+                q_mw=heat_mw,
             )
 
-    # Create the HX-Generators (return → supply) in non-node-based mode,
-    # scaled by ``gen_scale`` so total HX-Gen capacity matches HX-Load
-    # demand.  Per-bus heat-generator HXs are only meaningful under
-    # formulations that allow flow reversal (e.g. plain LinearHeatExchanger);
-    # under McCormick-DHS the rooted-outward supply tree pins every pipe's
-    # flow direction, so a generator HX injecting mass into an intermediate
-    # consumer junction has no path to drain.  Skip them in node-based mode.
     if not node_based_heat_loads:
-        for supply_id, q_mw_raw in gen_specs:
-            q_mw = q_mw_raw * gen_scale
+        for supply_id, heat_mw_raw in gen_specs:
+            heat_mw = heat_mw_raw * gen_scale
             mx.create_heat_exchanger(
                 target_net,
                 from_node_id=return_junction,
                 to_node_id=supply_id,
-                q_mw=-q_mw,
+                q_mw=-heat_mw,
             )
 
-    # ---- Downstream-demand sweep (used by both HG capping and m_U_design) ---
-    # Each supply junction *i* sees a mass-flow ``m_downstream[i]`` equal to
-    # the sum of all consumer demands in its rooted subtree (post-order over
-    # the supply spanning tree).  This is the *only* mass-flow that can carry
-    # heat injected at *i* downstream toward consumers in a tree-shaped DHS
-    # with pinned flow direction (McCormick-DHS), so it sets the physical
-    # limit on local heat injection: ``q ≤ c · m · ΔT_design``.
     bus_demand_kgs: dict[int, float] = {}
     subtree: dict = {}
-    if node_based_heat_loads:
-        for supply_id, q_mw in load_specs:
-            m_design = q_mw * 1e6 / (4180.0 * 30.0)
+    # The per-pipe cumulative downstream demand feeds both the McCormick-DHS
+    # envelopes (node-based mode) and capacity-based pipe sizing (auto_diameter),
+    # so compute it whenever either is requested.
+    if node_based_heat_loads or auto_diameter:
+        for supply_id, heat_mw in load_specs:
+            m_design = heat_mw * 1e6 / (4180.0 * 30.0)
             bus_demand_kgs[supply_id] = bus_demand_kgs.get(supply_id, 0.0) + m_design
 
         children_of: dict = {}
@@ -929,10 +1002,6 @@ def create_heat_supply_return_net_for_power(
             if p in keep_nodes and c in keep_nodes:
                 children_of.setdefault(p, []).append(c)
 
-        # Post-order accumulation: each bus's subtree mass-flow demand is its
-        # own consumer share plus the sum of its children's subtree totals.
-        # Iterative DFS keeps the worklist bounded; visited-flag pattern
-        # finalises a parent only after all its children are finalised.
         stack = [(slack_root, False)]
         while stack:
             bus, visited = stack.pop()
@@ -947,20 +1016,6 @@ def create_heat_supply_return_net_for_power(
                 for child_bus in children_of.get(bus, []):
                     stack.append((child_bus, False))
 
-    # Node-based HeatGenerators at PowerGenerator buses.  This is the
-    # McCormick-DHS-compatible counterpart to the gas-side ``Source``
-    # injection at generator buses: a distributed primary heat fleet whose
-    # rated output participates in the nodal heat balance and gives
-    # downstream resilience studies a finite, drainable pool (instead of
-    # routing every kJ through the unbounded supply slack).
-    #
-    # The rated output ``p_gen_mw · node_heat_gen_share`` is capped by the
-    # local transport bandwidth ``c · m_downstream · ΔT_design`` so the HG
-    # never injects more heat than the supply tree at this junction can
-    # actually carry away at the 30 K design ΔT.  Without this cap a small
-    # PowerGenerator on a low-demand branch would force the local water to
-    # overheat past any physical DHS temperature (the supply-pipe McCormick
-    # envelope rejects it; a real network would simply have undersized HX).
     if node_based_heat_loads and node_heat_gen_share > 0:
         for node in power_net_as_st.nodes:
             if node.id not in bus_index_to_supply_junction:
@@ -968,18 +1023,18 @@ def create_heat_supply_return_net_for_power(
             p_gen_mw = _node_power_gen_mw(power_net, node)
             if p_gen_mw <= 0:
                 continue
-            q_mw = max(min_gen_mw, p_gen_mw * node_heat_gen_share)
+            heat_mw = max(min_gen_mw, p_gen_mw * node_heat_gen_share)
             m_downstream = subtree.get(node.id, 0.0)
             q_cap_mw = 4180.0 * m_downstream * 30.0 / 1e6
             if q_cap_mw > 0:
-                q_mw = min(q_mw, q_cap_mw)
+                heat_mw = min(heat_mw, q_cap_mw)
             elif q_cap_mw == 0:
-                # No downstream consumers — no heat can be transported.
+                # No downstream consumers - no heat can be transported.
                 continue
             mx.create_heat_generator(
                 target_net,
                 node_id=bus_index_to_supply_junction[node.id],
-                q_mw=round(q_mw, 6),
+                q_mw=round(heat_mw, 6),
             )
 
     slack_supply_junction = bus_index_to_supply_junction[slack_root]
@@ -1001,19 +1056,6 @@ def create_heat_supply_return_net_for_power(
     )
 
     if heat_plant_mode == "two_port":
-        # Cold port (return slack): anchors the return-junction pressure
-        # so circulation can be driven, but does *not* pin the return
-        # temperature.  The return T emerges from the upstream heat
-        # balance (mass-weighted average of HX-Load outlet temperatures)
-        # — pinning it to a fixed setpoint over-constrains the balance
-        # whenever pipe losses or partial HX regulation make individual
-        # HX outlets diverge from the setpoint.  The two slacks together
-        # represent the heat plant as a two-port boundary: water exits
-        # at the return slack, is reheated externally, and re-enters at
-        # the supply slack.  Mass conservation forces
-        # ``m_supply_slack ≈ -m_return_slack`` (steady-state plant pump
-        # rate); the supply/return ΔT is preserved because the manifolds
-        # are no longer hydraulically shorted by a closing pipe.
         mx.create_ext_hydr_grid(
             target_net,
             node_id=return_junction,
@@ -1024,24 +1066,23 @@ def create_heat_supply_return_net_for_power(
             name="Grid Connection Heat Return",
         )
     else:
-        # Legacy closed-loop topology: a single supply slack plus a
-        # closing return pipe back to it.  Hydraulically closed, but
-        # collapses the supply/return ΔT under the t-pin at the slack —
-        # see the docstring.  Optional open-loop relaxation via a Sink
-        # at the return junction (``screening``) trades mass-flow
-        # realism for solve speed.
+        if return_diameter_m is not None:
+            closing_diameter_m = return_diameter_m
+        elif auto_diameter:
+            # The closing pipe returns the whole network's flow to the slack.
+            closing_diameter_m = _auto_diameter(subtree.get(slack_root, 0.0))
+        else:
+            closing_diameter_m = default_diameter_m * 1.5
         mx.create_water_pipe(
             target_net,
             from_node_id=return_junction,
             to_node_id=slack_supply_junction,
-            diameter_m=return_diameter_m
-            if return_diameter_m is not None
-            else default_diameter_m * 1.5,
+            diameter_m=closing_diameter_m,
             length_m=return_length_m
             if return_length_m is not None
             else default_length * length_scale,
             temperature_ext_k=296.15,
-            roughness=0.001,
+            roughness_m=0.001,
             grid=heat_grid,
         )
         if not node_based_heat_loads and heat_plant_mode == "screening" and load_specs:
@@ -1049,122 +1090,115 @@ def create_heat_supply_return_net_for_power(
             mx.create_water_sink(
                 target_net,
                 node_id=return_junction,
-                mass_flow=round(sink_capacity, 6),
+                mass_flow_kgs=round(sink_capacity, 6),
                 name="Grid Connection Heat Return Sink",
             )
 
-    # ---- Per-pipe ``m_U_design`` (Mccormick #5) -----------------------------
-    # For the McCormick-DHS formulation each pipe's mass-flow upper bound
-    # determines the McCormick envelope width; the velocity-cap default is
-    # tens of kg/s, while the actual downstream design demand on an LV-rural
-    # tree is typically below 1 kg/s.  Reuses the ``subtree`` sweep computed
-    # above (also used to cap HG injection at the local transport bandwidth);
-    # the formulation's ``_branch_m_U`` then prefers ``m_U_design`` over the
-    # velocity cap.  Only meaningful under ``node_based_heat_loads``
-    # (branch-HX trees route flow through HXs and closing pipes, where the
-    # simple downstream sum is misleading).
     if node_based_heat_loads:
-        # Per-pipe m_U_design with 5× safety on the rated 30 K ΔT estimate so
-        # tighter bounds (smaller ΔT, larger m) still fit the McCormick envelope.
         SAFETY = 5.0
         for (p, c), pipe_id in supply_pipe_for_edge.items():
             m_design = subtree.get(c, 0.0)
             if m_design > 0:
                 pipe = target_net.branch_by_id(pipe_id)
                 pipe.model.m_U_design = m_design * SAFETY
+                pipe.model.mass_flow_nominal_kgs = m_design
+
+    if auto_diameter:
+        # Widen each supply pipe to carry its cumulative downstream demand at
+        # the design velocity_mps; trunk pipes near the slack end up widest.
+        for (p, c), pipe_id in supply_pipe_for_edge.items():
+            pipe = target_net.branch_by_id(pipe_id)
+            pipe.model.diameter_m = _auto_diameter(subtree.get(c, 0.0))
 
     return bus_index_to_supply_junction, return_junction
 
 
-def _drain_power_gen_capacity(net: mm.Network, total_mw: float) -> float:
-    """Drain ``total_mw`` from PowerGenerator (skips ExtPowerGrid — slack). Returns the unabsorbed remainder."""
-    remaining = float(total_mw)
+def _drain_proportionally(items, get_mag, set_mag, remove, total) -> float:
+    """Drain ``total`` from *items* by scaling every item with one common
+    factor ``(pool − absorbed) / pool``.
+
+    Proportional draining preserves the spatial distribution of the
+    remaining capacity — which generators carry the replaced output is then
+    independent of child insertion order, so CP-replacement variants differ
+    from their no-CP baseline only by the CP routing, not by an arbitrary
+    set of deleted generators. Items scaled to ~0 are removed entirely.
+
+    Returns the unabsorbed remainder (> 0 iff ``total`` exceeds the pool).
+    """
+    remaining = float(total)
     if remaining <= 0:
         return 0.0
-    for child in list(net.childs):
-        if remaining <= 1e-12:
-            break
-        if isinstance(child.model, mm.PowerGenerator):
-            current = abs(float(child.model.p_mw))
-            if current <= 0:
-                continue
-            absorb = min(current, remaining)
-            new_mag = current - absorb
-            if new_mag <= 1e-12:
-                net.remove_child(child.id)
-            else:
-                child.model.p_mw = -new_mag
-            remaining -= absorb
-    return remaining
+    items = [i for i in items if get_mag(i) > 0]
+    pool = sum(get_mag(i) for i in items)
+    if pool <= 0:
+        return remaining
+    absorb = min(pool, remaining)
+    factor = (pool - absorb) / pool
+    for item in items:
+        new_mag = get_mag(item) * factor
+        if new_mag <= 1e-12:
+            remove(item)
+        else:
+            set_mag(item, new_mag)
+    return remaining - absorb
+
+
+def _drain_power_gen_capacity(net: mm.Network, total_mw: float) -> float:
+    """Drain ``total_mw`` proportionally from PowerGenerator children
+    (skips ExtPowerGrid - slack). Returns the unabsorbed remainder."""
+    return _drain_proportionally(
+        [c for c in net.childs if isinstance(c.model, mm.PowerGenerator)],
+        get_mag=lambda c: abs(float(c.model.p_mw)),
+        set_mag=lambda c, v: setattr(c.model, "p_mw", -v),
+        remove=lambda c: net.remove_child(c.id),
+        total=total_mw,
+    )
 
 
 def _drain_gas_source_capacity(net: mm.Network, total_kgs: float) -> float:
-    """Drain ``total_kgs`` from gas-side Sources only. Returns the unabsorbed remainder."""
-    remaining = float(total_kgs)
-    if remaining <= 0:
-        return 0.0
-    for child in list(net.childs):
-        if remaining <= 1e-12:
-            break
-        if not isinstance(child.model, mm.Source):
-            continue
-        if not isinstance(child.grid, mm.GasGrid):
-            continue
-        current = abs(float(child.model.mass_flow))
-        if current <= 0:
-            continue
-        absorb = min(current, remaining)
-        new_mag = current - absorb
-        if new_mag <= 1e-12:
-            net.remove_child(child.id)
-        else:
-            child.model.mass_flow = -new_mag
-        remaining -= absorb
-    return remaining
+    """Drain ``total_kgs`` proportionally from gas-side Sources only.
+    Returns the unabsorbed remainder."""
+    return _drain_proportionally(
+        [
+            c
+            for c in net.childs
+            if isinstance(c.model, mm.Source) and isinstance(c.grid, mm.GasGrid)
+        ],
+        get_mag=lambda c: abs(float(c.model.mass_flow_kgs)),
+        set_mag=lambda c, v: setattr(c.model, "mass_flow_kgs", -v),
+        remove=lambda c: net.remove_child(c.id),
+        total=total_kgs,
+    )
 
 
 def _drain_heat_gen_capacity(net: mm.Network, total_mw: float) -> float:
-    """Drain ``total_mw`` from HeatGenerator children, then HX-Gen branches.
+    """Drain ``total_mw`` proportionally from HeatGenerator children, then
+    (only if their pool is exhausted) proportionally from HX-Gen branches.
     Returns the unabsorbed remainder; no slack fallback by design."""
-    remaining = float(total_mw)
-    if remaining <= 0:
-        return 0.0
+    remaining = _drain_proportionally(
+        [c for c in net.childs if isinstance(c.model, mm.HeatGenerator)],
+        get_mag=lambda c: abs(float(c.model.q_mw_heat)),
+        set_mag=lambda c, v: setattr(c.model, "q_mw_heat", -v),
+        remove=lambda c: net.remove_child(c.id),
+        total=total_mw,
+    )
+    if remaining <= 1e-12:
+        return remaining
 
-    for child in list(net.childs):
-        if remaining <= 1e-12:
-            break
-        if not isinstance(child.model, mm.HeatGenerator):
-            continue
-        current = abs(float(child.model.q_mw_heat))
-        if current <= 0:
-            continue
-        absorb = min(current, remaining)
-        new_mag = current - absorb
-        if new_mag <= 1e-12:
-            net.remove_child(child.id)
-        else:
-            child.model.q_mw_heat = -new_mag
-        remaining -= absorb
-
-    for branch in list(net.branches):
-        if remaining <= 1e-12:
-            break
-        if not isinstance(branch.model, mm.HeatExchanger):
-            continue
-        q_set = float(getattr(branch.model, "q_mw_set", 0.0) or 0.0)
-        if q_set <= 0:
-            continue
-        absorb = min(q_set, remaining)
-        new_q = q_set - absorb
-        if new_q <= 1e-12:
-            net.remove_branch_between(
-                branch.from_node_id, branch.to_node_id, branch.id[2]
-            )
-        else:
-            branch.model.q_mw_set = new_q
-        remaining -= absorb
-
-    return remaining
+    return _drain_proportionally(
+        [
+            b
+            for b in net.branches
+            if isinstance(b.model, mm.HeatExchanger)
+            and float(getattr(b.model, "q_mw_set", 0.0) or 0.0) > 0
+        ],
+        get_mag=lambda b: float(getattr(b.model, "q_mw_set", 0.0) or 0.0),
+        set_mag=lambda b, v: setattr(b.model, "q_mw_set", v),
+        remove=lambda b: net.remove_branch_between(
+            b.from_node_id, b.to_node_id, b.id[2]
+        ),
+        total=remaining,
+    )
 
 
 def create_coupling_points_for_mes(
@@ -1230,6 +1264,8 @@ def create_coupling_points_for_mes(
     candidate_node_ids = [
         nid for nid in bus_to_gas_junc.keys() if nid in bus_to_heat_supply_junc
     ]
+    if not candidate_node_ids:
+        raise ValueError("no nodes are coupled to both gas and heat supply")
 
     if centralized:
         hub = (
@@ -1245,9 +1281,16 @@ def create_coupling_points_for_mes(
         target_nodes = [nid for nid in candidate_node_ids if rng.random() < density]
 
     created = []
-    # Tracks the cumulative rated *output* capacity of every CP we add, so we
-    # can absorb the same amount from primary generation when
-    # ``replace_primary_generation`` is set (see end of function).
+
+    # HHV [MJ/kg] of the gas fluid actually registered on the net, so coupling-
+    # point sizing uses the same heating value as the gas physics regardless of
+    # which gas type the grid was built with.
+    gas_hhv_mj = (
+        mes_net.node_by_id(next(iter(bus_to_gas_junc.values()))).grid
+        .higher_heating_value_kwh_per_kg
+        * 3.6
+    )
+
     cp_power_out_mw = 0.0
     cp_gas_out_kgs = 0.0
     cp_heat_out_mw = 0.0
@@ -1255,11 +1298,6 @@ def create_coupling_points_for_mes(
         gas_junc = bus_to_gas_junc[power_node_id]
         heat_supply_junc = bus_to_heat_supply_junc[power_node_id]
 
-        # Sizing handle: prefer local generation magnitude, fall back to local
-        # load magnitude.  A bus with no power activity at all (transit /
-        # bare slack) provides no basis for sizing — skip it instead of
-        # using a system-scale fallback that would oversize the unit by
-        # orders of magnitude on LV grids.
         node = mes_net.node_by_id(power_node_id)
         p_ref_mw = _node_power_gen_mw(mes_net, node) or _node_power_load_mw(
             mes_net, node
@@ -1270,27 +1308,20 @@ def create_coupling_points_for_mes(
         unit_type = rng.choice(sorted(coupling_set))
 
         if unit_type == "chp":
-            # Fuel mass flow chosen so the electrical output covers
-            # ``chp_p_share · cp_size_multiplier · p_ref_mw`` at the configured
-            # electrical efficiency.
             chp_p_target_mw = chp_p_share * cp_size_multiplier * p_ref_mw
-            mass_flow = round(
-                chp_p_target_mw / max(chp_efficiency_power, 1e-3) / GAS_HHV_MJ_PER_KG,
+            mass_flow_kgs = round(
+                chp_p_target_mw / max(chp_efficiency_power, 1e-3) / gas_hhv_mj,
                 6,
             )
-            cp_power_out_mw += mass_flow * GAS_HHV_MJ_PER_KG * chp_efficiency_power
-            cp_heat_out_mw += mass_flow * GAS_HHV_MJ_PER_KG * chp_efficiency_heat
+            cp_power_out_mw += mass_flow_kgs * gas_hhv_mj * chp_efficiency_power
+            cp_heat_out_mw += mass_flow_kgs * gas_hhv_mj * chp_efficiency_heat
             if use_hg_variants:
-                # HeatGenerator-based CHP: heat injection via q_mw_heat at the
-                # supply junction, no return-side branch.  Required for the
-                # McCormick-DHS formulation, which only sees node-level heat
-                # injection (q_mw_heat) and pipe enthalpy (H_in_mw/H_out_mw).
                 uid = mx.create_chp_hg(
                     mes_net,
                     power_node_id=power_node_id,
                     heat_node_id=heat_supply_junc,
                     gas_node_id=gas_junc,
-                    mass_flow_setpoint=mass_flow,
+                    mass_flow_setpoint_kgs=mass_flow_kgs,
                     efficiency_power=chp_efficiency_power,
                     efficiency_heat=chp_efficiency_heat,
                     regulation=regulation,
@@ -1302,7 +1333,7 @@ def create_coupling_points_for_mes(
                     heat_node_id=heat_supply_junc,
                     heat_return_node_id=heat_return_junc,
                     gas_node_id=gas_junc,
-                    mass_flow_setpoint=mass_flow,
+                    mass_flow_setpoint_kgs=mass_flow_kgs,
                     diameter_m=chp_diameter_m,
                     efficiency_power=chp_efficiency_power,
                     efficiency_heat=chp_efficiency_heat,
@@ -1312,14 +1343,14 @@ def create_coupling_points_for_mes(
 
         elif unit_type == "p2g":
             p2g_p_in_mw = p2g_p_share * cp_size_multiplier * p_ref_mw
-            mass_flow = round(p2g_efficiency * p2g_p_in_mw / GAS_HHV_MJ_PER_KG, 6)
-            cp_gas_out_kgs += mass_flow
+            mass_flow_kgs = round(p2g_efficiency * p2g_p_in_mw / gas_hhv_mj, 6)
+            cp_gas_out_kgs += mass_flow_kgs
             bid = mx.create_p2g(
                 mes_net,
                 from_node_id=power_node_id,
                 to_node_id=gas_junc,
                 efficiency=p2g_efficiency,
-                mass_flow_setpoint=mass_flow,
+                mass_flow_setpoint_kgs=mass_flow_kgs,
                 regulation=regulation,
             )
             created.append({"type": "p2g", "node": power_node_id, "id": bid})
@@ -1361,10 +1392,16 @@ def create_coupling_points_for_mes(
             ("heat (HeatGenerator + HX-Gen)", cp_heat_out_mw, unabsorbed_h),
         ):
             if left > 1e-9 and asked > 0:
-                print(
-                    f"[create_coupling_points_for_mes] replace_primary_generation: "
-                    f"{label} pool absorbed {asked - left:g} of {asked:g} requested; "
-                    f"{left:g} unabsorbed (likely no remaining primary capacity)."
+                # Hard error by design: an unabsorbed remainder means the CP
+                # output exceeds the primary pool, so total rated capacity is
+                # NOT invariant any more and every density-sweep comparison
+                # built on that invariance is silently biased.
+                raise ValueError(
+                    f"replace_primary_generation: {label} pool absorbed "
+                    f"{asked - left:g} of {asked:g} requested; {left:g} "
+                    f"unabsorbed. CP output exceeds the primary pool — "
+                    f"capacity invariance would break. Reduce CP density / "
+                    f"size (or raise the primary generation share)."
                 )
 
     return created

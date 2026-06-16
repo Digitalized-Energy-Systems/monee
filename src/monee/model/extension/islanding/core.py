@@ -78,9 +78,9 @@ def _branch_inflow_outflow(node, c_fwd_vars, c_rev_vars, network):
 def _build_connectivity_equations(
     network, gf_nodes, regular_nodes, e_vars, c_fwd_vars, c_rev_vars, c_src_vars, big_m
 ) -> list:
-    """Single-commodity connectivity flow: GF energised (e=1), arc caps via
-    big_m·on_off, per-node balance ``Σ_in - Σ_out = e``, super-source supply
-    ``Σ c_src = Σ e``."""
+    r"""Single-commodity connectivity flow: GF energised (e=1), arc caps via
+    :math:`\text{big\_m} \cdot \text{on\_off}`, per-node balance :math:`\sum_{in} - \sum_{out} = e`, super-source supply
+    :math:`\sum c_{src} = \sum e`."""
     eqs = []
     all_nodes = gf_nodes + regular_nodes
 

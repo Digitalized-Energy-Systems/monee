@@ -1,3 +1,9 @@
+import os
+import sys
+
+# Local Sphinx extensions (build-time interactive figure generators).
+sys.path.insert(0, os.path.abspath("_ext"))
+
 # -- Project information -----------------------------------------------------
 project = "monee"
 author = "monee contributors"
@@ -20,6 +26,8 @@ extensions = [
     "sphinx.ext.autosectionlabel",
     "sphinx_design",
     "sphinx.ext.mathjax",
+    "sphinxcontrib.mermaid",
+    "interactive_plots",
 ]
 
 templates_path = ["_templates"]
@@ -41,6 +49,10 @@ typehints_use_signature = True
 plot_html_show_source_link = False
 plot_html_show_formats = False
 plot_include_source = False
+
+# Mermaid renders client-side in HTML (raw, the default). The PDF builder shells
+# out to mermaid-cli, whose bundled Chromium needs --no-sandbox on CI.
+mermaid_params = ["-p", "puppeteer-config.json"]
 
 myst_enable_extensions = [
     "colon_fence",

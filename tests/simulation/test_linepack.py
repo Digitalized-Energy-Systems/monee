@@ -1,19 +1,4 @@
-"""
-Tests for GasLinepack — the pipe-storage extension for gas networks.
-
-Design properties verified:
-
-1. Single-step: ``linepack_kg`` matches ``V_pipe * gas_density``; ``net_pack_kgs == 0``.
-2. Auto-computed capacity: ``linepack_kg_initial`` and ``linepack_kg_max`` match
-   the expected values from pipe geometry and grid thermodynamics.
-3. Timeseries: ``net_pack_kgs`` matches ``Δlinepack_kg / Δt``.
-4. Linepack buffers demand variation: linepack discharges when demand rises.
-5. Per-pipe overrides take precedence over auto-computed values.
-6. Branching tree topology: linepack works correctly with multiple pipes,
-   junctions, and sinks in a non-meshed tree layout.
-7. Global mass conservation: total source feed + total linepack discharge = total demand.
-8. Spatially non-uniform discharge: pipes closer to a demand spike discharge more.
-"""
+"""Tests for GasLinepack - the pipe-storage extension for gas networks."""
 
 import math
 
@@ -23,15 +8,12 @@ from monee.simulation.timeseries import TimeseriesData, run
 
 
 def _gas_net():
-    """
-    Simple linear gas network:  source — pipe — sink
-    Returns (net, pipe_id, sink_id).
-    """
+    """Linear gas network (source - pipe - sink); returns (net, pipe_id, sink_id)."""
     net = mm.Network(mm.create_gas_grid("gas", type="lgas"))
     net.activate_grid(mm.GAS)
 
     source_id = net.child(mm.ExtHydrGrid())
-    sink_id = net.child(mm.Sink(mass_flow=0.2))
+    sink_id = net.child(mm.Sink(mass_flow_kgs=0.2))
 
     n0 = net.node(mm.Junction(), mm.GAS, child_ids=[source_id])
     n1 = net.node(mm.Junction(), mm.GAS, child_ids=[sink_id])
@@ -42,48 +24,52 @@ def _gas_net():
 
 
 def test_linepack_single_step_definition():
-    """linepack_kg = V * gas_density and net_pack_kgs = 0 in steady state."""
-
+    # GIVEN
     net, pipe_id, _ = _gas_net()
     net.add_extension(GasLinepack())
+
+    # WHEN
     result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
 
     pipe_series = result[pipe_id]
     lp = pipe_series["linepack_kg"]
     npk = pipe_series["net_pack_kgs"]
-    density = pipe_series["gas_density"]
+    density = pipe_series["gas_density_kg_per_m3"]
 
+    # linepack_kg = V * gas_density_kg_per_m3 in steady state
     v_pipe = math.pi / 4 * 0.5**2 * 5000
     assert math.isclose(lp, v_pipe * density, rel_tol=1e-4), (
         f"linepack_kg ({lp:.3f}) != V*density ({v_pipe * density:.3f})"
     )
+
     assert math.isclose(npk, 0.0, abs_tol=1e-6), (
         f"net_pack_kgs should be 0 in single-step, got {npk}"
     )
 
 
 def test_linepack_auto_capacity():
-    """
-    linepack_kg_initial and linepack_kg_max are auto-computed from pipe
-    geometry and gas-grid thermodynamics.
-    """
+    # GIVEN
     net, pipe_id, _ = _gas_net()
     ext = GasLinepack()
-    # Call prepare() directly — no need for a full solve.
-    ext.prepare(net)
 
     grid = net.grids[0]
     v_pipe = math.pi / 4 * 0.5**2 * 5000
     R, M, T = grid.universal_gas_constant, grid.molar_mass, grid.t_k
-
-    rho_nominal = grid.pressure_ref * grid.nominal_pressure_pu * M / (R * T)
-    rho_max = grid.pressure_ref * math.sqrt(grid.p_squared_pu_max) * M / (R * T)
-
+    rho_nominal = grid.pressure_ref_pa * grid.nominal_pressure_pu * M / (R * T)
+    rho_max = grid.pressure_ref_pa * math.sqrt(grid.pressure_squared_pu_max) * M / (R * T)
     expected_initial = v_pipe * rho_nominal
     expected_max = v_pipe * rho_max
 
+    # WHEN
+    ext.prepare(net)
+
+    # THEN
     assert math.isclose(ext._initial_lp[pipe_id], expected_initial, rel_tol=1e-6)
     assert math.isclose(ext._pipe_volume[pipe_id], v_pipe, rel_tol=1e-6)
+
     for branch in net.branches:
         if branch.id == pipe_id:
             assert math.isclose(
@@ -92,9 +78,8 @@ def test_linepack_auto_capacity():
 
 
 def test_linepack_override():
-    """Per-pipe overrides replace auto-computed initial / max values."""
+    # GIVEN
     net, pipe_id, _ = _gas_net()
-    # Use values that are plausible but distinct from auto-computed ones.
     ext_auto = GasLinepack()
     ext_auto.prepare(net)
     auto_initial = ext_auto._initial_lp[pipe_id]
@@ -109,9 +94,13 @@ def test_linepack_override():
             )
         }
     )
+
+    # WHEN
     ext.prepare(net)
 
+    # THEN
     assert math.isclose(ext._initial_lp[pipe_id], override_initial, rel_tol=1e-9)
+
     for branch in net.branches:
         if branch.id == pipe_id:
             assert math.isclose(
@@ -120,23 +109,27 @@ def test_linepack_override():
 
 
 def test_linepack_timeseries_mass_conservation():
-    """net_pack_kgs * dt_s equals the change in linepack_kg between steps."""
+    # GIVEN
     net, pipe_id, sink_id = _gas_net()
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    td.add_child_series(sink_id, "mass_flow", [0.1, 0.3])
+    td.add_child_series(sink_id, "mass_flow_kgs", [0.1, 0.3])
 
+    # WHEN
     result = run(net, td)
+
+    # THEN
+    assert not result.failed_steps
 
     lp = result.get_result_for_id(pipe_id, "linepack_kg")
     npk = result.get_result_for_id(pipe_id, "net_pack_kgs")
-
     dt_s = 1.0 * 3600.0
     lp0 = lp.iloc[0]
     lp1 = lp.iloc[1]
     npk1 = npk.iloc[1]
 
+    # net_pack_kgs * dt_s equals the change in linepack_kg between steps
     expected_npk1 = (lp1 - lp0) / dt_s
     assert math.isclose(npk1, expected_npk1, rel_tol=1e-4), (
         f"net_pack_kgs mismatch: {npk1:.6f} vs expected {expected_npk1:.6f}"
@@ -144,64 +137,55 @@ def test_linepack_timeseries_mass_conservation():
 
 
 def test_linepack_source_flow_reduced_by_discharge():
-    """
-    When linepack discharges it must *reduce* the source feed — not increase it.
-
-    Mass balance at source junction (outflow-positive convention):
-        source_feed  +  pipe_forward_flow  +  linepack_term  ==  0
-
-    During discharge net_pack_kgs < 0, so the linepack term is
-    +0.5 * net_pack_kgs (negative = inflow from pipe to junction).
-    The source can therefore provide *less* than the full demand.
-
-    If the sign were wrong the source would over-deliver by exactly |net_pack_kgs|.
-    This test catches that regression.
-    """
+    # GIVEN
     net, pipe_id, sink_id = _gas_net()
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    td.add_child_series(sink_id, "mass_flow", [0.1, 0.12])
+    td.add_child_series(sink_id, "mass_flow_kgs", [0.1, 0.12])
+
+    # WHEN
     result = run(net, td)
 
-    src_flow = result.get_result_for(mm.ExtHydrGrid, "mass_flow")
-    npk = result.get_result_for_id(pipe_id, "net_pack_kgs")
+    # THEN
+    assert not result.failed_steps
 
-    # Source feed = -mass_flow (load convention: negative = injection)
+    src_flow = result.get_result_for(mm.ExtHydrGrid, "mass_flow_kgs")
+    npk = result.get_result_for_id(pipe_id, "net_pack_kgs")
     src_feed_1 = float(-src_flow.iloc[1])
     npk1 = float(npk.iloc[1])
     demand_1 = 0.12
 
     assert npk1 < 0, f"Linepack should discharge at step 1 (npk={npk1})"
-    # Source should provide LESS than demand — linepack covers the shortfall.
+
+    # Discharge must reduce the source feed below demand, not increase it.
     assert src_feed_1 < demand_1, (
-        f"Source over-delivers ({src_feed_1:.6f} > {demand_1}) — "
+        f"Source over-delivers ({src_feed_1:.6f} > {demand_1}) - "
         f"sign error: linepack is an anti-buffer"
     )
-    # The shortfall should equal the total discharge rate |net_pack_kgs|.
-    import math
 
+    # The shortfall should equal the total discharge rate |net_pack_kgs|.
     assert math.isclose(demand_1 - src_feed_1, abs(npk1), rel_tol=1e-3), (
         f"shortfall {demand_1 - src_feed_1:.6f} != |npk| {abs(npk1):.6f}"
     )
 
 
 def test_linepack_buffers_demand_variation():
-    """
-    When demand increases, linepack discharges: linepack_kg drops and
-    net_pack_kgs is negative at the step where demand jumped.
-    """
+    # GIVEN
     net, pipe_id, sink_id = _gas_net()
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    td.add_child_series(sink_id, "mass_flow", [0.1, 0.11, 0.35])
+    td.add_child_series(sink_id, "mass_flow_kgs", [0.1, 0.11, 0.35])
 
+    # WHEN
     result = run(net, td)
+
+    # THEN
+    assert not result.failed_steps
 
     lp = result.get_result_for_id(pipe_id, "linepack_kg")
     npk = result.get_result_for_id(pipe_id, "net_pack_kgs")
-
     lp0 = lp.iloc[0]
     lp1 = lp.iloc[1]
     npk1 = npk.iloc[1]
@@ -213,29 +197,14 @@ def test_linepack_buffers_demand_variation():
 
 
 def _branching_gas_net():
-    """
-    Tree-shaped gas network with 6 junctions, 5 pipes, and 3 sinks::
-
-        source(n0) --pipe0-- n1 --pipe1-- n2 (sink_a: 0.10 kg/s)
-                              |
-                             pipe2
-                              |
-                              n3 --pipe3-- n4 (sink_b: 0.08 kg/s)
-                              |
-                             pipe4
-                              |
-                              n5 (sink_c: 0.05 kg/s)
-
-    Returns (net, pipe_ids, sink_ids) where pipe_ids and sink_ids are dicts
-    keyed by label.
-    """
+    """Tree gas net (trunk + 3 sink branches); returns (net, pipes, sinks) dicts keyed by label."""
     net = mm.Network(mm.create_gas_grid("gas", type="lgas"))
     net.activate_grid(mm.GAS)
 
     source_id = net.child(mm.ExtHydrGrid())
-    sink_a = net.child(mm.Sink(mass_flow=0.10))
-    sink_b = net.child(mm.Sink(mass_flow=0.08))
-    sink_c = net.child(mm.Sink(mass_flow=0.05))
+    sink_a = net.child(mm.Sink(mass_flow_kgs=0.10))
+    sink_b = net.child(mm.Sink(mass_flow_kgs=0.08))
+    sink_c = net.child(mm.Sink(mass_flow_kgs=0.05))
 
     n0 = net.node(mm.Junction(), mm.GAS, child_ids=[source_id])
     n1 = net.node(mm.Junction(), mm.GAS)
@@ -244,7 +213,6 @@ def _branching_gas_net():
     n4 = net.node(mm.Junction(), mm.GAS, child_ids=[sink_b])
     n5 = net.node(mm.Junction(), mm.GAS, child_ids=[sink_c])
 
-    # Trunk: larger diameter
     p0 = net.branch(mm.GasPipe(diameter_m=0.40, length_m=3000), n0, n1)
     p1 = net.branch(mm.GasPipe(diameter_m=0.30, length_m=2000), n1, n2)
     p2 = net.branch(mm.GasPipe(diameter_m=0.35, length_m=2500), n1, n3)
@@ -263,10 +231,9 @@ def _branching_gas_net():
 
 
 def test_tree_linepack_single_step_all_pipes():
-    """In steady state every pipe has linepack_kg = V * density and net_pack_kgs = 0."""
+    # GIVEN
     net, pipes, _ = _branching_gas_net()
     net.add_extension(GasLinepack())
-    result = run_energy_flow(net)
 
     pipe_specs = {
         "trunk": (0.40, 3000),
@@ -275,14 +242,20 @@ def test_tree_linepack_single_step_all_pipes():
         "branch_b": (0.25, 1500),
         "branch_c": (0.20, 1000),
     }
-    print(result)
-    assert False
+
+    # WHEN
+    result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
+
+    # Every pipe: linepack_kg = V * density and net_pack_kgs = 0 in steady state
     gp_df = result.get(mm.GasPipe)
     for label, pid in pipes.items():
         row = gp_df[gp_df["id"] == pid].iloc[0]
         lp = row["linepack_kg"]
         npk = row["net_pack_kgs"]
-        density = row["gas_density"]
+        density = row["gas_density_kg_per_m3"]
 
         d, l = pipe_specs[label]
         v_pipe = math.pi / 4 * d**2 * l
@@ -295,22 +268,23 @@ def test_tree_linepack_single_step_all_pipes():
 
 
 def test_tree_linepack_timeseries_mass_conservation():
-    """
-    net_pack_kgs * dt = Δlinepack_kg holds for every pipe in the tree
-    across all timesteps.
-    """
+    # GIVEN
     net, pipes, sinks = _branching_gas_net()
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    # Ramp sink_a from 0.10 to 0.20, keep others constant.
-    td.add_child_series(sinks["a"], "mass_flow", [0.10, 0.15, 0.20])
-    td.add_child_series(sinks["b"], "mass_flow", [0.08, 0.08, 0.08])
-    td.add_child_series(sinks["c"], "mass_flow", [0.05, 0.05, 0.05])
+    td.add_child_series(sinks["a"], "mass_flow_kgs", [0.10, 0.15, 0.20])
+    td.add_child_series(sinks["b"], "mass_flow_kgs", [0.08, 0.08, 0.08])
+    td.add_child_series(sinks["c"], "mass_flow_kgs", [0.05, 0.05, 0.05])
 
+    # WHEN
     result = run(net, td)
-    dt_s = 1.0 * 3600.0
 
+    # THEN
+    assert not result.failed_steps
+
+    # net_pack_kgs * dt = Δlinepack_kg for every pipe across all timesteps
+    dt_s = 1.0 * 3600.0
     for label, pid in pipes.items():
         lp = result.get_result_for_id(pid, "linepack_kg")
         npk = result.get_result_for_id(pid, "net_pack_kgs")
@@ -326,23 +300,22 @@ def test_tree_linepack_timeseries_mass_conservation():
 
 
 def test_tree_linepack_discharge_on_demand_spike():
-    """
-    A sudden demand increase at one leaf causes linepack discharge in
-    upstream pipes.  The trunk pipe should discharge as well as the
-    direct branch, while pipes on unaffected branches should be less affected.
-    """
+    # GIVEN
     net, pipes, sinks = _branching_gas_net()
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    # Step 0: baseline.  Step 1: sink_b spikes from 0.08 to 0.25 kg/s.
-    td.add_child_series(sinks["a"], "mass_flow", [0.10, 0.10])
-    td.add_child_series(sinks["b"], "mass_flow", [0.08, 0.25])
-    td.add_child_series(sinks["c"], "mass_flow", [0.05, 0.05])
+    td.add_child_series(sinks["a"], "mass_flow_kgs", [0.10, 0.10])
+    td.add_child_series(sinks["b"], "mass_flow_kgs", [0.08, 0.25])
+    td.add_child_series(sinks["c"], "mass_flow_kgs", [0.05, 0.05])
 
+    # WHEN
     result = run(net, td)
 
-    # Trunk (pipe0) and the path to sink_b (pipe2 → pipe3) should discharge.
+    # THEN
+    assert not result.failed_steps
+
+    # Trunk and the path to the spiking sink_b should discharge.
     trunk_npk = result.get_result_for_id(pipes["trunk"], "net_pack_kgs").iloc[1]
     main_npk = result.get_result_for_id(pipes["branch_main"], "net_pack_kgs").iloc[1]
     b_npk = result.get_result_for_id(pipes["branch_b"], "net_pack_kgs").iloc[1]
@@ -359,12 +332,7 @@ def test_tree_linepack_discharge_on_demand_spike():
 
 
 def test_tree_linepack_global_mass_balance():
-    """
-    At each timeseries step, total source injection + total linepack discharge
-    must equal total sink demand (within solver tolerance).
-
-    source_feed + Σ(-net_pack_kgs_i) = Σ(sink_demand_i)
-    """
+    # GIVEN
     net, pipes, sinks = _branching_gas_net()
     net.add_extension(GasLinepack())
 
@@ -375,12 +343,16 @@ def test_tree_linepack_global_mass_balance():
     }
     td = TimeseriesData()
     for label, series in demands.items():
-        td.add_child_series(sinks[label], "mass_flow", series)
+        td.add_child_series(sinks[label], "mass_flow_kgs", series)
 
+    # WHEN
     result = run(net, td)
 
-    src_flow = result.get_result_for(mm.ExtHydrGrid, "mass_flow")
+    # THEN
+    assert not result.failed_steps
 
+    # Per step: source feed + Σ(-net_pack_kgs_i) = Σ(sink_demand_i)
+    src_flow = result.get_result_for(mm.ExtHydrGrid, "mass_flow_kgs")
     for step in range(len(demands["a"])):
         total_demand = sum(demands[k][step] for k in demands)
         source_feed = float(-src_flow.iloc[step])
@@ -396,20 +368,20 @@ def test_tree_linepack_global_mass_balance():
 
 
 def test_tree_linepack_recharge_when_demand_drops():
-    """
-    When demand drops below initial level, linepack should charge (absorb gas):
-    linepack_kg increases and net_pack_kgs is positive.
-    """
+    # GIVEN
     net, pipes, sinks = _branching_gas_net()
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    # Step 0: normal demand.  Step 1: all sinks drop to half.
-    td.add_child_series(sinks["a"], "mass_flow", [0.10, 0.05])
-    td.add_child_series(sinks["b"], "mass_flow", [0.08, 0.04])
-    td.add_child_series(sinks["c"], "mass_flow", [0.05, 0.025])
+    td.add_child_series(sinks["a"], "mass_flow_kgs", [0.10, 0.05])
+    td.add_child_series(sinks["b"], "mass_flow_kgs", [0.08, 0.04])
+    td.add_child_series(sinks["c"], "mass_flow_kgs", [0.05, 0.025])
 
+    # WHEN
     result = run(net, td)
+
+    # THEN
+    assert not result.failed_steps
 
     trunk_lp = result.get_result_for_id(pipes["trunk"], "linepack_kg")
     trunk_npk = result.get_result_for_id(pipes["trunk"], "net_pack_kgs").iloc[1]
@@ -424,7 +396,7 @@ def test_tree_linepack_recharge_when_demand_drops():
 
 
 def test_tree_linepack_per_pipe_override():
-    """Per-pipe overrides work correctly with multiple pipes in a tree."""
+    # GIVEN
     net, pipes, _ = _branching_gas_net()
 
     ext_auto = GasLinepack()
@@ -440,10 +412,14 @@ def test_tree_linepack_per_pipe_override():
             pipes["branch_b"]: dict(linepack_kg_initial=auto_b * 0.7),
         }
     )
+
+    # WHEN
     ext.prepare(net)
 
+    # THEN
     assert math.isclose(ext._initial_lp[pipes["trunk"]], auto_trunk * 0.5, rel_tol=1e-9)
     assert math.isclose(ext._initial_lp[pipes["branch_b"]], auto_b * 0.7, rel_tol=1e-9)
+
     # Non-overridden pipes keep auto values.
     assert math.isclose(
         ext._initial_lp[pipes["branch_a"]],

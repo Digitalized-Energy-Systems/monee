@@ -32,6 +32,7 @@ from monee.model import (
     Source,
     Var,
 )
+from monee.model.storage import ElectricStorage, GasStorage, ThermalStorage
 
 logger = logging.getLogger(__name__)
 
@@ -64,6 +65,7 @@ class Objective:
 
     def calculate(self, calculator):
         self._calculator = calculator
+        return self
 
     def when_period(self, period_filter):
         """Only activate for periods where *period_filter* is truthy. Accepts a
@@ -131,7 +133,6 @@ class Constraint:
         self._selected_models_link = selected_models_link
         self._selected_models_with_ids_link = selected_models_with_ids_link
         self._data_attacher = None
-        self._model_to_data = {}
         self._equations = []
         self._comp_equations = []
         self._temporal_equations = []
@@ -173,7 +174,7 @@ class Constraint:
         model_equations = []
         selected_models = self._selected_models_link(network)
         for equation in self._equations:
-            if len(self._model_to_data) > 0:
+            if self._data_attacher is not None:
                 model_to_data = {}
                 for model in selected_models:
                     model_to_data[model] = self._data_attacher(model)
@@ -183,7 +184,7 @@ class Constraint:
                 for model in selected_models:
                     model_equations.append(equation(model))
         for comp_equation in self._comp_equations:
-            if len(self._model_to_data) > 0:
+            if self._data_attacher is not None:
                 model_to_data = {}
                 for model in selected_models:
                     model_to_data[model] = self._data_attacher(model)
@@ -337,12 +338,13 @@ class OptimizationProblem:
     """
 
     def __init__(self, debug=False, lex_objectives: bool = False) -> None:
-        """Args:
-        debug: verbose logging during variable promotion.
-        lex_objectives: Pyomo-only two-phase solve: first user objectives,
-            then formulation-tightening terms (``branch/node/child.minimize``)
-            with the phase-1 optimum pinned. Removes weight tuning. GEKKO falls
-            back to single-objective sum.
+        """
+        Args:
+            debug: verbose logging during variable promotion.
+            lex_objectives: Pyomo-only two-phase solve: first user objectives,
+                then formulation-tightening terms (``branch/node/child.minimize``)
+                with the phase-1 optimum pinned. Removes weight tuning. GEKKO
+                falls back to single-objective sum.
         """
         self._controllable_appliables: list = []
         self._controllable_to_attr: dict[GenericModel, str] = {}
@@ -374,7 +376,7 @@ class OptimizationProblem:
                             if val == 0.0:
                                 logger.warning(
                                     "Attribute '%s' on %s has value 0.0 and no "
-                                    "explicit bounds — inferred bounds [0, 0] "
+                                    "explicit bounds - inferred bounds [0, 0] "
                                     "will lock this variable. Use an "
                                     "AttributeParameter or prob.bounds() to "
                                     "set meaningful bounds.",
@@ -428,7 +430,7 @@ class OptimizationProblem:
             self._controllable_to_attr[model] = []
         self._controllable_to_attr[model] += attributes
 
-    def bounds(self, minmax, component_condition=lambda _: True, attributes=None):
+    def bounds(self, minmax, component_condition=lambda _m, _g: True, attributes=None):
         """Override min/max for ``Var`` attributes on matching components.
         ``component_condition`` is ``(model, grid) -> bool``."""
         self._bounds_for_controllables.append(
@@ -484,8 +486,11 @@ class OptimizationProblem:
                         isinstance(
                             component.model, HeatExchanger | PassiveHeatExchanger
                         )
-                        and type(component.model.q_mw) is not Var
-                        and (component.model.q_mw > 0)
+                        # q_mw is always a Var on these models; the consuming
+                        # setpoint lives in q_mw_set (= -q_mw), so a positive
+                        # consuming q_mw maps to q_mw_set < 0.
+                        and isinstance(component.model.q_mw_set, (int, float))
+                        and (component.model.q_mw_set < 0)
                     )
                 )
                 and component.active
@@ -517,7 +522,14 @@ class OptimizationProblem:
         return self
 
     def controllable_ext(self):
-        """Make ExtPowerGrid / ExtHydrGrid connections controllable."""
+        """Declare ExtPowerGrid / ExtHydrGrid connections controllable.
+
+        Purely declarative: these models already expose their exchange
+        (``p_mw`` / ``mass_flow_kgs``) as free Vars from their own ``__init__``, so
+        no attribute is (re)bound here (``attributes=[]``). The call documents
+        intent and registers the components with the controllable set; it does
+        not itself make the ext-grid exchange free.
+        """
         self.controllable(
             component_condition=lambda component: (
                 isinstance(component.model, ExtPowerGrid | ExtHydrGrid)
@@ -553,7 +565,6 @@ class OptimizationProblem:
 
     def controllable_storages(self):
         """Promote dispatch on all storage components via their ``make_controllable``."""
-        from monee.model.storage import ElectricStorage, GasStorage, ThermalStorage
 
         def _apply_storages(network: Network):
             for component in network.all_components():

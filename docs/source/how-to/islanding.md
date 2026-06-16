@@ -1,10 +1,8 @@
 
 # Solve islanded networks
 
-This guide shows how to enable islanding for one or more carriers so that a
-network with multiple disconnected islands converges correctly.
-
-For background on the formulation see {doc}`../concepts/islanding`.
+Enable islanding for one or more carriers so a network with disconnected
+islands converges. For the formulation, see {doc}`../concepts/islanding`.
 
 ---
 
@@ -12,12 +10,12 @@ For background on the formulation see {doc}`../concepts/islanding`.
 
 * monee installed with a MIP-capable solver (GEKKO or Pyomo + HiGHS / CBC /
   Gurobi).
-* A `Network` object with at least one junction that has no reachable path to
-  the external grid — i.e. a second island.
+* A `Network` with at least one node that has no reachable path to the external
+  grid, that is, a second island.
 
 ---
 
-## Quick start — electricity
+## Quick start: electricity
 
 ```python
 import monee as mn
@@ -27,9 +25,9 @@ import monee.express as mx
 # 1. Build the network
 net = mm.Network()
 
-bus_0 = mx.create_bus(net)   # island A — reference
-bus_1 = mx.create_bus(net)   # island A — load bus
-bus_2 = mx.create_bus(net)   # island B — isolated
+bus_0 = mx.create_bus(net)   # island A - reference
+bus_1 = mx.create_bus(net)   # island A - load bus
+bus_2 = mx.create_bus(net)   # island B - isolated
 
 mx.create_ext_power_grid(net, bus_0)
 mx.create_power_load(net, bus_1, p_mw=0.05, q_mvar=0)
@@ -48,8 +46,8 @@ print(result)
 ```
 
 `enable_islanding` returns a `NetworkIslandingConfig` and registers it on the
-network.  The solver picks it up automatically when `run_energy_flow` (or
-`solve`) is called.
+network. The solver picks it up automatically when `run_energy_flow` (or
+`solve`) runs.
 
 ---
 
@@ -68,13 +66,14 @@ import monee as mn
 
 mn.enable_islanding(
     net,
-    electricity=mn.ElectricityIslandingMode(angle_bound=3.15, big_m_conn=50),
-    gas=mn.GasIslandingMode(big_m_conn=50),
+    electricity=mn.ElectricityIslandingMode(angle_bound=3.15),
+    gas=mn.GasIslandingMode(),
 )
 ```
 
-Set `big_m_conn` to at least the number of nodes in the carrier sub-network.
-The default of 200 is safe for most networks.
+`angle_bound` (in radians) caps the voltage angle on energised buses. The
+big-M constant of the connectivity-flow constraints is sized automatically
+from the node count, so you do not need to tune it.
 
 ---
 
@@ -92,8 +91,8 @@ result = mn.run_energy_flow(net)
 ```
 
 The source pins the junction pressure to `pressure_pu` (like `ExtHydrGrid`)
-and exposes a variable `mass_flow` that absorbs the island's supply–demand
-imbalance.
+and exposes a `mass_flow_kgs` variable that absorbs the island's supply and
+demand imbalance.
 
 For water/heat networks use `mx.create_water_grid_forming_source` identically:
 
@@ -104,7 +103,7 @@ mn.enable_islanding(net, water=True)
 
 ---
 
-## Express API reference — islanding components
+## Express API reference: islanding components
 
 | Function | Carrier | Description |
 |---|---|---|
@@ -127,14 +126,14 @@ print(gf_df[["p_mw", "q_mvar"]])
 
 # Gas grid-forming source output
 src_df = result.dataframes.get("GridFormingSource")
-print(src_df[["mass_flow"]])
+print(src_df[["mass_flow_kgs"]])
 ```
 
 ---
 
 ## Choosing the right solver
 
-Islanding adds binary variables, making the problem a **MILP / MIQP**.  Both
+Islanding adds binary variables, making the problem a MILP or MIQP. Both
 back-ends support this:
 
 | Solver | Notes |
@@ -150,19 +149,23 @@ result = mn.run_energy_flow(net, solver=mn.PyomoSolver(solver_name="highs"))
 
 ## Common pitfalls
 
-**Island not detected — bus still ignored**
+**Island not detected, bus still ignored.** Check that the island's
+grid-forming child inherits `GridFormingMixin` and is marked `active=True`.
+`ExtPowerGrid`, `ExtHydrGrid`, `GridFormingGenerator`, and `GridFormingSource`
+all qualify automatically. A custom component must inherit `GridFormingMixin`
+explicitly.
 
-Check that the island's grid-forming child inherits `GridFormingMixin` and
-is marked `active=True`.  `ExtPowerGrid`, `ExtHydrGrid`, `GridFormingGenerator`,
-and `GridFormingSource` all qualify automatically.  A custom component must
-explicitly inherit `GridFormingMixin`.
+**All energization variables are zero.** The big-M is sized automatically from
+the node count, so an all-zero solution is never a tuning issue. Check instead
+that an `active` grid-forming child exists in each island, and that the back-end
+is MIP-capable. The energization variables `e_*` are binary, so use GEKKO
+(APOPT) or Pyomo with `highs`, `cbc`, `gurobi`, or `scip`.
 
-**`big_m_conn` too small**
+**Islanding lost after saving and loading.** The islanding configuration is
+registered as a network extension and is not persisted by
+{mod}`monee.io.native`. Call `enable_islanding` again after loading a network
+from JSON.
 
-If the solver returns a trivially infeasible or degenerate solution, increase
-`big_m_conn` to be at least the number of carrier nodes.
-
-**Solver does not support integers**
-
-Some Pyomo solver interfaces (e.g. IPOPT) do not support integer variables and
-will raise an error.  Switch to HiGHS, CBC, or Gurobi.
+**Solver does not support integers.** Some Pyomo solver interfaces (for example
+IPOPT) reject integer variables and raise an error. Switch to HiGHS, CBC, or
+Gurobi.

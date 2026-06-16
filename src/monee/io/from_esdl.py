@@ -1,52 +1,3 @@
-"""ESDL import for monee (multi-energy: electricity + gas + heat).
-
-.. warning::
-
-   **EXPERIMENTAL — SKETCH.** This is a structural scaffold, not a finished
-   importer. The topology reconstruction works in the common cases, but several
-   asset families are only counted/skipped (see TODOs), and the numeric mapping
-   uses placeholders where ESDL does not carry the physical parameter monee needs
-   (e.g. cable r/x, gas heating value). Validate before relying on it. It is
-   intentionally *not* exported from any package ``__init__`` — import it
-   explicitly via ``monee.io.from_esdl``.
-
-Why ESDL
---------
-ESDL (Energy System Description Language, TNO) is the one *de-facto* format that
-spans all three of monee's carriers — electricity, gas and heat — in a single
-schema, with maintained Python tooling (``pyESDL``). Unlike CGMES (electricity
-only), it is the natural multi-energy on-ramp. It is **not** a formal IEC/ISO
-standard, but it has real parsers and downstream tools.
-
-How ESDL topology maps to monee
--------------------------------
-ESDL is *port-and-connection* based: assets carry ``InPort``/``OutPort`` objects,
-and a port lists the other ports it is ``connectedTo``. There is no explicit
-"node" in general. We therefore reconstruct nodes by taking each **connected
-component of ports** (union-find over ``connectedTo``) as one monee node, typed
-by the port carrier::
-
-    electricity carrier -> Bus       on grid EL
-    gas carrier         -> Junction  on grid GAS
-    heat carrier        -> Junction  on grid WATER
-
-Then::
-
-    2-port transport asset (ElectricityCable, Pipe, Transformer) -> branch
-    1-port demand/producer asset                                 -> child
-
-Multi-carrier *conversion* assets (CHP, HeatPump, PowerToGas, GasHeater) have
-ports on more than one carrier — these are monee's coupling points (compounds).
-They are **not** mapped yet; they are counted in the report as a TODO.
-
-Dependency
-----------
-Needs the optional `pyESDL <https://pypi.org/project/pyESDL/>`_ package
-(``pip install pyESDL``). Imported lazily, so monee does not depend on it. ESDL
-attribute names are read defensively, so schema-version drift degrades to a
-counted "skip" rather than a crash.
-"""
-
 import logging
 import warnings
 from dataclasses import dataclass, field
@@ -138,7 +89,7 @@ def _class_name(obj) -> str:
 def _walk_assets(area):
     """Yield every asset in *area* and its nested sub-areas, depth-first."""
     for asset in _get(area, "asset", []) or []:
-        yield asset
+        yield from asset
     for sub_area in _get(area, "area", []) or []:
         yield from _walk_assets(sub_area)
 
@@ -233,9 +184,6 @@ def _node_for_port(port, dsu, node_of_group):
     return node_of_group.get(dsu.find(_port_key(port)))
 
 
-# --------------------------------------------------------------------------- #
-# Assets -> branches and children                                             #
-# --------------------------------------------------------------------------- #
 # Asset class-name families (ESDL has many concrete subclasses; match loosely).
 _EL_TRANSPORT = {"ElectricityCable", "Transformer"}
 _PIPE = {"Pipe"}
@@ -268,7 +216,7 @@ def _add_transport(asset, kind, net, dsu, node_of_group, report):
 
     if kind == EL:
         net.branch(
-            # TODO: real impedance — ESDL cables seldom carry r/x.
+            # TODO: real impedance - ESDL cables seldom carry r/x.
             PowerLine(
                 length_m=length_m,
                 r_ohm_per_m=_PLACEHOLDER_R_OHM_PER_M,
@@ -343,7 +291,9 @@ def esdl_system_to_network(es):
     net = mx.create_multi_energy_network()
     report = EsdlImportReport()
 
-    assets = [a for inst in (_get(es, "instance", []) or []) for a in _walk_assets(inst.area)]
+    assets = [
+        a for inst in (_get(es, "instance", []) or []) for a in _walk_assets(inst.area)
+    ]
 
     dsu, kind_by_port = _build_port_groups(assets)
     kind_by_group = _group_kind(dsu, kind_by_port)

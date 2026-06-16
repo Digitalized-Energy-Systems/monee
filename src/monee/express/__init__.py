@@ -1,4 +1,5 @@
 import monee.model as mm
+from monee.model.extension.islanding import GridFormingGenerator, GridFormingSource
 
 
 def create_bus(
@@ -117,7 +118,7 @@ def create_gas_pipe(
     diameter_m,
     length_m,
     temperature_ext_k=296.15,
-    roughness=1e-05,
+    roughness_m=1e-05,
     on_off=1,
     constraints=None,
     grid=None,
@@ -125,7 +126,7 @@ def create_gas_pipe(
 ):
     """Add a :class:`GasPipe`; missing junctions are auto-created."""
     return network.branch(
-        mm.GasPipe(diameter_m, length_m, temperature_ext_k, roughness, on_off=on_off),
+        mm.GasPipe(diameter_m, length_m, temperature_ext_k, roughness_m, on_off=on_off),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
         constraints=constraints,
@@ -164,8 +165,8 @@ def create_water_pipe(
     diameter_m,
     length_m,
     temperature_ext_k=296.15,
-    roughness=0.001,
-    lambda_insulation_w_per_k=0.025,
+    roughness_m=0.001,
+    lambda_insulation_w_per_m_k=0.025,
     insulation_thickness_m=0.2,
     on_off=1,
     unidirectional=False,
@@ -180,8 +181,8 @@ def create_water_pipe(
             diameter_m,
             length_m,
             temperature_ext_k=temperature_ext_k,
-            roughness=roughness,
-            lambda_insulation_w_per_k=lambda_insulation_w_per_k,
+            roughness_m=roughness_m,
+            lambda_insulation_w_per_m_k=lambda_insulation_w_per_m_k,
             insulation_thickness_m=insulation_thickness_m,
             on_off=on_off,
             unidirectional=unidirectional,
@@ -341,7 +342,7 @@ def create_ext_power_grid(
 def create_ext_hydr_grid(
     network: mm.Network,
     node_id,
-    mass_flow=1,
+    mass_flow_kgs=1,
     pressure_pu=1,
     t_k=356,
     grid_key=mm.GAS_KEY,
@@ -357,7 +358,7 @@ def create_ext_hydr_grid(
     :func:`create_gas_ext_grid` / :func:`create_water_ext_grid` shortcuts."""
     return network.child_to(
         mm.ExtHydrGrid(
-            mass_flow=mass_flow,
+            mass_flow_kgs=mass_flow_kgs,
             pressure_pu=pressure_pu,
             t_k=t_k,
             max_import_kgs=max_import_kgs,
@@ -377,7 +378,7 @@ def create_ext_hydr_grid(
 def create_source(
     network: mm.Network,
     node_id,
-    mass_flow=1,
+    mass_flow_kgs=1,
     grid_key=mm.GAS_KEY,
     constraints=None,
     overwrite_id=None,
@@ -386,7 +387,7 @@ def create_source(
 ):
     """Attach a :class:`Source`. Pass positive magnitude; constructor negates internally."""
     return network.child_to(
-        mm.Source(mass_flow, **kwargs),
+        mm.Source(mass_flow_kgs, **kwargs),
         node_id=node_id,
         constraints=constraints,
         overwrite_id=overwrite_id,
@@ -399,30 +400,36 @@ def create_source(
 def create_consume_hydr_grid(
     network: mm.Network,
     node_id,
-    mass_flow=1,
-    pressure_pa=1000000,
+    mass_flow_kgs=1,
+    pressure_pu=1,
     t_k=293,
+    grid_key=mm.WATER_KEY,
     constraints=None,
     overwrite_id=None,
     name=None,
     **kwargs,
 ):
-    """Attach a :class:`ConsumeHydrGrid` (fixed-pressure consumption point)."""
+    """Attach a :class:`ConsumeHydrGrid` (fixed-pressure consumption point).
+
+    ``pressure_pu`` is per-unit (relative to the grid's reference pressure),
+    matching :func:`create_ext_hydr_grid` and the model's own convention."""
     return network.child_to(
         mm.ConsumeHydrGrid(
-            mass_flow=mass_flow, pressure_pa=pressure_pa, t_k=t_k, **kwargs
+            mass_flow_kgs=mass_flow_kgs, pressure_pu=pressure_pu, t_k=t_k, **kwargs
         ),
         node_id=node_id,
         constraints=constraints,
         overwrite_id=overwrite_id,
         name=name,
+        auto_node_creator=mm.Junction,
+        auto_grid_key=grid_key,
     )
 
 
 def create_sink(
     network: mm.Network,
     node_id,
-    mass_flow=1,
+    mass_flow_kgs=1,
     grid_key=mm.GAS_KEY,
     constraints=None,
     overwrite_id=None,
@@ -431,7 +438,7 @@ def create_sink(
 ):
     """Attach a :class:`Sink` (positive = consumption)."""
     return network.child_to(
-        mm.Sink(mass_flow=mass_flow, **kwargs),
+        mm.Sink(mass_flow_kgs=mass_flow_kgs, **kwargs),
         node_id=node_id,
         constraints=constraints,
         overwrite_id=overwrite_id,
@@ -507,12 +514,47 @@ def create_heat_exchanger(
     )
 
 
+def create_passive_heat_exchanger(
+    network: mm.Network,
+    from_node_id,
+    to_node_id,
+    q_mw,
+    diameter_m,
+    temperature_ext_k=293,
+    constraints=None,
+    grid=None,
+    name=None,
+):
+    """Add a passive heat-exchanger branch: a fixed ``q_mw`` injected into or
+    extracted from the free-flowing water stream, with the temperature change
+    following from the actual mass flow (the surrounding hydraulics determine
+    the flow). Use this for in-line consumers/sources on a distribution run;
+    use :func:`create_heat_exchanger` for supply/return exchangers that drive
+    their design mass flow. ``q_mw > 0`` → :class:`PassiveHeatExchangerLoad`;
+    ``q_mw < 0`` → :class:`PassiveHeatExchangerGenerator`."""
+    # Pass -q_mw to match create_heat_exchanger: both model bases store
+    # q_mw_set = -q_mw, so a positive public q_mw must be negated here too for
+    # the active and passive wrappers to agree on the load/generator sign.
+    return network.branch(
+        mm.PassiveHeatExchangerLoad(-q_mw, diameter_m, temperature_ext_k)
+        if q_mw > 0
+        else mm.PassiveHeatExchangerGenerator(-q_mw, diameter_m, temperature_ext_k),
+        from_node_id=from_node_id,
+        to_node_id=to_node_id,
+        constraints=constraints,
+        grid=grid,
+        name=name,
+        auto_node_creator=mm.Junction,
+        auto_grid_key=mm.WATER_KEY,
+    )
+
+
 def create_p2g(
     network: mm.Network,
     from_node_id,
     to_node_id,
     efficiency,
-    mass_flow_setpoint,
+    mass_flow_setpoint_kgs,
     consume_q_mvar_setpoint=0,
     regulation=1,
     constraints=None,
@@ -523,7 +565,7 @@ def create_p2g(
     return network.branch(
         mm.PowerToGas(
             efficiency=efficiency,
-            mass_flow_setpoint=mass_flow_setpoint,
+            mass_flow_setpoint_kgs=mass_flow_setpoint_kgs,
             consume_q_mvar_setpoint=consume_q_mvar_setpoint,
             regulation=regulation,
         ),
@@ -572,7 +614,7 @@ def create_chp(
     diameter_m,
     efficiency_power,
     efficiency_heat,
-    mass_flow_setpoint,
+    mass_flow_setpoint_kgs,
     regulation=1,
     constraints=None,
     remove_existing_branch=False,
@@ -585,7 +627,7 @@ def create_chp(
             diameter_m,
             efficiency_power,
             efficiency_heat,
-            mass_flow_setpoint,
+            mass_flow_setpoint_kgs,
             q_mvar_setpoint=0,
             temperature_ext_k=293,
             regulation=regulation,
@@ -661,7 +703,7 @@ def create_chp_hg(
     gas_node_id,
     efficiency_power,
     efficiency_heat,
-    mass_flow_setpoint,
+    mass_flow_setpoint_kgs,
     regulation=1,
     constraints=None,
 ):
@@ -670,7 +712,7 @@ def create_chp_hg(
         mm.CHPHG(
             efficiency_power=efficiency_power,
             efficiency_heat=efficiency_heat,
-            mass_flow_setpoint=mass_flow_setpoint,
+            mass_flow_setpoint_kgs=mass_flow_setpoint_kgs,
             q_mvar_setpoint=0,
             regulation=regulation,
         ),
@@ -756,7 +798,7 @@ def create_trafo(
 def create_gas_ext_grid(
     network: mm.Network,
     node_id,
-    mass_flow=1,
+    mass_flow_kgs=1,
     pressure_pu=1,
     t_k=356,
     constraints=None,
@@ -770,7 +812,7 @@ def create_gas_ext_grid(
     return create_ext_hydr_grid(
         network,
         node_id,
-        mass_flow=mass_flow,
+        mass_flow_kgs=mass_flow_kgs,
         pressure_pu=pressure_pu,
         t_k=t_k,
         grid_key=mm.GAS_KEY,
@@ -784,7 +826,7 @@ def create_gas_ext_grid(
 def create_water_ext_grid(
     network: mm.Network,
     node_id,
-    mass_flow=1,
+    mass_flow_kgs=1,
     pressure_pu=1,
     t_k=356,
     constraints=None,
@@ -798,7 +840,7 @@ def create_water_ext_grid(
     return create_ext_hydr_grid(
         network,
         node_id,
-        mass_flow=mass_flow,
+        mass_flow_kgs=mass_flow_kgs,
         pressure_pu=pressure_pu,
         t_k=t_k,
         grid_key=mm.WATER_KEY,
@@ -812,7 +854,7 @@ def create_water_ext_grid(
 def create_gas_source(
     network: mm.Network,
     node_id,
-    mass_flow=1,
+    mass_flow_kgs=1,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -824,7 +866,7 @@ def create_gas_source(
     return create_source(
         network,
         node_id,
-        mass_flow=mass_flow,
+        mass_flow_kgs=mass_flow_kgs,
         grid_key=mm.GAS_KEY,
         constraints=constraints,
         overwrite_id=overwrite_id,
@@ -836,7 +878,7 @@ def create_gas_source(
 def create_gas_sink(
     network: mm.Network,
     node_id,
-    mass_flow=1,
+    mass_flow_kgs=1,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -848,7 +890,7 @@ def create_gas_sink(
     return create_sink(
         network,
         node_id,
-        mass_flow=mass_flow,
+        mass_flow_kgs=mass_flow_kgs,
         grid_key=mm.GAS_KEY,
         constraints=constraints,
         overwrite_id=overwrite_id,
@@ -860,7 +902,7 @@ def create_gas_sink(
 def create_water_source(
     network: mm.Network,
     node_id,
-    mass_flow=1,
+    mass_flow_kgs=1,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -872,7 +914,7 @@ def create_water_source(
     return create_source(
         network,
         node_id,
-        mass_flow=mass_flow,
+        mass_flow_kgs=mass_flow_kgs,
         grid_key=mm.WATER_KEY,
         constraints=constraints,
         overwrite_id=overwrite_id,
@@ -884,7 +926,7 @@ def create_water_source(
 def create_water_sink(
     network: mm.Network,
     node_id,
-    mass_flow=1,
+    mass_flow_kgs=1,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -896,7 +938,7 @@ def create_water_sink(
     return create_sink(
         network,
         node_id,
-        mass_flow=mass_flow,
+        mass_flow_kgs=mass_flow_kgs,
         grid_key=mm.WATER_KEY,
         constraints=constraints,
         overwrite_id=overwrite_id,
@@ -917,8 +959,6 @@ def create_grid_forming_generator(
 ):
     """Attach a :class:`GridFormingGenerator` (island slack bus). Requires
     ``enable_islanding(net, electricity=True)``."""
-    from monee.model.extension.islanding import GridFormingGenerator
-
     return create_el_child(
         network,
         GridFormingGenerator(p_mw_max=p_mw_max, q_mvar_max=q_mvar_max, vm_pu=vm_pu),
@@ -934,7 +974,7 @@ def create_grid_forming_source(
     node_id,
     pressure_pu: float = 1.0,
     t_k: float = 356.0,
-    mass_flow_max: float = 1e6,
+    mass_flow_max_kgs: float = 1e6,
     grid_key=mm.GAS_KEY,
     constraints=None,
     overwrite_id=None,
@@ -942,11 +982,9 @@ def create_grid_forming_source(
 ):
     """Attach a :class:`GridFormingSource` (island pressure reference). Requires
     ``enable_islanding`` for the relevant carrier."""
-    from monee.model.extension.islanding import GridFormingSource
-
     return network.child_to(
         GridFormingSource(
-            pressure_pu=pressure_pu, t_k=t_k, mass_flow_max=mass_flow_max
+            pressure_pu=pressure_pu, t_k=t_k, mass_flow_max_kgs=mass_flow_max_kgs
         ),
         node_id=node_id,
         constraints=constraints,
@@ -962,7 +1000,7 @@ def create_gas_grid_forming_source(
     node_id,
     pressure_pu: float = 1.0,
     t_k: float = 356.0,
-    mass_flow_max: float = 1e6,
+    mass_flow_max_kgs: float = 1e6,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -973,7 +1011,7 @@ def create_gas_grid_forming_source(
         node_id,
         pressure_pu=pressure_pu,
         t_k=t_k,
-        mass_flow_max=mass_flow_max,
+        mass_flow_max_kgs=mass_flow_max_kgs,
         grid_key=mm.GAS_KEY,
         constraints=constraints,
         overwrite_id=overwrite_id,
@@ -986,7 +1024,7 @@ def create_water_grid_forming_source(
     node_id,
     pressure_pu: float = 1.0,
     t_k: float = 356.0,
-    mass_flow_max: float = 1e6,
+    mass_flow_max_kgs: float = 1e6,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -997,7 +1035,7 @@ def create_water_grid_forming_source(
         node_id,
         pressure_pu=pressure_pu,
         t_k=t_k,
-        mass_flow_max=mass_flow_max,
+        mass_flow_max_kgs=mass_flow_max_kgs,
         grid_key=mm.WATER_KEY,
         constraints=constraints,
         overwrite_id=overwrite_id,

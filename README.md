@@ -34,6 +34,8 @@
 - MISOCP relaxation for convex AC OPF
 - Built-in minimum-curtailment (load shedding) formulation with per-carrier bounds
 - Capacity limits on all external grid connections (`max_import` / `max_export`)
+- Islanding-aware solves with grid-forming units per carrier (`monee.enable_islanding`)
+- Structured infeasibility diagnostics on failed solves, for both back-ends
 - Custom objectives and constraints through a composable problem API
 
 **Simulation**
@@ -57,8 +59,8 @@ pip install monee
 The default GEKKO solver (IPOPT) is bundled. For MILP/MIQCP problems, install a Pyomo-compatible solver:
 
 ```bash
-pip install highspy   # HiGHS — open source, recommended
-pip install gurobipy  # Gurobi — commercial, free academic licence available
+pip install highspy   # HiGHS - open source, recommended
+pip install gurobipy  # Gurobi - commercial, free academic licence available
 ```
 
 ---
@@ -68,6 +70,7 @@ pip install gurobipy  # Gurobi — commercial, free academic licence available
 Build a coupled electricity and district-heat network and run an energy-flow calculation:
 
 ```python
+import monee.model as mm
 from monee import mx, run_energy_flow
 
 net = mx.create_multi_energy_network()
@@ -86,16 +89,18 @@ j_mid    = mx.create_water_junction(net)
 j_return = mx.create_water_junction(net)
 mx.create_ext_hydr_grid(net, j_supply)
 mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.12, length_m=100)
-mx.create_sink(net, j_return, mass_flow=1.0)
+mx.create_sink(net, j_return, mass_flow_kgs=1.0)
 
 # Coupling: bus_1 drives a heat pump that feeds the heating loop
 mx.create_p2h(net, bus_1, j_mid, j_return,
-              heat_energy_w=100_000, diameter_m=0.1, efficiency=0.9)
+              heat_mw=0.1, diameter_m=0.1, efficiency=0.9)
 
 result = run_energy_flow(net)
-print(result.get("Bus")[["vm_pu", "va_degree"]])
-print(result.get("WaterPipe")[["mass_flow"]])
+print(result.get(mm.Bus)[["vm_pu", "va_degree"]])
+print(result.get(mm.WaterPipe)[["mass_flow_kgs"]])
 ```
+
+Solvers are selected by name - `run_energy_flow(net, solver="gurobi")` routes GEKKO names (`apopt`, `bpopt`, `ipopt`) to the bundled GEKKO back-end and any other name to the matching Pyomo solver. By default `run_energy_flow` runs in **simulation mode** (`simulation=True`), squaring the model for a fast steady-state solve; pass `simulation=False` (or an optimisation problem) to solve in optimisation mode.
 
 ---
 
@@ -106,12 +111,12 @@ Solve minimum-curtailment problems with per-carrier operational bounds:
 ```python
 import monee
 
-net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)
+net.apply_formulation(monee.EL_MISOCP_FORMULATION)
 
 problem = monee.create_min_load_shedding_problem(
-    bounds_el=(0.9, 1.1),    # voltage bounds (pu)
-    bounds_heat=(0.9, 1.1),  # temperature bounds (pu)
-    bounds_gas=(0.9, 1.1),   # pressure bounds (pu)
+    bounds_vm=(0.9, 1.1),        # voltage bounds (pu)
+    bounds_t=(0.9, 1.1),         # temperature bounds (pu)
+    bounds_pressure=(0.9, 1.1),  # pressure bounds (pu)
     include_ext_grids=True,
 )
 
@@ -129,26 +134,35 @@ print(result.dataframes["PowerLoad"][["regulation"]])
 
 ## Formulations
 
-monee separates the **physical equations** from the **network topology** through a `NetworkFormulation` layer. Each formulation covers a **single energy domain** and maps the component types in that domain to a set of equations. Calling `apply_formulation()` overwrites the equations for only the component types included in that formulation, leaving all other domains untouched.
+monee separates the **physical equations** from the **network topology** through a `NetworkFormulation` layer. A formulation maps component types to a set of equations - most cover a **single energy domain**. Calling `apply_formulation()` overwrites the equations for only the component types included in that formulation, leaving all other domains untouched.
 
-Every new `Network` starts with three single-domain defaults:
+Formulations are named by **optimization class** (`NLP`, `MILP`, convex/non-convex `MIQCQP`) and are a property of the **solve**, not the network: pass `formulation=` to any solve call (a registry key string, a `NetworkFormulation`, or a mix), or record a network-level choice with `apply_formulation()`. Components without a choice fall back to `DEFAULT_SIMULATION_FORMULATION` - a deliberate per-domain hybrid:
 
-| Formulation constant | Domain | Equations |
-|---|---|---|
-| `AC_NETWORK_FORMULATION` | Electricity | Nonlinear AC power flow (voltage magnitude + angle) |
-| `MISOCP_NETWORK_FORMULATION` | Electricity | MISOCP relaxation (lifted voltages, SOC constraints) |
-| `NL_WEYMOUTH_NETWORK_FORMULATION` | Gas | Weymouth equation (*p*² formulation) |
-| `NL_DARCY_WEISBACH_NETWORK_FORMULATION` | Water / Heat | Darcy–Weisbach + temperature propagation |
+| Formulation constant | Domain | Equations | Applied |
+|---|---|---|---|
+| `EL_NLP_FORMULATION` | Electricity | Nonlinear polar AC power flow (voltage magnitude + angle) | default |
+| `GAS_CONVEX_MIQCQP_FORMULATION` | Gas | Weymouth equation (*p*² formulation, convex epigraph relaxation) | default |
+| `HEAT_NONCONVEX_MIQCQP_FORMULATION` | Water / Heat | Darcy–Weisbach + bilinear temperature propagation | default |
+| `EL_MISOCP_FORMULATION` | Electricity | MISOCP relaxation (lifted voltages, SOC constraints) | opt-in |
+| `HEAT_CONVEX_MILP_FORMULATION` | Water / Heat | McCormick district-heating relaxation (LP/MILP) | opt-in |
+| `SMOOTH_NLP_FORMULATION` | All three | Binary-free smooth NLP (AC + smooth Weymouth + smooth Darcy–Weisbach) | opt-in bundle |
+| `CONVEX_MIQCQP_FORMULATION` | All three | Certifiable convex relaxations (MISOCP + relaxed Weymouth + McCormick heat) | opt-in bundle |
+| `NONCONVEX_MIQCQP_FORMULATION` | All three | Exact quadratic models for global solvers (exact branch flow + exact Weymouth + bilinear heat) | opt-in bundle |
 
-To use the convex MISOCP relaxation for electricity optimal power flow, apply it over the defaults — gas and heat equations remain unchanged:
+The smooth bundle replaces all direction binaries with smooth approximations, making the full multi-energy system tractable for pure NLP solvers such as IPOPT; import it (or its factory `make_smooth_nlp_formulation()`) from `monee.model.formulation`.
+
+To use the convex MISOCP relaxation for electricity optimal power flow, select it at solve time - gas and heat equations remain on their defaults:
 
 ```python
 import monee
 
-net.apply_formulation(monee.MISOCP_NETWORK_FORMULATION)   # replaces electricity equations only
+result = monee.run_energy_flow(net, solver="gurobi", formulation="el_misocp", simulation=False)
+
+# or record it as the network-level choice for all subsequent solves
+net.apply_formulation(monee.EL_MISOCP_FORMULATION)
 ```
 
-Custom formulations follow the same pattern — subclass the appropriate base class and register it for the target component types:
+Custom formulations follow the same pattern - subclass the appropriate base class and register it for the target component types:
 
 ```python
 from monee.model.formulation.core import BranchFormulation, NetworkFormulation
@@ -157,7 +171,7 @@ from monee.model.branch import GasPipe
 class MyGasPipeFormulation(BranchFormulation):
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         return [from_node_model.pressure_pu - to_node_model.pressure_pu
-                == branch.resistance * branch.mass_flow]
+                == branch.resistance * branch.mass_flow_kgs]
 
 net.apply_formulation(NetworkFormulation(
     branch_type_to_formulations={GasPipe: MyGasPipeFormulation()},
@@ -170,9 +184,9 @@ net.apply_formulation(NetworkFormulation(
 
 Every layer of the framework is designed to be subclassed or replaced without modifying the library internals.
 
-**Custom components** — subclass `NodeModel`, `BranchModel`, `ChildModel`, or `CompoundModel` and register the model with `NetworkFormulation`. The solver infrastructure (variable injection, result extraction, timeseries state tracking) handles the new type automatically.
+**Custom components** - subclass `NodeModel`, `BranchModel`, `ChildModel`, or `CompoundModel` and register the model with `NetworkFormulation`. The solver infrastructure (variable injection, result extraction, timeseries state tracking) handles the new type automatically.
 
-**Custom objectives and constraints** — the optimisation problem is assembled with a composable builder API. `Objectives` and `Constraints` objects are attached to an `OptimizationProblem`; the solver evaluates them without any solver-specific glue:
+**Custom objectives and constraints** - the optimisation problem is assembled with a composable builder API. `Objectives` and `Constraints` objects are attached to an `OptimizationProblem`; the solver evaluates them without any solver-specific glue:
 
 ```python
 import monee.model as mm
@@ -209,13 +223,14 @@ problem.constraints = constraints
 result = run_energy_flow_optimization(net, problem)
 ```
 
-**Network-level extensions** — implement `NetworkAspect` (with `prepare` and `equations` methods) and attach it via `network.add_extension(aspect)`. The extension participates in both variable injection and equation registration without any solver-specific glue code.
+**Network-level extensions** - implement `NetworkAspect` (with `prepare` and `equations` methods) and attach it via `network.add_extension(aspect)`. The extension participates in both variable injection and equation registration without any solver-specific glue code.
 
 ---
 
 ## Timeseries simulation
 
 ```python
+import monee.model as mm
 from monee import run_timeseries, TimeseriesData
 import numpy as np
 
@@ -224,7 +239,7 @@ td.add_child_series(load_id, "p_mw", np.linspace(0.5, 1.5, 96))
 
 ts_result = run_timeseries(net, td)
 # DataFrame indexed by timestep, columns by component ID
-print(ts_result.get_result_for("Bus", "vm_pu"))
+print(ts_result.get_result_for(mm.Bus, "vm_pu"))
 ```
 
 ---

@@ -22,33 +22,60 @@ def test_from_pandapower_net():
 
 
 @pytest.mark.pptest
-def test_from_pandapower_max_i_ka_overrides_matpower_placeholder():
-    """``max_i_ka`` for lines must come from ``net.line``, not from
-    matpower's apparent-power ``rateA`` (which the converter drops to a
-    250 MVA placeholder) or the legacy ``0.319 kA`` fallback in
-    :func:`monee.io.matpower.fill_branch_dict`.
-
-    The bug previously made every imported branch — LV cable, MV cable, HV
-    line, or distribution transformer — share the same 0.319 kA limit,
-    silently breaking any line-loading constraint downstream.  The fix
-    overrides each *line* branch's ``max_i_ka`` from
-    ``net.line.max_i_ka × parallel × df``.
-
-    Transformers are intentionally not covered (the single-``max_i_ka``
-    branch model cannot represent the HV / LV side asymmetry — see the
-    docstring of ``_pp_branch_max_i_ka_overrides``); they retain the
-    legacy placeholder so the test asserts presence of line ratings only.
-    """
+def test_sgens_import_as_distinct_generators_without_positive_reactive():
     import simbench
 
     import monee.model as mm
     from monee.io.from_pandapower import from_pandapower_net
 
-    # LV-rural3: 127 cables at 0.27 kA each + one transformer.  Every line
-    # branch must now carry 0.27, and the legacy 0.319 must appear at most
-    # as the trafo / switch-aux placeholder — not on real lines.
-    net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
+    # GIVEN a grid whose buses carry both loads and static generators
+    net = simbench.get_simbench_net("1-MV-rural--0-sw")
+    n_sgen = int(net.sgen.in_service.sum())
+    assert n_sgen > 0
+
+    # WHEN
     monee_net = from_pandapower_net(net)
+
+    # THEN every in-service sgen becomes its own PowerGenerator ...
+    gens = [c for c in monee_net.childs if isinstance(c.model, mm.PowerGenerator)]
+    assert len(gens) == n_sgen
+
+    # ... and none carries positive (consuming) reactive power. monee stores
+    # generation in load convention, so an injecting generator's q_mvar is <= 0;
+    # the load's reactive power now stays on its own PowerLoad child.
+    assert all(g.model.q_mvar <= 1e-9 for g in gens)
+
+    # The net nodal injection is unchanged vs the raw pandapower elements
+    # (load - sgen, both in generation convention for the sgen contribution).
+    childs = [
+        c
+        for c in monee_net.childs
+        if isinstance(c.model, (mm.PowerGenerator, mm.PowerLoad))
+    ]
+    assert abs(sum(c.model.p_mw for c in childs) - (net.load.p_mw.sum() - net.sgen.p_mw.sum())) < 1e-6
+    assert abs(sum(c.model.q_mvar for c in childs) - (net.load.q_mvar.sum() - net.sgen.q_mvar.sum())) < 1e-6
+
+    # The caller's net is not mutated.
+    assert len(net.sgen) == n_sgen
+
+
+@pytest.mark.pptest
+def test_from_pandapower_max_i_ka_overrides_matpower_placeholder():
+    import simbench
+
+    import monee.model as mm
+    from monee.io.from_pandapower import from_pandapower_net
+
+    # GIVEN
+    net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
+    net_mv = simbench.get_simbench_net("1-MV-rural--0-no_sw")
+
+    # WHEN
+    monee_net = from_pandapower_net(net)
+    monee_mv = from_pandapower_net(net_mv)
+
+    # THEN
+    # line max_i_ka must come from net.line, not the 0.319 kA matpower placeholder
     branches = [
         b for b in monee_net.branches if isinstance(b.model, mm.GenericPowerBranch)
     ]
@@ -58,11 +85,7 @@ def test_from_pandapower_max_i_ka_overrides_matpower_placeholder():
         f"{nb_at_line_rating}"
     )
 
-    # MV-rural: every distinct value in ``net.line.max_i_ka`` must show up
-    # on at least one imported branch (modulo switch-auxiliary branches
-    # documented in ``_pp_branch_max_i_ka_overrides``).
-    net_mv = simbench.get_simbench_net("1-MV-rural--0-no_sw")
-    monee_mv = from_pandapower_net(net_mv)
+    # every distinct MV line rating must appear on at least one imported branch
     mv_branches = [
         b for b in monee_mv.branches if isinstance(b.model, mm.GenericPowerBranch)
     ]

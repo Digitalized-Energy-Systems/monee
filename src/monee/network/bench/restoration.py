@@ -15,11 +15,11 @@ Topology
     network via compressors.  Three distribution chains serve gas sinks.
     A gas storage cavern adds flexibility.
 
-**Thermal / District Heating** (~18 junctions -- 9 supply + 9 return):
-    One heat plant feeds a supply-pipe chain.  A mirrored return-pipe
-    chain carries cooled water back.  Heat exchangers bridge supply to
-    return junctions at consumer nodes.  Coupling points bridge
-    return to supply.
+**Thermal / District Heating** (121 junctions -- 120 supply + 1 return):
+    One heat plant feeds a 120-junction supply-pipe chain.  A single
+    shared return junction collects cooled water (no mirrored return
+    chain).  Heat exchangers bridge supply junctions to the return
+    junction at consumer nodes.  Coupling points feed the supply chain.
 
 **Coupling points** (7 total -- all variants):
     - 2 x CHP  (gas -> electricity + heat)
@@ -51,6 +51,7 @@ from __future__ import annotations
 
 import monee.express as mx
 import monee.model as mm
+from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 from monee.model import GasLinepack, LumpedThermalCapacitance
 
 # -- electrical line catalogue --
@@ -71,12 +72,12 @@ _DH_TRUNK = dict(diameter_m=0.25, length_m=100)
 # -- heat sizing helpers --
 _CP = 4186.0  # water specific heat, J/(kg K)
 _DT = 25.0  # supply-return temperature drop, K
-_HHV_MJ = 55.08  # gas higher heating value, MJ/kg (l-gas)
+_HHV_MJ = DEFAULT_GAS_HHV_MJ_PER_KG  # gas higher heating value, MJ/kg (lgas)
 
 
-def _mf(q_mw):
+def _mf(heat_mw):
     """Convert heat load (MW) to mass flow (kg/s) for a 25 K drop."""
-    return q_mw * 1e6 / (_CP * _DT)
+    return heat_mw * 1e6 / (_CP * _DT)
 
 
 def create_restoration_benchmark(
@@ -89,12 +90,12 @@ def create_restoration_benchmark(
     Build and return the multi-energy restoration benchmark grid.
 
     Args:
-        linepack: Attach :class:`GasLinepack` extension.  Default ``True``.
+        linepack: Attach :class:`GasLinepack` extension.  Default ``False``.
         ltc: Attach :class:`LumpedThermalCapacitance` extension.
-            Default ``True``.
+            Default ``False``.
         misocp: Replace the default AC power-flow formulation with the
             MISOCP relaxation (suitable for ``PyomoSolver``).
-            Default ``False``.
+            Default ``True``.
 
     Returns:
         mm.Network: The fully built network.
@@ -241,7 +242,7 @@ def create_restoration_benchmark(
         (gs0, 0.03),
         (gs1, 0.02),
     ]:
-        mx.create_gas_sink(net, node, mass_flow=mf)
+        mx.create_gas_sink(net, node, mass_flow_kgs=mf)
 
     n_heat = 120
     hs = [mx.create_water_junction(net, name=f"hs_{i}") for i in range(n_heat)]
@@ -257,7 +258,7 @@ def create_restoration_benchmark(
 
     # Consumer heat exchangers (bridge supply -> return, extract heat).
     # Placed at even indices, interleaved with coupling points at odd indices.
-    for i, q_mw in [
+    for i, heat_mw in [
         (2, 0.03),
         (4, 0.04),
         (6, 0.03),
@@ -269,9 +270,9 @@ def create_restoration_benchmark(
         # (99, -0.03),
         (119, 0.02),
     ]:
-        mx.create_heat_exchanger(net, hs[i], hr, q_mw, name=f"HE_{i}")
+        mx.create_heat_exchanger(net, hs[i], hr, heat_mw, name=f"HE_{i}")
 
-    # CHP 1: industrial — gas at A2, power at Ind_1, heat at position 1
+    # CHP 1: industrial - gas at A2, power at Ind_1, heat at position 1
     mx.create_chp_hg(
         net,
         power_node_id=ring_a[1],
@@ -279,9 +280,9 @@ def create_restoration_benchmark(
         gas_node_id=gas_a[2],
         efficiency_power=0.40,
         efficiency_heat=0.40,
-        mass_flow_setpoint=0.008,
+        mass_flow_setpoint_kgs=0.008,
     )
-    # # CHP 2: commercial — gas at B3, power at Com_2, heat at position 3
+    # # CHP 2: commercial - gas at B3, power at Com_2, heat at position 3
     mx.create_chp_hg(
         net,
         power_node_id=ring_b[2],
@@ -289,7 +290,7 @@ def create_restoration_benchmark(
         gas_node_id=gas_b[3],
         efficiency_power=0.38,
         efficiency_heat=0.42,
-        mass_flow_setpoint=0.006,
+        mass_flow_setpoint_kgs=0.006,
     )
     # mx.create_p2h(
     #     net,
@@ -307,7 +308,7 @@ def create_restoration_benchmark(
         from_node_id=ring_a[4],
         to_node_id=gas_a[7],
         efficiency=0.65,
-        mass_flow_setpoint=0.005,
+        mass_flow_setpoint_kgs=0.005,
     )
 
     # G2P 2: peaker (residential)
@@ -325,9 +326,9 @@ def create_restoration_benchmark(
         net.add_extension(LumpedThermalCapacitance())
 
     if misocp:
-        from monee.model.formulation import MISOCP_NETWORK_FORMULATION
+        from monee.model.formulation import EL_MISOCP_FORMULATION
 
-        net.apply_formulation(MISOCP_NETWORK_FORMULATION)
+        net.apply_formulation(EL_MISOCP_FORMULATION)
 
     return net
 

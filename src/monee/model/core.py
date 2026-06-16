@@ -38,10 +38,38 @@ def lower(var_or_const):
 
 
 def value(var_or_const):
-    """Extract ``.value`` from a ``Var``/``Const``/``Intermediate``; pass through plain scalars."""
-    if isinstance(var_or_const, Const | Var | Intermediate):
+    """Extract ``.value`` from a ``Var``/``Const``/``Intermediate``/``PostProcess``; pass through plain scalars."""
+    if isinstance(var_or_const, Const | Var | Intermediate | PostProcess):
         return var_or_const.value
     return var_or_const
+
+
+def set_initial_value(var, value) -> None:
+    """Seed a variable's initial guess / warm start, backend-agnostically.
+
+    A model attribute may be a monee :class:`Var` *or*, once a backend has run
+    ``inject_vars`` (e.g. in ``activate_timeseries``), the backend's own variable
+    object. monee ``Var`` / GEKKO ``GKVariable`` / Pyomo ``Var`` all expose a
+    settable ``value``; gurobipy ``Var`` instead carries its warm start in
+    ``Start`` (and has no ``value``, so ``var.value = ...`` raises). Duck-type on
+    the available attribute so callers in the model layer never need to know
+    which solver backend is active.
+
+    A backend symbol that seeds its warm start elsewhere (e.g. the CasADi
+    ``CasSym``, which captures ``x0`` at ``inject_vars`` time and exposes neither
+    attribute) is deliberately a silent no-op. A plain scalar/string target is
+    never a valid warm-start sink, so reject it loudly to catch the wrong-target
+    programming error the no-op would otherwise mask.
+    """
+    if hasattr(var, "value"):
+        var.value = value
+    elif hasattr(var, "Start"):  # gurobipy.Var
+        var.Start = value
+    elif isinstance(var, (int, float, complex, str, bool)):
+        raise TypeError(
+            f"set_initial_value got a non-variable target {var!r}; expected a "
+            "backend variable with a settable 'value' or 'Start'"
+        )
 
 
 class Var:
@@ -71,7 +99,11 @@ class Var:
         actual_max = None if self.max is None else -self.max
         actual_min = None if self.min is None else -self.min
         return type(self)(
-            value=-self.value, max=actual_min, min=actual_max, name=self.name
+            value=-self.value,
+            max=actual_min,
+            min=actual_max,
+            integer=self.integer,
+            name=self.name,
         )
 
     def __mul__(self, other):
@@ -82,7 +114,11 @@ class Var:
             new_max = None if self.max is None else self.max * other
             new_min = None if self.min is None else self.min * other
         return type(self)(
-            value=self.value * other, max=new_max, min=new_min, name=self.name
+            value=self.value * other,
+            max=new_max,
+            min=new_min,
+            integer=self.integer,
+            name=self.name,
         )
 
     def __lt__(self, other):
@@ -186,6 +222,32 @@ class IntermediateEq:
     def __init__(self, attr, eq):
         self.attr = attr
         self.eq = eq
+
+
+class PostProcess:
+    """A report-only quantity computed *after* the solve, outside the solver,
+    from the solved model values via ``fn(values)``, where ``values`` is a
+    namespace of the model's solved fields (read as ``values.vm_pu``).
+
+    Unlike :class:`Intermediate`, it is never injected as a solver variable nor
+    referenced by any equation - it carries no degrees of freedom and cannot
+    affect convergence or squareness. The clean home for derived reports (e.g.
+    ``vm_pu_squared = vm_pu^2``): physics stays in the solver, reporting outside.
+    """
+
+    def __init__(self, fn, value=0):
+        self.fn = fn  # callable(values_namespace) -> number
+        self.value = value
+
+    def __repr__(self):
+        return f"PostProcess({self.value!r})"
+
+    def __deepcopy__(self, memo):
+        new = PostProcess.__new__(PostProcess)
+        memo[id(self)] = new
+        new.fn = self.fn  # a function is atomic - share by reference
+        new.value = self.value
+        return new
 
 
 class GenericModel(ABC):
@@ -348,7 +410,13 @@ class Component(ABC):
         self.independent = independent
         self.ignored = False
 
+        # Declarative only - which equations to use. Variable declaration
+        # (ensure_var) is deferred to the solver's attach_formulations() pass,
+        # which runs on the solve-time network copy.
         self.formulation = formulation
+        # Set by the Network builders when an explicit formulation= was passed;
+        # pinned formulations survive a solver-level formulation override.
+        self.formulation_pinned = False
 
     @property
     def tid(self):
@@ -357,17 +425,6 @@ class Component(ABC):
     @property
     def nid(self):
         return f"{self.model.__class__.__name__}-{self.id}".lower()
-
-    @property
-    def formulation(self):
-        return self._formulation
-
-    @formulation.setter
-    def formulation(self, formulation):
-        self._formulation = formulation
-
-        if self._formulation is not None:
-            self._formulation.ensure_var(self.model)
 
     def __deepcopy__(self, memo):
         new = self.__class__.__new__(self.__class__)

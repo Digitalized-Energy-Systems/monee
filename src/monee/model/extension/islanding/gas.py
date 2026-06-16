@@ -12,17 +12,17 @@ from .core import GridFormingMixin, IslandingMode
 @model
 class GridFormingSource(ChildModel, GridFormingMixin):
     """Grid-forming source: pins pressure (and t_pu/t_k) on the junction, leaves
-    mass_flow as a Var to absorb island imbalance."""
+    mass_flow_kgs as a Var to absorb island imbalance."""
 
     def __init__(
         self,
         pressure_pu: float = 1.0,
         t_k: float = 356.0,
-        mass_flow_max: float = 1e6,
+        mass_flow_max_kgs: float = 1e6,
     ) -> None:
         super().__init__()
-        self.mass_flow = Var(
-            0, min=-mass_flow_max, max=mass_flow_max, name="gf_mass_flow"
+        self.mass_flow_kgs = Var(
+            0, min=-mass_flow_max_kgs, max=mass_flow_max_kgs, name="gf_mass_flow"
         )
         self._pressure_pu = pressure_pu
         self._t_k = t_k
@@ -30,7 +30,7 @@ class GridFormingSource(ChildModel, GridFormingMixin):
     def overwrite(self, node_model, grid) -> None:
         node_model.pressure_pu = Const(self._pressure_pu)
         node_model.pressure_squared_pu = Const(self._pressure_pu**2)
-        node_model.t_pu = Const(self._t_k / grid.t_ref)
+        node_model.t_pu = Const(self._t_k / grid.t_ref_k)
         node_model.t_k = Const(self._t_k)
 
     def equations(self, grid, node_model, **kwargs):
@@ -38,7 +38,7 @@ class GridFormingSource(ChildModel, GridFormingMixin):
 
 
 class GasIslandingMode(IslandingMode):
-    """Gas islanding: connectivity flow plus ``pressure_pu ≤ 2·e`` on regular
+    r"""Gas islanding: connectivity flow plus :math:`pressure_{pu} \le 2 \cdot e` on regular
     junctions (GF junctions already pin pressure via overwrite())."""
 
     carrier_grid_type = GasGrid

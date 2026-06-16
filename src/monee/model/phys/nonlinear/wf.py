@@ -12,13 +12,13 @@ def darcy_weisbach_equation(
     m_neg_sq,
     pipe_length,
     diameter_m,
-    fluid_density,
+    fluid_density_kg_per_m3,
     on_off=1,
     friction=None,
     **kwargs,
 ):
-    A = math.pi * diameter_m**2 / 4  # pipe cross-section [m²]
+    A = math.pi * diameter_m**2 / 4  # pipe cross-section [m^2]
 
-    Rm = friction * (pipe_length / diameter_m) * (1.0 / (2.0 * fluid_density * A**2))
+    Rm = friction * (pipe_length / diameter_m) * (1.0 / (2.0 * fluid_density_kg_per_m3 * A**2))
 
     return (p_i - p_j) == Rm * -(m_pos_sq - m_neg_sq)

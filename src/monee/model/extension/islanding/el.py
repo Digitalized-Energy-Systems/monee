@@ -34,7 +34,7 @@ class GridFormingGenerator(NoVarChildModel, GridFormingMixin):
 
 
 class ElectricityIslandingMode(IslandingMode):
-    """Electricity islanding: connectivity flow plus θ=0 at GF buses and
+    r"""Electricity islanding: connectivity flow plus :math:`\theta=0` at GF buses and
     energisation-gated angle bounds elsewhere."""
 
     carrier_grid_type = PowerGrid
@@ -47,13 +47,13 @@ class ElectricityIslandingMode(IslandingMode):
     def prepare(self, network: Network) -> None:
         for node in network.nodes:
             if isinstance(node.grid, PowerGrid) and node.active:
-                # Claim bus-angle management: this mode pins θ=0 at GF buses and
+                # Claim bus-angle management: this mode pins \theta=0 at GF buses and
                 # applies energisation-gated bounds elsewhere, so the grid-former
                 # must NOT statically pin va_radians in its overwrite().
                 node.model._islanding_angle_managed = True
                 node.model.e_el = Var(1, min=0, max=1, integer=True, name="e_el")
                 is_gf = any(
-                    isinstance(c.model, GridFormingMixin) and c.active
+                    self.is_grid_forming(c)
                     for c in network.childs_by_ids(node.child_ids)
                 )
                 if is_gf:

@@ -2,7 +2,11 @@ import math
 
 import monee.model as mm
 import monee.solver as ms
+from tests.util import create_water_loop
 
+from monee import run_energy_flow
+from monee.model.formulation import make_heat_nlp_formulation
+from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER as CP
 
 def create_branching_two_pipe_heat_example():
     pn = mm.Network()
@@ -16,12 +20,12 @@ def create_branching_two_pipe_heat_example():
     g_node_1 = pn.node(
         mm.Junction(),
         mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=30))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=30))],
     )
     g_node_2 = pn.node(
         mm.Junction(),
         mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=3))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=3))],
     )
 
     pn.branch(
@@ -47,14 +51,17 @@ def create_t_heat_grid_test():
     )
     g_node_1 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Source(mass_flow=0.1))],
+        # t_k types the injected stream; without it the junction temperature
+        # is structurally underdetermined - APOPT fails on the rank-deficient
+        # system and SCIP/IPOPT return arbitrary, mutually disagreeing values.
+        child_ids=[pn.child(mm.Source(mass_flow_kgs=0.1, t_k=340))],
     )
     g_node_mid = pn.node(
         mm.Junction(),
     )
     g_node_2 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=0.3))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.3))],
     )
 
     pn.branch(
@@ -71,44 +78,6 @@ def create_t_heat_grid_test():
         mm.WaterPipe(diameter_m=0.1, length_m=1000),
         g_node_mid,
         g_node_2,
-    )
-    return pn
-
-
-def create_circle_heat_grid_test():
-    pn = mm.Network()
-
-    # WATER
-    g_node_0 = pn.node(
-        mm.Junction(),
-        mm.WATER,
-        child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))],
-    )
-    g_node_1 = pn.node(
-        mm.Junction(),
-        mm.WATER,
-        child_ids=[pn.child(mm.Source(mass_flow=5))],
-    )
-    g_node_2 = pn.node(
-        mm.Junction(),
-        mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=10))],
-    )
-
-    pn.branch(
-        mm.WaterPipe(diameter_m=0.3, length_m=100),
-        g_node_0,
-        g_node_1,
-    )
-    pn.branch(
-        mm.WaterPipe(diameter_m=0.3, length_m=100),
-        g_node_1,
-        g_node_2,
-    )
-    pn.branch(
-        mm.WaterPipe(diameter_m=0.3, length_m=100),
-        g_node_2,
-        g_node_0,
     )
     return pn
 
@@ -129,7 +98,7 @@ def create_rect_he_heat_example():
     )
     g_node_3 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=1))],
+        child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=1))],
     )
 
     pn.branch(
@@ -166,23 +135,23 @@ def create_ext_branching_heat_example():
     )
     g_node_1 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))],
     )
     g_node_2 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))],
     )
     g_node_3 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))],
     )
     g_node_4 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.Sink(mass_flow=1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))],
     )
     g_node_5 = pn.node(
         mm.Junction(),
-        child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=1))],
+        child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=1))],
     )
 
     pn.branch(
@@ -225,10 +194,10 @@ def create_two_pipes_with_he_no_branching():
     g_node_0 = pn.node(
         mm.Junction(),
         mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=0.3))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.3))],
     )
     g_node_1 = pn.node(
-        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=10))]
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=10))]
     )
     g_node_2 = pn.node(mm.Junction(), mm.WATER)
     g_node_3 = pn.node(
@@ -262,7 +231,7 @@ def create_line_heating_with_dead_end():
     g_node_0 = pn.node(
         mm.Junction(),
         mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))],
     )
     g_node_1 = pn.node(mm.Junction(), mm.WATER)
     g_node_2 = pn.node(mm.Junction(), mm.WATER)
@@ -303,7 +272,7 @@ def create_circular_heating_net():
     g_node_0 = pn.node(
         mm.Junction(),
         mm.WATER,
-        child_ids=[pn.child(mm.Sink(mass_flow=0.1))],
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))],
     )
     g_node_1 = pn.node(mm.Junction(), mm.WATER)
     g_node_2 = pn.node(mm.Junction(), mm.WATER)
@@ -343,85 +312,126 @@ def create_circular_heating_net():
 
 
 def test_two_pipes_heat_network():
+    # GIVEN
     heat_net = create_branching_two_pipe_heat_example()
+
+    # WHEN
     result = ms.PyomoSolver().solve(heat_net)
     print(result)
-    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow"][0], -33)
+
+    # THEN
+    assert result.success
+
+    assert math.isclose(result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -33)
     assert len(result.dataframes) == 4
-    assert math.isclose(result.dataframes["Junction"]["pressure_pa"][2], 999999.60636)
+    assert math.isclose(
+        result.dataframes["Junction"]["pressure_pa"][2], 999999.84300, abs_tol=0.001
+    )
     assert math.isclose(
         result.dataframes["Junction"]["t_k"][2], 355.74529187, abs_tol=0.001
     )
 
 
 def test_t_heat_network():
+    # GIVEN
     heat_net = create_t_heat_grid_test()
-    result = ms.GEKKOSolver().solve(heat_net)
 
+    # WHEN
+    result = ms.GEKKOSolver().solve(heat_net)
     print(result)
+
+    # THEN
+    assert result.success
+
     assert math.isclose(
-        result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.2, rel_tol=1e-4
+        result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -0.2, rel_tol=1e-4
     )
-    assert math.isclose(result.dataframes["Junction"]["t_k"][3], 332.37994134)
+    # 356 K slack and 340 K source mix at mid and cool toward the sink; with
+    # the source temperature typed, APOPT and SCIP agree on this value to 5
+    # decimals (the old 332.38 stemmed from the underdetermined system).
+    assert math.isclose(
+        result.dataframes["Junction"]["t_k"][3], 334.50727, abs_tol=0.001
+    )
     assert len(result.dataframes) == 5
 
 
 def test_circle_heat_network():
-    heat_net = create_circle_heat_grid_test()
-    result = ms.GEKKOSolver().solve(heat_net)
+    # GIVEN
+    heat_net, _, _, _ = create_water_loop(source_t_k=340)
 
+    # WHEN
+    result = ms.GEKKOSolver().solve(heat_net)
     print(result)
+
+    # THEN
+    assert result.success
+
     assert math.isclose(
-        result.dataframes["ExtHydrGrid"]["mass_flow"][0], -5, rel_tol=1e-4
+        result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -5, rel_tol=1e-4
     )
-    assert math.isclose(result.dataframes["Junction"]["t_k"][2], 367.18008246)
+    # Sink junction mixes the 356 K slack and 340 K source streams (minus pipe
+    # losses), so it lies between the injection temperatures. The old 367.18 K
+    # exceeded every injection temperature - an artifact of the structurally
+    # underdetermined source temperature. APOPT/SCIP now agree within 5e-3 K.
+    assert math.isclose(result.dataframes["Junction"]["t_k"][2], 347.917, abs_tol=0.01)
     assert len(result.dataframes) == 5
 
 
 def test_heat_exchanger():
+    # GIVEN
     heat_net = create_two_pipes_with_he_no_branching()
-    result = ms.GEKKOSolver().solve(heat_net)
 
+    # WHEN
+    result = ms.GEKKOSolver().solve(heat_net)
     print(result)
+
+    # THEN
+    assert result.success
+
     assert math.isclose(
-        result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.39834289356
+        result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -0.39834289356
     )
     assert math.isclose(
         result.dataframes["Junction"]["t_k"][0], 383.17457358, abs_tol=0.01
     )
     assert math.isclose(
-        result.dataframes["Junction"]["pressure_pa"][0], 999996.1481, abs_tol=0.001
+        result.dataframes["Junction"]["pressure_pa"][0], 999997.65278, abs_tol=0.01
     )
     assert len(result.dataframes) == 6
 
 
 def test_dead_end():
+    # GIVEN
     heat_net = create_line_heating_with_dead_end()
+
+    # WHEN
     result = ms.GEKKOSolver().solve(heat_net)
 
+    # THEN
+    assert result.success
+
     assert math.isclose(
-        result.dataframes["ExtHydrGrid"]["mass_flow"][0], -0.1, rel_tol=1e-5
+        result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], -0.1, rel_tol=1e-5
     )
     assert math.isclose(
-        result.dataframes["Junction"]["t_k"][0], 343.43247132, abs_tol=0.01
+        result.dataframes["Junction"]["t_k"][0], 343.40404, abs_tol=0.01
     )
     assert len(result.dataframes) == 4
 
 
 def create_supply_return_parallel_he():
-    """Supply and return as 3-node chains.  One node pair is connected by two
-    parallel heat exchangers; the other by a single one."""
+    """Supply/return 3-node chains; one node pair joined by two parallel HEs, the other by one."""
     pn = mm.Network()
 
     s0 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))])
-    s1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
-    s2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=1))])
+    s1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))])
+    s2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=1))])
 
     r0 = pn.node(
-        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=10))]
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=10))]
     )
-    r1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=3))])
-    r2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow=3))])
+    r1 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=3))])
+    r2 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.Sink(mass_flow_kgs=3))])
 
     pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s0, s1)
     pn.branch(mm.WaterPipe(diameter_m=0.56, length_m=100), s1, s2)
@@ -439,8 +449,7 @@ def create_supply_return_parallel_he():
 
 
 def create_supply_return_parallel_he_real(q_mw_coeff=1):
-    """Supply and return as 3-node chains.  One node pair is connected by two
-    parallel heat exchangers; the other by a single one."""
+    """Supply/return 3-node chains with single heat exchangers between node pairs."""
     pn = mm.Network()
 
     s0 = pn.node(mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ExtHydrGrid(t_k=356))])
@@ -448,7 +457,7 @@ def create_supply_return_parallel_he_real(q_mw_coeff=1):
     s2 = pn.node(mm.Junction(), mm.WATER)
 
     r0 = pn.node(
-        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow=10))]
+        mm.Junction(), mm.WATER, child_ids=[pn.child(mm.ConsumeHydrGrid(mass_flow_kgs=10))]
     )
     r1 = pn.node(mm.Junction(), mm.WATER)
     r2 = pn.node(mm.Junction(), mm.WATER)
@@ -466,23 +475,80 @@ def create_supply_return_parallel_he_real(q_mw_coeff=1):
 
 
 def test_supply_return_parallel_he():
+    # GIVEN
     net = create_supply_return_parallel_he()
+
+    # WHEN
     result = ms.GEKKOSolver().solve(net)
     print(result)
+
+    # THEN
     assert result.success
 
 
 def test_supply_return_parallel_he_real():
+    # GIVEN
     net = create_supply_return_parallel_he_real(q_mw_coeff=1)
+
+    # WHEN
     result = ms.PyomoSolver().solve(net)
 
+    # THEN
     assert result.success
+
     assert math.isclose(result.get(mm.Junction)["t_k"][3], 385.1, abs_tol=0.09)
 
 
 def test_supply_return_parallel_he_real_loads():
+    # GIVEN
     net = create_supply_return_parallel_he_real(q_mw_coeff=-1)
+
+    # WHEN
     result = ms.PyomoSolver().solve(net)
 
+    # THEN
     assert result.success
+
     assert math.isclose(result.get(mm.Junction)["t_k"][3], 325.4, abs_tol=0.09)
+
+
+def test_passive_he_minor_loss_matches_analytic():
+
+    q_mw, mdot, zeta, dia = 0.1, 2.0, 5.0, 0.1
+    grid = mm.create_water_grid("heat")
+    net = mm.Network()
+    a = net.node(mm.Junction(), grid=grid, child_ids=[net.child(mm.ExtHydrGrid(t_k=350))])
+    b = net.node(mm.Junction(), grid=grid, child_ids=[net.child(mm.Sink(mass_flow_kgs=mdot))])
+    net.branch(
+        mm.PassiveHeatExchanger(q_mw=q_mw, diameter_m=dia, loss_coefficient=zeta), a, b
+    )
+    net.apply_formulation(make_heat_nlp_formulation(friction_model="constant"))
+
+    result = run_energy_flow(net)
+    print(result)
+    assert result.success
+
+    j = result.dataframes["Junction"]
+    t_in, t_out = j["t_k"].iloc[0], j["t_k"].iloc[1]
+    dp = j["pressure_pa"].iloc[0] - j["pressure_pa"].iloc[1]
+
+    rho = grid.fluid_density_kg_per_m3
+    v = mdot / (rho * math.pi / 4 * dia**2)
+    assert math.isclose(t_out, t_in + q_mw * 1e6 / (CP * mdot), rel_tol=1e-4)
+    assert math.isclose(dp, zeta * rho / 2 * v**2, rel_tol=1e-3)
+
+
+def test_passive_he_zero_loss_coefficient_is_lossless():
+
+    net = mm.Network()
+    a = net.node(mm.Junction(), grid=mm.WATER_KEY, child_ids=[net.child(mm.ExtHydrGrid(t_k=350))])
+    b = net.node(mm.Junction(), grid=mm.WATER_KEY, child_ids=[net.child(mm.Sink(mass_flow_kgs=2.0))])
+    net.branch(
+        mm.PassiveHeatExchanger(q_mw=0.01, diameter_m=0.1, loss_coefficient=0.0), a, b
+    )
+    net.apply_formulation(make_heat_nlp_formulation(friction_model="constant"))
+
+    result = run_energy_flow(net)
+    assert result.success
+    j = result.dataframes["Junction"]
+    assert math.isclose(j["pressure_pa"].iloc[0], j["pressure_pa"].iloc[1], abs_tol=1e-3)

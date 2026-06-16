@@ -9,20 +9,26 @@ import logging
 import pandas
 
 from monee.model import Network
+from monee.model.core import Var
 from monee.model.extension.islanding.core import NetworkIslandingConfig
+from monee.model.formulation.registry import attach_formulations
 from monee.simulation.step_state import PeriodState
 from monee.simulation.timeseries import TimeseriesData
 from monee.solver.core import (
-    _TABLE_CSS,
     SolverResult,
-    _col_summary,
-    _display_df,
     find_ignored_nodes,
     ignore_node,
     inject_vars,
+    mark_he_flow_prescription,
     mark_ignored_components,
     withdraw_vars,
 )
+
+# Shared result-rendering helpers, imported from the solver's public reporting
+# surface (the simulation layer renders the same kind of result tables).
+from monee.solver.core import TABLE_CSS as _TABLE_CSS
+from monee.solver.core import col_summary as _col_summary
+from monee.solver.core import display_df as _display_df
 from monee.solver.dispatch import resolve_multi_period_solver
 
 _log = logging.getLogger(__name__)
@@ -33,6 +39,7 @@ def _prepare_period(
     timeseries_data: TimeseriesData | None,
     t: int,
     optimization_problem,
+    formulation=None,
 ) -> tuple[Network, set]:
     """Copy net, apply timeseries for *t*, run extension prepare(), compute
     ignored nodes. Returns ``(net_t, ignored_nodes)`` ready for injection."""
@@ -43,6 +50,10 @@ def _prepare_period(
 
     for ext in net_t.extensions:
         ext.prepare(net_t)
+
+    # Attach formulations and declare their vars on the period copy (same
+    # position as the single-period solvers: after prepare, before _apply).
+    attach_formulations(net_t, formulation)
 
     islanding_config = next(
         (e for e in net_t.extensions if isinstance(e, NetworkIslandingConfig)),
@@ -64,6 +75,11 @@ def _prepare_period(
         for child in net_t.childs_by_ids(node.child_ids):
             if child.active:
                 child.model.overwrite(node.model, node.grid)
+
+    # Decide per compound-internal SubHE whether the design flow prescribes
+    # the through-flow or yields to a network-determined flow (must run before
+    # var injection - the check relies on monee Var instances).
+    mark_he_flow_prescription(net_t, ignored_nodes)
 
     return net_t, ignored_nodes
 
@@ -88,8 +104,6 @@ def _find_component_var(net_t: Network, comp_id, attr: str):
 def _extract_terminal_state(net_t: Network) -> dict:
     """``{(comp_id, attr): value}`` for all Var/numeric attributes; used by
     :func:`run_mpc` to seed the next horizon's ``initial_state``."""
-    from monee.model.core import Var
-
     state: dict = {}
 
     def _scan(comp_id, model):
@@ -128,8 +142,13 @@ def _slice_timeseries(td: TimeseriesData, start: int, length: int) -> Timeseries
     end = start + length
 
     def _slice_dict(d: dict) -> dict:
+        # Normalize to a list before slicing: a pandas Series keeps its original
+        # integer labels under ``series[start:end]``, so the later positional
+        # read ``series[timestep]`` (timestep is 0-based within the window) would
+        # be label-based and read the wrong row / raise KeyError. ``list(...)``
+        # makes both lists and Series slice positionally and consistently.
         return {
-            comp_id: {attr: series[start:end] for attr, series in attrs.items()}
+            comp_id: {attr: list(series)[start:end] for attr, series in attrs.items()}
             for comp_id, attrs in d.items()
         }
 
@@ -318,7 +337,7 @@ class MultiPeriodResult:
                     row += "  │  " + "  ·  ".join(parts[:4])
                 lines.append(row)
 
-        # Temporal evolution section — only shown when there are varying attrs
+        # Temporal evolution section - only shown when there are varying attrs
         temporal = self._temporal_lines()
         if temporal:
             lines.append(SEP)
@@ -407,6 +426,7 @@ class GekkoMultiPeriodSolver:
         datetime_index: pandas.DatetimeIndex | None = None,
         initial_state: dict | None = None,
         terminal_state: dict | None = None,
+        formulation=None,
     ) -> MultiPeriodResult:
         """Build and solve a multi-period optimization in one GEKKO model.
 
@@ -416,7 +436,7 @@ class GekkoMultiPeriodSolver:
         """
         from gekko import GEKKO
 
-        from monee.solver.gekko import DEFAULT_SOLVER_OPTIONS, GEKKOSolver
+        from monee.solver.gekko import GEKKOSolver, _solver_options
 
         steps = _resolve_steps(steps, timeseries_data)
         dt_h_list = _resolve_dt_h(dt_h, datetime_index, steps)
@@ -425,7 +445,7 @@ class GekkoMultiPeriodSolver:
         m.options.SOLVER = self._solver_int
         m.options.WEB = 0
         m.options.IMODE = 3
-        m.solver_options = DEFAULT_SOLVER_OPTIONS
+        m.solver_options = _solver_options(self._solver_int)
 
         _single = GEKKOSolver(solver=self._solver_int)
 
@@ -438,7 +458,7 @@ class GekkoMultiPeriodSolver:
         for t in range(steps):
             _log.debug("Preparing period %d/%d", t + 1, steps)
             net_t, ignored_t = _prepare_period(
-                network, timeseries_data, t, optimization_problem
+                network, timeseries_data, t, optimization_problem, formulation
             )
             inject_vars(
                 lambda model, comp, cat, _t=t: GEKKOSolver.inject_gekko_vars_attr(
@@ -532,7 +552,7 @@ class GekkoMultiPeriodSolver:
                 f"  • Problem is physically infeasible (conflicting bounds or "
                 f"insufficient supply).\n"
                 f"{terminal_hint}"
-                f"  • Numerical scaling — try normalising loads to per-unit or "
+                f"  • Numerical scaling - try normalising loads to per-unit or "
                 f"reducing T.\n"
                 f"Tip: set steps=1 and increase incrementally to isolate the "
                 f"first infeasible period."
@@ -575,6 +595,7 @@ class PyomoMultiPeriodSolver:
         datetime_index: pandas.DatetimeIndex | None = None,
         initial_state: dict | None = None,
         terminal_state: dict | None = None,
+        formulation=None,
     ) -> MultiPeriodResult:
         """Build and solve a multi-period optimization in a single Pyomo model."""
         import pyomo.environ as pyo
@@ -603,7 +624,7 @@ class PyomoMultiPeriodSolver:
         for t in range(steps):
             _log.debug("Preparing period %d/%d", t + 1, steps)
             net_t, ignored_t = _prepare_period(
-                network, timeseries_data, t, optimization_problem
+                network, timeseries_data, t, optimization_problem, formulation
             )
             inject_vars(
                 lambda model, comp, cat, _t=t: PyomoSolver.inject_pyomo_vars_attr(
@@ -826,6 +847,7 @@ def run_multi_period(
     datetime_index: pandas.DatetimeIndex | None = None,
     initial_state: dict | None = None,
     terminal_state: dict | None = None,
+    formulation=None,
 ) -> MultiPeriodResult:
     """Run a single-shot multi-period optimisation. Cross-period coupling goes
     through the standard ``inter_step_equations`` protocol; ``TimeseriesData``
@@ -844,6 +866,7 @@ def run_multi_period(
         datetime_index=datetime_index,
         initial_state=initial_state,
         terminal_state=terminal_state,
+        formulation=formulation,
     )
 
 
@@ -860,6 +883,7 @@ def run_mpc(
     datetime_index: pandas.DatetimeIndex | None = None,
     initial_state: dict | None = None,
     terminal_state: dict | None = None,
+    formulation=None,
 ) -> MultiPeriodResult:
     """Rolling-horizon MPC. Each iteration solves a *horizon*-period problem,
     accepts the first *execution_steps* periods, advances and reseeds initial
@@ -906,12 +930,18 @@ def run_mpc(
             if timeseries_data is not None
             else None
         )
+        # window_dt already holds the correct per-period durations (derived from
+        # datetime_index by _resolve_dt_h when one was supplied). Drive the
+        # window solve from window_dt alone and pass datetime_index=None, so the
+        # per-window solve does not re-warn about "both dt_h and datetime_index"
+        # and does not discard the computed window_dt.
         window_dt = dt_h_list[offset : offset + actual_window]
-        window_idx = (
-            datetime_index[offset : offset + actual_window]
-            if datetime_index is not None
-            else None
-        )
+
+        # A terminal target pins only the *global* horizon end. Forwarding it to
+        # every rolling window would over-constrain intermediate windows (and can
+        # make them infeasible); only the final window reaches the global end.
+        is_final_window = offset + actual_window >= total_steps
+        window_terminal_state = terminal_state if is_final_window else None
 
         window_result = solver.solve_multi_period(
             network,
@@ -919,9 +949,10 @@ def run_mpc(
             steps=actual_window,
             optimization_problem=optimization_problem,
             dt_h=window_dt,
-            datetime_index=window_idx,
+            datetime_index=None,
             initial_state=current_initial_state,
-            terminal_state=terminal_state,
+            terminal_state=window_terminal_state,
+            formulation=formulation,
         )
 
         n_execute = min(execution_steps, actual_window)

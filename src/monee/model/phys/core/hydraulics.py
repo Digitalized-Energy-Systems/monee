@@ -44,25 +44,32 @@ def calc_pipe_area(diameter_m):
     return math.pi * diameter_m**2 / 4
 
 
-def calc_max_mass_flow(diameter_m, fluid_density, v_max_mps):
-    """Per-pipe mass-flow upper bound [kg/s] from a velocity cap (π/4·D²·ρ·v_max).
+def calc_max_mass_flow(diameter_m, fluid_density_kg_per_m3, v_max_mps):
+    r"""Per-pipe mass-flow upper bound [kg/s] from a velocity cap (:math:`\pi/4 \cdot D^2 \cdot \rho \cdot v_{max}`).
     Used to tighten per-pipe big-M relaxations."""
-    return calc_pipe_area(diameter_m) * fluid_density * v_max_mps
+    return calc_pipe_area(diameter_m) * fluid_density_kg_per_m3 * v_max_mps
 
 
-def calc_nikurdse(internal_diameter_m, roughness):
-    return 1 / (2 * np.log10(3.71 * internal_diameter_m / roughness)) ** 2
+def calc_min_diameter_for_mass_flow(mass_flow_kgs, fluid_density_kg_per_m3, v_design_mps):
+    r"""Smallest pipe diameter [m] carrying ``mass_flow_kgs`` at ``v_design_mps``.
+
+    Inverse of :func:`calc_max_mass_flow`: :math:`D = \sqrt{4 \cdot m / (\pi \cdot \rho \cdot v)}`. Used to
+    size DHS pipes to their required capacity so the velocity cap does not bind.
+    Returns 0 for degenerate inputs (:math:`m \le 0` or non-positive :math:`\rho/v`)."""
+    if mass_flow_kgs <= 0 or fluid_density_kg_per_m3 <= 0 or v_design_mps <= 0:
+        return 0.0
+    return math.sqrt(4.0 * mass_flow_kgs / (math.pi * fluid_density_kg_per_m3 * v_design_mps))
 
 
-# model.reynolds is stored as Re/1e6, so friction PWL breakpoints sit in [0,10]
-# rather than [0,1e7] — keeps the matrix coefficient range manageable.
+# model.reynolds_scaled is stored as Re/1e6, so friction PWL breakpoints sit in [0,10]
+# rather than [0,1e7] - keeps the matrix coefficient range manageable.
 # Friction y-values are still computed at unscaled Re.
 REYNOLDS_SCALE = 1e6
 
 
-def reynolds_equation(rey_var, mass_flow, diameter_m, dynamic_visc, pipe_area):
-    return rey_var == mass_flow * diameter_m / (
-        dynamic_visc * pipe_area * REYNOLDS_SCALE
+def reynolds_equation(rey_var, mass_flow_kgs, diameter_m, dynamic_visc_pas, pipe_area):
+    return rey_var == mass_flow_kgs * diameter_m / (
+        dynamic_visc_pas * pipe_area * REYNOLDS_SCALE
     )
 
 
@@ -74,37 +81,30 @@ def pipe_mass_flow(max_v, min_v, v):
     return min_v <= v <= max_v
 
 
-def flow_rate_equation(mean_flow_velocity, flow_rate, diameter, fluid_density):
+def flow_rate_equation(mean_flow_velocity, flow_rate, diameter, fluid_density_kg_per_m3):
     return mean_flow_velocity == flow_rate / (
-        fluid_density * (diameter**2 * math.pi / 4)
+        fluid_density_kg_per_m3 * (diameter**2 * math.pi / 4)
     )
 
 
-def swamee_jain(reynolds_var, diameter_m, roughness, log_func):
-    term1 = roughness / diameter_m / 3.7
+def swamee_jain(reynolds_var, diameter_m, roughness_m, log_func):
+    term1 = roughness_m / diameter_m / 3.7
     term2 = 5.74 / (reynolds_var + 1) ** 0.9  # +1 avoids infeasibility at Re=0
     denominator = log_func(term1 + term2) ** 2
     f = 0.25 / denominator
     return f
 
 
-def friction_at_high_re(diameter_m: float, roughness: float) -> float:
-    """Turbulent asymptote f = 0.25 / log₁₀(ε / (3.7·D))² (Swamee-Jain at Re→∞).
-    Within a few % of Colebrook for Re ≳ 1e4; under-estimates pressure drop in
-    laminar (Re<2300). Returns 0 for degenerate inputs (D≤0, ε≥3.7·D)."""
-    if diameter_m <= 0 or roughness <= 0:
+def friction_at_high_re(diameter_m: float, roughness_m: float) -> float:
+    r"""Turbulent asymptote :math:`f = 0.25 / \log_{10}(\varepsilon / (3.7 \cdot D))^2` (Swamee-Jain at :math:`Re \to \infty`).
+    Within a few % of Colebrook for :math:`Re \gtrsim 10^4`; under-estimates pressure drop in
+    laminar (:math:`Re < 2300`). Returns 0 for degenerate inputs (:math:`D \le 0`, :math:`\varepsilon \ge 3.7 \cdot D`)."""
+    if diameter_m <= 0 or roughness_m <= 0:
         return 0.0
-    term1 = roughness / diameter_m / 3.7
+    term1 = roughness_m / diameter_m / 3.7
     if term1 >= 1.0:
         return 0.0
     return 0.25 / math.log10(term1) ** 2
-
-
-def churchill_friction(Re, D, eps):
-    Re = max(Re, 1.0)
-    A = (2.457 * math.log(1.0 / ((7.0 / Re) ** 0.9 + 0.27 * eps / D))) ** 16
-    B = (37530.0 / Re) ** 16
-    return 8.0 * ((8.0 / Re) ** 12 + 1.0 / (A + B) ** 1.5) ** (1.0 / 12.0)
 
 
 def filter_near_linear(xs, ys, rtol=1e-6):
@@ -144,7 +144,7 @@ def logspace(a, b, n):
 
 def piecewise_eq_friction(model, pwl):
     D = model.diameter_m
-    eps = model.roughness
+    eps = model.roughness_m
 
     xs = []
     xs += logspace(10.0, 2000.0, 4)
@@ -156,7 +156,7 @@ def piecewise_eq_friction(model, pwl):
     xs = [x / REYNOLDS_SCALE for x in xs]
 
     # Anchor Re=0 so a no-flow branch stays feasible. Reuse f(10) to keep
-    # the (0, f(10)) slope finite; friction·m² ≡ 0 at m=0 anyway.
+    # the (0, f(10)) slope finite; friction \cdot m^2 \equiv 0 at m=0 anyway.
     xs = [0.0] + xs
     ys = [ys[0]] + ys
 
@@ -164,7 +164,7 @@ def piecewise_eq_friction(model, pwl):
 
     pwl.piecewise_eq(
         y=model.friction,
-        x=model.reynolds,
+        x=model.reynolds_scaled,
         xs=xs,
         ys=ys,
     )
@@ -172,16 +172,16 @@ def piecewise_eq_friction(model, pwl):
 
 def phi_pwl_breakpoints(
     diameter_m: float,
-    roughness: float,
-    dynamic_visc: float,
+    roughness_m: float,
+    dynamic_visc_pas: float,
     pipe_area: float,
     m_max: float,
     n_breakpoints: int = 12,
 ):
-    """Breakpoints for ``φ(m) = friction(Re(m)) · m²`` on ``m ∈ [0, m_max]``.
+    r"""Breakpoints for :math:`\varphi(m) = friction(Re(m)) \cdot m^2` on :math:`m \in [0, m_{max}]`.
 
-    Log-spaced ``[m_max·1e-4, m_max]`` plus a 0-anchor, so both the laminar
-    tail (φ ∝ m) and turbulent regime (φ ∝ m²) resolve well in a single SOS2.
+    Log-spaced :math:`[m_{max} \cdot 10^{-4}, m_{max}]` plus a 0-anchor, so both the laminar
+    tail (:math:`\varphi \propto m`) and turbulent regime (:math:`\varphi \propto m^2`) resolve well in a single SOS2.
     """
     if m_max <= 0:
         return [0.0, 1e-6], [0.0, 0.0]
@@ -193,8 +193,8 @@ def phi_pwl_breakpoints(
     xs = [0.0] + list(log_xs)
     ys = [0.0]
     for m in log_xs:
-        Re = m * diameter_m / (dynamic_visc * pipe_area)
-        f = friction_value(Re, diameter_m, roughness)
+        Re = m * diameter_m / (dynamic_visc_pas * pipe_area)
+        f = friction_value(Re, diameter_m, roughness_m)
         ys.append(f * m * m)
 
     xs, ys = filter_near_linear(xs, ys, rtol=1e-3)

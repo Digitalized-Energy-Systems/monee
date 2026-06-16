@@ -4,6 +4,7 @@ Minimises total unserved energy across electrical, gas, and thermal carriers
 (single- or multi-period).
 """
 
+import logging
 import math
 
 from monee.model.branch import (
@@ -25,7 +26,12 @@ from monee.model.child import (
     Sink,
     Source,
 )
-from monee.model.grid import GasGrid, WaterGrid
+from monee.model.grid import (
+    DEFAULT_GAS_HHV_KWH_PER_KG,
+    KGPS_KWHPERKG_TO_MW,
+    GasGrid,
+    WaterGrid,
+)
 from monee.model.multi import (
     CHPControlNode,
     CHPHGControlNode,
@@ -44,15 +50,15 @@ from monee.problem.core import (
     OptimizationProblem,
     nan_to_zero,
 )
-from monee.problem.utils import cp_input_rated_mw
+from monee.problem.utils import cp_input_rated_mw, line_loading_limit
 
 WEIGHT_DEMAND = 1e3
 WEIGHT_GENERATOR = 0.1
 # 10× weaker than the demand-shed cost so ties prefer self-sufficiency.
 EXT_SLACK_WEIGHT_RATIO = 0.1
 
-# Fallback HHV (kWh/kg) for Sink/Source on a grid without higher_heating_value.
-_HHV_DEFAULT = 15.3
+# Fallback HHV (kWh/kg) for Sink/Source on a grid without higher_heating_value_kwh_per_kg.
+_HHV_DEFAULT = DEFAULT_GAS_HHV_KWH_PER_KG
 
 # Types that participate in the load-shedding objective.
 _DEMAND_TYPES = (
@@ -94,9 +100,9 @@ _COUPLING_POINT_TYPES = (
 
 
 def _gas_mw_factor(grid):
-    """Return ``3.6 · HHV`` (kg/s → MW); falls back to :data:`_HHV_DEFAULT`."""
-    hhv = getattr(grid, "higher_heating_value", _HHV_DEFAULT)
-    return 3.6 * hhv
+    """Return ``KGPS_KWHPERKG_TO_MW · HHV`` (kg/s → MW); falls back to :data:`_HHV_DEFAULT`."""
+    hhv = getattr(grid, "higher_heating_value_kwh_per_kg", _HHV_DEFAULT)
+    return KGPS_KWHPERKG_TO_MW * hhv
 
 
 _SQRT_3 = math.sqrt(3.0)
@@ -111,7 +117,7 @@ def _aux_objective_upper_bound(
     """Upper bound on ``|Σ aux_obj|`` over the formulation-level minimize hooks.
 
     Contributors:
-      * MISOCP electricity: ``current_pu·br_r`` capped by ``min(SOC_bound,
+      * MISOCP electricity: ``current_pu_squared·br_r_pu`` capped by ``min(SOC_bound,
         line_loading_bound)``;
       * Linear HE: ``|q_mw_set|``;
       * NL gas/water epigraph (ε=1e-5): ``1e-5·2·M²`` per branch;
@@ -121,27 +127,27 @@ def _aux_objective_upper_bound(
     total = 0.0
     for component in network.all_components():
         m = component.model
-        # br_r/br_x on PowerLine/Trafo are computed in equations() — at
+        # br_r_pu/br_x_pu on PowerLine/Trafo are computed in equations() - at
         # _apply time they are still 0, so call calc_r_x to read them now.
-        br_r = getattr(m, "br_r", None)
-        br_x = getattr(m, "br_x", None)
+        br_r_pu = getattr(m, "br_r_pu", None)
+        br_x_pu = getattr(m, "br_x_pu", None)
         from_model = to_model = None
         if hasattr(component, "from_node_id"):
             try:
                 from_model = network.node_by_id(component.from_node_id).model
                 to_model = network.node_by_id(component.to_node_id).model
                 if hasattr(m, "calc_r_x"):
-                    br_r, br_x = m.calc_r_x(component.grid, from_model, to_model)
+                    br_r_pu, br_x_pu = m.calc_r_x(component.grid, from_model, to_model)
             except Exception:
                 from_model = to_model = None
-        if isinstance(br_r, (int, float)) and isinstance(br_x, (int, float)):
-            denom = br_r * br_r + br_x * br_x
-            if denom > 0 and br_r > 0:
+        if isinstance(br_r_pu, (int, float)) and isinstance(br_x_pu, (int, float)):
+            denom = br_r_pu * br_r_pu + br_x_pu * br_x_pu
+            if denom > 0 and br_r_pu > 0:
                 vm_max = getattr(component.grid, "vm_pu_max", vm_pu_fallback)
                 w_max = vm_max * vm_max
                 current_pu_max = 4.0 * w_max / denom  # SOC physics bound
                 # Tighten via line-loading constraint:
-                # current_pu ≤ max_loading² · (max_i_ka / I_base)²
+                # current_pu_squared ≤ max_loading² · (max_i_ka / I_base)²
                 max_i_ka = getattr(m, "max_i_ka", None)
                 grid = component.grid
                 if (
@@ -159,17 +165,19 @@ def _aux_objective_upper_bound(
                     i_base_min = min(i_base_from, i_base_to)
                     loading_bound = max_line_loading**2 * (max_i_ka / i_base_min) ** 2
                     current_pu_max = min(current_pu_max, loading_bound)
-                total += current_pu_max * br_r
+                total += current_pu_max * br_r_pu
         # Linear HX: |q_mw_delivered| ≤ |q_mw_set·regulation| ⇒ bound |q_mw_set|.
         q_mw_set = getattr(m, "q_mw_set", None)
         if isinstance(q_mw_set, (int, float)):
             total += abs(q_mw_set)
         # NL gas/water epigraph ε·(m_pos²+m_neg²) (ε≈1e-5; use 1e-4 for safety).
-        m_pos_sq = getattr(m, "mass_flow_pos_squared", None)
-        m_neg_sq = getattr(m, "mass_flow_neg_squared", None)
+        m_pos_sq = getattr(m, "mass_flow_pos_kgs_squared", None)
+        m_neg_sq = getattr(m, "mass_flow_neg_kgs_squared", None)
         if m_pos_sq is not None and m_neg_sq is not None:
-            ub_pos = getattr(m_pos_sq, "max", None) or 100.0**2
-            ub_neg = getattr(m_neg_sq, "max", None) or 100.0**2
+            max_pos = getattr(m_pos_sq, "max", None)
+            max_neg = getattr(m_neg_sq, "max", None)
+            ub_pos = max_pos if max_pos is not None else 100.0**2
+            ub_neg = max_neg if max_neg is not None else 100.0**2
             total += 1e-4 * (ub_pos + ub_neg)
         # McCormick-DHS t_pu pull: ε·(1-t_pu), t_pu∈[0,2].
         t_pu = getattr(m, "t_pu", None)
@@ -198,11 +206,9 @@ def _make_auto_priority_floor_hook(
     and, if it is below the floor, scales every weight up by
     ``floor / min_w``.  Generator weights and the per-load callback's
     returns are both lifted by the same scale via the ``weights["scale"]``
-    multiplier consulted in ``weight_fn`` — the user-set load-priority
+    multiplier consulted in ``weight_fn`` - the user-set load-priority
     *ratios* are preserved.
     """
-    import logging
-
     _log = logging.getLogger(__name__)
 
     def _hook(network):
@@ -228,20 +234,25 @@ def _make_auto_priority_floor_hook(
             if min_w is not None and min_w < floor:
                 scale = floor / min_w if min_w > 0 else 1.0
                 # ``weights['scale']`` multiplies BOTH the callback return
-                # AND the default ``weights['demand']`` — see ``weight_fn``.
+                # AND the default ``weights['demand']`` - see ``weight_fn``.
                 weights["scale"] = weights.get("scale", 1.0) * scale
                 weights["generator"] = weights["generator"] * scale
                 if debug:
                     _log.warning(
                         "Auto priority floor (per-load): A_max=%.3g, α=%.3g, "
                         "min_w=%.3g → scale ×%.3g (generator weight scaled too)",
-                        a_max, alpha, min_w, scale,
+                        a_max,
+                        alpha,
+                        min_w,
+                        scale,
                     )
             elif debug:
                 _log.warning(
                     "Auto priority floor (per-load): A_max=%.3g, α·A_max=%.3g "
-                    "already covered by per-load min_w=%.3g — no change.",
-                    a_max, floor, min_w or 0.0,
+                    "already covered by per-load min_w=%.3g - no change.",
+                    a_max,
+                    floor,
+                    min_w or 0.0,
                 )
             return
 
@@ -264,7 +275,7 @@ def _make_auto_priority_floor_hook(
         elif debug:
             _log.warning(
                 "Auto priority floor: A_max=%.3g, α·A_max=%.3g already "
-                "covered by user-supplied demand_weight=%.3g — no change.",
+                "covered by user-supplied demand_weight=%.3g - no change.",
                 a_max,
                 floor,
                 old_demand,
@@ -314,8 +325,8 @@ def _shedding_mw(model, gas_mw_factor=None, cp_rated_mw=None):
         return q_mw_set * (1 - reg)
 
     if isinstance(model, (Sink, Source)):
-        mf = nan_to_zero(model.mass_flow)
-        factor = gas_mw_factor if gas_mw_factor is not None else 3.6 * _HHV_DEFAULT
+        mf = nan_to_zero(model.mass_flow_kgs)
+        factor = gas_mw_factor if gas_mw_factor is not None else KGPS_KWHPERKG_TO_MW * _HHV_DEFAULT
         if isinstance(model, Sink):
             return mf * factor * (1 - reg)
         return (-mf) * factor * (1 - reg)
@@ -341,21 +352,21 @@ def create_min_load_shedding_problem(
     demand_weight=WEIGHT_DEMAND,
     generator_weight=WEIGHT_GENERATOR,
     weight_for_load=None,
-    bounds_el=(0.9, 1.1),
-    bounds_gas=(0.9, 1.1),
-    bounds_heat=(0.9, 1.1),
+    bounds_vm=(0.9, 1.1),
+    bounds_pressure=(0.9, 1.1),
+    bounds_t=(0.9, 1.1),
     max_line_loading=1.5,
-    ext_grid_el_bounds=(-3, 3),
-    ext_grid_gas_bounds=(-10, 10),
-    ext_grid_heat_bounds=(-10, 10),
+    bounds_ext_el=(-3, 3),
+    bounds_ext_gas=(-10, 10),
+    bounds_ext_heat=(-10, 10),
     regulation_ramp_limit=None,
     include_storages=False,
     include_ext_grids=True,
     include_coupling_points=False,
     check_vm=True,
     check_pressure=True,
-    check_temperature=True,
-    check_line_loading=True,
+    check_t=True,
+    check_lp=True,
     lex_objectives=False,
     auto_priority_floor=True,
     priority_safety_factor=10.0,
@@ -377,7 +388,7 @@ def create_min_load_shedding_problem(
     ``include_coupling_points`` (default False) extends the demand-side of the
     objective to coupling-point components (CHP / CHPHG / G2H / P2H control
     nodes and the HG branch variants P2G / G2P / P2H_HG / G2H_HG). Each CP is
-    penalised at ``demand_weight · cp_input_rated_mw · (1 - regulation)`` —
+    penalised at ``demand_weight · cp_input_rated_mw · (1 - regulation)`` -
     i.e. treated like a load on its input carrier (gas or power).
     """
     problem = OptimizationProblem(debug=debug, lex_objectives=lex_objectives)
@@ -385,7 +396,7 @@ def create_min_load_shedding_problem(
     # Mutable so the auto-priority-floor hook can retune at _apply time.
     # ``scale`` is a multiplicative factor applied on top of both the
     # default ``demand`` weight AND any per-load weight returned by
-    # ``weight_for_load`` — the auto-floor hook uses it to lift every
+    # ``weight_for_load`` - the auto-floor hook uses it to lift every
     # demand-side weight uniformly when the minimum effective per-load
     # weight would otherwise fall below ``α·A_max``.  Default 1.0 makes
     # it a no-op for legacy (no callback) usage.
@@ -410,25 +421,25 @@ def create_min_load_shedding_problem(
                 _weights,
                 alpha=priority_safety_factor,
                 debug=debug,
-                max_line_loading=max_line_loading if check_line_loading else None,
+                max_line_loading=max_line_loading if check_lp else None,
                 weight_for_load=weight_for_load,
             )
         )
 
     if check_vm:
-        problem.bounds(bounds_el, lambda m, _: type(m) is Bus, ["vm_pu"])
+        problem.bounds(bounds_vm, lambda m, _: type(m) is Bus, ["vm_pu"])
     if check_pressure:
-        problem.bounds(bounds_gas, lambda m, _: type(m) is Junction, ["pressure_pu"])
-    if check_temperature:
+        problem.bounds(bounds_pressure, lambda m, _: type(m) is Junction, ["pressure_pu"])
+    if check_t:
         problem.bounds(
-            bounds_heat,
+            bounds_t,
             lambda m, g: type(m) is Junction and type(g) is WaterGrid,
             ["t_pu"],
         )
 
     # Lookups go through _weights so the auto-priority-floor can retune.
     # When ``weight_for_load`` is set and applicable, the per-load
-    # weight it returns takes precedence — multiplied by the auto-
+    # weight it returns takes precedence - multiplied by the auto-
     # floor scale so per-load weights and the legacy demand weight
     # share the same aux-dominance lift.
     def weight_fn(model):
@@ -445,7 +456,7 @@ def create_min_load_shedding_problem(
         if isinstance(model, _DEMAND_TYPES):
             return _weights["demand"] * scale
         # CPs are penalised at the demand weight when include_coupling_points
-        # is on — the input draw is treated as a load on its input carrier.
+        # is on - the input draw is treated as a load on its input carrier.
         if isinstance(model, _COUPLING_POINT_TYPES):
             return _weights["demand"] * scale
         # Bare HeatExchanger / PassiveHeatExchanger: route by sign of q_mw_set.
@@ -473,12 +484,12 @@ def create_min_load_shedding_problem(
             return False
         grids = g if isinstance(g, list) else [g]
         return any(
-            gg is not None and hasattr(gg, "higher_heating_value") for gg in grids
+            gg is not None and hasattr(gg, "higher_heating_value_kwh_per_kg") for gg in grids
         )
 
     # Populated by _objective_models, read by _data_attacher.
-    #   model_to_grid  — Sink/Source HHV lookup (gas grid only).
-    #   model_to_cp_mw — CP nameplate input MW (when include_coupling_points).
+    #   model_to_grid  - Sink/Source HHV lookup (gas grid only).
+    #   model_to_cp_mw - CP nameplate input MW (when include_coupling_points).
     model_to_grid: dict = {}
     model_to_cp_mw: dict = {}
 
@@ -488,15 +499,23 @@ def create_min_load_shedding_problem(
         model_to_grid.clear()
         model_to_cp_mw.clear()
         out = []
-        # Standard child/branch loads + generators + HX.
-        for model, grid in network.all_models_with_grid():
+        # Standard child/branch loads + generators + HX. Inactive/ignored
+        # components are excluded (mirroring Constraints.select and the CP
+        # loop below): their Vars are never registered with the backend, so
+        # e.g. an ignored HeatExchangerLoad's q_mw_delivered would otherwise
+        # leak a raw monee Var into the objective expression.
+        for component in network.all_components():
+            if not component.active or component.ignored:
+                continue
+            model = component.model
+            grid = getattr(component, "grid", None)
             if not _is_objective_model(model):
                 continue
             if isinstance(model, (Sink, Source)) and not _is_gas_grid(grid):
                 continue
             # CP control nodes also surface via all_models_with_grid, but we
             # need ``component`` (not just ``model``) to compute the rated MW
-            # via cp_input_rated_mw — handled in the dedicated loop below.
+            # via cp_input_rated_mw - handled in the dedicated loop below.
             if isinstance(model, _COUPLING_POINT_TYPES):
                 continue
             out.append(model)
@@ -552,7 +571,7 @@ def create_min_load_shedding_problem(
                 if isinstance(model, ExtPowerGrid):
                     total = total + model.p_mw * model.p_mw * weight
                 elif isinstance(model, ExtHydrGrid):
-                    total = total + model.mass_flow * model.mass_flow * weight
+                    total = total + model.mass_flow_kgs * model.mass_flow_kgs * weight
             return total
 
         objectives.with_models(_ext_slack_models).data(_ext_slack_data).calculate(
@@ -563,28 +582,26 @@ def create_min_load_shedding_problem(
 
     constraints = Constraints()
 
-    if check_line_loading:
-        from monee.problem.utils import line_loading_limit
-
+    if check_lp:
         constraints.select_types(GenericPowerBranch).equation(
             lambda m: line_loading_limit(m, "from", max_line_loading)
         ).equation(lambda m: line_loading_limit(m, "to", max_line_loading))
 
     if include_ext_grids:
         constraints.select_types(ExtPowerGrid).equation(
-            lambda m: m.p_mw >= ext_grid_el_bounds[0]
-        ).equation(lambda m: m.p_mw <= ext_grid_el_bounds[1])
+            lambda m: m.p_mw >= bounds_ext_el[0]
+        ).equation(lambda m: m.p_mw <= bounds_ext_el[1])
 
         constraints.select(
             lambda c: type(c.grid) is GasGrid and type(c.model) is ExtHydrGrid
-        ).equation(lambda m: m.mass_flow >= ext_grid_gas_bounds[0]).equation(
-            lambda m: m.mass_flow <= ext_grid_gas_bounds[1]
+        ).equation(lambda m: m.mass_flow_kgs >= bounds_ext_gas[0]).equation(
+            lambda m: m.mass_flow_kgs <= bounds_ext_gas[1]
         )
 
         constraints.select(
             lambda c: type(c.grid) is WaterGrid and type(c.model) is ExtHydrGrid
-        ).equation(lambda m: m.mass_flow >= ext_grid_heat_bounds[0]).equation(
-            lambda m: m.mass_flow <= ext_grid_heat_bounds[1]
+        ).equation(lambda m: m.mass_flow_kgs >= bounds_ext_heat[0]).equation(
+            lambda m: m.mass_flow_kgs <= bounds_ext_heat[1]
         )
 
     if regulation_ramp_limit is not None:

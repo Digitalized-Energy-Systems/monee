@@ -5,14 +5,14 @@ class NetworkAspect:
     Analogous to ``BranchFormulation`` / ``NodeFormulation`` but spanning the
     entire network.  Register with ``network.add_extension(aspect)``.
 
-    Phase 1 — ``prepare(network)``: called *before* variable injection; add
+    Phase 1 - ``prepare(network)``: called *before* variable injection; add
     ``Var`` placeholders to model objects so the injection loop picks them up.
 
-    Phase 2 — ``equations(network, ignored_nodes) → list``: called *after*
+    Phase 2 - ``equations(network, ignored_nodes) → list``: called *after*
     variable injection; return relational expressions (``==``, ``<=``,
     ``>=``) built from injected model attributes.  The solver registers them
     with ``m.Equations(eqs)`` / ``pm.cons.add`` without inspecting their
-    content — exactly like branch/node equations.
+    content - exactly like branch/node equations.
     """
 
     def prepare(self, network) -> None:
@@ -45,7 +45,7 @@ class NetworkAspect:
         equations are assembled, when a timeseries or multi-period solve begins.
 
         Override to set flags on model objects that modify equation assembly
-        for coupled solves — for example, suppressing a degenerate algebraic
+        for coupled solves - for example, suppressing a degenerate algebraic
         equation whose role is taken over by an inter-step constraint.
 
         *step_state* is provided so extensions can warm-start solver variable
