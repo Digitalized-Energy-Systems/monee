@@ -84,15 +84,22 @@ class PyomoPWLImpl:
 
 
 def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
-    """Map a Pyomo solve outcome to ``(success, report)``.
+    """Map a Pyomo solve outcome to ``(success, report, status_str, tc_str)``.
 
     OK → silent; infeasible → error + MIS report; other non-OK (limits with a
     feasible incumbent) → warning, treated as success.
+
+    The status/tc strings let downstream consumers identify *which* non-ok
+    outcome a "success" actually came from (e.g. a Gurobi time-limit abort
+    that returned a witness incumbent — the MC pipeline drops those
+    samples rather than averaging them in).
     """
     status = result.solver.status
     tc = result.solver.termination_condition
+    status_str = str(status) if status is not None else None
+    tc_str = str(tc) if tc is not None else None
     if status == SolverStatus.ok:
-        return True, None
+        return True, None, status_str, tc_str
     if tc == TerminationCondition.infeasible:
         from monee.solver.infeasibility import diagnose_infeasibility
 
@@ -106,7 +113,7 @@ def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
             tc,
             report.summary(max_items=50),
         )
-        return False, report
+        return False, report, status_str, tc_str
     _log.warning(
         "%s returned non-ok status (status=%s, termination=%s); "
         "using witness solution.",
@@ -114,7 +121,7 @@ def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
         status,
         tc,
     )
-    return True, None
+    return True, None, status_str, tc_str
 
 
 class PyomoSolver(SolverInterface):
@@ -361,7 +368,7 @@ class PyomoSolver(SolverInterface):
             solve_kwargs["warmstart"] = True
 
         if lex_objectives:
-            result, success, report = self._solve_lexicographic(
+            result, success, report, status_str, tc_str = self._solve_lexicographic(
                 pm, solver, solver_name, solve_kwargs
             )
         else:
@@ -370,7 +377,7 @@ class PyomoSolver(SolverInterface):
                 sense=pyo.minimize,
             )
             result = solver.solve(pm, **solve_kwargs)
-            success, report = _classify_solve_result(
+            success, report, status_str, tc_str = _classify_solve_result(
                 result,
                 pm,
                 solver_name,
@@ -395,6 +402,8 @@ class PyomoSolver(SolverInterface):
             obj_val,
             success,
             violations,
+            solver_status=status_str,
+            termination_condition=tc_str,
         )
         if not success:
             solver_result.infeasibility_report = report
@@ -421,7 +430,7 @@ class PyomoSolver(SolverInterface):
 
         # Phase 1: user objective only.
         result = solver.solve(pm, **solve_kwargs)
-        success, report = _classify_solve_result(
+        success, report, status_str, tc_str = _classify_solve_result(
             result,
             pm,
             solver_name,
@@ -433,7 +442,7 @@ class PyomoSolver(SolverInterface):
                 sense=pyo.minimize,
             )
             pm.obj.deactivate()
-            return result, success, report
+            return result, success, report, status_str, tc_str
 
         s_star = pyo.value(pm.obj_user, exception=False)
         if s_star is None:
@@ -445,7 +454,7 @@ class PyomoSolver(SolverInterface):
         pm.obj_aux.activate()
 
         result = solver.solve(pm, **solve_kwargs)
-        success, report = _classify_solve_result(
+        success, report, status_str, tc_str = _classify_solve_result(
             result,
             pm,
             solver_name,
@@ -457,7 +466,7 @@ class PyomoSolver(SolverInterface):
             sense=pyo.minimize,
         )
         pm.obj.deactivate()
-        return result, success, report
+        return result, success, report, status_str, tc_str
 
     def process_internal_oxf_components(self, pm, network):
         for constraint in network.constraints:

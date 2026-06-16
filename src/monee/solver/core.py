@@ -64,13 +64,28 @@ _TABLE_CSS = (
 @dataclass
 class SolverResult:
     """Outcome of a single solve. ``objective=0.0`` for plain energy flow;
-    ``None`` when not meaningful (e.g. ``MultiPeriodResult.get_period_result``)."""
+    ``None`` when not meaningful (e.g. ``MultiPeriodResult.get_period_result``).
+
+    Termination metadata
+    --------------------
+    ``solver_status`` and ``termination_condition`` mirror the Pyomo
+    ``SolverStatus`` / ``TerminationCondition`` strings (or ``None`` if
+    not populated by the backend). They let downstream consumers
+    distinguish a converged-optimal solution from a *witness* incumbent
+    Gurobi returns when it hits a time limit — the witness has
+    ``success=True`` and looks identical otherwise. Callers that care
+    about convergence (e.g. the MC resilience pipeline, which must drop
+    aborted samples rather than averaging in a non-converged shed value)
+    can inspect ``termination_condition`` to detect the time-limit case.
+    """
 
     network: Network
     dataframes: dict[str, pandas.DataFrame]
     objective: float | None
     success: bool
     violations: dict[str, float] = field(default_factory=dict)
+    solver_status: str | None = None
+    termination_condition: str | None = None
 
     def summary(self):
         return repr(self)
