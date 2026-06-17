@@ -392,6 +392,35 @@ reports.
 
 ----
 
+Which back-end is fastest?
+==========================
+
+The same network and formulation can go to several back-ends, and they reach
+the same solution (agreement to ``1e-4`` or better across every benchmarked
+case, most to ``1e-8``), so the only thing that separates them is speed. The
+in-process back-ends win, because they skip a subprocess or a file round-trip:
+
+- For the smooth NLPs (``EL_NLP``, ``GAS_NLP``, ``HEAT_NLP``, ``SMOOTH_NLP``),
+  the in-process CasADi/IPOPT back-end solves the same NLP as GEKKO 3.5 to 18
+  times faster, with the largest lead on timeseries loops where GEKKO pays its
+  per-step subprocess cost repeatedly. This is the default IPOPT path, so it
+  needs no configuration.
+- For the conic and quadratic formulations (``EL_MISOCP``, the
+  ``*_CONVEX_MIQCQP`` and ``*_NONCONVEX_MIQCQP`` variants), the native gurobipy
+  back-end is 2 to 7 times faster than driving the same Gurobi through Pyomo,
+  since it skips Pyomo's model-translation layer. The gap grows with model size,
+  reaching about 4 times on the coupled multi-sector OPF.
+
+GEKKO and Pyomo stay valuable for what they add rather than their speed: GEKKO
+ships its own binaries and an MINLP solver with no extra install, and Pyomo
+drives any registered solver (SCIP for global non-convex models, HiGHS, GLPK,
+CBC) plus lexicographic objectives.
+
+See :doc:`../benchmarks/backend_selection` for the head-to-head timings and the
+per-formulation recommendation behind this summary.
+
+----
+
 Choosing a solver
 =================
 
@@ -455,3 +484,11 @@ See also
 
       Read ``InfeasibilityReport`` / ``GekkoSolveError`` diagnostics when a
       solve fails.
+
+   .. grid-item-card:: Choosing a backend
+      :link: ../benchmarks/backend_selection
+      :link-type: doc
+      :shadow: sm
+
+      Head-to-head timings: which back-end solves each formulation class
+      fastest.

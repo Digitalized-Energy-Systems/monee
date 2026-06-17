@@ -118,6 +118,18 @@ Read networks from MATPOWER, pandapower, and SimBench formats.
 One function call per format.
 :::
 
+:::{grid-item-card}
+:link: benchmarks/validation
+:link-type: doc
+:shadow: sm
+
+**Validated**
+^^^
+Results are checked against pandapower and pandapipes on identical networks:
+voltages, pressures, and temperatures agree, and coupled multi-energy solves
+match the reference to machine precision.
+:::
+
 ::::
 
 ---

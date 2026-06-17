@@ -86,5 +86,9 @@ def test_res_with_load_shedding():
     assert result is not None
 
     load_df = result.dataframes["PowerLoad"]
-    assert (load_df["regulation"] >= 0).all(), "regulation must be non-negative"
-    assert (load_df["regulation"] <= 1).all(), "regulation must be at most 1"
+    # regulation is a [0, 1]-bounded MIP variable; SCIP may return values a few
+    # 1e-7 outside that range within its feasibility tolerance, so compare with
+    # a small epsilon rather than exactly.
+    TOL = 1e-6
+    assert (load_df["regulation"] >= -TOL).all(), "regulation must be non-negative"
+    assert (load_df["regulation"] <= 1 + TOL).all(), "regulation must be at most 1"
