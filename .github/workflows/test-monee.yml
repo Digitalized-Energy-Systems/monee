@@ -150,11 +150,3 @@ jobs:
       with:
         token: ${{ secrets.CODECOV_TOKEN  }}
         fail_ci_if_error: false
-    - name: SonarQube Cloud Scan
-      # Skip on PRs from forks: they have no access to the SONAR_TOKEN secret,
-      # so the scanner would abort the job.
-      if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository }}
-      uses: SonarSource/sonarqube-scan-action@v8
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Needed to get PR information, if any
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
