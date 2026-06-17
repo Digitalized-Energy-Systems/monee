@@ -65,7 +65,7 @@ def _solve(network):
     )
     return run_energy_flow_optimization(
         network,
-        solver="gurobi",
+        solver="scip",
         optimization_problem=problem,
         exclude_unconnected_nodes=True,
     )

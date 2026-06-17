@@ -308,7 +308,7 @@ def test_generate_scare():
     net = create_large_lv_simbench(0.3)()
 
     # WHEN
-    result = run_energy_flow(net, solver="gurobi")
+    result = run_energy_flow(net, solver="scip")
 
     # THEN
     assert result.success
@@ -379,7 +379,7 @@ def test_generate_mes():
         auto_priority_floor=True,
     )
     result = monee.run_energy_flow_optimization(
-        mes, optimization_problem=problem, solver="gurobi"
+        mes, optimization_problem=problem, solver="scip"
     )
 
     # THEN
@@ -456,7 +456,7 @@ def test_generate_mes_min_load_shedding():
     result = monee.run_energy_flow_optimization(
         mes,
         optimization_problem=problem,
-        solver="gurobi",
+        solver="scip",
     )
 
     # THEN
@@ -790,7 +790,7 @@ def test_generate_mes_storage_capabilities_timeseries():
         timeseries_data=td,
         steps=steps,
         optimization_problem=problem,
-        solver="gurobi",
+        solver="scip",
     )
 
     # THEN

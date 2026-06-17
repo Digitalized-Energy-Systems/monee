@@ -168,6 +168,6 @@ def test_solve_default_fallback_gekko_simulation():
 def test_run_energy_flow_threads_formulation_kwarg():
     net, _ = _small_power_net()
     result = monee.run_energy_flow(
-        net, solver="gurobi", formulation="el_misocp", simulation=False
+        net, solver="scip", formulation="el_misocp", simulation=False
     )
     assert result.success

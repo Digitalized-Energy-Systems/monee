@@ -141,7 +141,8 @@ def _base_layout(fig, title, height=640):
 
 def _write(fig, out_path, height_px=640):
     """Write the responsive interactive HTML (width 100%, so it fills its iframe
-    with no horizontal scroll) plus a best-effort static PNG for the PDF build."""
+    with no horizontal scroll) plus best-effort static PNG and PDF copies for the
+    PDF build."""
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     fig.write_html(
         out_path,
@@ -152,12 +153,15 @@ def _write(fig, out_path, height_px=640):
         config={"displayModeBar": False, "responsive": True},
         post_script=_THEME_POST_SCRIPT,
     )
-    try:  # static fallback for the LaTeX/PDF builder; never fail the build on it
-        fig.write_image(out_path[:-5] + ".png", width=900, height=height_px, scale=2)
-    except Exception as exc:  # noqa: BLE001
-        print(f"[interactive_plots] PNG fallback skipped for {out_path}: {exc}")
+    # Static copies for the LaTeX/PDF builder; never fail the build on them.
+    for ext in ("png", "pdf"):
+        try:
+            fig.write_image(
+                out_path[:-5] + "." + ext, width=900, height=height_px, scale=2
+            )
+        except Exception as exc:  # noqa: BLE001
+            print(f"[interactive_plots] {ext.upper()} export skipped for {out_path}: {exc}")
     return out_path
-
 
 def _solve_storage(capacity_mwh, p_max_mw, load, price, dt_h=1.0):
     """Solve the price-arbitrage dispatch for one battery capacity.

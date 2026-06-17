@@ -47,7 +47,7 @@ def test_mccormick_dhs_passive_line_temperature_decays():
     net = _build_series_dhs(0.001, 0.001)
 
     # WHEN
-    result = ms.PyomoSolver(solver_name="gurobi").solve(net)
+    result = ms.PyomoSolver().solve(net)
     print(result)
 
     # THEN

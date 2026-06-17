@@ -118,11 +118,11 @@ def test_min_load_shedding_no_incident_large():
         include_ext_grids=True,
         include_storages=False,
     )
-    print(monee.run_energy_flow(net, solver="gurobi"))
+    print(monee.run_energy_flow(net, solver="scip"))
 
     # WHEN
     result = monee.run_energy_flow_optimization(
-        net, optimization_problem=problem, solver="gurobi"
+        net, optimization_problem=problem, solver="scip"
     )
     print(result)
 
