@@ -7,7 +7,6 @@ from monee import run_energy_flow
 from monee.model import LumpedThermalCapacitance
 from monee.model.grid import WaterGrid
 from monee.simulation.timeseries import TimeseriesData, run
-from monee.solver import GEKKOSolver
 from tests.util import (
     WATER_LOOP_PIPE_D as PIPE_D,
 )
@@ -84,9 +83,11 @@ def test_ltc_slows_temperature_response():
     td_l = TimeseriesData()
     td_l.add_child_series(ext_child_id_ltc, "t_k", t_supply)
 
-    # WHEN  (pinned to GEKKO/IPOPT for a well-posed *base* case.)
-    ts_base = run(net_base, td_b, steps=4, solver=GEKKOSolver(solver=3))
-    ts_ltc = run(net_ltc, td_l, steps=4, solver=GEKKOSolver(solver=3))
+    # WHEN  (IPOPT: in-process CasADi when available, else GEKKO's bundled IPOPT;
+    # portable across platforms, and the CasADi reuse path now applies per-step
+    # boundary temperatures correctly.)
+    ts_base = run(net_base, td_b, steps=4, solver="ipopt")
+    ts_ltc = run(net_ltc, td_l, steps=4, solver="ipopt")
 
     # THEN
     assert not ts_base.failed_steps

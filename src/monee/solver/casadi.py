@@ -359,7 +359,18 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
                 )
                 setattr(model, key, CasSym(sx))
             elif isinstance(val, Const):
-                setattr(model, key, float(val.value))
+                # A boundary child's overwrite() can fold a time-varying input into
+                # a Const, e.g. ``node.t_pu = Const(ext_grid.t_k / t_ref)`` with a
+                # per-step CasADi parameter ``t_k``. Keep such symbolic values
+                # symbolic so the parameter still reaches the graph; only genuine
+                # numeric constants collapse to a float.
+                v = val.value
+                if isinstance(v, CasSym):
+                    setattr(model, key, v)
+                elif isinstance(v, (ca.SX, ca.MX)):
+                    setattr(model, key, CasSym(v))
+                else:
+                    setattr(model, key, float(v))
 
     def _active_models(self, network, nodes, branches, compounds, ignored_nodes):
         for branch in branches:
@@ -588,6 +599,16 @@ class CasADiTimeseries:
         if ignored:
             mark_ignored_components(network, ignored)
         nodes = network.nodes
+
+        # Declare every time-varying attribute as a CasADi parameter BEFORE the
+        # overwrite/inject passes. A boundary child whose pinned setpoint is itself
+        # time-varying (e.g. an ExtHydrGrid supply ``t_k``, an ExtPowerGrid
+        # ``vm_pu``) folds that attribute into the node boundary inside
+        # ``overwrite``; declaring the parameter first means the boundary captures
+        # the parameter *symbol* rather than a value frozen at step 0.
+        self._params = []  # (model, key, param_sx, series)
+        self._declare_params(network, timeseries_data)
+
         for node in nodes:
             if ignore_node(node, network, ignored):
                 continue
@@ -600,12 +621,6 @@ class CasADiTimeseries:
         mark_he_flow_prescription(network, ignored)
 
         inject_vars(cs._inject, nodes, branches, compounds, network, ignored)
-
-        # Declare every time-varying attribute as a CasADi parameter, replacing
-        # whatever value (float/Var) it currently holds, so it flows into the
-        # graph symbolically and can be set per step without a rebuild.
-        self._params = []  # (model, key, param_sx, series)
-        self._declare_params(network, timeseries_data)
 
         objs: list = []
         cs.init_branches(branches)

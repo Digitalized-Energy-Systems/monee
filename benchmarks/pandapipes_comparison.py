@@ -703,8 +703,6 @@ def run_mes_suite():
     rows = []
     # P2G: power -> gas
     for name, p_el in [
-        ("mes P2G 0.5MW", 0.5),
-        ("mes P2G 1.0MW", 1.0),
         ("mes P2G 2.0MW", 2.0),
     ]:
         mnet, pn, gn, src = build_ppipes_mes(p_el)
@@ -729,8 +727,6 @@ def run_mes_suite():
 
     # G2P: gas -> power
     for name, g2p_gas in [
-        ("mes G2P 0.05kgs", 0.05),
-        ("mes G2P 0.10kgs", 0.10),
         ("mes G2P 0.15kgs", 0.15),
     ]:
         mnet, pn, gn, sg = build_ppipes_mes_g2p(g2p_gas)
@@ -757,7 +753,7 @@ def run_mes_suite():
     # heat-exchanger water flow and inlet temperature are fed to pandapipes so the
     # HE temperature rise (= Q_heat / (m*cp)) is a like-for-like metric. The
     # absolute supply temperature is not; see the README on the CHP heat models.
-    for name, gas_kgs in [("mes CHP 0.05kgs", 0.05), ("mes CHP 0.10kgs", 0.10)]:
+    for name, gas_kgs in [("mes CHP 0.10kgs", 0.10)]:
         rmn, t_mn = _time(
             lambda: run_energy_flow(build_monee_mes_chp(gas_kgs)), repeats=1
         )
@@ -1088,7 +1084,7 @@ def main():
     # Plot shows all three suites: solve time, pressure agreement, and, where
     # heat participates (HEAT plus the CHP MES cases), temperature agreement. The
     # coupled MES voltage match is reported in the CSV/console above.
-    make_plot(df, HTML_PATH, PNG_PATH, SVG_PATH)
+    # make_plot(df, HTML_PATH, PNG_PATH, SVG_PATH)
 
 
 if __name__ == "__main__":

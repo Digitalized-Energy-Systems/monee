@@ -42,8 +42,46 @@ C_HEAT = "#d7191c"
 C_GAS = "#2c7bb6"
 C_LP = "#2c7bb6"
 C_ACCENT = "#1a9641"
-TEXT = "#C3C3C3"  # light-mode default; post_script overrides for dark mode
+TEXT = "#171717"  # light-mode default; post_script overrides for dark mode
 FONT_FAMILY = "Inter, Segoe UI, Helvetica, Arial"
+
+# Okabe-Ito colourblind-safe qualitative palette (distinguishable under deutan/
+# protan/tritan vision and in greyscale). The benchmark figures draw from these
+# so no comparison rests on a red-vs-green contrast alone.
+CB_BLUE = "#0072B2"
+CB_ORANGE = "#E69F00"
+CB_GREEN = "#009E73"
+CB_VERMILION = "#D55E00"
+CB_SKY = "#56B4E9"
+CB_PURPLE = "#CC79A7"
+CB_YELLOW = "#F0E442"
+
+# Every benchmark bar gets a thin dark outline (crisp on both light and dark
+# pages); head-to-head series additionally carry a hatch pattern so the contrast
+# never rests on hue alone.
+BAR_LINE = "#222222"
+BAR_LINE_WIDTH = 1.1
+
+
+def _bar_marker(color, pattern=None):
+    """Bar ``marker`` dict: solid *color* fill, crisp dark outline, optional hatch.
+
+    *pattern* is a Plotly pattern shape (``"/"``, ``"\\\\"``, ``"x"``, ``"."`` ...);
+    a falsy value leaves the bar solid. The hatch is drawn in the outline colour
+    at low opacity so it adds texture without muddying the fill hue."""
+    marker = {
+        "color": color,
+        "line": {"color": BAR_LINE, "width": BAR_LINE_WIDTH},
+    }
+    if pattern:
+        marker["pattern"] = {
+            "shape": pattern,
+            "fgcolor": BAR_LINE,
+            "fgopacity": 0.4,
+            "size": 7,
+            "solidity": 0.32,
+        }
+    return marker
 
 # Repo root, for reading the committed benchmark result CSVs at build time.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
@@ -1340,10 +1378,19 @@ def build_benchmark_backend(out_path):
     df = pd.read_csv(_bench_csv("results", "backend_comparison.csv"))
 
     color = {
-        "GEKKO": "#9467bd",
-        "CasADi": "#2ca02c",
-        "pyomo-gurobi": "#1f77b4",
-        "gurobipy": "#ff7f0e",
+        "GEKKO": CB_PURPLE,
+        "CasADi": CB_GREEN,
+        "pyomo-gurobi": CB_BLUE,
+        "gurobipy": CB_ORANGE,
+    }
+    # Hatch the reference backend in each pairing (GEKKO in group A, pyomo-gurobi
+    # in group B); the native engine stays solid. Pattern carries the contrast so
+    # the comparison reads in greyscale and under colour blindness.
+    hatch = {
+        "GEKKO": "/",
+        "CasADi": "",
+        "pyomo-gurobi": "/",
+        "gurobipy": "",
     }
     GRID = "rgba(80,80,80,0.12)"
     AXIS_LINE = "rgba(128,128,128,0.5)"
@@ -1376,8 +1423,7 @@ def build_benchmark_backend(out_path):
                 x=sub.time_a_ms,
                 name=ba,
                 orientation="h",
-                marker_color=color.get(ba, "#888"),
-                marker_line_width=0,
+                marker=_bar_marker(color.get(ba, "#888"), pattern=hatch.get(ba)),
                 legendgroup=ba,
                 showlegend=True,
                 cliponaxis=False,
@@ -1395,8 +1441,7 @@ def build_benchmark_backend(out_path):
                 x=sub.time_b_ms,
                 name=bb,
                 orientation="h",
-                marker_color=color.get(bb, "#888"),
-                marker_line_width=0,
+                marker=_bar_marker(color.get(bb, "#888"), pattern=hatch.get(bb)),
                 legendgroup=bb,
                 showlegend=True,
                 cliponaxis=False,
@@ -1416,10 +1461,9 @@ def build_benchmark_backend(out_path):
                 orientation="h",
                 showlegend=False,
                 cliponaxis=False,
-                marker_color=[
-                    color.get(bb, "#888") if v >= 1 else "#d62728" for v in spd
-                ],
-                marker_line_width=0,
+                marker=_bar_marker(
+                    [color.get(bb, "#888") if v >= 1 else CB_VERMILION for v in spd]
+                ),
                 text=[f"×{v:.1f}" for v in spd],
                 textposition="outside",
                 textfont={"size": 12, "color": TEXT},
@@ -1463,41 +1507,29 @@ def build_benchmark_backend(out_path):
         gridcolor=GRID,
         gridwidth=1,
         zeroline=False,
-        showline=True,
-        linecolor=AXIS_LINE,
-        linewidth=1,
-        ticks="outside",
-        ticklen=4,
-        tickcolor=AXIS_LINE,
+        showline=False,
+        ticks="",
         tickfont={"size": 13, "color": TEXT},
         title_font={"size": 14, "color": TEXT},
     )
     fig.update_yaxes(
         showgrid=False,
         zeroline=False,
-        showline=False,
+        showline=True,
+        linecolor=AXIS_LINE,
+        linewidth=1,
         tickfont={"size": 13, "color": TEXT},
         automargin=True,
     )
 
     height_px = int(70 * total_cases + 110 * len(groups) + 170)
     fig.update_layout(
-        title={
-            "text": "<b>monee backend performance comparison</b><br>"
-            "<span style='font-size:15px'>solver-backend "
-            "shoot-outs across representative cases: solve time and speedup</span>",
-            "x": 0.5,
-            "xanchor": "center",
-            "y": 0.978,
-            "yanchor": "top",
-            "font": {"size": 20, "color": TEXT},
-        },
         barmode="group",
         bargap=0.25,
         bargroupgap=0.1,
         template="plotly_white",
         autosize=True,
-        height=height_px,
+        height=height_px / 2,
         legend={
             "orientation": "h",
             "yanchor": "bottom",
@@ -1507,7 +1539,7 @@ def build_benchmark_backend(out_path):
             "font": {"size": 13, "color": TEXT},
             "bgcolor": "rgba(0,0,0,0)",
         },
-        margin={"l": 235, "r": 60, "t": 215, "b": 70},
+        margin={"l": 235, "r": 60, "t": 50, "b": 70},
         font={"family": FONT_FAMILY, "size": 13, "color": TEXT},
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -1522,10 +1554,10 @@ def build_benchmark_pandapower(out_path):
     agreement across AC power flow, OPF and line-limited OPF."""
     import numpy as np
 
-    C_PANDAPOWER = "#d62728"
-    C_MONEE = "#2ca02c"
-    C_VM = "#1f77b4"
-    C_P = "#ff7f0e"
+    C_PANDAPOWER = CB_VERMILION
+    C_MONEE = CB_GREEN
+    C_VM = CB_BLUE
+    C_P = CB_ORANGE
     PP_TEXT = TEXT
     PP_GRID = "rgba(80,80,80,0.12)"
     PP_AXIS_LINE = "rgba(128,128,128,0.5)"
@@ -1543,6 +1575,8 @@ def build_benchmark_pandapower(out_path):
         return [np.log10(v.min() * lo_pad), np.log10(v.max() * hi_pad)]
 
     color = {PANDAPOWER: C_PANDAPOWER, CASADI: C_MONEE}
+    # Hatch the reference engine so the paired solve-time bars never rely on hue.
+    hatch = {PANDAPOWER: "/", CASADI: ""}
     groups = [
         ("PF", "Power flow (AC): pandapower runpp vs monee CasADi"),
         ("OPF", "Optimal power flow, no line limit: pandapower runopp vs monee CasADi"),
@@ -1577,8 +1611,7 @@ def build_benchmark_pandapower(out_path):
                     x=sub[col],
                     name=backend,
                     orientation="h",
-                    marker_color=color[backend],
-                    marker_line_width=0,
+                    marker=_bar_marker(color[backend], pattern=hatch[backend]),
                     legendgroup=backend,
                     showlegend=(r == 1),
                     cliponaxis=False,
@@ -1606,8 +1639,7 @@ def build_benchmark_pandapower(out_path):
                 x=vm,
                 orientation="h",
                 showlegend=False,
-                marker_color=C_VM,
-                marker_line_width=0,
+                marker=_bar_marker(C_VM),
                 cliponaxis=False,
                 text=[f"{v:.1e}" for v in vm],
                 textposition="outside",
@@ -1632,8 +1664,7 @@ def build_benchmark_pandapower(out_path):
                 x=pw,
                 orientation="h",
                 showlegend=False,
-                marker_color=C_P,
-                marker_line_width=0,
+                marker=_bar_marker(C_P),
                 cliponaxis=False,
                 text=[f"{v:.1e}" for v in pw],
                 textposition="outside",
@@ -1670,35 +1701,22 @@ def build_benchmark_pandapower(out_path):
         gridcolor=PP_GRID,
         gridwidth=1,
         zeroline=False,
-        showline=True,
-        linecolor=PP_AXIS_LINE,
-        linewidth=1,
-        ticks="outside",
-        ticklen=4,
-        tickcolor=PP_AXIS_LINE,
+        showline=False,
+        ticks="",
         tickfont={"size": 13, "color": PP_TEXT},
         title_font={"size": 14, "color": PP_TEXT},
     )
     fig.update_yaxes(
         showgrid=False,
         zeroline=False,
-        showline=False,
+        showline=True,
+        linecolor=PP_AXIS_LINE,
+        linewidth=1,
         tickfont={"size": 13, "color": PP_TEXT},
         automargin=True,
     )
 
     fig.update_layout(
-        title={
-            "text": "<b>monee (electric, NLP) vs pandapower native AC solvers</b><br>"
-            "<span style='font-size:15px'>identical grids via the "
-            "MATPOWER exchange: solve time and solution agreement "
-            "(voltage &amp; power)</span>",
-            "x": 0.5,
-            "xanchor": "center",
-            "y": 0.978,
-            "yanchor": "top",
-            "font": {"size": 20, "color": PP_TEXT},
-        },
         barmode="group",
         bargap=0.3,
         bargroupgap=0.08,
@@ -1714,7 +1732,7 @@ def build_benchmark_pandapower(out_path):
             "font": {"size": 13, "color": PP_TEXT},
             "bgcolor": "rgba(0,0,0,0)",
         },
-        margin={"l": 155, "r": 60, "t": 215, "b": 70},
+        margin={"l": 155, "r": 60, "t": 50, "b": 70},
         font={
             "family": "Inter, Segoe UI, Helvetica, Arial",
             "size": 13,
@@ -1737,10 +1755,10 @@ def build_benchmark_pandapipes(out_path):
 
     PANDAPIPES = "pandapipes"
     MONEE = "monee · CasADi"
-    C_PANDAPIPES = "#d62728"
-    C_MONEE = "#2ca02c"
-    C_PRESSURE = "#1f77b4"
-    C_TEMP = "#ff7f0e"
+    C_PANDAPIPES = CB_VERMILION
+    C_MONEE = CB_GREEN
+    C_PRESSURE = CB_BLUE
+    C_TEMP = CB_ORANGE
     C_BANNER = TEXT
     GRID = "rgba(80,80,80,0.12)"
     AXIS_LINE = "rgba(128,128,128,0.5)"
@@ -1750,6 +1768,9 @@ def build_benchmark_pandapipes(out_path):
     BANNER_SIZE = 14
 
     color = {PANDAPIPES: C_PANDAPIPES, MONEE: C_MONEE}
+    # Hatch the reference engine so the two solve-time bars stay distinct without
+    # relying on the vermillion-vs-green hue contrast.
+    hatch = {PANDAPIPES: "/", MONEE: ""}
     groups = [
         ("GAS", "Gas hydraulics: pandapipes pipeflow vs monee Weymouth NLP"),
         ("HEAT", "Water hydraulics + thermal: pandapipes pipeflow vs monee Darcy NLP"),
@@ -1781,8 +1802,7 @@ def build_benchmark_pandapipes(out_path):
                     x=sub[col],
                     name=backend,
                     orientation="h",
-                    marker_color=color[backend],
-                    marker_line_width=0,
+                    marker=_bar_marker(color[backend], pattern=hatch[backend]),
                     legendgroup=backend,
                     showlegend=(r == 1),
                     cliponaxis=False,
@@ -1810,8 +1830,7 @@ def build_benchmark_pandapipes(out_path):
                 x=p,
                 orientation="h",
                 showlegend=False,
-                marker_color=C_PRESSURE,
-                marker_line_width=0,
+                marker=_bar_marker(C_PRESSURE),
                 cliponaxis=False,
                 text=[f"{v:.1f}%" for v in p],
                 textposition="outside",
@@ -1835,8 +1854,7 @@ def build_benchmark_pandapipes(out_path):
                 x=[v if f else None for v, f in zip(t, finite)],
                 orientation="h",
                 showlegend=False,
-                marker_color=C_TEMP,
-                marker_line_width=0,
+                marker=_bar_marker(C_TEMP),
                 cliponaxis=False,
                 text=[f"{v:.3g}" if f else "" for v, f in zip(t, finite)],
                 textposition="outside",
@@ -1892,36 +1910,23 @@ def build_benchmark_pandapipes(out_path):
         gridcolor=GRID,
         gridwidth=1,
         zeroline=False,
-        showline=True,
-        linecolor=AXIS_LINE,
-        linewidth=1,
-        ticks="outside",
-        ticklen=4,
-        tickcolor=AXIS_LINE,
+        showline=False,
+        ticks="",
         tickfont={"size": TICK_SIZE, "color": TEXT},
         title_font={"size": AXIS_TITLE_SIZE, "color": TEXT},
     )
     fig.update_yaxes(
         showgrid=False,
         zeroline=False,
-        showline=False,
+        showline=True,
+        linecolor=AXIS_LINE,
+        linewidth=1,
         tickfont={"size": TICK_SIZE, "color": TEXT},
         automargin=True,
     )
 
     height = int(80 * total_cases + 110 * n_groups + 170)
     fig.update_layout(
-        title={
-            "text": "<b>monee (multi-energy NLP) vs pandapipes</b><br>"
-            "<span style='font-size:15px'>gas, heat &amp; "
-            "coupled el+gas+heat flow: solve time and cross-tool "
-            "agreement</span>",
-            "x": 0.5,
-            "xanchor": "center",
-            "y": 0.985,
-            "yanchor": "top",
-            "font": {"size": 20, "color": TEXT},
-        },
         barmode="group",
         bargap=0.32,
         bargroupgap=0.12,
@@ -1937,7 +1942,7 @@ def build_benchmark_pandapipes(out_path):
             "font": {"size": 13, "color": TEXT},
             "bgcolor": "rgba(0,0,0,0)",
         },
-        margin={"l": 155, "r": 40, "t": 150, "b": 60},
+        margin={"l": 155, "r": 40, "t": 50, "b": 60},
         font={"family": FONT_FAMILY, "size": 13, "color": TEXT},
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",

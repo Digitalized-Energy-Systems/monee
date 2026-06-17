@@ -154,7 +154,7 @@ def test_linepack_source_flow_reduced_by_discharge():
 
     src_flow = result.get_result_for(mm.ExtHydrGrid, "mass_flow_kgs")
     npk = result.get_result_for_id(pipe_id, "net_pack_kgs")
-    src_feed_1 = float(-src_flow.iloc[1])
+    src_feed_1 = float(-src_flow.iloc[1][0])
     npk1 = float(npk.iloc[1])
     demand_1 = 0.12
 
@@ -357,7 +357,7 @@ def test_tree_linepack_global_mass_balance():
     src_flow = result.get_result_for(mm.ExtHydrGrid, "mass_flow_kgs")
     for step in range(len(demands["a"])):
         total_demand = sum(demands[k][step] for k in demands)
-        source_feed = float(-src_flow.iloc[step])
+        source_feed = float(-src_flow.iloc[step][0])
         total_discharge = sum(
             float(-result.get_result_for_id(pid, "net_pack_kgs").iloc[step])
             for pid in pipes.values()

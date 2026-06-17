@@ -31,13 +31,11 @@ dependencies = [
     "pandas>=2.3.3",
     "geopy>=2.4.1",
     "plotly>=6.3.0",
+    "pyscipopt>=5.0",
     "pyomo"
 ]
 
 [project.optional-dependencies]
-scip = [
-    "pyscipopt>=5.0"
-]
 simbench = [
     "simbench>=1.6.1",
     "pandapower>=3.3.3",
