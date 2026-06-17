@@ -44,13 +44,13 @@ The formulation layer: how equation sets are mapped to model types, what
 built-in formulations ship with monee, and how to write a custom one.
 :::
 
-:::{grid-item-card} Solvers
+:::{grid-item-card} Solvers & Backends
 :link: solvers
 :link-type: doc
 :shadow: sm
 
-The CasADi, GEKKO, and Pyomo back-ends: capabilities, limitations, and
-guidance on choosing the right one for each type of problem.
+The CasADi, GEKKO, Pyomo, and native gurobipy back-ends: capabilities,
+limitations, and guidance on choosing the right one for each type of problem.
 :::
 
 :::{grid-item-card} Islanding

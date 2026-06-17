@@ -176,6 +176,62 @@ A concrete instance also works as the ``solver=`` argument of
       See :doc:`../how-to/use_pyomo_solver` for a complete worked example
       including MISOCP optimal power flow.
 
+   .. tab-item:: gurobipy (native Gurobi)
+
+      The :class:`~monee.solver.gurobipy.GurobipySolver`
+      (``monee.solver.gurobipy``) builds the model in-memory through the
+      `gurobipy <https://docs.gurobi.com/projects/optimizer/en/current/reference/python.html>`_
+      API and calls Gurobi directly, instead of routing through Pyomo's
+      ``SolverFactory`` (which serialises the model to an LP / NL file and
+      shells out). It is a direct alternative to ``backend="pyomo"`` with
+      ``solver="gurobi"`` for users who have Gurobi installed.
+
+      Suitable for:
+
+      - MIP, MIQCQP, and MISOCP problems, e.g. optimal power flow with
+        :data:`~monee.model.formulation.EL_MISOCP_FORMULATION`. Linear,
+        quadratic, and second-order-cone terms map straight onto Gurobi's
+        ``LinExpr`` / ``QuadExpr`` cones.
+      - Smooth NLP energy flow (Weymouth gas, Darcy-Weisbach water / heat),
+        built with ``gurobipy.nlfunc`` general nonlinear constraints. This
+        path requires Gurobi 12 or newer.
+      - Lexicographic objectives
+        (``OptimizationProblem(lex_objectives=True)``), via Gurobi's native
+        hierarchical multi-objective for linear / quadratic tiers and a
+        two-phase fallback for nonlinear ones.
+
+      Advantages over the Pyomo / Gurobi path:
+
+      - No LP / NL file round-trip and no subprocess, so repeated solves and
+        timeseries loops are faster.
+      - IIS-based infeasibility diagnosis (``computeIIS``), surfaced as a
+        :class:`~monee.solver.gurobipy.GurobiIISReport` on
+        ``result.infeasibility_report``.
+      - Direct warm starts (``Var.Start``), including a build-once timeseries
+        driver that re-bounds inputs in place rather than rebuilding the model.
+
+      Limitations:
+
+      - Single-period only. For multi-period problems use ``backend="pyomo"``
+        or ``backend="gekko"``.
+      - GEKKO-specific operators (``if2``, ``max2``, ``sign2``) are not
+        available; formulations that rely on them raise
+        :exc:`NotImplementedError`.
+      - Requires the ``gurobipy`` package and a valid Gurobi licence
+        installed separately (Gurobi 12 or newer for the NLP formulations).
+
+      Usage (note the explicit ``backend=``: a bare ``solver="gurobi"`` routes
+      to Pyomo, not to this backend):
+
+      .. code-block:: python
+
+          result = solve(net, solver="gurobi", backend="gurobipy")
+
+          # Or construct it directly to pass Gurobi parameters:
+          from monee.solver.gurobipy import GurobipySolver
+
+          result = GurobipySolver(params={"TimeLimit": 60}).solve(net)
+
 ----
 
 Simulation vs. optimisation mode
@@ -264,7 +320,8 @@ the solved variable values are copied back into the input network
 (``persist_solution``). A subsequent solve of the same network therefore
 warm-starts from the previous solution, which speeds up timeseries loops and
 repeated what-if studies considerably. The Pyomo back-end additionally passes
-``warmstart=True`` to solvers that support it (e.g. Gurobi).
+``warmstart=True`` to solvers that support it (e.g. Gurobi), and the native
+gurobipy back-end seeds ``Var.Start`` from the persisted values directly.
 
 ----
 
@@ -287,8 +344,10 @@ the Pyomo back-end instead performs a two-phase solve: phase 1 minimises
 only the user objectives; phase 2 minimises the formulation-tightening
 auxiliary terms under the constraint that the user objective stays within a
 small tolerance of its phase-1 optimum. This removes weight tuning between
-user and formulation objectives entirely. Only Pyomo supports lexicographic
-ordering; the other back-ends fall back to the single summed objective.
+user and formulation objectives entirely. The native gurobipy back-end
+supports the same ordering (via Gurobi's hierarchical multi-objective for
+linear / quadratic tiers, two-phase otherwise); the CasADi and GEKKO
+back-ends fall back to the single summed objective.
 
 ----
 
@@ -308,6 +367,10 @@ The back-ends ship sensible defaults per solver:
   ``monee.solver.pyo``; for example, Gurobi runs with ``MIPGap=1e-3``
   (roughly kW precision at MW scale) and ``TimeLimit=300``. Extend or
   override these dictionaries to tune a specific solver.
+- gurobipy: the native back-end runs with ``MIPGap=1e-3`` and
+  ``TimeLimit=300`` (``DEFAULT_GUROBI_PARAMS`` in ``monee.solver.gurobipy``).
+  Pass ``GurobipySolver(params={...})`` to merge in any other Gurobi
+  parameter.
 
 ----
 
@@ -319,8 +382,11 @@ Pyomo back-end attaches an :class:`~monee.solver.InfeasibilityReport`
 (constraint residuals, bound violations, minimal infeasible subsystem) to the
 result as ``result.infeasibility_report``. The GEKKO back-end raises a
 :class:`~monee.solver.GekkoSolveError` carrying a parsed APMonitor report in its
-``.report`` attribute. The CasADi back-end raises a
-:class:`~monee.solver.casadi.CasADiSolveError` with the IPOPT return status. See
+``.report`` attribute. The native gurobipy back-end attaches a
+:class:`~monee.solver.gurobipy.GurobiIISReport` (the irreducible inconsistent
+subsystem from ``computeIIS``) to ``result.infeasibility_report``. The CasADi
+back-end raises a :class:`~monee.solver.casadi.CasADiSolveError` with the IPOPT
+return status. See
 :doc:`../how-to/diagnose_infeasibility` for how to read and act on these
 reports.
 
