@@ -1727,7 +1727,7 @@ def build_benchmark_pandapower(out_path):
         legend={
             "orientation": "h",
             "yanchor": "bottom",
-            "y": 1.012,
+            "y": 1.028,
             "xanchor": "right",
             "x": 1.0,
             "font": {"size": 13, "color": PP_TEXT},
