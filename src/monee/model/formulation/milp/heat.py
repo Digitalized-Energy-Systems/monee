@@ -51,9 +51,11 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
         # duty drives it: a generator (q < 0) raises the outlet, a load drops
         # it. Keeps the start off the t_pu rail the zero-flow corner forces.
         t_out_seed = 1.0
-        t_ref_k = getattr(grid, "t_ref_k", None) if not isinstance(
-            grid, (list, tuple)
-        ) else None
+        t_ref_k = (
+            getattr(grid, "t_ref_k", None)
+            if not isinstance(grid, (list, tuple))
+            else None
+        )
         if t_ref_k and q_design:
             dt_pu = model._T_delta_design_K / t_ref_k
             t_out_seed = 1.0 + dt_pu if q_design < 0 else 1.0 - dt_pu
@@ -66,9 +68,7 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
         if isinstance(model.mass_flow_design_kgs, Var):
             model.mass_flow_mag_kgs = Var(m_seed, min=0)
         else:
-            model.mass_flow_mag_kgs = Var(
-                m_seed, min=0, max=model.mass_flow_design_kgs
-            )
+            model.mass_flow_mag_kgs = Var(m_seed, min=0, max=model.mass_flow_design_kgs)
 
         q_seed = q_design or 0.0
         if model.q_mw_set <= 0 or isinstance(model.q_mw_set, Var):

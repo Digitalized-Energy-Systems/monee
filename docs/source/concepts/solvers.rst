@@ -1,6 +1,6 @@
-=======
-Solvers
-=======
+===================
+Solvers & Backends
+===================
 
 monee turns the network model and its formulation into a mathematical programme
 and hands it to a numerical solver back-end. Four back-ends ship with monee:
