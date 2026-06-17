@@ -17,7 +17,7 @@ timings are compared.
 
 ````{only} html
 ```{raw} html
-<iframe src="../_static/interactive/benchmark_backend.html" width="100%" height="1460" style="border:none;" loading="lazy" title="monee backend performance comparison: GEKKO vs CasADi on smooth NLP and Pyomo/Gurobi vs native gurobipy on (MI)QCQP"></iframe>
+<iframe src="../_static/interactive/benchmark_backend.html" width="100%" height="730" style="border:none;" loading="lazy" title="monee backend performance comparison: GEKKO vs CasADi on smooth NLP and Pyomo/Gurobi vs native gurobipy on (MI)QCQP"></iframe>
 ```
 ````
 

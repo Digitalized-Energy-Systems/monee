@@ -1716,14 +1716,14 @@ def build_benchmark_pandapower(out_path):
         tickfont={"size": 13, "color": PP_TEXT},
         automargin=True,
     )
-
+    height_px = int(80 * total_cases + 110 * n_groups + 170) / 2
     fig.update_layout(
         barmode="group",
         bargap=0.3,
         bargroupgap=0.08,
         template="plotly_white",
         autosize=True,
-        height=int(80 * total_cases + 110 * n_groups + 170),
+        height=height_px,
         legend={
             "orientation": "h",
             "yanchor": "bottom",
@@ -1743,7 +1743,7 @@ def build_benchmark_pandapower(out_path):
         paper_bgcolor="rgba(0,0,0,0)",
         uniformtext={"mode": "hide", "minsize": 8},
     )
-    return _write(fig, out_path, height_px=1060 / 2)
+    return _write(fig, out_path, height_px=height_px)
 
 
 def build_benchmark_pandapipes(out_path):
