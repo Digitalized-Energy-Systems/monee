@@ -83,6 +83,7 @@ def _bar_marker(color, pattern=None):
         }
     return marker
 
+
 # Repo root, for reading the committed benchmark result CSVs at build time.
 _REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
@@ -1742,7 +1743,7 @@ def build_benchmark_pandapower(out_path):
         paper_bgcolor="rgba(0,0,0,0)",
         uniformtext={"mode": "hide", "minsize": 8},
     )
-    return _write(fig, out_path, height_px=1060/2)
+    return _write(fig, out_path, height_px=1060 / 2)
 
 
 def build_benchmark_pandapipes(out_path):
