@@ -1522,24 +1522,24 @@ def build_benchmark_backend(out_path):
         automargin=True,
     )
 
-    height_px = int(70 * total_cases + 110 * len(groups) + 170)
+    height_px = int(70 * total_cases + 110 * len(groups) + 170) / 2
     fig.update_layout(
         barmode="group",
         bargap=0.25,
         bargroupgap=0.1,
         template="plotly_white",
         autosize=True,
-        height=height_px / 2,
+        height=height_px,
         legend={
             "orientation": "h",
             "yanchor": "bottom",
-            "y": 1.012,
+            "y": 1.03,
             "xanchor": "right",
             "x": 1.0,
             "font": {"size": 13, "color": TEXT},
             "bgcolor": "rgba(0,0,0,0)",
         },
-        margin={"l": 235, "r": 60, "t": 50, "b": 70},
+        margin={"l": 60, "r": 60, "t": 50, "b": 70},
         font={"family": FONT_FAMILY, "size": 13, "color": TEXT},
         plot_bgcolor="rgba(0,0,0,0)",
         paper_bgcolor="rgba(0,0,0,0)",
@@ -1742,7 +1742,7 @@ def build_benchmark_pandapower(out_path):
         paper_bgcolor="rgba(0,0,0,0)",
         uniformtext={"mode": "hide", "minsize": 8},
     )
-    return _write(fig, out_path, height_px=1060)
+    return _write(fig, out_path, height_px=1060/2)
 
 
 def build_benchmark_pandapipes(out_path):
@@ -1925,7 +1925,7 @@ def build_benchmark_pandapipes(out_path):
         automargin=True,
     )
 
-    height = int(80 * total_cases + 110 * n_groups + 170)
+    height = int(80 * total_cases + 110 * n_groups + 170) / 2
     fig.update_layout(
         barmode="group",
         bargap=0.32,
