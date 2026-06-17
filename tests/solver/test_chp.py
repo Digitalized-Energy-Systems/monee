@@ -6,7 +6,23 @@ import monee.model as mm
 import monee.solver as ms
 from monee.model.formulation import (
     EL_MISOCP_FORMULATION,
+    SMOOTH_NLP_FORMULATION,
 )
+
+
+def _gekko_energy_flow(net):
+    """Solve the coupled CHP network with GEKKO on the binary-free smooth-NLP
+    formulation.
+
+    The default hybrid simulation formulation relaxes gas (Weymouth) and heat
+    (Darcy-Weisbach) flow with per-pipe *direction* binaries, which turns the
+    three-grid CHP model into an MINLP that GEKKO's APOPT cannot reliably
+    converge (it stalls on the squared-flow constraints). SMOOTH_NLP_FORMULATION
+    is the pure-NLP bundle built for exactly this case, so APOPT/IPOPT solve it
+    as a square steady state.
+    """
+    net.apply_formulation(SMOOTH_NLP_FORMULATION)
+    return ms.GEKKOSolver().solve(net, simulation=True)
 
 
 def _build_chp_network(
@@ -161,7 +177,7 @@ def test_chp_energy_balance_invariant():
     net = _build_chp_network(
         efficiency_power=eff_p, efficiency_heat=eff_h, mass_flow_setpoint_kgs=0.001
     )
-    result = ms.PyomoSolver().solve(net)
+    result = _gekko_energy_flow(net)
     cn = result.dataframes["CHPControlNode"]
     el_mw = cn["el_mw"].iloc[0]
     heat_mw = cn["heat_mw"].iloc[0]
@@ -172,8 +188,8 @@ def test_chp_regulation_linear_scaling():
     """Halving regulation halves el_mw."""
     net_full = _build_chp_network(regulation=1.0)
     net_half = _build_chp_network(regulation=0.5)
-    r_full = ms.PyomoSolver().solve(net_full)
-    r_half = ms.PyomoSolver().solve(net_half)
+    r_full = _gekko_energy_flow(net_full)
+    r_half = _gekko_energy_flow(net_half)
     el_full = r_full.dataframes["CHPControlNode"]["el_mw"].iloc[0]
     el_half = r_half.dataframes["CHPControlNode"]["el_mw"].iloc[0]
     assert math.isclose(el_half, 0.5 * el_full, rel_tol=1e-4)
@@ -187,8 +203,8 @@ def test_chp_efficiency_ratio():
     net_b = _build_chp_network(
         efficiency_power=0.3, efficiency_heat=0.6, mass_flow_setpoint_kgs=0.001
     )
-    ra = ms.PyomoSolver().solve(net_a)
-    rb = ms.PyomoSolver().solve(net_b)
+    ra = _gekko_energy_flow(net_a)
+    rb = _gekko_energy_flow(net_b)
     el_a = ra.dataframes["CHPControlNode"]["el_mw"].iloc[0]
     el_b = rb.dataframes["CHPControlNode"]["el_mw"].iloc[0]
     heat_a = ra.dataframes["CHPControlNode"]["heat_mw"].iloc[0]
@@ -201,8 +217,8 @@ def test_chp_mass_flow_linearity():
     """Doubling mass_flow_setpoint_kgs doubles el_mw."""
     net_lo = _build_chp_network(mass_flow_setpoint_kgs=0.0005)
     net_hi = _build_chp_network(mass_flow_setpoint_kgs=0.001)
-    r_lo = ms.PyomoSolver().solve(net_lo)
-    r_hi = ms.PyomoSolver().solve(net_hi)
+    r_lo = _gekko_energy_flow(net_lo)
+    r_hi = _gekko_energy_flow(net_hi)
     el_lo = r_lo.dataframes["CHPControlNode"]["el_mw"].iloc[0]
     el_hi = r_hi.dataframes["CHPControlNode"]["el_mw"].iloc[0]
     assert math.isclose(el_hi, 2.0 * el_lo, rel_tol=1e-4)
@@ -226,14 +242,14 @@ def test_chp_absolute_values():
         mass_flow_setpoint_kgs=mf,
         regulation=1.0,
     )
-    result = ms.PyomoSolver().solve(net)
+    result = _gekko_energy_flow(net)
     cn = result.dataframes["CHPControlNode"]
     assert math.isclose(cn["el_mw"].iloc[0], expected_el, rel_tol=1e-4)
     assert math.isclose(cn["heat_mw"].iloc[0], expected_heat, rel_tol=1e-4)
 
 
 def test_chp_misocp_formulation():
-    """MISOCP formulation produces consistent vm_pu/vm_pu_squared, energy balance, and matches the exact AC voltages."""
+    """MISOCP formulation produces consistent vm_pu/vm_pu_squared, energy balance, and matches the GEKKO AC voltages."""
     net = _build_chp_network(mass_flow_setpoint_kgs=0.001)
     net.apply_formulation(EL_MISOCP_FORMULATION)
     result = ms.PyomoSolver().solve(net)
@@ -253,9 +269,9 @@ def test_chp_misocp_formulation():
     heat_mw = cn["heat_mw"].iloc[0]
     assert math.isclose(el_mw / eff_p, heat_mw / eff_h, rel_tol=1e-3)
 
-    # The MISOCP relaxation should reproduce the exact AC voltage profile
+    # The MISOCP relaxation should reproduce the exact AC (GEKKO) voltage profile
     ac_net = _build_chp_network(mass_flow_setpoint_kgs=0.001)
-    ac_result = ms.PyomoSolver().solve(ac_net)
+    ac_result = _gekko_energy_flow(ac_net)
     ac_vm = sorted(ac_result.dataframes["Bus"]["vm_pu"].tolist())
     misocp_vm = sorted(result.dataframes["Bus"]["vm_pu"].tolist())
     for v_ac, v_socp in zip(ac_vm, misocp_vm):
@@ -268,7 +284,7 @@ def test_chp_heat_dominated():
     net = _build_chp_network(
         efficiency_power=eff_p, efficiency_heat=eff_h, mass_flow_setpoint_kgs=0.0001
     )
-    result = ms.PyomoSolver().solve(net)
+    result = _gekko_energy_flow(net)
     cn = result.dataframes["CHPControlNode"]
     el_mw = cn["el_mw"].iloc[0]
     heat_mw = cn["heat_mw"].iloc[0]
@@ -281,7 +297,7 @@ def test_chp_power_dominated():
     net = _build_chp_network(
         efficiency_power=eff_p, efficiency_heat=eff_h, mass_flow_setpoint_kgs=0.001
     )
-    result = ms.GEKKOSolver().solve(net)
+    result = _gekko_energy_flow(net)
     cn = result.dataframes["CHPControlNode"]
     el_mw = cn["el_mw"].iloc[0]
     heat_mw = cn["heat_mw"].iloc[0]
