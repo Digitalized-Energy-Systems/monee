@@ -210,28 +210,34 @@ class GurobipySolver(SolverInterface):
         :class:`Intermediate`, see :meth:`_process_intermediate_eqs`) ->
         :class:`Intermediate`.  Mirrors the Pyomo backend: integer rounding,
         NaN/None -> 0, bound-noise snapping."""
-        gp, GRB = self._gp, self._GRB
+        gp = self._gp
         for key, value in list(target.__dict__.items()):
             if isinstance(value, (gp.LinExpr, gp.QuadExpr, gp.NLExpr)):
                 setattr(target, key, Intermediate(value=self._expr_value(value)))
                 continue
             if not isinstance(value, gp.Var):
                 continue
-            val = self._var_value(value)
-            is_integer = value.VType in (GRB.INTEGER, GRB.BINARY)
-            lb = value.LB
-            ub = value.UB
-            lb = None if lb <= -GRB.INFINITY else lb
-            ub = None if ub >= GRB.INFINITY else ub
-            if is_integer:
-                val = int(round(val))
-            else:
-                tol = self._BOUND_SNAP_TOL
-                if lb is not None and lb - tol <= val < lb:
-                    val = lb
-                if ub is not None and ub < val <= ub + tol:
-                    val = ub
-            setattr(target, key, Var(value=val, min=lb, max=ub, integer=is_integer))
+            setattr(target, key, self._var_from_gurobi(value))
+
+    def _var_from_gurobi(self, value) -> Var:
+        """Convert a solved gurobipy ``Var`` into a monee :class:`Var` with
+        integer rounding, NaN/None -> 0 and bound-noise snapping."""
+        GRB = self._GRB
+        val = self._var_value(value)
+        is_integer = value.VType in (GRB.INTEGER, GRB.BINARY)
+        lb = value.LB
+        ub = value.UB
+        lb = None if lb <= -GRB.INFINITY else lb
+        ub = None if ub >= GRB.INFINITY else ub
+        if is_integer:
+            val = int(round(val))
+        else:
+            tol = self._BOUND_SNAP_TOL
+            if lb is not None and lb - tol <= val < lb:
+                val = lb
+            if ub is not None and ub < val <= ub + tol:
+                val = ub
+        return Var(value=val, min=lb, max=ub, integer=is_integer)
 
     @staticmethod
     def _var_value(v) -> float:
@@ -389,7 +395,7 @@ class GurobipySolver(SolverInterface):
             name = f"{name_prefix}_eq_{i}" if name_prefix is not None else None
             self._add_equation(gm, e, name=name)
 
-    def _process_intermediate_eqs(self, gm, model_obj, equations):
+    def _process_intermediate_eqs(self, model_obj, equations):
         """Bind each :class:`Intermediate` attribute to its defining *expression*
         (not a variable), exactly like the Pyomo backend's ``pyo.Expression``.
 
@@ -778,7 +784,7 @@ class GurobipySolver(SolverInterface):
                 equations = filter_bool_eqs(
                     as_iter(equations), context=f"compound_{compound.id}"
                 )
-                self._process_intermediate_eqs(gm, compound, equations)
+                self._process_intermediate_eqs(compound, equations)
                 self._add_equations(
                     gm,
                     filter_intermediate_eqs(equations),
@@ -789,14 +795,14 @@ class GurobipySolver(SolverInterface):
         self, gm, network: Network, nodes, ignored_nodes, aux_obj_exprs
     ):
         nf = self._nlfunc
-        impls = dict(
-            sin_impl=nf.sin,
-            cos_impl=nf.cos,
-            abs_impl=self._abs_impl,
-            sqrt_impl=nf.sqrt,
-            log_impl=nf.log10,
-            exp_impl=nf.exp,
-        )
+        impls = {
+            "sin_impl": nf.sin,
+            "cos_impl": nf.cos,
+            "abs_impl": self._abs_impl,
+            "sqrt_impl": nf.sqrt,
+            "log_impl": nf.log10,
+            "exp_impl": nf.exp,
+        }
         for node in nodes:
             if ignore_node(node, network, ignored_nodes):
                 continue
@@ -832,7 +838,7 @@ class GurobipySolver(SolverInterface):
                 aux_obj_exprs.append(expr)
 
             node_eqs = filter_bool_eqs(equations, context=f"node_{node.id}")
-            self._process_intermediate_eqs(gm, node.model, node_eqs)
+            self._process_intermediate_eqs(node.model, node_eqs)
             self._add_equations(
                 gm, filter_intermediate_eqs(node_eqs), name_prefix=f"node_{node.id}"
             )
@@ -845,7 +851,7 @@ class GurobipySolver(SolverInterface):
                 child_eqs = filter_bool_eqs(
                     as_iter(child.equations(grid, node)), context=f"child_{child.id}"
                 )
-                self._process_intermediate_eqs(gm, child.model, child_eqs)
+                self._process_intermediate_eqs(child.model, child_eqs)
                 self._add_equations(
                     gm,
                     filter_intermediate_eqs(child_eqs),
@@ -866,18 +872,18 @@ class GurobipySolver(SolverInterface):
 
             return _impl
 
-        impls = dict(
-            sin_impl=nf.sin,
-            cos_impl=nf.cos,
-            abs_impl=self._abs_impl,
-            sqrt_impl=nf.sqrt,
-            log_impl=nf.log10,
-            exp_impl=nf.exp,
-            pwl_impl=pwl_impl,
-            if_impl=_unsupported("if2/if3", "use a Piecewise / big-M formulation"),
-            max_impl=_unsupported("max2", "use explicit constraints"),
-            sign_impl=_unsupported("sign2/sign3", "use a binary formulation"),
-        )
+        impls = {
+            "sin_impl": nf.sin,
+            "cos_impl": nf.cos,
+            "abs_impl": self._abs_impl,
+            "sqrt_impl": nf.sqrt,
+            "log_impl": nf.log10,
+            "exp_impl": nf.exp,
+            "pwl_impl": pwl_impl,
+            "if_impl": _unsupported("if2/if3", "use a Piecewise / big-M formulation"),
+            "max_impl": _unsupported("max2", "use explicit constraints"),
+            "sign_impl": _unsupported("sign2/sign3", "use a binary formulation"),
+        }
 
         for branch in branches:
             if ignore_branch(branch, network, ignored_nodes):
@@ -903,7 +909,7 @@ class GurobipySolver(SolverInterface):
                 aux_obj_exprs.append(expr)
 
             branch_eqs = filter_bool_eqs(branch_eqs, context=f"branch_{branch.id}")
-            self._process_intermediate_eqs(gm, branch.model, branch_eqs)
+            self._process_intermediate_eqs(branch.model, branch_eqs)
             self._add_equations(
                 gm,
                 filter_intermediate_eqs(branch_eqs),
@@ -1158,7 +1164,7 @@ class GurobipyTimeseries:
         self._params: list = []  # (gurobi Var, series)
         ptargets = {(id(m), a): s for (m, a, s) in self._param_targets}
         for model in self._active_models():
-            for key, val in list(model.__dict__.items()):
+            for key, val in model.__dict__.items():
                 if isinstance(val, gp.Var):
                     is_int = val.VType in (GRB.INTEGER, GRB.BINARY)
                     self._reg.append((model, key, val, "var", is_int))

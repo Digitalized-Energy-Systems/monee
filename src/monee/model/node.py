@@ -166,7 +166,7 @@ class Junction(NodeModel):
             "t_to_pu" in bm.vars for bm in to_branch_models
         )
         if temp_supported:
-            Tn = self.t_pu
+            t_n = self.t_pu
 
             terms = []
 
@@ -180,9 +180,9 @@ class Junction(NodeModel):
                 mpos = bm.vars["mass_flow_pos_kgs"] * bm.vars.get("on_off", 1)
                 mneg = bm.vars["mass_flow_neg_kgs"] * bm.vars.get("on_off", 1)
 
-                Tin = bm.vars["t_from_pu"]
-                Tout = self.t_pu * bm.vars.get("on_off", 1)
-                terms.append(mneg * Tout - mpos * Tin)
+                t_in = bm.vars["t_from_pu"]
+                t_out = self.t_pu * bm.vars.get("on_off", 1)
+                terms.append(mneg * t_out - mpos * t_in)
 
             # node is TO-end of these branches
             for bm in to_branch_models:
@@ -194,9 +194,9 @@ class Junction(NodeModel):
                 mpos = bm.vars["mass_flow_pos_kgs"] * bm.vars.get("on_off", 1)
                 mneg = bm.vars["mass_flow_neg_kgs"] * bm.vars.get("on_off", 1)
 
-                Tin = bm.vars["t_to_pu"]  # inflow at to-end
-                Tout = self.t_pu * bm.vars.get("on_off", 1)
-                terms.append(-mneg * Tin + mpos * Tout)
+                t_in = bm.vars["t_to_pu"]  # inflow at to-end
+                t_out = self.t_pu * bm.vars.get("on_off", 1)
+                terms.append(-mneg * t_in + mpos * t_out)
 
             for nm in child_models:
                 if "mass_flow_kgs" not in nm.vars:
@@ -210,7 +210,7 @@ class Junction(NodeModel):
                     # node's, keeping the nodal heat balance full-rank in T_n.
                     terms.append(m_ext * (t_inj_k / grid.t_ref_k))
                 else:
-                    terms.append(m_ext * Tn)
+                    terms.append(m_ext * t_n)
 
             # Node q_mw_heat (HeatGenerator/HeatLoad) \to kg/s \cdot t_pu via c \cdot t_ref_k/1e6.
             # grid may be None (compound heat balance); scale only used if needed.

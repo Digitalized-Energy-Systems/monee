@@ -170,7 +170,6 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
         heat_energy_eqs = self.calc_signed_heat_flow(
             heat_from_branches, heat_to_branches, [], None
         )
-        # MW = gas_mass_flow_kgs * KGPS_KWHPERKG_TO_MW * hhv [kWh/kg]
         self.pressure_pa = PostProcess(
             lambda v, ref=grid[0].pressure_ref_pa: v.pressure_pu * ref
         )

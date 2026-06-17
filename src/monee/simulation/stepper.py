@@ -198,11 +198,8 @@ class Stepper:
         )
 
 
-def _apply_overrides(net: Network, overrides: Mapping[tuple, float]) -> None:
-    """Apply ``{(comp_id, attr): value}`` via :meth:`TimeseriesData._set_model_attr`.
-    Unknown id/attr raise (treated as wiring bugs, not transient failures)."""
-    if not overrides:
-        return
+def _build_id_index(net: Network) -> dict:
+    """Map each component id to the list of models sharing it."""
     by_id: dict = {}
     for node in net.nodes:
         by_id.setdefault(node.id, []).append(node.model)
@@ -212,6 +209,15 @@ def _apply_overrides(net: Network, overrides: Mapping[tuple, float]) -> None:
         by_id.setdefault(branch.id, []).append(branch.model)
     for compound in net.compounds:
         by_id.setdefault(compound.id, []).append(compound.model)
+    return by_id
+
+
+def _apply_overrides(net: Network, overrides: Mapping[tuple, float]) -> None:
+    """Apply ``{(comp_id, attr): value}`` via :meth:`TimeseriesData._set_model_attr`.
+    Unknown id/attr raise (treated as wiring bugs, not transient failures)."""
+    if not overrides:
+        return
+    by_id = _build_id_index(net)
 
     for (comp_id, attr), value in overrides.items():
         models = by_id.get(comp_id)

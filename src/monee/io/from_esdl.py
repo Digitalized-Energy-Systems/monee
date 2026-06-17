@@ -163,7 +163,7 @@ def _group_kind(dsu, kind_by_port):
     return kind_by_group
 
 
-def _create_nodes(net, dsu, kind_by_group, report):
+def _create_nodes(net, kind_by_group, report):
     """Create one monee node per port-group. Returns {group_root: node_id}."""
     node_of_group = {}
     for root, kind in kind_by_group.items():
@@ -297,7 +297,7 @@ def esdl_system_to_network(es):
 
     dsu, kind_by_port = _build_port_groups(assets)
     kind_by_group = _group_kind(dsu, kind_by_port)
-    node_of_group = _create_nodes(net, dsu, kind_by_group, report)
+    node_of_group = _create_nodes(net, kind_by_group, report)
 
     for asset in assets:
         cls = _class_name(asset)
@@ -341,6 +341,6 @@ def import_esdl_file(path):
 
     Returns ``(network, EsdlImportReport)``.
     """
-    EnergySystemHandler, _ = _lazy_esdl()
-    es = EnergySystemHandler().load_file(path)
+    energy_system_handler, _ = _lazy_esdl()
+    es = energy_system_handler().load_file(path)
     return esdl_system_to_network(es)

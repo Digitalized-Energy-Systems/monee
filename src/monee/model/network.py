@@ -114,7 +114,7 @@ class Network:
 
     @property
     def grids(self):
-        return list(set([node.grid for node in self.nodes]))
+        return list({node.grid for node in self.nodes})
 
     @property
     def graph(self):
@@ -218,9 +218,8 @@ class Network:
     def compound_of_node(self, node_id):
         for compound in self.compounds:
             for subcomponent in compound.subcomponents:
-                if isinstance(subcomponent, Node):
-                    if subcomponent.id == node_id:
-                        return compound
+                if isinstance(subcomponent, Node) and subcomponent.id == node_id:
+                    return compound
         return None
 
     def remove_node(self, node_id):
@@ -326,7 +325,7 @@ class Network:
             if node_id in compound.connected_to.values()
         ]
 
-    def compound_of(self, subcomponent_component_id) -> list[Component]:
+    def compound_of(self, subcomponent_component_id) -> Component | None:
         compounds = [
             compound
             for compound in self.compounds
@@ -406,11 +405,10 @@ class Network:
         auto_node_creator=None,
         auto_grid_key=None,
     ):
-        child_id = (
-            overwrite_id
-            if overwrite_id is not None
-            else (0 if len(self._child_dict) == 0 else max(self._child_dict.keys()) + 1)
+        next_child_id = (
+            0 if len(self._child_dict) == 0 else max(self._child_dict.keys()) + 1
         )
+        child_id = overwrite_id if overwrite_id is not None else next_child_id
         child = Child(
             child_id,
             model,
@@ -587,15 +585,12 @@ class Network:
         overwrite_id=None,
         **connected_node_ids,
     ):
-        compound_id = (
-            overwrite_id
-            if overwrite_id is not None
-            else (
-                0
-                if len(self._compound_dict) == 0
-                else max(self._compound_dict.keys()) + 1
-            )
+        next_compound_id = (
+            0
+            if len(self._compound_dict) == 0
+            else max(self._compound_dict.keys()) + 1
         )
+        compound_id = overwrite_id if overwrite_id is not None else next_compound_id
         self.__force_blacklist = True
         self.__collect_components = True
         try:
@@ -826,14 +821,14 @@ def transform_network(network: Network, graph_transform):
         branch_id = (from_id, to_id, key)
         network.node_by_id(from_id).add_from_branch_id(branch_id)
         network.node_by_id(to_id).add_to_branch_id(branch_id)
-    for child in list(network.childs):
+    for child in network.childs:
         referenced = False
         for node in network.nodes:
             if child.id in node.child_ids:
                 referenced = True
         if not referenced:
             network.remove_child(child.id)
-    for compound in list(network.compounds):
+    for compound in network.compounds:
         _clean_up_compound(network, compound)
     return network
 
@@ -843,7 +838,7 @@ def _add_tuple(a, b):
 
 
 def _div_tuple(a, div):
-    return tuple([a[i] / div for i in range(len(a))])
+    return tuple(a[i] / div for i in range(len(a)))
 
 
 def calc_coordinates(network: Network, component: Component):
@@ -853,10 +848,8 @@ def calc_coordinates(network: Network, component: Component):
         node_start = network.node_by_id(component.from_node_id)
         node_end = network.node_by_id(component.to_node_id)
         return tuple(
-            [
-                (node_start.position[i] + node_end.position[i]) / 2
-                for i in range(len(node_start.position))
-            ]
+            (node_start.position[i] + node_end.position[i]) / 2
+            for i in range(len(node_start.position))
         )
     elif type(component) is Child:
         return network.node_by_id(component.node_id).position
@@ -866,4 +859,4 @@ def calc_coordinates(network: Network, component: Component):
             node = network.node_by_id(connected_node_id)
             position = _add_tuple(position, node.position)
         return _div_tuple(position, len(component.connected_to))
-    raise Exception(f"This should not happen! The component {component} is unknown.")
+    raise ValueError(f"This should not happen! The component {component} is unknown.")

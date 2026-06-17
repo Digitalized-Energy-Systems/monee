@@ -56,7 +56,7 @@ class ChildFormulation(Formulation):
         return []
 
     def overwrite(self, child, node_model, grid):
-        pass
+        """Hook for subclasses to overwrite child model state; no-op by default."""
 
 
 def _or_dict(d: dict):

@@ -49,12 +49,12 @@ def read_matpower_data(mat_data):
     fill_child_dict(gen_mat, node_dict_list, child_dict_list)
     fill_branch_dict(branch_mat, branch_dict_list)
     return native_dict_to_network(
-        dict(
-            grids=grid_dict_list,
-            nodes=node_dict_list,
-            childs=child_dict_list,
-            branches=branch_dict_list,
-        )
+        {
+            "grids": grid_dict_list,
+            "nodes": node_dict_list,
+            "childs": child_dict_list,
+            "branches": branch_dict_list,
+        }
     )
 
 
@@ -138,11 +138,11 @@ def fill_node_dict(bus_mat, node_dict_list, child_dict_list):
             # which equals the already-negative bus_row[2] - so storing the raw
             # value is correct for both model types here.
             child_dict_list.append(
-                dict(
-                    id=len(child_dict_list),
-                    model_type=model_type,
-                    values=dict(p_mw=bus_row[2], q_mvar=bus_row[3]),
-                )
+                {
+                    "id": len(child_dict_list),
+                    "model_type": model_type,
+                    "values": {"p_mw": bus_row[2], "q_mvar": bus_row[3]},
+                }
             )
 
 

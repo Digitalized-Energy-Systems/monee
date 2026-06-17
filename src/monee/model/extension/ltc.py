@@ -175,7 +175,7 @@ class LumpedThermalCapacitance(NetworkAspect):
         to the node heat balance (branch ids are 3-tuples, so they never match
         the scalar node ids in ``ignored_nodes`` - check endpoints instead).
         """
-        T_n = node.model.t_pu
+        t_n = node.model.t_pu
         terms = []
         scale_mw_per_kgs = SPECIFIC_HEAT_CAP_WATER * node.grid.t_ref_k / 1e6
 
@@ -207,7 +207,7 @@ class LumpedThermalCapacitance(NetworkAspect):
                     on_off = bvars.get("on_off", 1)
                     mpos = bvars["mass_flow_pos_kgs"] * on_off
                     mneg = bvars["mass_flow_neg_kgs"] * on_off
-                    terms.append(mpos * bvars["t_from_pu"] - mneg * T_n)
+                    terms.append(mpos * bvars["t_from_pu"] - mneg * t_n)
 
             elif branch.to_node_id == node.id:
                 if is_mccormick:
@@ -218,15 +218,15 @@ class LumpedThermalCapacitance(NetworkAspect):
                     on_off = bvars.get("on_off", 1)
                     mpos = bvars["mass_flow_pos_kgs"] * on_off
                     mneg = bvars["mass_flow_neg_kgs"] * on_off
-                    terms.append(mneg * bvars["t_to_pu"] - mpos * T_n)
+                    terms.append(mneg * bvars["t_to_pu"] - mpos * t_n)
 
         for child in network.childs_by_ids(node.child_ids):
             cm = child.model
             cvars = cm.vars
             if "mass_flow_kgs" in cvars:
-                # Well-mixed: m_ext < 0 = injection \to heat IN = -m_ext \cdot T_n.
+                # Well-mixed: m_ext < 0 = injection \to heat IN = -m_ext \cdot t_n.
                 m_ext = cvars["mass_flow_kgs"] * cvars.get("regulation", 1)
-                terms.append(-m_ext * T_n)
+                terms.append(-m_ext * t_n)
             if "q_mw_heat" in cvars:
                 # Load convention: positive = heat OUT → negate.
                 q = cvars["q_mw_heat"] * cvars.get("regulation", 1)

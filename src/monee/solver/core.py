@@ -56,6 +56,17 @@ def _col_summary(series: pandas.Series) -> str | None:
     return f"[{lo:.4g}, {hi:.4g}]"
 
 
+def _summarize_numeric_cols(num: pandas.DataFrame) -> list[str]:
+    """Per-column one-line summaries for the repr table row."""
+    parts = []
+    for col in num.columns:
+        s = _col_summary(num[col])
+        if s is None:
+            continue
+        parts.append(f"{col} ∈ {s}" if "[" in s else f"{col} = {s}")
+    return parts
+
+
 _TABLE_CSS = (
     "<style>"
     ".monee-result table{border-collapse:collapse;font-size:.88em;margin-top:4px}"
@@ -141,19 +152,14 @@ class SolverResult:
     def __repr__(self) -> str:
         SEP = "─" * 68
         title = "SolverResult"
-        if self.objective is not None and self.objective != 0.0:
+        if self.objective is not None and abs(self.objective) > 0.0:
             title += f"  (objective = {self.objective:.6g})"
         lines = [title, SEP]
         for type_name, df in self.dataframes.items():
             n = len(df)
             vis = _display_df(df).drop(columns=["id", "node_id"], errors="ignore")
             num = vis.select_dtypes(include="number")
-            parts = []
-            for col in num.columns:
-                s = _col_summary(num[col])
-                if s is None:
-                    continue
-                parts.append(f"{col} ∈ {s}" if "[" in s else f"{col} = {s}")
+            parts = _summarize_numeric_cols(num)
             row = f"  {type_name:<22} {n:>2}"
             if parts:
                 row += "  │  " + "  ·  ".join(parts[:4])
@@ -169,7 +175,7 @@ class SolverResult:
     def __str__(self) -> str:
         """Full per-type table dump (``print(result)``); ``repr`` gives the summary."""
         title = "SolverResult"
-        if self.objective is not None and self.objective != 0.0:
+        if self.objective is not None and abs(self.objective) > 0.0:
             title += f"  (objective = {self.objective:.6g})"
         SEP = "─" * 68
         lines = [title]
@@ -187,7 +193,7 @@ class SolverResult:
 
     def _repr_html_(self) -> str:
         obj_extra = ""
-        if self.objective is not None and self.objective != 0.0:
+        if self.objective is not None and abs(self.objective) > 0.0:
             obj_extra = (
                 f" &nbsp;<span style='color:#888;font-weight:normal'>"
                 f"objective = {self.objective:.6g}</span>"
@@ -471,7 +477,7 @@ class SolverInterface(ABC):
 
 def as_iter(possible_iter):
     if possible_iter is None:
-        raise Exception("None as result for 'equations' is not allowed!")
+        raise ValueError("None as result for 'equations' is not allowed!")
     return possible_iter if hasattr(possible_iter, "__iter__") else [possible_iter]
 
 
@@ -740,6 +746,10 @@ def mark_ignored_components(network, ignored_nodes):
             node.ignored = True
             for child in network.childs_by_ids(node.child_ids):
                 child.ignored = True
+    _mark_ignored_compounds(network, ignored_nodes)
+
+
+def _mark_ignored_compounds(network, ignored_nodes):
     for compound in network.compounds:
         if ignore_compound(compound, ignored_nodes):
             compound.ignored = True
@@ -920,12 +930,7 @@ def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
             inject_nans(node.model)
             continue
         inject_fn(node.model, node, "node")
-        for child in network.childs_by_ids(node.child_ids):
-            if ignore_child(child, ignored_nodes):
-                child.ignored = True
-                inject_nans(child.model)
-                continue
-            inject_fn(child.model, child, "child")
+        _inject_node_childs(inject_fn, node, network, ignored_nodes)
 
     for compound in compounds:
         if ignore_compound(compound, ignored_nodes):
@@ -933,6 +938,15 @@ def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
             inject_nans(compound.model)
             continue
         inject_fn(compound.model, compound, "compound")
+
+
+def _inject_node_childs(inject_fn, node, network, ignored_nodes):
+    for child in network.childs_by_ids(node.child_ids):
+        if ignore_child(child, ignored_nodes):
+            child.ignored = True
+            inject_nans(child.model)
+            continue
+        inject_fn(child.model, child, "child")
 
 
 def withdraw_vars(withdraw_fn, nodes, branches, compounds, network):
@@ -1257,9 +1271,7 @@ def find_ignored_nodes(network: Network, islanding_config=None):
 # import path ``monee.simulation.step_state`` re-exports them unchanged.
 
 
-def _find_model(net, component_id, attr=None):
-    """Return the model for *component_id*. Disambiguates node/child id collisions
-    by preferring a model that actually carries *attr*."""
+def _collect_id_matches(net, component_id):
     candidates = []
     for node in net.nodes:
         if node.id == component_id:
@@ -1273,6 +1285,13 @@ def _find_model(net, component_id, attr=None):
     for compound in net.compounds:
         if compound.id == component_id:
             candidates.append(compound.model)
+    return candidates
+
+
+def _find_model(net, component_id, attr=None):
+    """Return the model for *component_id*. Disambiguates node/child id collisions
+    by preferring a model that actually carries *attr*."""
+    candidates = _collect_id_matches(net, component_id)
 
     if not candidates:
         return None
@@ -1336,20 +1355,23 @@ class StepState(InterStepState):
             del self._networks[0]
             self._dropped += 1
 
+    def _network_for_step(self, step: int):
+        if not self._networks:
+            return None
+        if step < 0:
+            return self._networks[step] if -step <= len(self._networks) else None
+        # Absolute index: shift by dropped prefix; dropped → fallback.
+        idx = step - self._dropped
+        return self._networks[idx] if 0 <= idx < len(self._networks) else None
+
     def get(self, component_id, attr: str, step: int = -1):
-        if self._networks:
-            if step < 0:
-                net = self._networks[step] if -step <= len(self._networks) else None
-            else:
-                # Absolute index: shift by dropped prefix; dropped → fallback.
-                idx = step - self._dropped
-                net = self._networks[idx] if 0 <= idx < len(self._networks) else None
-            if net is not None:
-                model = _find_model(net, component_id, attr)
-                if model is not None:
-                    val = _extract_value(getattr(model, attr, None))
-                    if val is not None:
-                        return val
+        net = self._network_for_step(step)
+        if net is not None:
+            model = _find_model(net, component_id, attr)
+            if model is not None:
+                val = _extract_value(getattr(model, attr, None))
+                if val is not None:
+                    return val
         return self._initial_state.get((component_id, attr))
 
     def __len__(self) -> int:

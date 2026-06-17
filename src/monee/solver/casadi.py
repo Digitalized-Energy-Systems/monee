@@ -145,48 +145,48 @@ class CasSym:
         self.e = e
 
     # arithmetic -> CasSym
-    def __add__(s, o):
-        return CasSym(s.e + _sx(o))
+    def __add__(self, o):
+        return CasSym(self.e + _sx(o))
 
-    def __radd__(s, o):
-        return CasSym(_sx(o) + s.e)
+    def __radd__(self, o):
+        return CasSym(_sx(o) + self.e)
 
-    def __sub__(s, o):
-        return CasSym(s.e - _sx(o))
+    def __sub__(self, o):
+        return CasSym(self.e - _sx(o))
 
-    def __rsub__(s, o):
-        return CasSym(_sx(o) - s.e)
+    def __rsub__(self, o):
+        return CasSym(_sx(o) - self.e)
 
-    def __mul__(s, o):
-        return CasSym(s.e * _sx(o))
+    def __mul__(self, o):
+        return CasSym(self.e * _sx(o))
 
-    def __rmul__(s, o):
-        return CasSym(_sx(o) * s.e)
+    def __rmul__(self, o):
+        return CasSym(_sx(o) * self.e)
 
-    def __truediv__(s, o):
-        return CasSym(s.e / _sx(o))
+    def __truediv__(self, o):
+        return CasSym(self.e / _sx(o))
 
-    def __rtruediv__(s, o):
-        return CasSym(_sx(o) / s.e)
+    def __rtruediv__(self, o):
+        return CasSym(_sx(o) / self.e)
 
-    def __pow__(s, o):
-        return CasSym(s.e ** _sx(o))
+    def __pow__(self, o):
+        return CasSym(self.e ** _sx(o))
 
-    def __rpow__(s, o):
-        return CasSym(_sx(o) ** s.e)
+    def __rpow__(self, o):
+        return CasSym(_sx(o) ** self.e)
 
-    def __neg__(s):
-        return CasSym(-s.e)
+    def __neg__(self):
+        return CasSym(-self.e)
 
     # relations -> constraint records (residual {==,<=} 0)
-    def __eq__(s, o):
-        return _Rel(s.e - _sx(o), "eq")
+    def __eq__(self, o):
+        return _Rel(self.e - _sx(o), "eq")
 
-    def __le__(s, o):
-        return _Rel(s.e - _sx(o), "le")
+    def __le__(self, o):
+        return _Rel(self.e - _sx(o), "le")
 
-    def __ge__(s, o):
-        return _Rel(_sx(o) - s.e, "le")
+    def __ge__(self, o):
+        return _Rel(_sx(o) - self.e, "le")
 
     def __hash__(self):
         return id(self)
@@ -488,7 +488,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         ubx = ca.DM([r["ub"] for r in reg])
         g = ca.vertcat(*[c.r for c in m.cons]) if m.cons else ca.SX.zeros(0)
         lbg = ca.DM([0.0 if c.op == "eq" else -INF for c in m.cons])
-        ubg = ca.DM([0.0 for c in m.cons])
+        ubg = ca.DM([0.0 for _ in m.cons])
         f = ca.SX(0)
         for t in m.obj_terms:
             f = f + t
@@ -531,7 +531,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             for model in self._active_models(
                 network, nodes, branches, compounds, ignored_nodes
             )
-            for key, val in list(model.__dict__.items())
+            for key, val in model.__dict__.items()
             if isinstance(val, CasSym)
         ]
         if leftover:
@@ -648,7 +648,7 @@ class CasADiTimeseries:
         self._x = ca.DM([r["x0"] for r in reg])  # warm-start state
         g = ca.vertcat(*[c.r for c in m.cons]) if m.cons else ca.SX.zeros(0)
         self._lbg = ca.DM([0.0 if c.op == "eq" else -INF for c in m.cons])
-        self._ubg = ca.DM([0.0 for c in m.cons])
+        self._ubg = ca.DM([0.0 for _ in m.cons])
         f = ca.SX(0)
         for t in m.obj_terms:
             f = f + t
@@ -668,12 +668,12 @@ class CasADiTimeseries:
         self._inter = [
             (model, key, val.e)
             for model in self._active_models()
-            for key, val in list(model.__dict__.items())
+            for key, val in model.__dict__.items()
             if isinstance(val, CasSym)
             and (id(model), key) not in var_ids
             and (id(model), key) not in par_ids
         ]
-        self._F_inter = (
+        self._f_inter = (
             ca.Function("inter", [X, P], [ca.vertcat(*[e for _, _, e in self._inter])])
             if self._inter
             else None
@@ -770,8 +770,8 @@ class CasADiTimeseries:
             )
         for model, key, _psx, series in self._params:
             model.__dict__[key] = float(series[t])
-        if self._F_inter is not None:
-            ivals = np.array(self._F_inter(sol["x"], pvals)).flatten()
+        if self._f_inter is not None:
+            ivals = np.array(self._f_inter(sol["x"], pvals)).flatten()
             for (model, key, _), v in zip(self._inter, ivals):
                 model.__dict__[key] = Intermediate(value=float(v))
         apply_post_process_all(
@@ -939,7 +939,7 @@ class CasADiMultiPeriodSolver:
         ubx = ca.DM([r["ub"] for r in reg])
         g = ca.vertcat(*[c.r for c in m.cons]) if m.cons else ca.SX.zeros(0)
         lbg = ca.DM([0.0 if c.op == "eq" else -INF for c in m.cons])
-        ubg = ca.DM([0.0 for c in m.cons])
+        ubg = ca.DM([0.0 for _ in m.cons])
         f = ca.SX(0)
         for term in m.obj_terms:
             f = f + term
@@ -974,7 +974,7 @@ class CasADiMultiPeriodSolver:
             for model in cs._active_models(
                 net_t, net_t.nodes, net_t.branches, net_t.compounds, ignored_t
             )
-            for key, val in list(model.__dict__.items())
+            for key, val in model.__dict__.items()
             if isinstance(val, CasSym)
         ]
         if leftover:

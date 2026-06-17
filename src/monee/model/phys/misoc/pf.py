@@ -79,10 +79,10 @@ def soc_rel_lorentz(
 ):
     r"""Lorentz form of :func:`soc_rel`: :math:`s = (W/tap^2+ell)/2`, :math:`d = (W/tap^2-ell)/2`,
     :math:`P^2 + Q^2 + d^2 \le s^2` (since :math:`s^2 - d^2 = (W/tap^2) \cdot ell`)."""
-    Wp = var_w_pu_i / (tap * tap)
+    w_p = var_w_pu_i / (tap * tap)
     return [
-        var_soc_sum == 0.5 * (Wp + var_ell_pu),
-        var_soc_diff == 0.5 * (Wp - var_ell_pu),
+        var_soc_sum == 0.5 * (w_p + var_ell_pu),
+        var_soc_diff == 0.5 * (w_p - var_ell_pu),
         var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2 + var_soc_diff**2
         <= var_soc_sum**2,
     ]

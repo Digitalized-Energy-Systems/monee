@@ -314,7 +314,7 @@ class BranchModel(GenericModel):
         return False
 
     def init(self, grid):
-        pass
+        """Optional pre-solve initialization hook for the branch. Default: no-op."""
 
 
 class MultiGridBranchModel(BranchModel):
@@ -328,7 +328,7 @@ class MultiGridBranchModel(BranchModel):
         return True
 
     def init(self, grids):
-        pass
+        """Optional pre-solve initialization hook spanning grids. Default: no-op."""
 
 
 class MultiGridNodeModel(NodeModel):

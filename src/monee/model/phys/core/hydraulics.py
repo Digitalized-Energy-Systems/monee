@@ -134,10 +134,10 @@ def filter_near_linear(xs, ys, rtol=1e-6):
     return keep_x, keep_y
 
 
-def friction_value(Re, D, eps):
-    if Re < 2300:
-        return 64.0 / Re
-    return swamee_jain(Re, D, eps, math.log10)
+def friction_value(reynolds, diameter, eps):
+    if reynolds < 2300:
+        return 64.0 / reynolds
+    return swamee_jain(reynolds, diameter, eps, math.log10)
 
 
 def logspace(a, b, n):
@@ -197,8 +197,8 @@ def phi_pwl_breakpoints(
     xs = [0.0] + list(log_xs)
     ys = [0.0]
     for m in log_xs:
-        Re = m * diameter_m / (dynamic_visc_pas * pipe_area)
-        f = friction_value(Re, diameter_m, roughness_m)
+        reynolds = m * diameter_m / (dynamic_visc_pas * pipe_area)
+        f = friction_value(reynolds, diameter_m, roughness_m)
         ys.append(f * m * m)
 
     xs, ys = filter_near_linear(xs, ys, rtol=1e-3)

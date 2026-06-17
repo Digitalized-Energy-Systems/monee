@@ -309,13 +309,12 @@ class InfeasibilityReport:
                 f"=== Variables at bounds: {n_at_lb} at lower, {n_at_ub} at upper ==="
             )
             for v in self.variables_at_bounds[:max_items]:
-                which = (
-                    "lower"
-                    if v["at_lower"] and not v["at_upper"]
-                    else "upper"
-                    if v["at_upper"] and not v["at_lower"]
-                    else "both"
-                )
+                if v["at_lower"] and not v["at_upper"]:
+                    which = "lower"
+                elif v["at_upper"] and not v["at_lower"]:
+                    which = "upper"
+                else:
+                    which = "both"
                 lines.append(
                     f"  {v['display_name']}: value={v['value']:.6g} "
                     f"bounds=[{v['lower']}, {v['upper']}] (at {which})"

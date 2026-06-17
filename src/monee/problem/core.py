@@ -349,8 +349,8 @@ class OptimizationProblem:
         self._controllable_appliables: list = []
         self._controllable_to_attr: dict[GenericModel, str] = {}
         self._bounds_for_controllables: list = []
-        self._objectives: Objectives = None
-        self._constraints: Constraints = None
+        self._objectives: Objectives | None = None
+        self._constraints: Constraints | None = None
         self._debug = debug
         self._lex_objectives = lex_objectives
 

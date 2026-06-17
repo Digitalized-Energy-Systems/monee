@@ -191,7 +191,7 @@ class SmoothPassiveHeatExchangerFormulation(BranchFormulation):
         model.t_inc_pu = Var(1, min=-2, max=2, name="temperature_increase_pu")
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
-        eqs, signed, mag = _flow_and_pressure_eqs(
+        eqs, _, mag = _flow_and_pressure_eqs(
             self, branch, grid, from_node_model, to_node_model, **kwargs
         )
         eqs += [

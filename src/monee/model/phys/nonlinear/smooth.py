@@ -115,10 +115,10 @@ def smooth_friction_blend(
     switch so IPOPT sees a continuously differentiable friction. ``reynolds_scaled``
     is ``Re / REYNOLDS_SCALE`` (see :data:`hyd.REYNOLDS_SCALE`).
     """
-    Re = reynolds_scaled * hyd.REYNOLDS_SCALE
-    f_lam = 64.0 / (Re + 1.0)
-    f_turb = hyd.swamee_jain(Re, diameter_m, roughness_m, log_impl)
-    w = 1.0 / (1.0 + exp_impl(-(Re - re_crit) / sharpness))
+    reynolds = reynolds_scaled * hyd.REYNOLDS_SCALE
+    f_lam = 64.0 / (reynolds + 1.0)
+    f_turb = hyd.swamee_jain(reynolds, diameter_m, roughness_m, log_impl)
+    w = 1.0 / (1.0 + exp_impl(-(reynolds - re_crit) / sharpness))
     return (1.0 - w) * f_lam + w * f_turb
 
 
@@ -157,8 +157,8 @@ def signed_psi_breakpoints(
     mags = hyd.logspace(max(m_max * 1e-4, 1e-9), m_max, max(2, n_breakpoints - 1))
 
     def psi(m):
-        Re = m * diameter_m / (dynamic_visc_pas * area)
-        return hyd.friction_value(Re, diameter_m, roughness_m) * m * m
+        reynolds = m * diameter_m / (dynamic_visc_pas * area)
+        return hyd.friction_value(reynolds, diameter_m, roughness_m) * m * m
 
     xs = [-m for m in reversed(mags)] + [0.0] + list(mags)
     ys = [-psi(m) for m in reversed(mags)] + [0.0] + [psi(m) for m in mags]

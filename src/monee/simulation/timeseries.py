@@ -20,6 +20,8 @@ from monee.solver.dispatch import resolve_solver
 
 _log = logging.getLogger(__name__)
 
+_STEP_FAILED_MSG = "Step %d failed: %s"
+
 
 class TimeseriesData:
     """Time-varying attribute values applied to model objects before each step.
@@ -351,26 +353,29 @@ class TimeseriesResult:
             raise KeyError(component_id)
         return pandas.DataFrame(rows, index=self._make_index(step_indices))
 
+    @staticmethod
+    def _find_attr_value(dataframes, component_id, attribute: str):
+        for df in dataframes:
+            if "id" in df.columns and attribute in df.columns:
+                try:
+                    mask = df["id"] == component_id
+                except (ValueError, TypeError):
+                    mask = df["id"].apply(lambda x: x == component_id)
+                row = df[mask]
+                if not row.empty:
+                    return True, row.iloc[0][attribute]
+        return False, None
+
     def get_result_for_id(self, component_id, attribute: str) -> pandas.Series:
         """Series of *attribute* for *component_id* across successful steps.
         Yields ``None`` where the component is absent (e.g. islanded out)."""
         values = []
         step_indices = []
         for sr in self._successful():
-            found = False
-            for df in sr.result.dataframes.values():
-                if "id" in df.columns and attribute in df.columns:
-                    try:
-                        mask = df["id"] == component_id
-                    except (ValueError, TypeError):
-                        mask = df["id"].apply(lambda x: x == component_id)
-                    row = df[mask]
-                    if not row.empty:
-                        values.append(row.iloc[0][attribute])
-                        found = True
-                        break
-            if not found:
-                values.append(None)
+            found, value = self._find_attr_value(
+                sr.result.dataframes.values(), component_id, attribute
+            )
+            values.append(value if found else None)
             step_indices.append(sr.step)
         return pandas.Series(
             values, index=self._make_index(step_indices), name=attribute
@@ -678,7 +683,7 @@ def _run_casadi_reuse(
         except Exception as exc:
             if on_step_error == "raise":
                 raise
-            _log.warning("Step %d failed: %s", step, exc)
+            _log.warning(_STEP_FAILED_MSG, step, exc)
             sr = StepResult(step=step, result=None, failed=True, error=exc)
         step_results.append(sr)
         if progress_callback is not None:
@@ -785,7 +790,7 @@ def _run_gurobipy_reuse(
         except Exception as exc:
             if on_step_error == "raise":
                 raise
-            _log.warning("Step %d failed: %s", step, exc)
+            _log.warning(_STEP_FAILED_MSG, step, exc)
             sr = StepResult(step=step, result=None, failed=True, error=exc)
         step_results.append(sr)
         if progress_callback is not None:
@@ -926,7 +931,7 @@ def run(
             except Exception as exc:
                 if on_step_error == "raise":
                     raise
-                _log.warning("Step %d failed: %s", step, exc)
+                _log.warning(_STEP_FAILED_MSG, step, exc)
                 sr = StepResult(step=step, result=None, failed=True, error=exc)
         else:
             sr = StepResult(step=step, result=None, skipped=True)

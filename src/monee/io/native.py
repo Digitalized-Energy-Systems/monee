@@ -104,45 +104,49 @@ def _encode_value(value):
     return value
 
 
+def _decode_dict_value(value):
+    tag = value.get(_TYPE_KEY)
+    if tag == "Var":
+        return Var(
+            value["value"],
+            max=value.get("max"),
+            min=value.get("min"),
+            integer=value.get("integer", False),
+            name=value.get("name"),
+        )
+    if tag == "Const":
+        return Const(value["value"])
+    if tag == "Intermediate":
+        return Intermediate(value["value"])
+    if tag == "PostProcess":
+        # Carry the stored value via a constant lambda; the model's next
+        # solve re-attaches the real computation.
+        stored = value["value"]
+        return PostProcess(lambda _vals, _v=stored: _v, value=stored)
+    if tag is not None:
+        raise PersistenceException(f"Unknown encoded value type: {tag!r}")
+
+    # --- legacy (untagged) handling ------------------------------------ #
+    # Older files and matpower import emit bare Var dicts without a tag.
+    if "value" in value and ("max" in value or "min" in value):
+        return Var(
+            value["value"],
+            max=value.get("max"),
+            min=value.get("min"),
+            integer=value.get("integer", False),
+            name=value.get("name"),
+        )
+    if set(value.keys()) == {"value"}:
+        # Legacy Intermediate/Const both serialized as {"value": x}; restore
+        # the numeric value as an Intermediate rather than dropping it.
+        return Intermediate(value["value"])
+    return {k: _decode_value(v) for k, v in value.items()}
+
+
 def _decode_value(value):
     """Inverse of :func:`_encode_value`, tolerant of the legacy format."""
     if isinstance(value, dict):
-        tag = value.get(_TYPE_KEY)
-        if tag == "Var":
-            return Var(
-                value["value"],
-                max=value.get("max"),
-                min=value.get("min"),
-                integer=value.get("integer", False),
-                name=value.get("name"),
-            )
-        if tag == "Const":
-            return Const(value["value"])
-        if tag == "Intermediate":
-            return Intermediate(value["value"])
-        if tag == "PostProcess":
-            # Carry the stored value via a constant lambda; the model's next
-            # solve re-attaches the real computation.
-            stored = value["value"]
-            return PostProcess(lambda _vals, _v=stored: _v, value=stored)
-        if tag is not None:
-            raise PersistenceException(f"Unknown encoded value type: {tag!r}")
-
-        # --- legacy (untagged) handling ------------------------------------ #
-        # Older files and matpower import emit bare Var dicts without a tag.
-        if "value" in value and ("max" in value or "min" in value):
-            return Var(
-                value["value"],
-                max=value.get("max"),
-                min=value.get("min"),
-                integer=value.get("integer", False),
-                name=value.get("name"),
-            )
-        if set(value.keys()) == {"value"}:
-            # Legacy Intermediate/Const both serialized as {"value": x}; restore
-            # the numeric value as an Intermediate rather than dropping it.
-            return Intermediate(value["value"])
-        return {k: _decode_value(v) for k, v in value.items()}
+        return _decode_dict_value(value)
     if isinstance(value, list):
         return [_decode_value(v) for v in value]
     return value
@@ -354,56 +358,56 @@ def model_to_dict(model):
 
 
 def child_to_dict(child):
-    return dict(
-        id=child.id,
-        active=child.active,
-        name=child.name,
-        values=model_to_dict(child.model),
-        model_type=type(child.model).__name__,
-    )
+    return {
+        "id": child.id,
+        "active": child.active,
+        "name": child.name,
+        "values": model_to_dict(child.model),
+        "model_type": type(child.model).__name__,
+    }
 
 
 def compound_to_dict(compound):
-    return dict(
-        id=compound.id,
-        active=compound.active,
-        name=compound.name,
-        values=model_to_dict(compound.model),
-        model_type=type(compound.model).__name__,
-        connected_to=compound.connected_to,
-    )
+    return {
+        "id": compound.id,
+        "active": compound.active,
+        "name": compound.name,
+        "values": model_to_dict(compound.model),
+        "model_type": type(compound.model).__name__,
+        "connected_to": compound.connected_to,
+    }
 
 
 def branch_to_dict(branch, grids):
     fetch_grid_to_dict(grids, branch.grid)
     grid_ids = [grid.name for grid in iter_concrete_grids(branch.grid)]
-    return dict(
-        id=branch.id,
-        from_node=branch.id[0],
-        to_node=branch.id[1],
+    return {
+        "id": branch.id,
+        "from_node": branch.id[0],
+        "to_node": branch.id[1],
         # grid_id keeps a single representative for backward compatibility;
         # grid_ids preserves the full (possibly multi-grid) mapping.
-        grid_id=grid_ids[0] if grid_ids else None,
-        grid_ids=grid_ids,
-        active=branch.active,
-        name=branch.name,
-        values=model_to_dict(branch.model),
-        model_type=type(branch.model).__name__,
-    )
+        "grid_id": grid_ids[0] if grid_ids else None,
+        "grid_ids": grid_ids,
+        "active": branch.active,
+        "name": branch.name,
+        "values": model_to_dict(branch.model),
+        "model_type": type(branch.model).__name__,
+    }
 
 
 def node_to_dict(node, grids):
     fetch_grid_to_dict(grids, node.grid)
-    return dict(
-        id=node.id,
-        grid_id=node.grid.name,
-        child_ids=node.child_ids,
-        position=node.position,
-        active=node.active,
-        name=node.name,
-        values=model_to_dict(node.model),
-        model_type=type(node.model).__name__,
-    )
+    return {
+        "id": node.id,
+        "grid_id": node.grid.name,
+        "child_ids": node.child_ids,
+        "position": node.position,
+        "active": node.active,
+        "name": node.name,
+        "values": model_to_dict(node.model),
+        "model_type": type(node.model).__name__,
+    }
 
 
 def network_to_native_dict(network: Network) -> dict:
@@ -429,17 +433,17 @@ def network_to_native_dict(network: Network) -> dict:
         for compound in network.compounds
         if not network.is_blacklisted(compound)
     ]
-    return dict(
-        version=FORMAT_VERSION,
-        grids={
+    return {
+        "version": FORMAT_VERSION,
+        "grids": {
             k: {"values": _encode_values(vars(v)), "model_type": type(v).__name__}
             for k, v in grids.items()
         },
-        nodes=node_dict_list,
-        childs=child_dict_list,
-        branches=branch_dict_list,
-        compounds=compound_dict_list,
-    )
+        "nodes": node_dict_list,
+        "childs": child_dict_list,
+        "branches": branch_dict_list,
+        "compounds": compound_dict_list,
+    }
 
 
 def write_omef_network(file, network: Network):

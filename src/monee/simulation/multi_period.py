@@ -310,6 +310,23 @@ class MultiPeriodResult:
                 type_dfs.setdefault(type_name, []).append(df)
         return type_dfs
 
+    def _repr_type_row(self, type_name, df) -> str:
+        all_dfs = [
+            dfs.get(type_name, pandas.DataFrame()) for dfs in self._period_dfs
+        ]
+        combined = pandas.concat(all_dfs, ignore_index=True)
+        vis = _display_df(combined).drop(columns=["id", "node_id"], errors="ignore")
+        num = vis.select_dtypes(include="number")
+        parts = []
+        for col in num.columns:
+            s = _col_summary(num[col])
+            if s:
+                parts.append(f"{col} ∈ {s}" if "[" in s else f"{col} = {s}")
+        row = f"  {type_name:<22} ×{len(df):>2}"
+        if parts:
+            row += "  │  " + "  ·  ".join(parts[:4])
+        return row
+
     def __repr__(self) -> str:
         SEP = "─" * 68
         status = "ok" if self.success else "FAILED"
@@ -319,23 +336,7 @@ class MultiPeriodResult:
         ]
         if self._period_dfs:
             for type_name, df in self._period_dfs[0].items():
-                all_dfs = [
-                    dfs.get(type_name, pandas.DataFrame()) for dfs in self._period_dfs
-                ]
-                combined = pandas.concat(all_dfs, ignore_index=True)
-                vis = _display_df(combined).drop(
-                    columns=["id", "node_id"], errors="ignore"
-                )
-                num = vis.select_dtypes(include="number")
-                parts = []
-                for col in num.columns:
-                    s = _col_summary(num[col])
-                    if s:
-                        parts.append(f"{col} ∈ {s}" if "[" in s else f"{col} = {s}")
-                row = f"  {type_name:<22} ×{len(df):>2}"
-                if parts:
-                    row += "  │  " + "  ·  ".join(parts[:4])
-                lines.append(row)
+                lines.append(self._repr_type_row(type_name, df))
 
         # Temporal evolution section - only shown when there are varying attrs
         temporal = self._temporal_lines()
@@ -788,6 +789,38 @@ def _resolve_steps(steps: int | None, timeseries_data: TimeseriesData | None) ->
     )
 
 
+def _dt_h_from_datetime_index(
+    dt_h: float | list[float],
+    datetime_index: pandas.DatetimeIndex,
+    steps: int,
+) -> list[float]:
+    if isinstance(dt_h, (list, tuple)) or dt_h != 1.0:
+        _log.warning(
+            "Both dt_h and datetime_index were provided; dt_h will be "
+            "ignored and step durations will be derived from "
+            "datetime_index."
+        )
+    if len(datetime_index) < steps:
+        raise ValueError(
+            f"datetime_index length ({len(datetime_index)}) is less than "
+            f"steps ({steps})."
+        )
+    diffs = [
+        (datetime_index[t] - datetime_index[t - 1]).total_seconds() / 3600.0
+        if t > 0
+        else (datetime_index[1] - datetime_index[0]).total_seconds() / 3600.0
+        if steps > 1
+        else 1.0
+        for t in range(steps)
+    ]
+    if any(d <= 0 for d in diffs):
+        raise ValueError(
+            "datetime_index must be strictly increasing; "
+            "found non-positive step duration(s)."
+        )
+    return diffs
+
+
 def _resolve_dt_h(
     dt_h: float | list[float],
     datetime_index: pandas.DatetimeIndex | None,
@@ -795,31 +828,7 @@ def _resolve_dt_h(
 ) -> list[float]:
     """Return per-period timestep durations [h]. datetime_index overrides dt_h."""
     if datetime_index is not None:
-        if isinstance(dt_h, (list, tuple)) or dt_h != 1.0:
-            _log.warning(
-                "Both dt_h and datetime_index were provided; dt_h will be "
-                "ignored and step durations will be derived from "
-                "datetime_index."
-            )
-        if len(datetime_index) < steps:
-            raise ValueError(
-                f"datetime_index length ({len(datetime_index)}) is less than "
-                f"steps ({steps})."
-            )
-        diffs = [
-            (datetime_index[t] - datetime_index[t - 1]).total_seconds() / 3600.0
-            if t > 0
-            else (datetime_index[1] - datetime_index[0]).total_seconds() / 3600.0
-            if steps > 1
-            else 1.0
-            for t in range(steps)
-        ]
-        if any(d <= 0 for d in diffs):
-            raise ValueError(
-                "datetime_index must be strictly increasing; "
-                "found non-positive step duration(s)."
-            )
-        return diffs
+        return _dt_h_from_datetime_index(dt_h, datetime_index, steps)
     if isinstance(dt_h, (list, tuple)):
         if len(dt_h) != steps:
             raise ValueError(

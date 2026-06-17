@@ -86,7 +86,7 @@ class PwlWeymouthBranchFormulation(BranchFormulation):
             ys=ys,
         )
 
-        C_sq = ogfmodel.calc_C_squared(
+        c_sq = ogfmodel.calc_C_squared(
             branch.diameter_m,
             branch.length_m,
             grid.t_k,
@@ -116,7 +116,7 @@ class PwlWeymouthBranchFormulation(BranchFormulation):
             branch.mass_flow_pos_kgs <= m_max * branch.on_off,
             branch.mass_flow_neg_kgs <= m_max * branch.on_off,
             #
-            abs_psq_diff * grid.pressure_ref_pa**2 * C_sq * branch.on_off
+            abs_psq_diff * grid.pressure_ref_pa**2 * c_sq * branch.on_off
             == branch.phi_pwl_neg - branch.phi_pwl_pos,
             #
             branch.gas_density_kg_per_m3

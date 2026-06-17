@@ -87,6 +87,36 @@ def _is_multi_period_solver_instance(obj) -> bool:
     return obj is not None and hasattr(obj, "solve_multi_period")
 
 
+def _dispatch_casadi(solver, name, casadi_factory):
+    if casadi_factory is None:
+        raise ValueError(
+            "The casadi backend is single-period only; use backend='pyomo' "
+            "or backend='gekko' for multi-period solves."
+        )
+    if isinstance(solver, str) and name != "ipopt":
+        raise ValueError(
+            "The casadi backend only provides IPOPT; got "
+            f"{solver!r}. Pass solver='ipopt' (or omit it) with "
+            "backend='casadi'."
+        )
+    return casadi_factory()
+
+
+def _dispatch_gurobipy(solver, name, gurobipy_factory):
+    if gurobipy_factory is None:
+        raise ValueError(
+            "The gurobipy backend is single-period only; use "
+            "backend='pyomo' or backend='gekko' for multi-period solves."
+        )
+    if isinstance(solver, str) and name != "gurobi":
+        raise ValueError(
+            "The gurobipy backend only provides the 'gurobi' solver; got "
+            f"{solver!r}. Pass solver='gurobi' (or omit it) with "
+            "backend='gurobipy'."
+        )
+    return gurobipy_factory()
+
+
 def _dispatch_backend(
     solver,
     backend,
@@ -117,32 +147,10 @@ def _dispatch_backend(
         return pyomo_factory(name)
 
     if chosen_backend == "casadi":
-        if casadi_factory is None:
-            raise ValueError(
-                "The casadi backend is single-period only; use backend='pyomo' "
-                "or backend='gekko' for multi-period solves."
-            )
-        if isinstance(solver, str) and name != "ipopt":
-            raise ValueError(
-                "The casadi backend only provides IPOPT; got "
-                f"{solver!r}. Pass solver='ipopt' (or omit it) with "
-                "backend='casadi'."
-            )
-        return casadi_factory()
+        return _dispatch_casadi(solver, name, casadi_factory)
 
     if chosen_backend == "gurobipy":
-        if gurobipy_factory is None:
-            raise ValueError(
-                "The gurobipy backend is single-period only; use "
-                "backend='pyomo' or backend='gekko' for multi-period solves."
-            )
-        if isinstance(solver, str) and name != "gurobi":
-            raise ValueError(
-                "The gurobipy backend only provides the 'gurobi' solver; got "
-                f"{solver!r}. Pass solver='gurobi' (or omit it) with "
-                "backend='gurobipy'."
-            )
-        return gurobipy_factory()
+        return _dispatch_gurobipy(solver, name, gurobipy_factory)
 
     raise ValueError(
         f"Unknown backend {chosen_backend!r}; expected 'gekko', 'pyomo' or 'gurobipy'."

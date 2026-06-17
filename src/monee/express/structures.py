@@ -375,16 +375,16 @@ class DhsStructure:
         grid=None,
     ):
         self._net = network
-        common = dict(
-            diameter_m=diameter_m,
-            length_m=length_m,
-            temperature_ext_k=temperature_ext_k,
-            roughness_m=roughness_m,
-            lambda_insulation_w_per_m_k=lambda_insulation_w_per_m_k,
-            insulation_thickness_m=insulation_thickness_m,
-            unidirectional=unidirectional,
-            grid=grid,
-        )
+        common = {
+            "diameter_m": diameter_m,
+            "length_m": length_m,
+            "temperature_ext_k": temperature_ext_k,
+            "roughness_m": roughness_m,
+            "lambda_insulation_w_per_m_k": lambda_insulation_w_per_m_k,
+            "insulation_thickness_m": insulation_thickness_m,
+            "unidirectional": unidirectional,
+            "grid": grid,
+        }
         self.supply = WaterStructure(network, **common)
         self.return_ = WaterStructure(network, **common)
 

@@ -137,8 +137,8 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
 
         eqs = [
             mag == smoothmodel.smooth_abs(signed, self.smoothing_eps, sqrt_impl),
-            branch.mass_flow_pos_kgs == 0.5 * (mag + signed),
-            branch.mass_flow_neg_kgs == 0.5 * (mag - signed),
+            branch.mass_flow_pos_kgs == 0.5 * (mag + signed),  # NOSONAR
+            branch.mass_flow_neg_kgs == 0.5 * (mag - signed),  # NOSONAR
         ]
         if not kwargs.get("simulation", False):
             # Operational flow limits - dropped in simulation mode (their slacks

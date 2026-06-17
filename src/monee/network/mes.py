@@ -254,20 +254,21 @@ def create_p2h_in_combined_generated_network(
     for power_node in net_power.nodes:
         heat_junc = bus_to_heat_junc[power_node.id]
         heat_junc_two = end_bus_to_heat_junc[power_node.id]
-        if rng.random() <= p2h_density:
-            if heat_junc != heat_junc_two and new_mes_net.has_branch_between(
-                heat_junc, heat_junc_two
-            ):
-                new_mes_net.remove_branch_between(heat_junc, heat_junc_two)
-                mx.create_p2h(
-                    new_mes_net,
-                    power_node_id=power_node.id,
-                    heat_node_id=heat_junc_two,
-                    heat_return_node_id=heat_junc,
-                    heat_energy_mw=0.015,
-                    diameter_m=0.003,
-                    efficiency=0.4 * 0.5 * 0.5,
-                )
+        if (
+            rng.random() <= p2h_density
+            and heat_junc != heat_junc_two
+            and new_mes_net.has_branch_between(heat_junc, heat_junc_two)
+        ):
+            new_mes_net.remove_branch_between(heat_junc, heat_junc_two)
+            mx.create_p2h(
+                new_mes_net,
+                power_node_id=power_node.id,
+                heat_node_id=heat_junc_two,
+                heat_return_node_id=heat_junc,
+                heat_energy_mw=0.015,
+                diameter_m=0.003,
+                efficiency=0.4 * 0.5 * 0.5,
+            )
 
 
 def create_chp_in_combined_generated_network(
@@ -285,22 +286,23 @@ def create_chp_in_combined_generated_network(
         heat_junc_two = end_bus_to_heat_junc[power_node.id]
         gas_junc = bus_to_gas_junc[power_node.id]
         efficiency = 0.8 + rng.random() / 10
-        if rng.random() <= chp_density:
-            if heat_junc != heat_junc_two and new_mes_net.has_branch_between(
-                heat_junc, heat_junc_two
-            ):
-                new_mes_net.remove_branch_between(heat_junc, heat_junc_two)
-                mx.create_chp(
-                    new_mes_net,
-                    power_node_id=power_node.id,
-                    heat_node_id=heat_junc_two,
-                    heat_return_node_id=heat_junc,
-                    gas_node_id=gas_junc,
-                    mass_flow_setpoint_kgs=0.015 * rng.random(),
-                    diameter_m=0.035,
-                    efficiency_power=efficiency / 2,
-                    efficiency_heat=efficiency / 2,
-                )
+        if (
+            rng.random() <= chp_density
+            and heat_junc != heat_junc_two
+            and new_mes_net.has_branch_between(heat_junc, heat_junc_two)
+        ):
+            new_mes_net.remove_branch_between(heat_junc, heat_junc_two)
+            mx.create_chp(
+                new_mes_net,
+                power_node_id=power_node.id,
+                heat_node_id=heat_junc_two,
+                heat_return_node_id=heat_junc,
+                gas_node_id=gas_junc,
+                mass_flow_setpoint_kgs=0.015 * rng.random(),
+                diameter_m=0.035,
+                efficiency_power=efficiency / 2,
+                efficiency_heat=efficiency / 2,
+            )
 
 
 def create_p2g_in_combined_generated_network(
@@ -481,10 +483,8 @@ def create_monee_benchmark_net():
     bus_to_gas_junc = create_gas_net_for_power(pn, new_mes, 1, scaling=1)
 
     # # # heat
-    bus_index_to_junction_index, bus_index_to_end_junction_index = (
-        create_heat_net_for_power(
-            pn, new_mes, 1, mass_flow_rate_kgs=1, default_diameter_m=0.16
-        )
+    bus_index_to_junction_index, _ = create_heat_net_for_power(
+        pn, new_mes, 1, mass_flow_rate_kgs=1, default_diameter_m=0.16
     )
     new_water_junc = mx.create_water_junction(new_mes)
     mx.create_sink(
@@ -657,6 +657,48 @@ def create_mv_multi_cigre():
     return new_mes
 
 
+def _add_gas_mesh_pipes(
+    target_net,
+    bus_index_to_junction_index,
+    gas_grid,
+    extra_mesh_pipes,
+    mesh_diameter_factor,
+    mesh_length_factor,
+    default_diameter_m,
+    default_length,
+    length_scale,
+    mesh_seed,
+):
+    # Add resilience tie pipes: pick non-adjacent junction pairs uniformly
+    # at random and connect them with a smaller-diameter / longer pipe.
+    # The point is to give every junction more than one path to the
+    # slack so single pipe failures don't isolate large subtrees - the
+    # main reason additive CPs underperform on a tree layout.
+    rng = random.Random(mesh_seed) if mesh_seed is not None else random
+    junctions = list(bus_index_to_junction_index.values())
+    existing_pairs = set()
+    for branch in target_net.branches:
+        if isinstance(branch.model, mm.GasPipe):
+            a, b = branch.from_node_id, branch.to_node_id
+            existing_pairs.add(frozenset((a, b)))
+    candidates = [
+        (j1, j2)
+        for i, j1 in enumerate(junctions)
+        for j2 in junctions[i + 1 :]
+        if frozenset((j1, j2)) not in existing_pairs
+    ]
+    rng.shuffle(candidates)
+    for j1, j2 in candidates[:extra_mesh_pipes]:
+        mx.create_gas_pipe(
+            target_net,
+            from_node_id=j1,
+            to_node_id=j2,
+            diameter_m=default_diameter_m * mesh_diameter_factor,
+            length_m=default_length * mesh_length_factor * length_scale,
+            grid=gas_grid,
+        )
+
+
 def create_gas_tree_net_for_power(
     power_net: mm.Network,
     target_net: mm.Network,
@@ -736,34 +778,18 @@ def create_gas_tree_net_for_power(
             )
 
     if extra_mesh_pipes > 0:
-        # Add resilience tie pipes: pick non-adjacent junction pairs uniformly
-        # at random and connect them with a smaller-diameter / longer pipe.
-        # The point is to give every junction more than one path to the
-        # slack so single pipe failures don't isolate large subtrees - the
-        # main reason additive CPs underperform on a tree layout.
-        rng = random.Random(mesh_seed) if mesh_seed is not None else random
-        junctions = list(bus_index_to_junction_index.values())
-        existing_pairs = set()
-        for branch in target_net.branches:
-            if isinstance(branch.model, mm.GasPipe):
-                a, b = branch.from_node_id, branch.to_node_id
-                existing_pairs.add(frozenset((a, b)))
-        candidates = [
-            (j1, j2)
-            for i, j1 in enumerate(junctions)
-            for j2 in junctions[i + 1 :]
-            if frozenset((j1, j2)) not in existing_pairs
-        ]
-        rng.shuffle(candidates)
-        for j1, j2 in candidates[:extra_mesh_pipes]:
-            mx.create_gas_pipe(
-                target_net,
-                from_node_id=j1,
-                to_node_id=j2,
-                diameter_m=default_diameter_m * mesh_diameter_factor,
-                length_m=default_length * mesh_length_factor * length_scale,
-                grid=gas_grid,
-            )
+        _add_gas_mesh_pipes(
+            target_net,
+            bus_index_to_junction_index,
+            gas_grid,
+            extra_mesh_pipes=extra_mesh_pipes,
+            mesh_diameter_factor=mesh_diameter_factor,
+            mesh_length_factor=mesh_length_factor,
+            default_diameter_m=default_diameter_m,
+            default_length=default_length,
+            length_scale=length_scale,
+            mesh_seed=mesh_seed,
+        )
 
     slack_node = (
         slack_node_id if slack_node_id is not None else power_net_as_st.first_node()

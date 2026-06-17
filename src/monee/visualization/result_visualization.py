@@ -441,13 +441,13 @@ def plot_result(
                 mode="markers",
                 hoverinfo="skip",
                 showlegend=False,
-                marker=dict(
-                    symbol=_GRID_SYMBOL[gtype],
-                    size=42,
-                    color=d["tl_colors"],
-                    opacity=0.12,
-                    line=dict(width=0),
-                ),
+                marker={
+                    "symbol": _GRID_SYMBOL[gtype],
+                    "size": 42,
+                    "color": d["tl_colors"],
+                    "opacity": 0.12,
+                    "line": {"width": 0},
+                },
             )
         )
 
@@ -459,17 +459,17 @@ def plot_result(
                 mode="markers+text",
                 textposition="top center",
                 text=d["labels"],
-                textfont=dict(family=_FONT, size=11, color=_DIM_COLOR),
+                textfont={"family": _FONT, "size": 11, "color": _DIM_COLOR},
                 hovertext=d["hover"],
                 hoverinfo="text",
                 name=_GRID_LABEL[gtype],
-                marker=dict(
-                    symbol=_GRID_SYMBOL[gtype],
-                    size=24,
-                    color=d["tl_colors"],
-                    opacity=0.88,
-                    line=dict(width=3, color=_ACCENT[gtype]),
-                ),
+                marker={
+                    "symbol": _GRID_SYMBOL[gtype],
+                    "size": 24,
+                    "color": d["tl_colors"],
+                    "opacity": 0.88,
+                    "line": {"width": 3, "color": _ACCENT[gtype]},
+                },
             )
         )
 
@@ -491,10 +491,11 @@ def plot_result(
         is_cp = int_branch.model.is_cp()  # use the model's own declaration
         bname = getattr(int_branch, "name", None)
 
+        default_color = _ACCENT["cp"] if is_cp else _TL_GRAY
         label, color = (
             _branch_label_and_color(row, is_cp=is_cp)
             if row
-            else ("", _ACCENT["cp"] if is_cp else _TL_GRAY)
+            else ("", default_color)
         )
 
         hover = (
@@ -527,11 +528,11 @@ def plot_result(
                 mode="lines",
                 hoverinfo="none",
                 showlegend=False,
-                line=dict(
-                    color=color,
-                    width=3.5 if not is_cp else 2,
-                    dash="dot" if is_cp else "solid",
-                ),
+                line={
+                    "color": color,
+                    "width": 3.5 if not is_cp else 2,
+                    "dash": "dot" if is_cp else "solid",
+                },
                 opacity=0.65,
             )
         )
@@ -542,17 +543,17 @@ def plot_result(
         mode="markers+text",
         text=mid_label,
         textposition="middle right",
-        textfont=dict(family=_FONT, size=10, color=_DIM_COLOR),
+        textfont={"family": _FONT, "size": 10, "color": _DIM_COLOR},
         hovertext=mid_hover,
         hoverinfo="text",
         showlegend=False,
-        marker=dict(
-            size=9,
-            color=mid_colors,
-            symbol="circle",
-            opacity=0.90,
-            line=dict(width=1.5, color=_BG),
-        ),
+        marker={
+            "size": 9,
+            "color": mid_colors,
+            "symbol": "circle",
+            "opacity": 0.90,
+            "line": {"width": 1.5, "color": _BG},
+        },
     )
 
     # Traffic-light legend entries
@@ -561,28 +562,28 @@ def plot_result(
             x=[None],
             y=[None],
             mode="markers",
-            marker=dict(size=11, color=_TL_GREEN, symbol="square", line=dict(width=0)),
+            marker={"size": 11, "color": _TL_GREEN, "symbol": "square", "line": {"width": 0}},
             name="OK  (< 70 % / vm ±5 %)",
         ),
         go.Scatter(
             x=[None],
             y=[None],
             mode="markers",
-            marker=dict(size=11, color=_TL_YELLOW, symbol="square", line=dict(width=0)),
+            marker={"size": 11, "color": _TL_YELLOW, "symbol": "square", "line": {"width": 0}},
             name="Warning  (70–90 % / vm ±10 %)",
         ),
         go.Scatter(
             x=[None],
             y=[None],
             mode="markers",
-            marker=dict(size=11, color=_TL_RED, symbol="square", line=dict(width=0)),
+            marker={"size": 11, "color": _TL_RED, "symbol": "square", "line": {"width": 0}},
             name="Critical  (≥ 90 % / vm > ±10 %)",
         ),
         go.Scatter(
             x=[None],
             y=[None],
             mode="lines",
-            line=dict(color=_ACCENT["cp"], width=2, dash="dot"),
+            line={"color": _ACCENT["cp"], "width": 2, "dash": "dot"},
             name="Coupling branch (CP)",
         ),
     ]
@@ -595,54 +596,54 @@ def plot_result(
     fig = go.Figure(
         data=all_traces,
         layout=go.Layout(
-            title=dict(
-                text=title or "Network Result",
-                font=dict(family=_FONT, size=18, color=_FONT_COLOR),
-                x=0.5,
-                xanchor="center",
-                y=0.97,
-            ),
+            title={
+                "text": title or "Network Result",
+                "font": {"family": _FONT, "size": 18, "color": _FONT_COLOR},
+                "x": 0.5,
+                "xanchor": "center",
+                "y": 0.97,
+            },
             paper_bgcolor=_BG,
             plot_bgcolor=_BG,
             hovermode="closest",
-            hoverlabel=dict(
-                bgcolor=_PANEL,
-                bordercolor=_BORDER,
-                font=dict(family=_FONT, size=12, color=_FONT_COLOR),
-                namelength=-1,
-            ),
-            xaxis=dict(
-                showgrid=False,
-                zeroline=False,
-                showticklabels=False,
-                showline=False,
-            ),
-            yaxis=dict(
-                showgrid=False,
-                zeroline=False,
-                showticklabels=False,
-                showline=False,
-                scaleanchor="x",  # equal aspect ratio keeps shapes undistorted
-            ),
-            font=dict(family=_FONT, color=_FONT_COLOR),
+            hoverlabel={
+                "bgcolor": _PANEL,
+                "bordercolor": _BORDER,
+                "font": {"family": _FONT, "size": 12, "color": _FONT_COLOR},
+                "namelength": -1,
+            },
+            xaxis={
+                "showgrid": False,
+                "zeroline": False,
+                "showticklabels": False,
+                "showline": False,
+            },
+            yaxis={
+                "showgrid": False,
+                "zeroline": False,
+                "showticklabels": False,
+                "showline": False,
+                "scaleanchor": "x",
+            },
+            font={"family": _FONT, "color": _FONT_COLOR},
             autosize=True,
-            margin=dict(l=30, r=200, t=60, b=30),
-            legend=dict(
-                title=dict(
-                    text="Legend",
-                    font=dict(family=_FONT, size=12, color=_DIM_COLOR),
-                ),
-                x=1.02,
-                y=1.0,
-                xanchor="left",
-                yanchor="top",
-                bgcolor="rgba(246, 248, 250, 0.95)",
-                bordercolor=_BORDER,
-                borderwidth=1,
-                font=dict(family=_FONT, size=11, color=_FONT_COLOR),
-                itemsizing="constant",
-                tracegroupgap=6,
-            ),
+            margin={"l": 30, "r": 200, "t": 60, "b": 30},
+            legend={
+                "title": {
+                    "text": "Legend",
+                    "font": {"family": _FONT, "size": 12, "color": _DIM_COLOR},
+                },
+                "x": 1.02,
+                "y": 1.0,
+                "xanchor": "left",
+                "yanchor": "top",
+                "bgcolor": "rgba(246, 248, 250, 0.95)",
+                "bordercolor": _BORDER,
+                "borderwidth": 1,
+                "font": {"family": _FONT, "size": 11, "color": _FONT_COLOR},
+                "itemsizing": "constant",
+                "tracegroupgap": 6,
+            },
         ),
     )
 

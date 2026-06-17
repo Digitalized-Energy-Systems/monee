@@ -114,14 +114,14 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         tap = _branch_tap(branch)
         sqrt_impl = kwargs["sqrt_impl"]
         # I_base_ka = S_base / (\sqrt{3} \cdot V_base); trafo primary divides by tap.
-        I_base_from = grid.sn_mva / (SQRT_3 * from_node_model.base_kv) / tap
-        I_base_to = grid.sn_mva / (SQRT_3 * to_node_model.base_kv)
-        ell_phys = _ell_max(branch, w_max, I_base_from, I_base_to)
+        i_base_from = grid.sn_mva / (SQRT_3 * from_node_model.base_kv) / tap
+        i_base_to = grid.sn_mva / (SQRT_3 * to_node_model.base_kv)
+        ell_phys = _ell_max(branch, w_max, i_base_from, i_base_to)
         i_mag_pu = sqrt_impl(branch.current_pu_squared)
         # loading^2 = current_pu_squared \cdot (I_base/max_i_ka)^2 is linear in current_pu_squared.
         # Used by line_loading_limit() instead of the sqrt-bearing form.
-        branch._misocp_loading_from_scale_squared = (I_base_from / branch.max_i_ka) ** 2
-        branch._misocp_loading_to_scale_squared = (I_base_to / branch.max_i_ka) ** 2
+        branch._misocp_loading_from_scale_squared = (i_base_from / branch.max_i_ka) ** 2
+        branch._misocp_loading_to_scale_squared = (i_base_to / branch.max_i_ka) ** 2
         return [
             branch.current_pu_squared <= ell_phys * branch.on_off,
             voltage_drop(
@@ -161,8 +161,8 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
             ),
             # |I_ka| = \sqrt{current_pu_squared} \cdot I_base. current_pu_squared is the from-side magnitude;
             # the to-side report is approximate (off by r \cdot ell, x \cdot ell).
-            IntermediateEq("i_from_ka", i_mag_pu * I_base_from),
-            IntermediateEq("i_to_ka", i_mag_pu * I_base_to),
-            IntermediateEq("loading_from_pu", i_mag_pu * I_base_from / branch.max_i_ka),
-            IntermediateEq("loading_to_pu", i_mag_pu * I_base_to / branch.max_i_ka),
+            IntermediateEq("i_from_ka", i_mag_pu * i_base_from),
+            IntermediateEq("i_to_ka", i_mag_pu * i_base_to),
+            IntermediateEq("loading_from_pu", i_mag_pu * i_base_from / branch.max_i_ka),
+            IntermediateEq("loading_to_pu", i_mag_pu * i_base_to / branch.max_i_ka),
         ]

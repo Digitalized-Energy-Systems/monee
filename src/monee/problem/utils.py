@@ -66,11 +66,8 @@ def cp_input_rated_mw(component):
     def _scalar(x):
         # Read the bound (or the value) off a Var; pass scalars through.
         if isinstance(x, Var):
-            return (
-                x.max
-                if x.max is not None
-                else (x.value if x.value is not None else 0.0)
-            )
+            fallback = x.value if x.value is not None else 0.0
+            return x.max if x.max is not None else fallback
         return x if x is not None else 0.0
 
     # ---- Gas-input CPs ----------------------------------------------------

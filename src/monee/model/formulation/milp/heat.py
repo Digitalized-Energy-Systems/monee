@@ -89,7 +89,7 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
         return eqs
 
     def _he_equations(self, branch, grid, from_node_model):
-        cp_mw_per_kgs_K = ohfmodel.SPECIFIC_HEAT_CAP_WATER / 1e6
+        cp_mw_per_kgs_k = ohfmodel.SPECIFIC_HEAT_CAP_WATER / 1e6
 
         # equations() runs after solver-var injection, when mass_flow_design_kgs
         # is no longer a monee Var - the model's construction-time flag is the
@@ -125,8 +125,8 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
             branch.t_in_pu == from_node_model.vars["t_pu"],
             branch.t_from_pu == from_node_model.vars["t_pu"],
             branch.t_to_pu == branch.t_out_pu,
-            branch.t_out_pu * (balance_flow_kgs * cp_mw_per_kgs_K * grid.t_ref_k)
-            == branch.t_in_pu * (balance_flow_kgs * cp_mw_per_kgs_K * grid.t_ref_k)
+            branch.t_out_pu * (balance_flow_kgs * cp_mw_per_kgs_k * grid.t_ref_k)
+            == branch.t_in_pu * (balance_flow_kgs * cp_mw_per_kgs_k * grid.t_ref_k)
             - branch.q_mw_delivered,
         ]
         if branch._he_is_generator:
@@ -136,7 +136,7 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
         return eqs
 
 
-def _branch_m_U(branch, grid):
+def _branch_m_u(branch, grid):
     r"""Per-pipe mass-flow upper bound [kg/s]: the smaller of ``grid.max_mass_flow_kgs``
     and the velocity cap :math:`\pi/4 \cdot D^2 \cdot \rho \cdot v_{max}`, further capped
     by ``branch.m_U_design`` when set."""
@@ -277,7 +277,7 @@ class McCormickHeatNodeFormulation(NodeFormulation):
 
         # |S| = 1 uses the plain envelopes assembled on the branch side.
         if self.num_partitions > 1:
-            tpu_L, tpu_U = _t_pu_env_bounds(grid)
+            tpu_l, tpu_u = _t_pu_env_bounds(grid)
             S = self.num_partitions
             tpu_pieces = [getattr(node, f"_t_pu_piece_{s}") for s in range(S)]
             y_pieces = [getattr(node, f"_piece_y_{s}") for s in range(S)]
@@ -288,10 +288,10 @@ class McCormickHeatNodeFormulation(NodeFormulation):
             eqs.append(sum(y_pieces) == 1)
             # 18f/18g: \tau_{i,s} bracketed to piece s when active, else 0
             for s in range(S):
-                tL_s = tpu_L + (tpu_U - tpu_L) * s / S
-                tU_s = tpu_L + (tpu_U - tpu_L) * (s + 1) / S
-                eqs.append(tpu_pieces[s] >= tL_s * y_pieces[s])
-                eqs.append(tpu_pieces[s] <= tU_s * y_pieces[s])
+                t_l_s = tpu_l + (tpu_u - tpu_l) * s / S
+                t_u_s = tpu_l + (tpu_u - tpu_l) * (s + 1) / S
+                eqs.append(tpu_pieces[s] >= t_l_s * y_pieces[s])
+                eqs.append(tpu_pieces[s] <= t_u_s * y_pieces[s])
 
         return eqs
 
@@ -326,7 +326,7 @@ class McCormickHeatBranchFormulation(BranchFormulation):
         # vL = 2 \pi \cdot \lambda \cdot L / ln(r_out/r_in) [W/K] \cdot 1e-6 \to MW.
         pipe_outside_r = branch.diameter_m / 2 + branch.insulation_thickness_m
         pipe_inside_r = branch.diameter_m / 2
-        vL_mw_per_k = (
+        vl_mw_per_k = (
             2
             * math.pi
             * branch.lambda_insulation_w_per_m_k
@@ -338,13 +338,13 @@ class McCormickHeatBranchFormulation(BranchFormulation):
         t_pu_send = from_node_model.vars["t_pu"]
         return [
             branch.H_in_mw
-            == branch.H_out_mw - vL_mw_per_k * grid.t_ref_k * (t_pu_send - t_a_pu),
+            == branch.H_out_mw - vl_mw_per_k * grid.t_ref_k * (t_pu_send - t_a_pu),
         ]
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
-        m_U = _branch_m_U(branch, grid)
-        m_L = 0.0
-        tpu_L, tpu_U = _t_pu_env_bounds(grid)
+        m_u = _branch_m_u(branch, grid)
+        m_l = 0.0
+        tpu_l, tpu_u = _t_pu_env_bounds(grid)
 
         scale_mw = C_WATER * grid.t_ref_k / 1e6
 
@@ -352,10 +352,10 @@ class McCormickHeatBranchFormulation(BranchFormulation):
         m = branch.mass_flow_neg_kgs
 
         eqs = [
-            branch.mass_flow_neg_kgs <= m_U * branch.on_off,
+            branch.mass_flow_neg_kgs <= m_u * branch.on_off,
             branch.mass_flow_mag_kgs == branch.mass_flow_neg_kgs,
-            branch.H_out_mw <= scale_mw * m_U * tpu_U * branch.on_off,
-            branch.H_in_mw <= scale_mw * m_U * tpu_U * branch.on_off,
+            branch.H_out_mw <= scale_mw * m_u * tpu_u * branch.on_off,
+            branch.H_in_mw <= scale_mw * m_u * tpu_u * branch.on_off,
         ]
         eqs += self._heat_balance_eqs(branch, grid, from_node_model)
 
@@ -363,13 +363,13 @@ class McCormickHeatBranchFormulation(BranchFormulation):
             # eq. 17b-17e: McCormick envelopes.
             eqs += [
                 branch.H_out_mw
-                >= scale_mw * (m_L * t_pu_send + tpu_L * m - m_L * tpu_L),
+                >= scale_mw * (m_l * t_pu_send + tpu_l * m - m_l * tpu_l),
                 branch.H_out_mw
-                >= scale_mw * (m_U * t_pu_send + tpu_U * m - m_U * tpu_U),
+                >= scale_mw * (m_u * t_pu_send + tpu_u * m - m_u * tpu_u),
                 branch.H_out_mw
-                <= scale_mw * (m_L * t_pu_send + tpu_U * m - m_L * tpu_U),
+                <= scale_mw * (m_l * t_pu_send + tpu_u * m - m_l * tpu_u),
                 branch.H_out_mw
-                <= scale_mw * (m_U * t_pu_send + tpu_L * m - m_U * tpu_L),
+                <= scale_mw * (m_u * t_pu_send + tpu_l * m - m_u * tpu_l),
             ]
         else:
             # eq. 18b/18d/18h: piecewise McCormick over \tau partition.
@@ -382,8 +382,8 @@ class McCormickHeatBranchFormulation(BranchFormulation):
 
             eqs.append(m == sum(m_pieces))
             for s in range(S):
-                eqs.append(m_pieces[s] >= m_L * y_pieces[s])
-                eqs.append(m_pieces[s] <= m_U * y_pieces[s])
+                eqs.append(m_pieces[s] >= m_l * y_pieces[s])
+                eqs.append(m_pieces[s] <= m_u * y_pieces[s])
 
             def _env_sum(m_coef, tau_coef):
                 return scale_mw * sum(
@@ -393,17 +393,17 @@ class McCormickHeatBranchFormulation(BranchFormulation):
                     for s in range(S)
                 )
 
-            def _tL_s(s):
-                return tpu_L + (tpu_U - tpu_L) * s / S
+            def _t_l_s(s):
+                return tpu_l + (tpu_u - tpu_l) * s / S
 
-            def _tU_s(s):
-                return tpu_L + (tpu_U - tpu_L) * (s + 1) / S
+            def _t_u_s(s):
+                return tpu_l + (tpu_u - tpu_l) * (s + 1) / S
 
             eqs += [
-                branch.H_out_mw >= _env_sum(m_L, _tL_s),
-                branch.H_out_mw >= _env_sum(m_U, _tU_s),
-                branch.H_out_mw <= _env_sum(m_U, _tL_s),
-                branch.H_out_mw <= _env_sum(m_L, _tU_s),
+                branch.H_out_mw >= _env_sum(m_l, _t_l_s),
+                branch.H_out_mw >= _env_sum(m_u, _t_u_s),
+                branch.H_out_mw <= _env_sum(m_u, _t_l_s),
+                branch.H_out_mw <= _env_sum(m_l, _t_u_s),
             ]
 
         return eqs
@@ -449,9 +449,9 @@ class McCormickHeatExchangerFormulation(FixedFlowHeatExchangerFormulation):
 def mccormick_dhs_gap_bound_mw(branch, grid, num_partitions: int = 1) -> float:
     r"""Worst-case ``H_out_mw`` gap [MW]:
     :math:`(c \cdot t_{ref,k}/10^6) \cdot m_U \cdot (\tau_U - \tau_L) / (4 \cdot S)`."""
-    tpu_L, tpu_U = _t_pu_env_bounds(grid)
-    m_U = _branch_m_U(branch, grid)
-    return C_WATER * grid.t_ref_k / 1e6 * m_U * (tpu_U - tpu_L) / (4 * num_partitions)
+    tpu_l, tpu_u = _t_pu_env_bounds(grid)
+    m_u = _branch_m_u(branch, grid)
+    return C_WATER * grid.t_ref_k / 1e6 * m_u * (tpu_u - tpu_l) / (4 * num_partitions)
 
 
 def mccormick_dhs_gap_bound_k(
@@ -459,11 +459,11 @@ def mccormick_dhs_gap_bound_k(
 ) -> float:
     r"""Worst-case gap as a sender-temperature error [K]:
     :math:`t_{ref,k} \cdot (\tau_U - \tau_L)/(4 \cdot S)` at :math:`m = m_U`, scaling as ``m_U/m`` below."""
-    tpu_L, tpu_U = _t_pu_env_bounds(grid)
-    base_k = grid.t_ref_k * (tpu_U - tpu_L) / (4 * num_partitions)
+    tpu_l, tpu_u = _t_pu_env_bounds(grid)
+    base_k = grid.t_ref_k * (tpu_u - tpu_l) / (4 * num_partitions)
     if mass_flow_kgs is None:
         return base_k
     if branch is None:
         raise ValueError("branch is required when mass_flow_kgs is provided")
-    m_U = _branch_m_U(branch, grid)
-    return base_k * m_U / mass_flow_kgs
+    m_u = _branch_m_u(branch, grid)
+    return base_k * m_u / mass_flow_kgs

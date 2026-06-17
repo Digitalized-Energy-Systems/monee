@@ -69,8 +69,8 @@ def reference_gas_density(grid):
 def calc_C_squared(diameter_m, length_m, t_k, compressibility, r_specific=R_specific):
     numerator = math.pi**2 * diameter_m**5
     denominator = 16 * length_m * r_specific * t_k * compressibility
-    C_squared = numerator / denominator
-    return C_squared
+    c_squared = numerator / denominator
+    return c_squared
 
 
 def pipe_weymouth(

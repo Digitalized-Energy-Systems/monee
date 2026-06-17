@@ -88,6 +88,33 @@ def _build_display_translator(name_map: dict[str, str] | None):
     return lambda text: token_re.sub(lambda m: name_map[m.group(1)], text)
 
 
+def _append_apm_row(equations, row_kind, groups, name_map, translate):
+    idx, a, b, c, d, name = groups
+    if row_kind == "eq":
+        equations.append(
+            ApmEquationResidual(
+                number=int(idx),
+                lower=float(a),
+                residual=float(b),
+                upper=float(c),
+                infeasibility=float(d),
+                equation=translate(_strip_mode_prefix(name.strip())),
+            )
+        )
+    elif equations:
+        apm_name = _strip_mode_prefix(name.strip())
+        equations[-1].variables.append(
+            ApmVariableState(
+                name=apm_name,
+                display_name=(name_map or {}).get(apm_name, apm_name),
+                lower=float(a),
+                value=float(b),
+                upper=float(c),
+                marginal=float(d),
+            )
+        )
+
+
 def parse_infeasibilities(
     text: str, name_map: dict[str, str] | None = None
 ) -> list[ApmEquationResidual]:
@@ -114,30 +141,7 @@ def parse_infeasibilities(
         m = _APM_ROW_RE.match(line)
         if m is None or row_kind is None:
             continue
-        idx, a, b, c, d, name = m.groups()
-        if row_kind == "eq":
-            equations.append(
-                ApmEquationResidual(
-                    number=int(idx),
-                    lower=float(a),
-                    residual=float(b),
-                    upper=float(c),
-                    infeasibility=float(d),
-                    equation=translate(_strip_mode_prefix(name.strip())),
-                )
-            )
-        elif equations:
-            apm_name = _strip_mode_prefix(name.strip())
-            equations[-1].variables.append(
-                ApmVariableState(
-                    name=apm_name,
-                    display_name=(name_map or {}).get(apm_name, apm_name),
-                    lower=float(a),
-                    value=float(b),
-                    upper=float(c),
-                    marginal=float(d),
-                )
-            )
+        _append_apm_row(equations, row_kind, m.groups(), name_map, translate)
     # APMonitor reports signed infeasibility values - rank by magnitude.
     equations.sort(key=lambda e: abs(e.infeasibility), reverse=True)
     return equations
@@ -282,12 +286,11 @@ class GekkoInfeasibilityReport:
                 f"=== Variables at bounds: {n_at_lb} at lower, {n_at_ub} at upper ==="
             )
             for v in self.variables_at_bounds[:max_items]:
+                which_upper = "upper" if v["at_upper"] and not v["at_lower"] else "both"
                 which = (
                     "lower"
                     if v["at_lower"] and not v["at_upper"]
-                    else "upper"
-                    if v["at_upper"] and not v["at_lower"]
-                    else "both"
+                    else which_upper
                 )
                 lines.append(
                     f"  {v['display_name']}: value={v['value']:.6g} "

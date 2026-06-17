@@ -58,8 +58,8 @@ class WaterGrid(Grid):
     # v_max_mps caps per-pipe mass-flow via \pi/4 \cdot D^2 \cdot \rho \cdot v_max; combined with max_mass_flow_kgs
     # by min(...), so it can only tighten. 5 m/s is generous for DH water.
     v_max_mps: float = 5.0
-    fluid_density_kg_per_m3: float = None
-    dynamic_visc_pas: float = None
+    fluid_density_kg_per_m3: float | None = None
+    dynamic_visc_pas: float | None = None
 
     def __post_init__(self):
         if self.fluid_density_kg_per_m3 is None:
@@ -138,7 +138,7 @@ class GasGrid(Grid):
     max_mass_flow_kgs: float
     pressure_squared_pu_max: float
     pressure_squared_pu_min: float
-    compressibility: float = None
+    compressibility: float | None = None
     # Ambient pressure [Pa] added to node pressure to form the ABSOLUTE pressure
     # the Weymouth/density physics require. 0.0 (default) => node pressures are
     # absolute (monee's historical convention); STANDARD_ATMOSPHERE_PA => node

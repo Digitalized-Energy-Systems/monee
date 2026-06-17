@@ -55,19 +55,19 @@ from monee.model import GasLinepack, LumpedThermalCapacitance
 from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 
 # -- electrical line catalogue --
-_HV_LINE = dict(length_m=5000, r_ohm_per_m=3e-5, x_ohm_per_m=4e-5, parallel=1)
-_MV_LINE = dict(length_m=200, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, parallel=1)
-_MV_LINE_LONG = dict(length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, parallel=1)
+_HV_LINE = {"length_m": 5000, "r_ohm_per_m": 3e-5, "x_ohm_per_m": 4e-5, "parallel": 1}
+_MV_LINE = {"length_m": 200, "r_ohm_per_m": 7e-5, "x_ohm_per_m": 7e-5, "parallel": 1}
+_MV_LINE_LONG = {"length_m": 500, "r_ohm_per_m": 7e-5, "x_ohm_per_m": 7e-5, "parallel": 1}
 
 # -- gas pipe catalogue (short lengths for solver convergence) --
-_HP_PIPE = dict(diameter_m=0.5, length_m=200)
-_MP_PIPE = dict(diameter_m=0.3, length_m=100)
-_MP_PIPE_SHORT = dict(diameter_m=0.3, length_m=80)
+_HP_PIPE = {"diameter_m": 0.5, "length_m": 200}
+_MP_PIPE = {"diameter_m": 0.3, "length_m": 100}
+_MP_PIPE_SHORT = {"diameter_m": 0.3, "length_m": 80}
 
 # -- water pipe catalogue --
-_DH_PIPE = dict(diameter_m=0.15, length_m=100)
-_DH_PIPE_LONG = dict(diameter_m=0.15, length_m=150)
-_DH_TRUNK = dict(diameter_m=0.25, length_m=100)
+_DH_PIPE = {"diameter_m": 0.15, "length_m": 100}
+_DH_PIPE_LONG = {"diameter_m": 0.15, "length_m": 150}
+_DH_TRUNK = {"diameter_m": 0.25, "length_m": 100}
 
 # -- heat sizing helpers --
 _CP = 4186.0  # water specific heat, J/(kg K)
@@ -263,11 +263,6 @@ def create_restoration_benchmark(
         (4, 0.04),
         (6, 0.03),
         (8, 0.03),
-        # (9, 0.03),
-        # (3, -0.03),
-        # (44, -0.03),
-        # (55, -0.03),
-        # (99, -0.03),
         (119, 0.02),
     ]:
         mx.create_heat_exchanger(net, hs[i], hr, heat_mw, name=f"HE_{i}")
