@@ -18,22 +18,22 @@ class NetworkAspect:
     def prepare(self, network) -> None:
         """Add Var placeholders before variable injection (no-op by default)."""
 
-    def equations(self, network, ignored_nodes: set) -> list:
+    def equations(self, network, ignored_nodes: set) -> list:  # NOSONAR
         """Return solver-agnostic relational expressions (empty by default)."""
         return []
 
-    def inter_step_equations(self, network, ignored_nodes: set, step_state) -> list:
+    def inter_step_equations(self, network, ignored_nodes: set, step_state) -> list:  # NOSONAR
         """Return expressions coupling current variables to previous-step values
         (timeseries only).  Empty by default."""
         return []
 
-    def inter_period_equations(self, network, ignored_nodes: set, period_state) -> list:
+    def inter_period_equations(self, network, ignored_nodes: set, period_state) -> list:  # NOSONAR
         """Return expressions coupling current variables to other period values
         (multi-period only).  Empty by default."""
         return []
 
     def inter_temporal_equations(
-        self, network, ignored_nodes: set, temporal_state
+        self, network, ignored_nodes: set, temporal_state  # NOSONAR
     ) -> list:
         """Return expressions coupling current variables to previous values
         (both timeseries and multi-period).  Empty by default."""

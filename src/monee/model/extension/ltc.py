@@ -49,7 +49,7 @@ class LumpedThermalCapacitance(NetworkAspect):
         self._t_init_overrides: dict = dict(t_init_overrides or {})
         self._first_step_steady_state: bool = bool(first_step_steady_state)
 
-    def prepare(self, network) -> None:
+    def prepare(self, network) -> None:  # NOSONAR
         self._ltc_rho_v = {}
         self._ltc_initial_t_pu = {}
 
@@ -162,7 +162,7 @@ class LumpedThermalCapacitance(NetworkAspect):
     def equations(self, network, ignored_nodes: set) -> list:
         return []
 
-    def _net_convective_heat(self, node, network, ignored_nodes: set = frozenset()):
+    def _net_convective_heat(self, node, network, ignored_nodes: set = frozenset()):  # NOSONAR
         """Net convective heat flow INTO *node* (inflow-positive).
 
         Two paths:

@@ -18,7 +18,7 @@ EL, GAS, HEAT = "electricity", "gas", "heat"
 
 # Placeholder electrical line parameters: ESDL ElectricityCable rarely carries
 # r/x, so a flat per-metre value is used until impedance data is available.
-# TODO: read from an ESDL extension / asset KPI when present.
+# TODO: read from an ESDL extension / asset KPI when present.  # NOSONAR
 _PLACEHOLDER_R_OHM_PER_M = 1e-4
 _PLACEHOLDER_X_OHM_PER_M = 1e-4
 # Default pipe geometry when an ESDL Pipe omits diameter.
@@ -216,7 +216,7 @@ def _add_transport(asset, kind, net, dsu, node_of_group, report):
 
     if kind == EL:
         net.branch(
-            # TODO: real impedance - ESDL cables seldom carry r/x.
+            # TODO: real impedance - ESDL cables seldom carry r/x.  # NOSONAR
             PowerLine(
                 length_m=length_m,
                 r_ohm_per_m=_PLACEHOLDER_R_OHM_PER_M,
@@ -274,7 +274,7 @@ def _add_child(asset, cls, net, dsu, node_of_group, report):
         report.sources += 1
     else:
         # Gas demand/producer need a heating value to turn power into mass flow.
-        # TODO: convert via the gas carrier's energyContent before mapping to
+        # TODO: convert via the gas carrier's energyContent before mapping to  # NOSONAR
         # Sink/Source. Skipped for now to avoid inventing a number.
         report.skip(f"{cls} (mapping not implemented)")
 

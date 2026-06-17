@@ -48,8 +48,8 @@ def _flow_and_pressure_eqs(
     mag = branch.mass_flow_mag_kgs
     eqs = [
         mag == smoothmodel.smooth_abs(signed, formulation.smoothing_eps, sqrt_impl),
-        branch.mass_flow_pos_kgs == 0.5 * (mag + signed),
-        branch.mass_flow_neg_kgs == 0.5 * (mag - signed),
+        branch.mass_flow_pos_kgs == 0.5 * (mag + signed),  # NOSONAR
+        branch.mass_flow_neg_kgs == 0.5 * (mag - signed),  # NOSONAR
     ]
     if not kwargs.get("simulation", False):
         eqs += [
@@ -195,7 +195,7 @@ class SmoothPassiveHeatExchangerFormulation(BranchFormulation):
             self, branch, grid, from_node_model, to_node_model, **kwargs
         )
         eqs += [
-            mag * branch.t_inc_pu
+            mag * branch.t_inc_pu  # NOSONAR
             == -branch.q_mw * 1e6 / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * grid.t_ref_k),
             branch.t_out_pu
             == branch.temperature_ext_k / grid.t_ref_k

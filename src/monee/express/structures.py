@@ -103,7 +103,7 @@ class _Structure:
     def _create_branch(self, from_id, to_id):
         raise NotImplementedError
 
-    def _attach_loads(self, node_id, kwargs):
+    def _attach_loads(self, node_id, kwargs):  # NOSONAR
         return []
 
     # --- shapes ---

@@ -285,7 +285,7 @@ class BilinearPassiveHeatExchangerFormulation(BilinearDarcyWeisbachBranchFormula
             ),
             branch.mass_flow_mag_kgs
             == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs,
-            branch.mass_flow_mag_kgs * branch.t_inc_pu
+            branch.mass_flow_mag_kgs * branch.t_inc_pu  # NOSONAR
             == -branch.q_mw * 1e6 / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * grid.t_ref_k),
             branch.t_out_pu
             == branch.temperature_ext_k / grid.t_ref_k

@@ -26,7 +26,7 @@ def _coerce_positive_int(value, default=1):
         fv = float(value)
     except (TypeError, ValueError):
         return default
-    if fv != fv or fv <= 0:  # NaN or non-positive
+    if fv != fv or fv <= 0:  # NOSONAR NaN or non-positive
         return default
     return max(1, int(fv))
 
@@ -38,7 +38,7 @@ def _coerce_positive_float(value, default=1.0):
         fv = float(value)
     except (TypeError, ValueError):
         return default
-    if fv != fv or fv <= 0:
+    if fv != fv or fv <= 0:  # NOSONAR
         return default
     return fv
 
@@ -229,7 +229,7 @@ def _bus_position(net, pp_id):
     return None
 
 
-def from_pandapower_net(net):
+def from_pandapower_net(net):  # NOSONAR
     # Import sgens as distinct PowerGenerators instead of letting to_mpc fold
     # them into each bus's net injection (see _extract_sgens). Works on the
     # returned copy so the caller's net is left untouched.

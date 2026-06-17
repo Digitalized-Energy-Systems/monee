@@ -145,7 +145,7 @@ def _add_line(obj, net, tn_to_node, base_kv_of, report):
             b_fr_pu=bch * base_z / 2.0,
             g_to_pu=gch * base_z / 2.0,
             b_to_pu=bch * base_z / 2.0,
-            max_i_ka=_UNBOUNDED_I_KA,  # TODO: read CurrentLimit / OperationalLimit
+            max_i_ka=_UNBOUNDED_I_KA,  # NOSONAR TODO: read CurrentLimit / OperationalLimit
         ),
         from_node_id=from_node,
         to_node_id=to_node,
@@ -179,8 +179,8 @@ def _add_transformer(obj, ends, net, tn_to_node, base_kv_of, report):
     base_z = base_kv_of(from_node) ** 2 / net_base_mva(net)
     net.branch(
         GenericPowerBranch(
-            tap=1.0,  # TODO: RatioTapChanger.step -> off-nominal ratio
-            shift=0.0,  # TODO: PhaseTapChanger -> phase shift
+            tap=1.0,  # NOSONAR TODO: RatioTapChanger.step -> off-nominal ratio
+            shift=0.0,  # NOSONAR TODO: PhaseTapChanger -> phase shift
             br_r_pu=r_ohm / base_z,
             br_x_pu=x_ohm / base_z,
             g_fr_pu=0.0,

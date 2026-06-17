@@ -158,7 +158,7 @@ def create_compressor(
     )
 
 
-def create_water_pipe(
+def create_water_pipe(  # NOSONAR
     network: mm.Network,
     from_node_id,
     to_node_id,

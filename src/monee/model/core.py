@@ -292,7 +292,7 @@ class NodeModel(GenericModel):
     def equations(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
         """Return nodal equations (e.g. flow conservation, voltage balance)."""
 
-    def minimize(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
+    def minimize(self, _grid, _in_branch_models, _out_branch_models, _childs, **kwargs):
         """Optional objective contribution (e.g. slack penalties). Default: none."""
         return []
 
@@ -304,7 +304,7 @@ class BranchModel(GenericModel):
     def equations(self, grid, from_node_model, to_node_model, **kwargs):
         pass
 
-    def minimize(self, grid, from_node_model, to_node_model, **kwargs):
+    def minimize(self, _grid, _from_node_model, _to_node_model, **kwargs):
         return []
 
     def loss_percent(self):
@@ -350,10 +350,10 @@ class CompoundModel(GenericModel):
     def create(self, network):
         """Add sub-components (nodes, branches, children) to *network*."""
 
-    def equations(self, network, **kwargs):
+    def equations(self, _network, **kwargs):
         return []
 
-    def minimize(self, network, **kwargs):
+    def minimize(self, _network, **kwargs):
         return []
 
 
@@ -385,7 +385,7 @@ class ChildModel(GenericModel):
     def equations(self, grid, node_model, **kwargs):
         pass
 
-    def minimize(self, grid, node_model, **kwargs):
+    def minimize(self, _grid, _node_model, **kwargs):
         return []
 
 

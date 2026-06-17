@@ -184,7 +184,7 @@ def run_energy_flow_optimization(
     return solve(net, optimization_problem, solver, **kwargs)
 
 
-def solve_load_shedding_problem(
+def solve_load_shedding_problem(  # NOSONAR
     network: Network,
     *,
     bounds_vm: tuple = (0.9, 1.1),

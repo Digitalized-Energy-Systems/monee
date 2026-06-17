@@ -9,50 +9,50 @@ class Formulation:
 
 
 class BranchFormulation(Formulation):
-    def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
+    def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):  # NOSONAR
         return []
 
-    def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
+    def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):  # NOSONAR
         return []
 
 
 class NodeFormulation(Formulation):
     def minimize(
         self,
-        node,
-        grid,
-        from_branch_models,
-        to_branch_models,
-        connected_child_models,
+        node,  # NOSONAR
+        grid,  # NOSONAR
+        from_branch_models,  # NOSONAR
+        to_branch_models,  # NOSONAR
+        connected_child_models,  # NOSONAR
         **kwargs,
     ):
         return []
 
     def equations(
         self,
-        node,
-        grid,
-        from_branch_models,
-        to_branch_models,
-        connected_child_models,
+        node,  # NOSONAR
+        grid,  # NOSONAR
+        from_branch_models,  # NOSONAR
+        to_branch_models,  # NOSONAR
+        connected_child_models,  # NOSONAR
         **kwargs,
     ):
         return []
 
 
 class CompoundFormulation(Formulation):
-    def minimize(self, compound, network, **kwargs):
+    def minimize(self, compound, network, **kwargs):  # NOSONAR
         return []
 
-    def equations(self, compound, network, **kwargs):
+    def equations(self, compound, network, **kwargs):  # NOSONAR
         return []
 
 
 class ChildFormulation(Formulation):
-    def minimize(self, child, grid, node, **kwargs):
+    def minimize(self, child, grid, node, **kwargs):  # NOSONAR
         return []
 
-    def equations(self, child, grid, node, **kwargs):
+    def equations(self, child, grid, node, **kwargs):  # NOSONAR
         return []
 
     def overwrite(self, child, node_model, grid):

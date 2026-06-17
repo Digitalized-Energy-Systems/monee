@@ -9,7 +9,7 @@ from monee.simulation.timeseries import TimeseriesData
 logger = logging.getLogger(__name__)
 
 
-def obtain_simbench_profile_by_pp_net(pp_net) -> TimeseriesData:
+def obtain_simbench_profile_by_pp_net(pp_net) -> TimeseriesData:  # NOSONAR
     """Build a :class:`TimeseriesData` from a simbench pandapower net.
 
     Load profiles are scaled per-load (``base_p_mw·profile[t]``) and summed

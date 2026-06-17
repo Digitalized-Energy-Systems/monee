@@ -202,7 +202,7 @@ class HeatExchanger(BranchModel):
         self,
         q_mw,
         mass_flow_design_kgs=None,
-        T_delta_design_K=30,
+        T_delta_design_K=30,  # NOSONAR
         regulation=1,
     ) -> None:
         super().__init__()
@@ -258,7 +258,7 @@ class HeatExchanger(BranchModel):
         ]
         if self._calc_mass_flow:
             eqs.append(
-                self.mass_flow_design_kgs
+                self.mass_flow_design_kgs  # NOSONAR
                 == -self.q_mw
                 * 1e6
                 / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * self._T_delta_design_K)
