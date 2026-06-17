@@ -44,19 +44,39 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
     """
 
     def ensure_var(self, model, simulation=False, grid=None):
-        model.t_in_pu = Var(1, min=0, max=2, name="t_in_pu")
-        model.t_out_pu = Var(1, min=0, max=2, name="t_out_pu")
-        if isinstance(model.mass_flow_design_kgs, Var):
-            model.mass_flow_mag_kgs = Var(0, min=0)
-        else:
-            model.mass_flow_mag_kgs = Var(0, min=0, max=model.mass_flow_design_kgs)
+        m_seed = getattr(model, "_mass_flow_seed_kgs", 0.0)
+        q_design = getattr(model, "_q_design_mw", None)
 
+        # Warm-start t_out at the design dT spread (in pu), in the direction the
+        # duty drives it: a generator (q < 0) raises the outlet, a load drops
+        # it. Keeps the start off the t_pu rail the zero-flow corner forces.
+        t_out_seed = 1.0
+        t_ref_k = getattr(grid, "t_ref_k", None) if not isinstance(
+            grid, (list, tuple)
+        ) else None
+        if t_ref_k and q_design:
+            dt_pu = model._T_delta_design_K / t_ref_k
+            t_out_seed = 1.0 + dt_pu if q_design < 0 else 1.0 - dt_pu
+
+        model.t_in_pu = Var(1, min=0, max=2, name="t_in_pu")
+        model.t_out_pu = Var(t_out_seed, min=0, max=2, name="t_out_pu")
+        # t_to_pu == t_out_pu in equations(); keep its seed consistent.
+        if hasattr(model, "t_to_pu"):
+            model.t_to_pu.value = t_out_seed
+        if isinstance(model.mass_flow_design_kgs, Var):
+            model.mass_flow_mag_kgs = Var(m_seed, min=0)
+        else:
+            model.mass_flow_mag_kgs = Var(
+                m_seed, min=0, max=model.mass_flow_design_kgs
+            )
+
+        q_seed = q_design or 0.0
         if model.q_mw_set <= 0 or isinstance(model.q_mw_set, Var):
             model._he_is_generator = True
-            model.q_mw_delivered = Var(0, max=0, name="q_mw_delivered")
+            model.q_mw_delivered = Var(min(q_seed, 0.0), max=0, name="q_mw_delivered")
         elif model.q_mw_set > 0:
             model._he_is_generator = False
-            model.q_mw_delivered = Var(0, min=0, name="q_mw_delivered")
+            model.q_mw_delivered = Var(max(q_seed, 0.0), min=0, name="q_mw_delivered")
 
     def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
         if branch._he_is_generator:

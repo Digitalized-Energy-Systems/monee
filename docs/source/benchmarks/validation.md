@@ -29,7 +29,7 @@ in-process CasADi/IPOPT backend; pandapower uses its native Newton-Raphson
 
 ````{only} html
 ```{raw} html
-<iframe src="../_static/interactive/benchmark_pandapower.html" width="100%" height="540" style="border:none;" loading="lazy" title="monee vs pandapower: solve time, bus-voltage agreement, and slack-power agreement for AC power flow and OPF"></iframe>
+<iframe src="../_static/interactive/benchmark_pandapower.html" width="100%" height="600" style="border:none;" loading="lazy" title="monee vs pandapower: solve time, bus-voltage agreement, and slack-power agreement for AC power flow and OPF"></iframe>
 ```
 ````
 
@@ -74,7 +74,7 @@ agreement within tolerance.
 
 ````{only} html
 ```{raw} html
-<iframe src="../_static/interactive/benchmark_pandapipes.html" width="100%" height="900" style="border:none;" loading="lazy" title="monee vs pandapipes: solve time, pressure agreement, and temperature agreement for gas, heat, and coupled MES flow"></iframe>
+<iframe src="../_static/interactive/benchmark_pandapipes.html" width="100%" height="750" style="border:none;" loading="lazy" title="monee vs pandapipes: solve time, pressure agreement, and temperature agreement for gas, heat, and coupled MES flow"></iframe>
 ```
 ````
 

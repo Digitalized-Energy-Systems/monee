@@ -12,7 +12,8 @@ from monee.model.formulation import (
 )
 from tests.util import create_g2h_net
 
-FRICTION_MODELS = ["constant", "pwl", "nonlinear", "hybrid"]
+# PWL with int type vars is not compatible with IPOPT
+FRICTION_MODELS = ["constant", "nonlinear", "hybrid"]
 
 IPOPT = 3
 

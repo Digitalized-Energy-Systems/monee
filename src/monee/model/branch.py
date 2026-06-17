@@ -214,19 +214,38 @@ class HeatExchanger(BranchModel):
         self.q_mw_set = -q_mw
         self.q_mw = Var(0, name="q_mw")
 
+        # Numeric design duty for warm-starting. ``q_mw`` is a Var when the
+        # surrounding network sizes the HE (SubHE in a compound), but its
+        # initial value is still the design setpoint, so it seeds the flow and
+        # temperature vars either way.
+        self._q_design_mw = q_mw.value if isinstance(q_mw, Var) else q_mw
+        # Design through-flow at the nominal dT. Seeding the flow away from zero
+        # matters: at m=0 the fixed-q energy balance needs t_out -> inf, which
+        # rails the temperature vars and stalls IPOPT. Whether that degenerate
+        # start converges is linear-solver/platform dependent, so a consistent
+        # warm start is what keeps the smooth NLP solving across builds.
+        self._mass_flow_seed_kgs = (
+            abs(self._q_design_mw * 1e6)
+            / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * T_delta_design_K)
+            if self._q_design_mw
+            else 0.1
+        )
+
         if mass_flow_design_kgs is None:
             if isinstance(q_mw, (int, float)):
-                mass_flow_design_kgs = abs(q_mw * 1e6) / (
-                    ohfmodel.SPECIFIC_HEAT_CAP_WATER * T_delta_design_K
-                )
+                mass_flow_design_kgs = self._mass_flow_seed_kgs
             else:
                 mass_flow_design_kgs = Var(0, name="mass_flow_design_kgs")
                 self._calc_mass_flow = True
 
         self.mass_flow_design_kgs = mass_flow_design_kgs
-        self.mass_flow_kgs = Intermediate(0.1)
+        # Flow runs in the neg direction (the formulations pin mass_flow_pos to
+        # 0), so the magnitude lives on mass_flow_neg_kgs.
+        self.mass_flow_kgs = Intermediate(-self._mass_flow_seed_kgs)
         self.mass_flow_pos_kgs = Var(0, min=0, name="mass_flow_pos_kgs")
-        self.mass_flow_neg_kgs = Var(0, min=0, name="mass_flow_neg_kgs")
+        self.mass_flow_neg_kgs = Var(
+            self._mass_flow_seed_kgs, min=0, name="mass_flow_neg_kgs"
+        )
         self.direction = Var(0, integer=True, min=0, max=1, name="direction")
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")

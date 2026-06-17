@@ -88,8 +88,6 @@ class GekkoCubicSplineImpl:
 class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
     def __init__(self, solver=1):
         self.solver: int = solver
-        # Per-solve simulation flag (set at the top of solve()); read by the
-        # equation-building passes to drop operational flow limits.
         self._simulation: bool = False
 
     @staticmethod
