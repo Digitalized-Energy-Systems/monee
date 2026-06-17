@@ -44,6 +44,10 @@ test = [
     "pytest",
     "pytest-cov",
     "pre-commit",
+    # pip wheel ships a size-limited licence (2000 vars/constraints, no licence
+    # file needed); every gurobipy test model is tiny, so this lights up the
+    # native-Gurobi backend tests in CI.
+    "gurobipy",
 ]
 testpp = [
     "pytest",
@@ -55,6 +59,7 @@ testpp = [
     "pre-commit",
     "pandas==2.3.3",
     "kaleido",
+    "gurobipy",
 ]
 
 [project.urls]

@@ -5,8 +5,12 @@ Covers the two formulation families the backend supports - smooth NLP
 (MI)QCQP / MISOCP / PWL convex path - plus the IIS infeasibility diagnostics
 and the lexicographic objective handling.
 
-All solve-based tests need both the ``gurobipy`` package and a working Gurobi
-licence, so they are skipped wholesale when either is missing.
+The solve-based tests need the ``gurobipy`` package, but *not* a Gurobi licence
+file: the pip wheel ships a built-in size-limited licence (2000 variables /
+2000 constraints) that needs no setup, and every model here is tiny (the largest
+is the urban-district MISOCP at ~164 variables / ~128 constraints). So the only
+thing gating these tests is whether ``gurobipy`` is installed; they are skipped
+wholesale when it is not.
 """
 
 import math
@@ -29,7 +33,11 @@ FRICTION_MODELS = ["constant", "pwl", "nonlinear", "hybrid"]
 
 
 def _gurobipy_available() -> bool:
-    """True iff gurobipy imports *and* a licence lets us solve a trivial model."""
+    """True iff gurobipy imports and a (any) licence solves a trivial model.
+
+    The pip wheel's built-in size-limited licence satisfies this probe, so no
+    Gurobi licence file is required - the tests run anywhere gurobipy installs.
+    """
     try:
         import gurobipy as gp
 
@@ -44,7 +52,8 @@ def _gurobipy_available() -> bool:
 
 HAVE_GUROBI = _gurobipy_available()
 requires_gurobi = pytest.mark.skipif(
-    not HAVE_GUROBI, reason="gurobipy + Gurobi licence not available"
+    not HAVE_GUROBI,
+    reason="gurobipy not installed (or its licence rejected a trivial solve)",
 )
 
 
@@ -55,17 +64,6 @@ def _gas_only_net():
     g2 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.6))])
     pn.branch(mm.GasPipe(diameter_m=0.35, length_m=1000, roughness_m=0.01), g0, g1)
     pn.branch(mm.GasPipe(diameter_m=0.35, length_m=1500, roughness_m=0.01), g0, g2)
-    return pn
-
-
-def _heat_only_net():
-    pn = mm.Network(mm.create_water_grid("heat"))
-    w0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.1))])
-    w1 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ConsumeHydrGrid(1))])
-    w2 = pn.node(mm.Junction())
-    w3 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid(t_k=359))])
-    pn.branch(mm.WaterPipe(diameter_m=0.15, length_m=100), w0, w1)
-    pn.branch(mm.WaterPipe(diameter_m=0.15, length_m=200), w3, w2)
     return pn
 
 
@@ -88,6 +86,75 @@ def _make_shedding_problem(lex_objectives=False):
         include_storages=False,
         lex_objectives=lex_objectives,
     )
+
+
+# --------------------------------------------------------------------------- #
+# Pure backend logic (no gurobipy package / licence required)
+# --------------------------------------------------------------------------- #
+# The backend imports gurobipy lazily (only inside ``_require_gurobipy``), so its
+# parameter handling and value-scrubbing helpers can be imported and exercised
+# without the package or a licence. These run everywhere, including CI where
+# gurobipy is not installed.
+
+
+def test_params_merge_over_defaults_without_mutating_defaults():
+    # GIVEN
+    from monee.solver.gurobipy import DEFAULT_GUROBI_PARAMS, GurobipySolver
+
+    # WHEN
+    solver = GurobipySolver(params={"TimeLimit": 60, "FeasibilityTol": 1e-7})
+
+    # THEN
+    assert solver._params["TimeLimit"] == 60  # caller overrides the default 300
+    assert solver._params["MIPGap"] == DEFAULT_GUROBI_PARAMS["MIPGap"]  # default kept
+    assert solver._params["FeasibilityTol"] == 1e-7  # extra param merged in
+    assert "FeasibilityTol" not in DEFAULT_GUROBI_PARAMS  # module default untouched
+
+
+def test_var_value_returns_zero_when_no_solution_loaded():
+    # GIVEN
+    from monee.solver.gurobipy import GurobipySolver
+
+    class _NoSolutionVar:
+        @property
+        def X(self):
+            raise RuntimeError("Unable to retrieve attribute 'X'")
+
+    # WHEN / THEN
+    assert GurobipySolver._var_value(_NoSolutionVar()) == 0.0
+
+
+def test_var_value_scrubs_nan():
+    # GIVEN
+    from monee.solver.gurobipy import GurobipySolver
+
+    class _NanVar:
+        X = float("nan")
+
+    # WHEN / THEN
+    assert GurobipySolver._var_value(_NanVar()) == 0.0
+
+
+def test_var_value_passes_through_finite_solution():
+    # GIVEN
+    from monee.solver.gurobipy import GurobipySolver
+
+    class _GoodVar:
+        X = 3.5
+
+    # WHEN / THEN
+    assert GurobipySolver._var_value(_GoodVar()) == 3.5
+
+
+def test_sanitize_name_strips_gurobi_unsafe_chars():
+    # GIVEN
+    from monee.solver.gurobipy import GurobipySolver
+
+    # WHEN
+    safe = GurobipySolver._sanitize_name("node (3), p_mw [UB]")
+
+    # THEN
+    assert safe == "node_3_p_mw_UB"
 
 
 # --------------------------------------------------------------------------- #
@@ -122,6 +189,38 @@ def test_iis_report_summary_handles_empty():
 
     # THEN
     assert "empty IIS" in summary
+
+
+# --------------------------------------------------------------------------- #
+# Minimal solve (smallest model; proves license-free operation)
+# --------------------------------------------------------------------------- #
+
+
+def _minimal_gas_net():
+    pn = mm.Network(mm.create_gas_grid("gas", type="lgas"))
+    g0 = pn.node(mm.Junction(), child_ids=[pn.child(mm.Source(mass_flow_kgs=0.5))])
+    g1 = pn.node(mm.Junction(), child_ids=[pn.child(mm.ExtHydrGrid())])
+    pn.branch(mm.GasPipe(diameter_m=0.3, length_m=100, roughness_m=0.01), g0, g1)
+    return pn
+
+
+@requires_gurobi
+def test_minimal_solve_runs_under_size_limited_license():
+    from monee.solver.gurobipy import GurobipySolver
+
+    # GIVEN
+    net = _minimal_gas_net()
+    net.apply_formulation(make_gas_nlp_formulation())
+
+    # WHEN
+    result = GurobipySolver().solve(net)
+
+    # THEN
+    assert result.success
+    # Mass conservation on a single pipe: the ext grid balances the 0.5 kg/s source.
+    assert math.isclose(
+        result.dataframes["ExtHydrGrid"]["mass_flow_kgs"][0], 0.5, abs_tol=1e-3
+    )
 
 
 # --------------------------------------------------------------------------- #
