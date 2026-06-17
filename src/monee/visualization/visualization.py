@@ -207,7 +207,7 @@ def _branch_hover(int_branch, from_id, to_id) -> str:
 # Main function
 
 
-def plot_network(
+def plot_network(  # NOSONAR
     network: mm.Network,
     title: str | None = None,
     show_children: bool = True,

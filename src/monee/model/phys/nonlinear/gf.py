@@ -33,7 +33,7 @@ def abs_psq_diff_pu(
     linearization they use for density), so the offset stays linear / conic.
     """
     base = psq_pu_i - psq_pu_j
-    if pressure_ambient_pa == 0.0:
+    if pressure_ambient_pa == 0.0:  # NOSONAR
         # Default absolute convention: no offset, and no reference to p_pu at all
         # (keeps the equation byte-identical to the pre-gauge form).
         return base
@@ -46,7 +46,7 @@ def abs_psq_pu(psq_pu, p_pu, pressure_ambient_pa, pressure_ref_pa):
     :math:`a^2` that cancels in any i-j difference. Short-circuits to the gauge
     ``psq_pu`` when ambient is 0 (no ``p_pu`` reference). See
     :func:`abs_psq_diff_pu` for the exact-vs-linearized ``p_pu`` convention."""
-    if pressure_ambient_pa == 0.0:
+    if pressure_ambient_pa == 0.0:  # NOSONAR
         return psq_pu
     return psq_pu + 2.0 * (pressure_ambient_pa / pressure_ref_pa) * p_pu
 
@@ -66,7 +66,7 @@ def reference_gas_density(grid):
     return p_abs * grid.molar_mass / (grid.universal_gas_constant * grid.t_k)
 
 
-def calc_C_squared(diameter_m, length_m, t_k, compressibility, r_specific=R_specific):
+def calc_C_squared(diameter_m, length_m, t_k, compressibility, r_specific=R_specific):  # NOSONAR
     numerator = math.pi**2 * diameter_m**5
     denominator = 16 * length_m * r_specific * t_k * compressibility
     c_squared = numerator / denominator

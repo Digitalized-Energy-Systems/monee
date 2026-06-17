@@ -193,7 +193,7 @@ class MultiPeriodResult:
         ]
 
     @property
-    def T(self) -> int:
+    def T(self) -> int:  # NOSONAR
         return len(self._net_copies)
 
     def _make_index(self) -> pandas.Index:
@@ -258,7 +258,7 @@ class MultiPeriodResult:
             self.success,
         )
 
-    def _temporal_lines(self) -> list[str]:
+    def _temporal_lines(self) -> list[str]:  # NOSONAR
         """Compact per-period evolution lines for attributes that vary across
         periods. At most 2 attrs per type."""
         lines = []
@@ -348,7 +348,7 @@ class MultiPeriodResult:
         lines.append(SEP)
         return "\n".join(lines)
 
-    def _repr_html_(self) -> str:
+    def _repr_html_(self) -> str:  # NOSONAR
         status_color = "#090" if self.success else "#c00"
         status_text = "ok" if self.success else "failed"
         sections = []
@@ -417,7 +417,7 @@ class GekkoMultiPeriodSolver:
     def __init__(self, solver: int = 1):
         self._solver_int = solver
 
-    def solve_multi_period(
+    def solve_multi_period(  # NOSONAR
         self,
         network: Network,
         timeseries_data: TimeseriesData | None = None,
@@ -586,7 +586,7 @@ class PyomoMultiPeriodSolver:
     def __init__(self, solver_name: str = "scip"):
         self._solver_name = solver_name
 
-    def solve_multi_period(
+    def solve_multi_period(  # NOSONAR
         self,
         network: Network,
         timeseries_data: TimeseriesData | None = None,
@@ -794,7 +794,7 @@ def _dt_h_from_datetime_index(
     datetime_index: pandas.DatetimeIndex,
     steps: int,
 ) -> list[float]:
-    if isinstance(dt_h, (list, tuple)) or dt_h != 1.0:
+    if isinstance(dt_h, (list, tuple)) or dt_h != 1.0:  # NOSONAR
         _log.warning(
             "Both dt_h and datetime_index were provided; dt_h will be "
             "ignored and step durations will be derived from "

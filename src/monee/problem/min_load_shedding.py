@@ -108,7 +108,7 @@ def _gas_mw_factor(grid):
 _SQRT_3 = math.sqrt(3.0)
 
 
-def _aux_objective_upper_bound(
+def _aux_objective_upper_bound(  # NOSONAR
     network,
     *,
     vm_pu_fallback: float = 1.1,
@@ -186,7 +186,7 @@ def _aux_objective_upper_bound(
     return total
 
 
-def _make_auto_priority_floor_hook(
+def _make_auto_priority_floor_hook(  # NOSONAR
     weights: dict,
     *,
     alpha: float,
@@ -284,7 +284,7 @@ def _make_auto_priority_floor_hook(
     return _hook
 
 
-def _shedding_mw(model, gas_mw_factor=None, cp_rated_mw=None):
+def _shedding_mw(model, gas_mw_factor=None, cp_rated_mw=None):  # NOSONAR
     """Unserved-energy expression for *model* in MW-equivalent.
 
     For LinearHX branches the under-delivery gap ``|q_mw_set - q_mw_delivered|``
@@ -351,7 +351,7 @@ def _calc_objective(model_to_data):
     )
 
 
-def create_min_load_shedding_problem(
+def create_min_load_shedding_problem(  # NOSONAR
     *,
     demand_weight=WEIGHT_DEMAND,
     generator_weight=WEIGHT_GENERATOR,

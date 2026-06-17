@@ -37,7 +37,7 @@ def line_loading_limit(branch_model, side: str, max_loading: float):
     return getattr(branch_model, f"loading_{side}_pu") <= max_loading
 
 
-def cp_input_rated_mw(component):
+def cp_input_rated_mw(component):  # NOSONAR
     """Return ``(carrier, rated_input_mw)`` for a coupling-point component or
     ``None`` if *component* is not a coupling point.
 

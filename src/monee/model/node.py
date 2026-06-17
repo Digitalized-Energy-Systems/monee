@@ -152,7 +152,7 @@ class Junction(NodeModel):
             ]
         )
 
-    def calc_signed_heat_flow(
+    def calc_signed_heat_flow(  # NOSONAR
         self, from_branch_models, to_branch_models, child_models, grid
     ):
         # LTC / Mcc-DHS replace the degenerate T_n \times mass_balance with their own

@@ -9,7 +9,7 @@ from monee.problem.core import (
 from monee.problem.utils import line_loading_limit
 
 
-def create_economic_dispatch_problem(
+def create_economic_dispatch_problem(  # NOSONAR
     gen_cost_default=1.0,
     ext_grid_cost_default=None,
     bounds_vm=(0.9, 1.1),

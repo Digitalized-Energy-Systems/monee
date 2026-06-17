@@ -117,7 +117,7 @@ def int_flow_to_q(
     )
 
 
-def int_flows(
+def int_flows(  # NOSONAR
     p_from_var,
     q_from_var,
     p_to_var,

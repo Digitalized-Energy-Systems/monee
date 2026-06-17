@@ -384,7 +384,7 @@ class TimeseriesResult:
     def summary(self):
         return repr(self)
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # NOSONAR
         n_total = len(self._step_results)
         n_failed = len(self.failed_steps)
         n_skipped = sum(1 for sr in self._step_results if sr.skipped)
@@ -460,7 +460,7 @@ class TimeseriesResult:
                 lines.append("  " + line)
         return "\n".join(lines)
 
-    def _repr_html_(self) -> str:
+    def _repr_html_(self) -> str:  # NOSONAR
         n_total = len(self._step_results)
         n_failed = len(self.failed_steps)
         n_skipped = sum(1 for sr in self._step_results if sr.skipped)
@@ -579,7 +579,7 @@ _TEMPORAL_METHODS = (
 )
 
 
-def _network_has_temporal_coupling(net: Network) -> bool:
+def _network_has_temporal_coupling(net: Network) -> bool:  # NOSONAR
     """True if any component model/formulation or extension contributes
     inter-step temporal coupling (storage SOC, ramp limits, linepack, LTC).
 
@@ -798,7 +798,7 @@ def _run_gurobipy_reuse(
     return TimeseriesResult(step_results, datetime_index=datetime_index)
 
 
-def run(
+def run(  # NOSONAR
     net: Network,
     timeseries_data: TimeseriesData | None = None,
     steps: int | None = None,

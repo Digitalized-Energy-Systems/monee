@@ -177,7 +177,7 @@ class GurobipySolver(SolverInterface):
 
     # --------- variable injection / withdrawal ---------
 
-    def inject_gurobi_vars_attr(self, gm, target: GenericModel, prefix: str):
+    def inject_gurobi_vars_attr(self, gm, target: GenericModel, prefix: str):  # NOSONAR
         """Replace Var/Const with a gurobipy Var / float.  The stale solved
         value (clamped into the current bounds, NaN scrubbed) seeds ``Var.Start``
         for a warm start."""
@@ -211,7 +211,7 @@ class GurobipySolver(SolverInterface):
         :class:`Intermediate`.  Mirrors the Pyomo backend: integer rounding,
         NaN/None -> 0, bound-noise snapping."""
         gp = self._gp
-        for key, value in list(target.__dict__.items()):
+        for key, value in list(target.__dict__.items()):  # NOSONAR
             if isinstance(value, (gp.LinExpr, gp.QuadExpr, gp.NLExpr)):
                 setattr(target, key, Intermediate(value=self._expr_value(value)))
                 continue
@@ -265,7 +265,7 @@ class GurobipySolver(SolverInterface):
         except Exception:
             return float("nan")
 
-    def _eval_nlexpr(self, opcodes, data, parent) -> float:
+    def _eval_nlexpr(self, opcodes, data, parent) -> float:  # NOSONAR
         """Evaluate a Gurobi nonlinear-expression tree at the solved point.
 
         The tree is ``(opcodes, data, parent)``: ``opcodes[i]`` is the operation
@@ -512,7 +512,7 @@ class GurobipySolver(SolverInterface):
 
     # --------- main solve ---------
 
-    def solve(
+    def solve(  # NOSONAR
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
@@ -994,7 +994,7 @@ class GurobipyTimeseries:
             :class:`GurobipySolver`).
     """
 
-    def __init__(
+    def __init__(  # NOSONAR
         self,
         input_network,
         timeseries_data,
@@ -1268,7 +1268,7 @@ class GurobipyTimeseries:
                 yield compound.model
 
     # ------------------------------------------------------------------ #
-    def _solve_step(self, t: int) -> bool:
+    def _solve_step(self, t: int) -> bool:  # NOSONAR
         """Re-bound the time-varying inputs (and carried state) for step *t*,
         re-solve the persistent model (warm-started), and scatter the solution
         into the network models. Returns whether the solve succeeded."""

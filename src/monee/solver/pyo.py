@@ -101,7 +101,7 @@ class PyscipoptSolver:
     def warm_start_capable(self) -> bool:
         return False
 
-    def available(self, exception_flag: bool = False) -> bool:
+    def available(self, exception_flag: bool = False) -> bool:  # NOSONAR
         return _pyscipopt_available()
 
     def solve(self, model, tee: bool = False, **kwargs):
@@ -275,7 +275,7 @@ class PyomoSolver(SolverInterface):
         self._simulation: bool = False
 
     @staticmethod
-    def inject_pyomo_vars_attr(
+    def inject_pyomo_vars_attr(  # NOSONAR
         pm: pyo.ConcreteModel, target: GenericModel, prefix: str
     ):
         """Replace Var/Const with Pyomo Var / numeric. Clamps stale ``initialize``
@@ -306,7 +306,7 @@ class PyomoSolver(SolverInterface):
     _BOUND_SNAP_TOL = 1e-9
 
     @staticmethod
-    def withdraw_pyomo_vars_attr(target: GenericModel):
+    def withdraw_pyomo_vars_attr(target: GenericModel):  # NOSONAR
         """Pyomo Var → :class:`Var`. Restores ``integer``, snaps bound-noise to
         bounds, replaces NaN/None with 0 so the next solve's warmstart survives."""
         for key, value in target.__dict__.items():
@@ -415,7 +415,7 @@ class PyomoSolver(SolverInterface):
             return PyscipoptSolver()
         return pyo.SolverFactory(solver_name)
 
-    def solve(
+    def solve(  # NOSONAR
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,

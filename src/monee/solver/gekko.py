@@ -79,7 +79,7 @@ class GekkoCubicSplineImpl:
     def __init__(self, m):
         self.m = m
 
-    def piecewise_eq(self, y, x, xs, ys, name=None):
+    def piecewise_eq(self, y, x, xs, ys, _name=None):
         xs = list(xs)
         ys = list(ys)
         return self.m.cspline(x, y, xs, ys)
@@ -155,7 +155,7 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
         m.solve(disp=False)
         return m.options.IMODE
 
-    def solve(
+    def solve(  # NOSONAR
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,

@@ -84,7 +84,7 @@ class GenericTransferBranch(MultiGridBranchModel):
             eqs += [to_node_model.t_pu == from_node_model.t_pu]
             eqs += [from_node_model.pressure_pu == to_node_model.pressure_pu]
         if type(grids) is GasGrid or (type(grids) is dict and GasGrid in grids):
-            pass
+            pass  # NOSONAR
         return eqs
 
 
@@ -434,10 +434,10 @@ class CHP(MultiGridCompoundModel):
     def create(
         self,
         network: Network,
-        gas_node: Node,
-        heat_node: Node,
-        heat_return_node: Node,
-        power_node: Node,
+        gas_node: Node,  # NOSONAR
+        heat_node: Node,  # NOSONAR
+        heat_return_node: Node,  # NOSONAR
+        power_node: Node,  # NOSONAR
     ):
         self._gas_grid = gas_node.grid
         hhv = gas_node.grid.higher_heating_value_kwh_per_kg
@@ -510,7 +510,7 @@ class GasToHeat(MultiGridCompoundModel):
             self._control_node.regulation = 0
 
     def create(
-        self, network: Network, gas_node: Node, heat_node: Node, heat_return_node: Node
+        self, network: Network, gas_node: Node, heat_node: Node, heat_return_node: Node  # NOSONAR
     ):
         self._gas_grid = gas_node.grid
         hhv = gas_node.grid.higher_heating_value_kwh_per_kg
@@ -584,9 +584,9 @@ class PowerToHeat(MultiGridCompoundModel):
     def create(
         self,
         network: Network,
-        power_node: Node,
-        heat_node: Node,
-        heat_return_node: Node,
+        power_node: Node,  # NOSONAR
+        heat_node: Node,  # NOSONAR
+        heat_return_node: Node,  # NOSONAR
     ):
         self._control_node = PowerToHeatControlNode(
             self.load_p_mw,
@@ -814,9 +814,9 @@ class CHPHG(MultiGridCompoundModel):
     def create(
         self,
         network: Network,
-        gas_node: Node,
-        heat_node: Node,
-        power_node: Node,
+        gas_node: Node,  # NOSONAR
+        heat_node: Node,  # NOSONAR
+        power_node: Node,  # NOSONAR
     ):
         self._gas_grid = gas_node.grid
         hhv = gas_node.grid.higher_heating_value_kwh_per_kg

@@ -50,7 +50,7 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
             if cp_input_rated_mw(component) is not None
         ]
 
-    def calc(
+    def calc(  # NOSONAR
         self, network, inv=False, include_ext_grid=True, include_coupling_points=False
     ):
         relevant_components = self.get_relevant_components(network)

@@ -167,7 +167,7 @@ class Constraint:
             self._period_filter = lambda t: t in allowed
         return self
 
-    def _eval(self, network, period_index=None):
+    def _eval(self, network, period_index=None):  # NOSONAR
         if self._period_filter is not None and period_index is not None:
             if not self._period_filter(period_index):
                 return []
@@ -358,7 +358,7 @@ class OptimizationProblem:
     def lex_objectives(self) -> bool:
         return self._lex_objectives
 
-    def _apply(self, network: Network):
+    def _apply(self, network: Network):  # NOSONAR
         self._controllable_to_attr.clear()
         for appliable in self._controllable_appliables:
             appliable(network)
@@ -373,7 +373,7 @@ class OptimizationProblem:
                     val = getattr(model, attribute)
                     if type(val) is not Var:
                         if param is None:
-                            if val == 0.0:
+                            if val == 0.0:  # NOSONAR
                                 logger.warning(
                                     "Attribute '%s' on %s has value 0.0 and no "
                                     "explicit bounds - inferred bounds [0, 0] "

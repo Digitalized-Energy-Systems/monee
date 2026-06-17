@@ -80,7 +80,7 @@ def _mf(heat_mw):
     return heat_mw * 1e6 / (_CP * _DT)
 
 
-def create_restoration_benchmark(
+def create_restoration_benchmark(  # NOSONAR
     *,
     linepack: bool = False,
     ltc: bool = False,

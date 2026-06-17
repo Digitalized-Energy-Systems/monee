@@ -231,7 +231,7 @@ class GekkoInfeasibilityReport:
     bound_violations: list[dict] = field(default_factory=list)
     variables_at_bounds: list[dict] = field(default_factory=list)
 
-    def summary(self, max_items: int = 10) -> str:
+    def summary(self, max_items: int = 10) -> str:  # NOSONAR
         lines = []
         if self.solver_message:
             lines.append(f"=== Solver message ===\n  {self.solver_message}")

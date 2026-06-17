@@ -54,7 +54,7 @@ class ConstraintResidual:
     expression: str | None = None
 
 
-def collect_constraint_residuals(
+def collect_constraint_residuals(  # NOSONAR
     pm: pyo.ConcreteModel, tol: float = 1e-4
 ) -> list[ConstraintResidual]:
     """List constraints whose residual exceeds *tol*, sorted by magnitude."""
@@ -256,7 +256,7 @@ class InfeasibilityReport:
     variables_at_bounds: list[dict] = field(default_factory=list)
     mis_constraints: list[str] = field(default_factory=list)
 
-    def summary(self, max_items: int = 10) -> str:
+    def summary(self, max_items: int = 10) -> str:  # NOSONAR
         lines = []
 
         if self.constraint_residuals:

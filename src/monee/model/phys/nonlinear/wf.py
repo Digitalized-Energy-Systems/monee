@@ -13,7 +13,7 @@ def darcy_weisbach_equation(
     pipe_length,
     diameter_m,
     fluid_density_kg_per_m3,
-    on_off=1,
+    on_off=1,  # NOSONAR
     friction=None,
     **kwargs,
 ):

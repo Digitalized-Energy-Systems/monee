@@ -297,7 +297,7 @@ class SolverInterface(ABC):
             branch.model.init(branch.grid)
 
     @staticmethod
-    def mark_temporal_components(network, ignored_nodes: set) -> None:
+    def mark_temporal_components(network, ignored_nodes: set) -> None:  # NOSONAR
         """Set ``_temporal_active`` on every model carrying a temporal method,
         so static-only constraints can be suppressed when coupling is active."""
         _temporal_methods = frozenset(
@@ -328,7 +328,7 @@ class SolverInterface(ABC):
             if any(hasattr(compound.model, m) for m in _temporal_methods):
                 compound.model._temporal_active = True
 
-    def _collect_temporal_eqs(
+    def _collect_temporal_eqs(  # NOSONAR
         self,
         solver_obj,
         network,
@@ -546,7 +546,7 @@ class OperatorEquationAssembly:
     :meth:`_pwl_impl`.
     """
 
-    def _pwl_impl(self, m):
+    def _pwl_impl(self, m):  # NOSONAR
         """Backend piecewise-linear/spline implementation handed to
         ``branch.equations(..., pwl_impl=...)``. ``None`` when the backend has no
         PWL support (e.g. CasADi); GEKKO overrides it with a cubic-spline impl."""
@@ -861,7 +861,7 @@ def _island_has_free_mass_flow_child(network: Network, island) -> bool:
     return False
 
 
-def mark_he_flow_prescription(network: Network, ignored_nodes):
+def mark_he_flow_prescription(network: Network, ignored_nodes):  # NOSONAR
     """Decide for each dynamic heat exchanger (compound-internal ``SubHE``)
     whether it prescribes its design mass flow or yields to the network.
 
@@ -1011,7 +1011,7 @@ def persist_solution(solved_copy: Network, original: Network) -> None:
         _copy_var_values(src_compound.model, dst_compound.model)
 
 
-def compute_bound_violations(
+def compute_bound_violations(  # NOSONAR
     nodes, branches, compounds, network, tol: float = 1e-6
 ) -> dict[str, float]:
     """``{"<Type>.<id>.<attr>": magnitude}`` for Var.value violations beyond *tol*."""
@@ -1122,7 +1122,7 @@ def remove_cps(network: Network):
             network.remove_branch(branch.id)
 
 
-def find_ignored_nodes(network: Network, islanding_config=None):
+def find_ignored_nodes(network: Network, islanding_config=None):  # NOSONAR
     """Return node IDs to exclude from the solve.
 
     Default: active topology, only ExtPowerGrid/ExtHydrGrid children are

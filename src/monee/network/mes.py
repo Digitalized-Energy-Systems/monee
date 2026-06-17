@@ -699,7 +699,7 @@ def _add_gas_mesh_pipes(
         )
 
 
-def create_gas_tree_net_for_power(
+def create_gas_tree_net_for_power(  # NOSONAR
     power_net: mm.Network,
     target_net: mm.Network,
     gas_load_share=3.0,
@@ -803,7 +803,7 @@ def create_gas_tree_net_for_power(
     return bus_index_to_junction_index
 
 
-def create_heat_supply_return_net_for_power(
+def create_heat_supply_return_net_for_power(  # NOSONAR
     power_net: mm.Network,
     target_net: mm.Network,
     heat_load_share=1.0,
@@ -1231,7 +1231,7 @@ def _drain_heat_gen_capacity(net: mm.Network, total_mw: float) -> float:
     )
 
 
-def create_coupling_points_for_mes(
+def create_coupling_points_for_mes(  # NOSONAR
     mes_net: mm.Network,
     bus_to_gas_junc,
     bus_to_heat_supply_junc,

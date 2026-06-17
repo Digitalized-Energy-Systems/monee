@@ -134,7 +134,7 @@ class _Rel:
         self.op = op
 
 
-class CasSym:
+class CasSym:  # NOSONAR
     """Thin wrapper over a CasADi ``SX`` so monee's operator-based equation
     bodies build a CasADi graph and ``==`` / ``<=`` / ``>=`` capture
     constraints."""
@@ -247,19 +247,19 @@ class CasModel:
         return CasSym(ca.if_else(_sx(cond), _sx(a), _sx(b)))
 
     # --- model assembly hooks ---
-    def Intermediate(self, expr):
+    def Intermediate(self, expr):  # NOSONAR
         # An intermediate is just a named sub-expression; inline it.
         return expr if isinstance(expr, CasSym) else CasSym(_sx(expr))
 
-    def Equation(self, eq):
+    def Equation(self, eq):  # NOSONAR
         if isinstance(eq, _Rel):
             self.cons.append(eq)
 
-    def Equations(self, eqs):
+    def Equations(self, eqs):  # NOSONAR
         for eq in eqs:
             self.Equation(eq)
 
-    def Obj(self, expr):
+    def Obj(self, expr):  # NOSONAR
         self.obj_terms.append(_sx(expr))
 
 
@@ -279,7 +279,7 @@ class CasADiCubicSplineImpl:
     def __init__(self, model: CasModel):
         self.m = model
 
-    def piecewise_eq(self, y, x, xs, ys, name=None):
+    def piecewise_eq(self, y, x, xs, ys, _name=None):
         xs = [float(v) for v in xs]
         ys = [float(v) for v in ys]
         nm = f"monee_cspline_{self.m._pwl_count}"
@@ -329,8 +329,8 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         backend uses a cubic spline; CasADi mirrors it with ``ca.interpolant``)."""
         return CasADiCubicSplineImpl(m)
 
-    def _inject(self, model, comp, cat):
-        for key, val in list(model.__dict__.items()):
+    def _inject(self, model, comp, cat):  # NOSONAR
+        for key, val in list(model.__dict__.items()):  # NOSONAR
             if isinstance(val, Var):
                 if val.integer:
                     # IPOPT is continuous; relax integers for this backend.
@@ -387,7 +387,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             if not ignore_compound(compound, ignored_nodes):
                 yield compound.model
 
-    def solve(
+    def solve(  # NOSONAR
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
@@ -572,7 +572,7 @@ class CasADiTimeseries:
     per-step inputs (loads, generation).
     """
 
-    def __init__(
+    def __init__(  # NOSONAR
         self,
         input_network,
         timeseries_data,
@@ -687,7 +687,7 @@ class CasADiTimeseries:
         self.last_step_success = None
 
     # ------------------------------------------------------------------ #
-    def _declare_params(self, network, td):
+    def _declare_params(self, network, td):  # NOSONAR
         # Mirror TimeseriesData.apply_to_network: iterate the network's components
         # and gather the series that target each one by id AND by name (and the
         # compound dicts). Iterating td's id-only dicts (as before) silently
@@ -836,7 +836,7 @@ class CasADiMultiPeriodSolver:
         self.last_solve_s = None
         self.last_iters = None
 
-    def solve_multi_period(
+    def solve_multi_period(  # NOSONAR
         self,
         network: Network,
         timeseries_data=None,

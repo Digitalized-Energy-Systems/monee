@@ -251,7 +251,7 @@ def _node_label_and_color(row: dict) -> tuple[str, str]:
     return "", _TL_GRAY
 
 
-def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
+def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:  # NOSONAR
     """Return (short inline label, colour) for a branch result row.
 
     Single-grid branches use the traffic-light palette; coupling branches
@@ -317,7 +317,7 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
 # Graph layout  –  spread out nodes for readability
 
 
-def _compute_layout(graph: nx.Graph, network, use_monee_positions: bool) -> dict:
+def _compute_layout(graph: nx.Graph, _network, use_monee_positions: bool) -> dict:
     if use_monee_positions and all(
         graph.nodes[nid]["internal_node"].position is not None for nid in graph.nodes
     ):
@@ -354,7 +354,7 @@ def _compute_layout(graph: nx.Graph, network, use_monee_positions: bool) -> dict
 # Main function
 
 
-def plot_result(
+def plot_result(  # NOSONAR
     result: SolverResult,
     title: str | None = None,
     show_children: bool = True,

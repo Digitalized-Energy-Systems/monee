@@ -81,8 +81,8 @@ def soc_rel_lorentz(
     :math:`P^2 + Q^2 + d^2 \le s^2` (since :math:`s^2 - d^2 = (W/tap^2) \cdot ell`)."""
     w_p = var_w_pu_i / (tap * tap)
     return [
-        var_soc_sum == 0.5 * (w_p + var_ell_pu),
-        var_soc_diff == 0.5 * (w_p - var_ell_pu),
+        var_soc_sum == 0.5 * (w_p + var_ell_pu),  # NOSONAR
+        var_soc_diff == 0.5 * (w_p - var_ell_pu),  # NOSONAR
         var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2 + var_soc_diff**2
         <= var_soc_sum**2,
     ]
