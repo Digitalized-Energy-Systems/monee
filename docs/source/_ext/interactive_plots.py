@@ -160,8 +160,11 @@ def _write(fig, out_path, height_px=640):
                 out_path[:-5] + "." + ext, width=900, height=height_px, scale=2
             )
         except Exception as exc:  # noqa: BLE001
-            print(f"[interactive_plots] {ext.upper()} export skipped for {out_path}: {exc}")
+            print(
+                f"[interactive_plots] {ext.upper()} export skipped for {out_path}: {exc}"
+            )
     return out_path
+
 
 def _solve_storage(capacity_mwh, p_max_mw, load, price, dt_h=1.0):
     """Solve the price-arbitrage dispatch for one battery capacity.
