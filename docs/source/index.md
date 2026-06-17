@@ -63,6 +63,8 @@ pip install monee
 :gutter: 4
 
 :::{grid-item-card}
+:link: concepts/data_model
+:link-type: doc
 :shadow: sm
 
 **Multi-energy networks**
@@ -72,6 +74,8 @@ so any topology works.
 :::
 
 :::{grid-item-card}
+:link: concepts/multi_energy
+:link-type: doc
 :shadow: sm
 
 **Energy-carrier coupling**
@@ -81,6 +85,8 @@ P2G, G2H, and CHP. Bidirectional flows are handled automatically.
 :::
 
 :::{grid-item-card}
+:link: quickstart
+:link-type: doc
 :shadow: sm
 
 **Steady-state simulation**
@@ -90,6 +96,8 @@ Results come back as typed dataframes, one row per component.
 :::
 
 :::{grid-item-card}
+:link: tutorials/01_optimization_basics
+:link-type: doc
 :shadow: sm
 
 **Optimisation**
@@ -100,6 +108,8 @@ Load shedding ships built in; add your own objectives and constraints.
 :::
 
 :::{grid-item-card}
+:link: concepts/solvers
+:link-type: doc
 :shadow: sm
 
 **Flexible solver back-ends**
@@ -110,6 +120,8 @@ code. A MISOCP relaxation is available for convex OPF.
 :::
 
 :::{grid-item-card}
+:link: how-to/matpower_io
+:link-type: doc
 :shadow: sm
 
 **Import**
@@ -119,6 +131,7 @@ One function call per format.
 :::
 
 :::{grid-item-card}
+:columns: 12
 :link: benchmarks/validation
 :link-type: doc
 :shadow: sm
