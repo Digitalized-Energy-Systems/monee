@@ -30,10 +30,8 @@ from monee.problem.core import OptimizationProblem
 
 _log = logging.getLogger(__name__)
 
-# Display helpers (also imported by simulation.timeseries)
-
 #: Internal bookkeeping columns omitted from pretty-printed output.
-_META_COLS: frozenset[str] = frozenset({"active", "independent", "ignored"})
+_META_COLS: frozenset[str] = frozenset({"active", "independent"})
 
 
 def _display_df(df: pandas.DataFrame) -> pandas.DataFrame:
@@ -113,18 +111,10 @@ class SolverResult:
     violations: dict[str, float] = field(default_factory=dict)
     solver_status: str | None = None
     termination_condition: str | None = None
-    #: Which solve mode actually ran: ``"simulation"`` (square IMODE=1
-    #: steady-state) or ``"optimization"`` (IMODE=3). When a simulation was
-    #: requested but the model was not square, this reads ``"optimization"`` -
-    #: the signal that the fast steady-state path silently fell back. ``None``
-    #: when the backend doesn't distinguish the two (e.g. Pyomo).
     mode_used: str | None = None
-    #: Diagnostic infeasibility report when the solve failed (``success=False``);
-    #: ``None`` on success. Declaring it as a field gives both backends a single,
-    #: documented place to surface the report instead of the GEKKO-raises /
-    #: Pyomo-dynamic-attribute split. (GEKKO additionally raises
-    #: ``GekkoSolveError`` carrying the same report.)
     infeasibility_report: object | None = None
+    backend_used: str | None = None
+    solver_used: str | None = None
 
     def summary(self):
         return repr(self)
@@ -251,6 +241,19 @@ class SinglePeriodSolverProtocol:
 
 class SolverInterface(ABC):
     """Abstract base class for solver backends (GEKKO, Pyomo, …)."""
+
+    @property
+    def backend_name(self) -> str:
+        """Backend label recorded on :attr:`SolverResult.backend_used`.
+        Concrete backends set ``_backend_name``; unknown custom solvers fall
+        back to their class name."""
+        return getattr(self, "_backend_name", type(self).__name__)
+
+    @property
+    def solver_name(self) -> str | None:
+        """Solver label recorded on :attr:`SolverResult.solver_used`.
+        Concrete backends set ``_solver_name``; ``None`` when unknown."""
+        return getattr(self, "_solver_name", None)
 
     @abstractmethod
     def solve(

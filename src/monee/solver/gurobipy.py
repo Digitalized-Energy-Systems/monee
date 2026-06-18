@@ -162,6 +162,8 @@ class GurobipySolver(SolverInterface):
     _LEX_ABS_TOL = 1e-9
 
     def __init__(self, params: dict | None = None):
+        self._backend_name = "gurobipy"
+        self._solver_name = "gurobi"
         self._params = dict(DEFAULT_GUROBI_PARAMS)
         if params:
             self._params.update(params)
@@ -643,6 +645,8 @@ class GurobipySolver(SolverInterface):
             success,
             violations,
             infeasibility_report=report if not success else None,
+            backend_used=self.backend_name,
+            solver_used=self.solver_name,
         )
 
     def _solve_lexicographic(self, gm, user_obj_exprs, aux_obj_exprs):
@@ -1289,6 +1293,8 @@ class GurobipyTimeseries:
             ok,
             violations,
             mode_used="optimization",
+            backend_used="gurobipy",
+            solver_used="gurobi",
         )
 
     def run(self):

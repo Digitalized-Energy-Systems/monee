@@ -263,6 +263,7 @@ class PyomoSolver(SolverInterface):
     """Pyomo-backed solver. ``solver_name`` is overridable per :meth:`solve`."""
 
     def __init__(self, solver_name: str = "scip"):
+        self._backend_name = "pyomo"
         self._solver_name = solver_name
         # Per-solve simulation flag (set at the top of solve()); read by the
         # equation-building passes to drop operational flow limits.
@@ -568,6 +569,8 @@ class PyomoSolver(SolverInterface):
             solver_status=status_str,
             termination_condition=tc_str,
             infeasibility_report=report if not success else None,
+            backend_used=self._backend_name,
+            solver_used=solver_name,
         )
         return solver_result
 

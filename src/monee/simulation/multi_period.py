@@ -170,11 +170,17 @@ class MultiPeriodResult:
         objective: float,
         success: bool,
         datetime_index: pandas.DatetimeIndex | None = None,
+        backend_used: str | None = None,
+        solver_used: str | None = None,
     ) -> None:
         self._net_copies = net_copies
         self.objective = objective
         self.success = success
         self._datetime_index = datetime_index
+        #: Backend and solver convention selected for this multi-period solve
+        #: (see :func:`monee.solver.dispatch.resolve_multi_period_solver`).
+        self.backend_used = backend_used
+        self.solver_used = solver_used
         # Build per-period DataFrames once; queried repeatedly by get_result_for.
         self._period_dfs: list[dict[str, pandas.DataFrame]] = [
             net_t.as_result_dataframe_dict() for net_t in net_copies
@@ -244,6 +250,8 @@ class MultiPeriodResult:
             self._period_dfs[t],
             None,
             self.success,
+            backend_used=self.backend_used,
+            solver_used=self.solver_used,
         )
 
     def _temporal_lines(self) -> list[str]:  # NOSONAR
@@ -364,6 +372,12 @@ class GekkoMultiPeriodSolver:
 
     def __init__(self, solver: int = 1):
         self._solver_int = solver
+        self._backend_name = "gekko"
+        # Mirror of dispatch.GEKKO_SOLVERS (name -> code); inlined to avoid a
+        # module-level gekko import (the backend is imported lazily).
+        self._solver_name = {1: "apopt", 2: "bpopt", 3: "ipopt"}.get(
+            solver, str(solver)
+        )
 
     def solve_multi_period(  # NOSONAR
         self,
@@ -521,6 +535,8 @@ class GekkoMultiPeriodSolver:
             objective=m.options.OBJFCNVAL,
             success=m.options.APPSTATUS == 1,
             datetime_index=datetime_index,
+            backend_used=self._backend_name,
+            solver_used=self._solver_name,
         )
 
 
@@ -533,6 +549,7 @@ class PyomoMultiPeriodSolver:
 
     def __init__(self, solver_name: str = "scip"):
         self._solver_name = solver_name
+        self._backend_name = "pyomo"
 
     def solve_multi_period(  # NOSONAR
         self,
@@ -713,6 +730,8 @@ class PyomoMultiPeriodSolver:
             objective=pyo.value(pm.obj),
             success=not _failed,
             datetime_index=datetime_index,
+            backend_used=self._backend_name,
+            solver_used=self._solver_name,
         )
 
 
@@ -930,4 +949,6 @@ def run_mpc(
         objective=total_objective,
         success=True,
         datetime_index=exec_datetime_index,
+        backend_used=getattr(solver, "_backend_name", None),
+        solver_used=getattr(solver, "_solver_name", None),
     )

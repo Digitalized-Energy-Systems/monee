@@ -307,6 +307,8 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
 
     def __init__(self):
         _require_casadi()
+        self._backend_name = "casadi"
+        self._solver_name = "ipopt"
         # Per-solve simulation flag, read by the shared branch pass to drop
         # operational flow limits (mirrors GEKKOSolver).
         self._simulation: bool = False
@@ -532,6 +534,8 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             success,
             violations,
             mode_used="optimization",
+            backend_used=self.backend_name,
+            solver_used=self.solver_name,
         )
 
 
@@ -769,6 +773,8 @@ class CasADiTimeseries:
             success,
             violations,
             mode_used="optimization",
+            backend_used="casadi",
+            solver_used="ipopt",
         )
 
     def run(self):
@@ -801,6 +807,8 @@ class CasADiMultiPeriodSolver:
 
     def __init__(self):
         _require_casadi()
+        self._backend_name = "casadi"
+        self._solver_name = "ipopt"
         self.last_build_s = None
         self.last_solve_s = None
         self.last_iters = None

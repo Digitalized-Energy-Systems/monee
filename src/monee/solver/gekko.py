@@ -35,6 +35,10 @@ from .infeasibility.apm import (
     sanitize_apm_name,
 )
 
+# Reverse of dispatch.GEKKO_SOLVERS (name -> code), so a constructed GEKKOSolver
+# can report which solver it runs on SolverResult.solver_used.
+_GEKKO_CODE_TO_NAME: dict[int, str] = {1: "apopt", 2: "bpopt", 3: "ipopt"}
+
 # APOPT (SOLVER=1) MINLP options. IPOPT rejects the minlp_* keys, so they are
 # applied only for the APOPT path (see _solver_options).
 DEFAULT_SOLVER_OPTIONS = [
@@ -82,6 +86,8 @@ class GekkoCubicSplineImpl:
 class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
     def __init__(self, solver=1):
         self.solver: int = solver
+        self._backend_name = "gekko"
+        self._solver_name = _GEKKO_CODE_TO_NAME.get(solver, str(solver))
         self._simulation: bool = False
 
     @staticmethod
@@ -312,6 +318,8 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
             m.options.APPSTATUS == 1,
             violations,
             mode_used="simulation" if imode_used == 1 else "optimization",
+            backend_used=self.backend_name,
+            solver_used=self.solver_name,
         )
         return solver_result
 

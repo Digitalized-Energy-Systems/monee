@@ -183,7 +183,12 @@ class Stepper:
     ) -> TimeseriesResult:
         """Wrap the retained history as a :class:`TimeseriesResult`. With
         ``max_history`` set this covers only the retained window."""
-        return TimeseriesResult(list(self._history), datetime_index=datetime_index)
+        return TimeseriesResult(
+            list(self._history),
+            datetime_index=datetime_index,
+            backend_used=getattr(self._solver, "backend_name", None),
+            solver_used=getattr(self._solver, "solver_name", None),
+        )
 
     def __enter__(self) -> Stepper:
         return self

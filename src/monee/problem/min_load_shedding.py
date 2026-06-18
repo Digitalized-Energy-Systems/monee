@@ -42,6 +42,7 @@ from monee.model.multi import (
     PowerToHeatControlNode,
     PowerToHeatHG,
 )
+from monee.model.core import Var
 from monee.model.node import Bus, Junction
 from monee.problem.core import (
     REGULATION_ATTR,
@@ -351,6 +352,24 @@ def _calc_objective(model_to_data):
     )
 
 
+def _make_pressure_bounds_hook(bounds_pressure):
+    lo, hi = bounds_pressure
+
+    def _apply_pressure_bounds(network):
+        for component in network.all_components():
+            model = component.model
+            if type(model) is not Junction or not component.independent:
+                continue
+            p = getattr(model, "pressure_pu", None)
+            psq = getattr(model, "pressure_squared_pu", None)
+            if type(p) is Var:
+                p.min, p.max = lo, hi
+            if type(psq) is Var:
+                psq.min, psq.max = lo * lo, hi * hi
+
+    return _apply_pressure_bounds
+
+
 def create_min_load_shedding_problem(  # NOSONAR
     *,
     demand_weight=WEIGHT_DEMAND,
@@ -433,8 +452,11 @@ def create_min_load_shedding_problem(  # NOSONAR
     if check_vm:
         problem.bounds(bounds_vm, lambda m, _: type(m) is Bus, ["vm_pu"])
     if check_pressure:
-        problem.bounds(
-            bounds_pressure, lambda m, _: type(m) is Junction, ["pressure_pu"]
+        # Bound the actual decision var (pressure_pu under NLP, pressure_squared_pu
+        # under the linearised gas formulation); a static bound on pressure_pu is
+        # a no-op when it is only a reporting Intermediate.
+        problem._controllable_appliables.append(
+            _make_pressure_bounds_hook(bounds_pressure)
         )
     if check_t:
         problem.bounds(

@@ -288,9 +288,15 @@ class TimeseriesResult:
         self,
         step_results: list[StepResult],
         datetime_index: pandas.DatetimeIndex | None = None,
+        backend_used: str | None = None,
+        solver_used: str | None = None,
     ) -> None:
         self._step_results = step_results
         self._datetime_index = datetime_index
+        #: Backend and solver convention selected for this timeseries run
+        #: (see :func:`monee.solver.dispatch.resolve_solver`).
+        self.backend_used = backend_used
+        self.solver_used = solver_used
         self._cache: dict[tuple, pandas.DataFrame] = {}
 
     @property
@@ -644,7 +650,12 @@ def _run_casadi_reuse(
         step_results.append(sr)
         if progress_callback is not None:
             progress_callback(step, steps)
-    return TimeseriesResult(step_results, datetime_index=datetime_index)
+    return TimeseriesResult(
+        step_results,
+        datetime_index=datetime_index,
+        backend_used="casadi",
+        solver_used="ipopt",
+    )
 
 
 def _is_gurobipy_solver(solver) -> bool:
@@ -751,7 +762,12 @@ def _run_gurobipy_reuse(
         step_results.append(sr)
         if progress_callback is not None:
             progress_callback(step, steps)
-    return TimeseriesResult(step_results, datetime_index=datetime_index)
+    return TimeseriesResult(
+        step_results,
+        datetime_index=datetime_index,
+        backend_used="gurobipy",
+        solver_used="gurobi",
+    )
 
 
 def run(  # NOSONAR
@@ -903,4 +919,9 @@ def run(  # NOSONAR
         if progress_callback is not None:
             progress_callback(step, steps)
 
-    return TimeseriesResult(step_results, datetime_index=datetime_index)
+    return TimeseriesResult(
+        step_results,
+        datetime_index=datetime_index,
+        backend_used=getattr(resolved_solver, "backend_name", None),
+        solver_used=getattr(resolved_solver, "solver_name", None),
+    )
