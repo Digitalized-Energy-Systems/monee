@@ -21,12 +21,12 @@ The heat-exchanger pair (:class:`McCormickHeatExchangerFormulation` /
 balance to HE branches so a network with HEs stays convex end to end.
 """
 
-import math
 import warnings
 
 import monee.model.phys.nonlinear.hf as ohfmodel
+import monee.model.phys.nonlinear.wf as owfmodel
 from monee.model.core import Const, Var
-from monee.model.phys.core.hydraulics import calc_max_mass_flow
+from monee.model.phys.core.hydraulics import calc_local_max_mass_flow
 
 from ..core import BranchFormulation, NodeFormulation
 
@@ -141,11 +141,8 @@ def _branch_m_u(branch, grid):
     and the velocity cap :math:`\pi/4 \cdot D^2 \cdot \rho \cdot v_{max}`, further capped
     by ``branch.m_U_design`` when set."""
     explicit = getattr(branch, "m_U_design", None)
-    velocity_cap = min(
-        grid.max_mass_flow_kgs,
-        calc_max_mass_flow(
-            branch.diameter_m, grid.fluid_density_kg_per_m3, grid.v_max_mps
-        ),
+    velocity_cap = calc_local_max_mass_flow(
+        grid, branch, grid.fluid_density_kg_per_m3, grid.v_max_mps
     )
     if explicit is None:
         return velocity_cap
@@ -324,16 +321,7 @@ class McCormickHeatBranchFormulation(BranchFormulation):
     def _heat_balance_eqs(self, branch, grid, from_node_model):
         """eq. 9b: Taylor-linearised insulation heat loss along the pipe."""
         # vL = 2 \pi \cdot \lambda \cdot L / ln(r_out/r_in) [W/K] \cdot 1e-6 \to MW.
-        pipe_outside_r = branch.diameter_m / 2 + branch.insulation_thickness_m
-        pipe_inside_r = branch.diameter_m / 2
-        vl_mw_per_k = (
-            2
-            * math.pi
-            * branch.lambda_insulation_w_per_m_k
-            * branch.length_m
-            / math.log(pipe_outside_r / pipe_inside_r)
-            / 1e6
-        )
+        vl_mw_per_k = owfmodel.pipe_insulation_ua(branch) / 1e6
         t_a_pu = branch.temperature_ext_k / grid.t_ref_k
         t_pu_send = from_node_model.vars["t_pu"]
         return [

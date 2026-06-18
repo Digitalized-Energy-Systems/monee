@@ -12,6 +12,9 @@ from monee.model import Network
 from monee.model.core import Var
 from monee.model.extension.islanding.core import NetworkIslandingConfig
 from monee.model.formulation.registry import attach_formulations
+from monee.simulation.result_utils import (
+    build_type_stats_html as _build_type_stats_html,
+)
 from monee.simulation.step_state import PeriodState
 from monee.simulation.timeseries import TimeseriesData
 
@@ -86,18 +89,9 @@ def _prepare_period(
 
 def _find_component_var(net_t: Network, comp_id, attr: str):
     """Return ``comp.model.attr`` for *comp_id* in *net_t*, or None."""
-    for node in net_t.nodes:
-        if node.id == comp_id:
-            return getattr(node.model, attr, None)
-        for child in net_t.childs_by_ids(node.child_ids):
-            if child.id == comp_id:
-                return getattr(child.model, attr, None)
-    for branch in net_t.branches:
-        if branch.id == comp_id:
-            return getattr(branch.model, attr, None)
-    for compound in net_t.compounds:
-        if compound.id == comp_id:
-            return getattr(compound.model, attr, None)
+    for comp in net_t.iter_all_components():
+        if comp.id == comp_id:
+            return getattr(comp.model, attr, None)
     return None
 
 
@@ -113,14 +107,8 @@ def _extract_terminal_state(net_t: Network) -> dict:
             elif isinstance(v, (int, float)):
                 state[(comp_id, k)] = v
 
-    for node in net_t.nodes:
-        _scan(node.id, node.model)
-        for child in net_t.childs_by_ids(node.child_ids):
-            _scan(child.id, child.model)
-    for branch in net_t.branches:
-        _scan(branch.id, branch.model)
-    for compound in net_t.compounds:
-        _scan(compound.id, compound.model)
+    for comp in net_t.iter_all_components():
+        _scan(comp.id, comp.model)
     return state
 
 
@@ -311,9 +299,7 @@ class MultiPeriodResult:
         return type_dfs
 
     def _repr_type_row(self, type_name, df) -> str:
-        all_dfs = [
-            dfs.get(type_name, pandas.DataFrame()) for dfs in self._period_dfs
-        ]
+        all_dfs = [dfs.get(type_name, pandas.DataFrame()) for dfs in self._period_dfs]
         combined = pandas.concat(all_dfs, ignore_index=True)
         vis = _display_df(combined).drop(columns=["id", "node_id"], errors="ignore")
         num = vis.select_dtypes(include="number")
@@ -353,45 +339,7 @@ class MultiPeriodResult:
         status_text = "ok" if self.success else "failed"
         sections = []
         if self._period_dfs:
-            type_dfs = self._collect_type_dfs()
-            for type_name, dfs in type_dfs.items():
-                n_comp = len(dfs[0])
-                plural = "instance" if n_comp == 1 else "instances"
-                combined = pandas.concat(dfs, ignore_index=True)
-                vis = _display_df(combined).drop(
-                    columns=["id", "node_id"], errors="ignore"
-                )
-                num_cols = vis.select_dtypes(include="number").columns.tolist()
-                stat_rows = []
-                for col in num_cols:
-                    vals = combined[col].dropna()
-                    if vals.empty:
-                        continue
-                    stat_rows.append(
-                        {
-                            "attribute": col,
-                            "min": f"{float(vals.min()):.4g}",
-                            "mean": f"{float(vals.mean()):.4g}",
-                            "max": f"{float(vals.max()):.4g}",
-                        }
-                    )
-                tbl = (
-                    pandas.DataFrame(stat_rows).to_html(
-                        index=False, border=0, classes=[]
-                    )
-                    if stat_rows
-                    else "<em style='color:#888'>(no numeric attributes)</em>"
-                )
-                sections.append(
-                    f"<details open style='margin-bottom:6px'>"
-                    f"<summary style='cursor:pointer;font-weight:bold;color:#333;"
-                    f"padding:2px 0'>{type_name} "
-                    f"<span style='color:#999;font-weight:normal'>({n_comp} {plural})</span>"
-                    f"</summary>"
-                    f"<div style='color:#888;font-size:.82em;padding:1px 0 3px'>"
-                    f"aggregated over {len(dfs)} period{'s' if len(dfs) != 1 else ''}"
-                    f"</div>{tbl}</details>"
-                )
+            sections = _build_type_stats_html(self._collect_type_dfs(), "period")
         header = (
             f"<div style='font-weight:bold;font-size:1.05em;padding:4px 0 8px'>"
             f"MultiPeriodResult &nbsp;"

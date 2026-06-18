@@ -11,13 +11,11 @@ from ..core import BranchFormulation
 def _pwl_m_max(model, grid) -> float:
     """Per-pipe mass-flow cap: grid max_mass_flow_kgs tightened by the velocity_mps bound at
     reference-pressure density."""
-    return min(
-        grid.max_mass_flow_kgs,
-        hydraulicsmodel.calc_max_mass_flow(
-            model.diameter_m,
-            ogfmodel.reference_gas_density(grid),
-            getattr(grid, "v_max_mps", 20.0),
-        ),
+    return hydraulicsmodel.calc_local_max_mass_flow(
+        grid,
+        model,
+        ogfmodel.reference_gas_density(grid),
+        getattr(grid, "v_max_mps", 20.0),
     )
 
 
@@ -53,13 +51,11 @@ class PwlWeymouthBranchFormulation(BranchFormulation):
         branch._pipe_area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
 
         # Linearise sqrt(p) around nominal pressure.
-        p0 = grid.nominal_pressure_pu
-        x0 = p0**2
-        p_from = p0 + (1 / (2 * p0)) * (
-            from_node_model.vars["pressure_squared_pu"] - x0
+        p_from, p_to, p_avg = ogfmodel.linearized_pressure_pu(
+            grid,
+            from_node_model.vars["pressure_squared_pu"],
+            to_node_model.vars["pressure_squared_pu"],
         )
-        p_to = p0 + (1 / (2 * p0)) * (to_node_model.vars["pressure_squared_pu"] - x0)
-        p_avg = 0.5 * (p_from + p_to)
 
         m_max = _pwl_m_max(branch, grid)
 
@@ -119,8 +115,7 @@ class PwlWeymouthBranchFormulation(BranchFormulation):
             abs_psq_diff * grid.pressure_ref_pa**2 * c_sq * branch.on_off
             == branch.phi_pwl_neg - branch.phi_pwl_pos,
             #
-            branch.gas_density_kg_per_m3
-            == (grid.pressure_ref_pa * p_avg + p_amb)
-            * grid.molar_mass
-            / (grid.universal_gas_constant * grid.t_k),
+            ogfmodel.ideal_gas_density_eq(
+                branch.gas_density_kg_per_m3, grid, p_avg, p_amb
+            ),
         ]

@@ -510,7 +510,11 @@ class GasToHeat(MultiGridCompoundModel):
             self._control_node.regulation = 0
 
     def create(
-        self, network: Network, gas_node: Node, heat_node: Node, heat_return_node: Node  # NOSONAR
+        self,
+        network: Network,
+        gas_node: Node,
+        heat_node: Node,
+        heat_return_node: Node,  # NOSONAR
     ):
         self._gas_grid = gas_node.grid
         hhv = gas_node.grid.higher_heating_value_kwh_per_kg

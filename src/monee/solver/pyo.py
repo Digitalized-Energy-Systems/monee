@@ -16,8 +16,6 @@ from monee.model import (
     Network,
     Var,
 )
-from monee.model.extension.islanding.core import NetworkIslandingConfig
-from monee.model.formulation.registry import attach_formulations
 from monee.problem.core import OptimizationProblem
 from monee.solver.infeasibility import diagnose_infeasibility
 
@@ -25,22 +23,18 @@ from .core import (
     SolverInterface,
     SolverResult,
     StepState,
-    apply_post_process_all,
+    apply_child_overwrites,
     as_iter,
-    compute_bound_violations,
     filter_bool_eqs,
     filter_intermediate_eqs,
-    find_ignored_nodes,
+    finalize_solution,
     ignore_branch,
     ignore_child,
     ignore_compound,
     ignore_node,
     inject_vars,
-    mark_he_flow_prescription,
-    mark_heat_balance_slacks,
-    mark_ignored_components,
-    persist_solution,
-    pin_floating_hydraulic_gauges,
+    mark_slacks_and_prescriptions,
+    prepare_solve_network,
     withdraw_vars,
 )
 
@@ -440,63 +434,34 @@ class PyomoSolver(SolverInterface):
         pm.user_obj_exprs = []  # user objectives
         pm.aux_obj_exprs = []  # formulation minimize() tightening terms
 
-        network = input_network.copy()
-
-        for ext in network.extensions:
-            ext.prepare(network)
-
-        # Attach the effective formulations and declare their vars on the copy.
-        # In simulation mode this also squares the model (phantom DOFs pinned to
-        # Const, |m| warm-started, vm_pu_squared demoted to a PostProcess).
-        # Pyomo has no IMODE=1; a square system simply solves as the
-        # objective-free feasibility problem, yielding the same unique steady
-        # state GEKKO gets via IMODE=1 - kept consistent across backends so
-        # pyomo+ipopt is an equivalent NLP path. Runs BEFORE
-        # pin_floating_hydraulic_gauges / mark_heat_balance_slacks (which set
-        # pressure Consts a re-declare would overwrite).
-        attach_formulations(network, formulation, simulation=simulation)
-
-        islanding_config = next(
-            (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
-            None,
+        # Copy the network, run extension prepare and attach the effective
+        # formulations (simulation mode additionally squares the model: phantom
+        # DOFs pinned to Const, |m| warm-started, vm_pu_squared demoted to a
+        # PostProcess; Pyomo has no IMODE=1, so a square system simply solves as
+        # the objective-free feasibility problem). ignored_nodes is computed
+        # before _apply so controllable filters checking component.ignored
+        # exclude disconnected components. attach_formulations runs BEFORE
+        # mark_slacks_and_prescriptions (which set pressure Consts a re-declare
+        # would overwrite).
+        network, ignored_nodes, _islanding_config = prepare_solve_network(
+            input_network,
+            optimization_problem=optimization_problem,
+            formulation=formulation,
+            simulation=simulation,
+            exclude_unconnected_nodes=exclude_unconnected_nodes,
         )
 
-        # ignored_nodes computed before _apply so controllable filters checking
-        # component.ignored exclude disconnected components.
-        ignored_nodes = set()
-        if optimization_problem is None or exclude_unconnected_nodes:
-            ignored_nodes = find_ignored_nodes(network, islanding_config)
-            if ignored_nodes:
-                mark_ignored_components(network, ignored_nodes)
-
-        if optimization_problem is not None:
-            optimization_problem._apply(network)
-
         nodes = network.nodes
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                continue
-            for child in network.childs_by_ids(node.child_ids):
-                if child.active:
-                    child.model.overwrite(node.model, node.grid)
+        apply_child_overwrites(network, nodes, ignored_nodes)
 
         branches = network.branches
         compounds = network.compounds
 
-        # Pin the pressure gauge of any hydraulic island without a grid-forming
-        # source - removes a rank-deficient free DOF.
-        pin_floating_hydraulic_gauges(network, ignored_nodes)
-
-        # Drop each heat island's dependent nodal balance at its grid-forming
-        # node (heat slack) - result-preserving for the exact balance. Under
-        # mccormick the Junction balance is already trivial and the relaxed
-        # eq. 9a is kept, so this is a no-op there.
-        mark_heat_balance_slacks(network, ignored_nodes)
-
-        # Decide per compound-internal SubHE whether the design flow prescribes
-        # the through-flow (supply/return islands with free-mass-flow slacks)
-        # or yields to a network-determined flow (e.g. a fixed sink downstream).
-        mark_he_flow_prescription(network, ignored_nodes)
+        # Pin floating hydraulic gauges (removing rank-deficient free DOFs), drop
+        # each heat island's dependent nodal balance at its grid-forming node
+        # (heat slack; a no-op under mccormick) and decide each compound-internal
+        # SubHE's flow prescription.
+        mark_slacks_and_prescriptions(network, ignored_nodes)
 
         inject_vars(
             lambda model, comp, cat: PyomoSolver.inject_pyomo_vars_attr(
@@ -584,9 +549,9 @@ class PyomoSolver(SolverInterface):
         withdraw_vars(
             PyomoSolver.withdraw_pyomo_vars_attr, nodes, branches, compounds, network
         )
-        apply_post_process_all(nodes, branches, compounds, network)
-        persist_solution(network, input_network)
-        violations = compute_bound_violations(nodes, branches, compounds, network)
+        violations = finalize_solution(
+            nodes, branches, compounds, network, input_network
+        )
 
         # NaN fallback: pyo.value raises on unset Vars (e.g. McCormick aux on a
         # freshly-activated branch); SolverResult.success is the real outcome.

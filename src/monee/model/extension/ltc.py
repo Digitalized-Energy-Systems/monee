@@ -162,7 +162,9 @@ class LumpedThermalCapacitance(NetworkAspect):
     def equations(self, network, ignored_nodes: set) -> list:
         return []
 
-    def _net_convective_heat(self, node, network, ignored_nodes: set = frozenset()):  # NOSONAR
+    def _net_convective_heat(
+        self, node, network, ignored_nodes: set = frozenset()
+    ):  # NOSONAR
         """Net convective heat flow INTO *node* (inflow-positive).
 
         Two paths:

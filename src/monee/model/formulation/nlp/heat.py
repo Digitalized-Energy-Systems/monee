@@ -1,10 +1,9 @@
 """Smooth Darcy-Weisbach water/heat formulations: non-convex NLPs, binary-free."""
 
-import math
-
 import monee.model.phys.core.hydraulics as hydraulicsmodel
 import monee.model.phys.nonlinear.hf as ohfmodel
 import monee.model.phys.nonlinear.smooth as smoothmodel
+import monee.model.phys.nonlinear.wf as owfmodel
 from monee.model.core import Const, Var
 
 from ..core import BranchFormulation
@@ -38,11 +37,8 @@ def _flow_and_pressure_eqs(
     Returns ``(eqs, signed, mag)`` for the caller to append temperature physics.
     """
     sqrt_impl = kwargs["sqrt_impl"]
-    f_max_local = min(
-        grid.max_mass_flow_kgs,
-        hydraulicsmodel.calc_max_mass_flow(
-            branch.diameter_m, grid.fluid_density_kg_per_m3, grid.v_max_mps
-        ),
+    f_max_local = hydraulicsmodel.calc_local_max_mass_flow(
+        grid, branch, grid.fluid_density_kg_per_m3, grid.v_max_mps
     )
     signed = branch.mass_flow_kgs
     mag = branch.mass_flow_mag_kgs
@@ -115,15 +111,7 @@ def _temperature_transport_eqs(branch, from_node_model, to_node_model):
 
 
 def _ua_per_cp(branch):
-    pipe_outside_r = branch.diameter_m / 2 + branch.insulation_thickness_m
-    pipe_inside_r = branch.diameter_m / 2
-    return (
-        2
-        * math.pi
-        * branch.lambda_insulation_w_per_m_k
-        * branch.length_m
-        / math.log(pipe_outside_r / pipe_inside_r)
-    ) / ohfmodel.SPECIFIC_HEAT_CAP_WATER
+    return owfmodel.pipe_insulation_ua(branch) / ohfmodel.SPECIFIC_HEAT_CAP_WATER
 
 
 class SmoothDarcyWeisbachBranchFormulation(BranchFormulation):

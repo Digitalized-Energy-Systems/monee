@@ -42,8 +42,6 @@ from monee.model import (
     Network,
     Var,
 )
-from monee.model.extension.islanding.core import NetworkIslandingConfig
-from monee.model.formulation.registry import attach_formulations
 from monee.problem.core import OptimizationProblem
 
 from .core import (
@@ -51,22 +49,20 @@ from .core import (
     SolverInterface,
     SolverResult,
     StepState,
+    apply_child_overwrites,
     apply_post_process_all,
     as_iter,
     compute_bound_violations,
     filter_bool_eqs,
     filter_intermediate_eqs,
-    find_ignored_nodes,
+    finalize_solution,
     ignore_branch,
     ignore_child,
     ignore_compound,
     ignore_node,
     inject_vars,
-    mark_he_flow_prescription,
-    mark_heat_balance_slacks,
-    mark_ignored_components,
-    persist_solution,
-    pin_floating_hydraulic_gauges,
+    mark_slacks_and_prescriptions,
+    prepare_solve_network,
     withdraw_vars,
 )
 
@@ -537,41 +533,21 @@ class GurobipySolver(SolverInterface):
         user_obj_exprs: list = []
         aux_obj_exprs: list = []
 
-        network = input_network.copy()
-
-        for ext in network.extensions:
-            ext.prepare(network)
-
-        attach_formulations(network, formulation, simulation=simulation)
-
-        islanding_config = next(
-            (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
-            None,
+        network, ignored_nodes, _islanding_config = prepare_solve_network(
+            input_network,
+            optimization_problem=optimization_problem,
+            formulation=formulation,
+            simulation=simulation,
+            exclude_unconnected_nodes=exclude_unconnected_nodes,
         )
 
-        ignored_nodes = set()
-        if optimization_problem is None or exclude_unconnected_nodes:
-            ignored_nodes = find_ignored_nodes(network, islanding_config)
-            if ignored_nodes:
-                mark_ignored_components(network, ignored_nodes)
-
-        if optimization_problem is not None:
-            optimization_problem._apply(network)
-
         nodes = network.nodes
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                continue
-            for child in network.childs_by_ids(node.child_ids):
-                if child.active:
-                    child.model.overwrite(node.model, node.grid)
+        apply_child_overwrites(network, nodes, ignored_nodes)
 
         branches = network.branches
         compounds = network.compounds
 
-        pin_floating_hydraulic_gauges(network, ignored_nodes)
-        mark_heat_balance_slacks(network, ignored_nodes)
-        mark_he_flow_prescription(network, ignored_nodes)
+        mark_slacks_and_prescriptions(network, ignored_nodes)
 
         inject_vars(
             lambda model, comp, cat: self.inject_gurobi_vars_attr(
@@ -654,9 +630,9 @@ class GurobipySolver(SolverInterface):
         withdraw_vars(
             self.withdraw_gurobi_vars_attr, nodes, branches, compounds, network
         )
-        apply_post_process_all(nodes, branches, compounds, network)
-        persist_solution(network, input_network)
-        violations = compute_bound_violations(nodes, branches, compounds, network)
+        violations = finalize_solution(
+            nodes, branches, compounds, network, input_network
+        )
 
         obj_val = self._obj_value(gm, all_obj_exprs) if success else float("nan")
 
@@ -1021,33 +997,17 @@ class GurobipyTimeseries:
             gm.setParam(key, val)
         self._gm = gm
 
-        network = input_network.copy()
-        for ext in network.extensions:
-            ext.prepare(network)
-        attach_formulations(network, formulation, simulation=simulation)
-        islanding = next(
-            (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
-            None,
+        network, ignored, _islanding = prepare_solve_network(
+            input_network,
+            optimization_problem=optimization_problem,
+            formulation=formulation,
+            simulation=simulation,
         )
-        ignored = set()
-        if optimization_problem is None:
-            ignored = find_ignored_nodes(network, islanding)
-            if ignored:
-                mark_ignored_components(network, ignored)
-        if optimization_problem is not None:
-            optimization_problem._apply(network)
 
         nodes = network.nodes
-        for node in nodes:
-            if ignore_node(node, network, ignored):
-                continue
-            for child in network.childs_by_ids(node.child_ids):
-                if child.active:
-                    child.model.overwrite(node.model, node.grid)
+        apply_child_overwrites(network, nodes, ignored)
         branches, compounds = network.branches, network.compounds
-        pin_floating_hydraulic_gauges(network, ignored)
-        mark_heat_balance_slacks(network, ignored)
-        mark_he_flow_prescription(network, ignored)
+        mark_slacks_and_prescriptions(network, ignored)
 
         # Capture initial values of all Var attributes (before they become
         # Gurobi vars) so carried-state parameters can seed step 0.

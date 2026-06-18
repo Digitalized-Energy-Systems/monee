@@ -43,23 +43,16 @@ class RelaxedWeymouthBranchFormulation(BranchFormulation):
         branch._pipe_area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
 
         # linearize sqrt(p) around nominal pressure
-        p0 = grid.nominal_pressure_pu
-        x0 = p0**2
-        p_from = p0 + (1 / (2 * p0)) * (
-            from_node_model.vars["pressure_squared_pu"] - x0
+        p_from, p_to, p_avg = ogfmodel.linearized_pressure_pu(
+            grid,
+            from_node_model.vars["pressure_squared_pu"],
+            to_node_model.vars["pressure_squared_pu"],
         )
-        p_to = p0 + (1 / (2 * p0)) * (to_node_model.vars["pressure_squared_pu"] - x0)
-        p_avg = 0.5 * (p_from + p_to)
 
         p_amb = getattr(grid, "pressure_ambient_pa", 0.0)
         gas_density_kg_per_m3 = ogfmodel.reference_gas_density(grid)
-        f_max_local = min(
-            grid.max_mass_flow_kgs,
-            hydraulicsmodel.calc_max_mass_flow(
-                branch.diameter_m,
-                gas_density_kg_per_m3,
-                getattr(grid, "v_max_mps", 20.0),
-            ),
+        f_max_local = hydraulicsmodel.calc_local_max_mass_flow(
+            grid, branch, gas_density_kg_per_m3, getattr(grid, "v_max_mps", 20.0)
         )
 
         return self._epigraph_eqs(branch) + [
@@ -97,8 +90,7 @@ class RelaxedWeymouthBranchFormulation(BranchFormulation):
                 r_specific=grid.universal_gas_constant / grid.molar_mass,
                 **kwargs,
             ),
-            branch.gas_density_kg_per_m3
-            == (grid.pressure_ref_pa * p_avg + p_amb)
-            * grid.molar_mass
-            / (grid.universal_gas_constant * grid.t_k),
+            ogfmodel.ideal_gas_density_eq(
+                branch.gas_density_kg_per_m3, grid, p_avg, p_amb
+            ),
         ]

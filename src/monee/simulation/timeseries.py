@@ -7,8 +7,11 @@ from typing import Any
 import pandas
 
 from monee.model import Network
-from monee.model.core import Var
+from monee.model.core import Branch, Child, Compound, Node, Var
 from monee.simulation.core import solve
+from monee.simulation.result_utils import (
+    build_type_stats_html as _build_type_stats_html,
+)
 from monee.simulation.step_state import StepState
 
 # Shared result-rendering helpers, imported from the solver's public reporting
@@ -185,16 +188,17 @@ class TimeseriesData:
             for attr, series in self._compound_name_to_series[compound.name].items():
                 self._set_model_attr(compound.model, attr, series[timestep])
 
+    _dispatch = {
+        Node: apply_to_node,
+        Child: apply_to_child,
+        Branch: apply_to_branch,
+        Compound: apply_to_compound,
+    }
+
     def apply_to_network(self, net: Network, timestep: int) -> None:
         """Apply all registered series to *net* at *timestep*."""
-        for node in net.nodes:
-            self.apply_to_node(node, timestep)
-            for child in net.childs_by_ids(node.child_ids):
-                self.apply_to_child(child, timestep)
-        for branch in net.branches:
-            self.apply_to_branch(branch, timestep)
-        for compound in net.compounds:
-            self.apply_to_compound(compound, timestep)
+        for comp in net.iter_all_components():
+            self._dispatch[type(comp)](self, comp, timestep)
 
     @staticmethod
     def _merge_component_data(target: dict, source: dict) -> dict:
@@ -485,46 +489,7 @@ class TimeseriesResult:
                 for type_name, df in sr.result.dataframes.items():
                     type_dfs.setdefault(type_name, []).append(df)
 
-            for type_name, dfs in type_dfs.items():
-                n_comp = len(dfs[0])
-                plural = "instance" if n_comp == 1 else "instances"
-                combined = pandas.concat(dfs, ignore_index=True)
-
-                # Build per-attribute stats table aggregated over all steps
-                vis = _display_df(combined).drop(
-                    columns=["id", "node_id"], errors="ignore"
-                )
-                num_cols = vis.select_dtypes(include="number").columns.tolist()
-                stat_rows = []
-                for col in num_cols:
-                    vals = combined[col].dropna()
-                    if vals.empty:
-                        continue
-                    stat_rows.append(
-                        {
-                            "attribute": col,
-                            "min": f"{float(vals.min()):.4g}",
-                            "mean": f"{float(vals.mean()):.4g}",
-                            "max": f"{float(vals.max()):.4g}",
-                        }
-                    )
-
-                if stat_rows:
-                    stats_df = pandas.DataFrame(stat_rows)
-                    tbl = stats_df.to_html(index=False, border=0, classes=[])
-                else:
-                    tbl = "<em style='color:#888'>(no numeric attributes)</em>"
-
-                sections.append(
-                    f"<details open style='margin-bottom:6px'>"
-                    f"<summary style='cursor:pointer;font-weight:bold;color:#333;"
-                    f"padding:2px 0'>{type_name} "
-                    f"<span style='color:#999;font-weight:normal'>"
-                    f"({n_comp} {plural})</span></summary>"
-                    f"<div style='color:#888;font-size:.82em;padding:1px 0 3px'>"
-                    f"aggregated over {len(dfs)} step{'s' if len(dfs) != 1 else ''}"
-                    f"</div>{tbl}</details>"
-                )
+            sections = _build_type_stats_html(type_dfs, "step")
 
         header = (
             f"<div style='font-weight:bold;font-size:1.05em;padding:4px 0 8px'>"
@@ -598,17 +563,8 @@ def _network_has_temporal_coupling(net: Network) -> bool:  # NOSONAR
             hasattr(formulation, m) for m in _TEMPORAL_METHODS
         )
 
-    for node in net.nodes:
-        if _comp_temporal(node):
-            return True
-        for child in net.childs_by_ids(node.child_ids):
-            if _comp_temporal(child):
-                return True
-    for branch in net.branches:
-        if _comp_temporal(branch):
-            return True
-    for compound in net.compounds:
-        if _comp_temporal(compound):
+    for comp in net.iter_all_components():
+        if _comp_temporal(comp):
             return True
     for ext in net.extensions:
         if any(

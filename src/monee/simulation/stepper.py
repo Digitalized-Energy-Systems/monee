@@ -201,14 +201,8 @@ class Stepper:
 def _build_id_index(net: Network) -> dict:
     """Map each component id to the list of models sharing it."""
     by_id: dict = {}
-    for node in net.nodes:
-        by_id.setdefault(node.id, []).append(node.model)
-        for child in net.childs_by_ids(node.child_ids):
-            by_id.setdefault(child.id, []).append(child.model)
-    for branch in net.branches:
-        by_id.setdefault(branch.id, []).append(branch.model)
-    for compound in net.compounds:
-        by_id.setdefault(compound.id, []).append(compound.model)
+    for comp in net.iter_all_components():
+        by_id.setdefault(comp.id, []).append(comp.model)
     return by_id
 
 

@@ -5,8 +5,6 @@ side carries true continuous bilinears (:math:`alpha \cdot mag`, :math:`alpha \c
 :math:`direction \cdot t`), so the model needs a global MIQCQP solver.
 """
 
-import math
-
 import monee.model.phys.core.hydraulics as hydraulicsmodel
 import monee.model.phys.nonlinear.hf as ohfmodel
 import monee.model.phys.nonlinear.wf as owfmodel
@@ -43,23 +41,12 @@ class BilinearDarcyWeisbachBranchFormulation(BranchFormulation):
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         branch._pipe_area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
 
-        pipe_outside_r = branch.diameter_m / 2 + branch.insulation_thickness_m
-        pipe_inside_r = branch.diameter_m / 2
-        UA_C = (
-            2
-            * math.pi
-            * branch.lambda_insulation_w_per_m_k
-            * branch.length_m
-            / math.log(pipe_outside_r / pipe_inside_r)
-        ) / ohfmodel.SPECIFIC_HEAT_CAP_WATER
+        UA_C = owfmodel.pipe_insulation_ua(branch) / ohfmodel.SPECIFIC_HEAT_CAP_WATER
 
         # Per-pipe big-M tightening via \pi/4 \cdot D^2 \cdot \rho \cdot v_max - usually well below
         # max_mass_flow_kgs; tighter big-M shrinks the LP relaxation gap.
-        f_max_local = min(
-            grid.max_mass_flow_kgs,
-            hydraulicsmodel.calc_max_mass_flow(
-                branch.diameter_m, grid.fluid_density_kg_per_m3, grid.v_max_mps
-            ),
+        f_max_local = hydraulicsmodel.calc_local_max_mass_flow(
+            grid, branch, grid.fluid_density_kg_per_m3, grid.v_max_mps
         )
 
         # Unidirectional pipes pin direction=0 below, eliminating that binary.
@@ -145,11 +132,8 @@ class PwlDarcyWeisbachBranchFormulation(BranchFormulation):
             # the bound natively - the previous Var.setub() in equations() was
             # pyomo-only and crashed the GEKKO path.
             m_ub = (
-                min(
-                    grid.max_mass_flow_kgs,
-                    hydraulicsmodel.calc_max_mass_flow(
-                        model.diameter_m, grid.fluid_density_kg_per_m3, grid.v_max_mps
-                    ),
+                hydraulicsmodel.calc_local_max_mass_flow(
+                    grid, model, grid.fluid_density_kg_per_m3, grid.v_max_mps
                 )
                 * 1.001
             )
@@ -159,21 +143,10 @@ class PwlDarcyWeisbachBranchFormulation(BranchFormulation):
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         branch._pipe_area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
 
-        pipe_outside_r = branch.diameter_m / 2 + branch.insulation_thickness_m
-        pipe_inside_r = branch.diameter_m / 2
-        UA_C = (
-            2
-            * math.pi
-            * branch.lambda_insulation_w_per_m_k
-            * branch.length_m
-            / math.log(pipe_outside_r / pipe_inside_r)
-        ) / ohfmodel.SPECIFIC_HEAT_CAP_WATER
+        UA_C = owfmodel.pipe_insulation_ua(branch) / ohfmodel.SPECIFIC_HEAT_CAP_WATER
 
-        m_max = min(
-            grid.max_mass_flow_kgs,
-            hydraulicsmodel.calc_max_mass_flow(
-                branch.diameter_m, grid.fluid_density_kg_per_m3, grid.v_max_mps
-            ),
+        m_max = hydraulicsmodel.calc_local_max_mass_flow(
+            grid, branch, grid.fluid_density_kg_per_m3, grid.v_max_mps
         )
 
         # Two \varphi(m) PWLs; 0-anchor collapses the inactive side's \varphi to 0.
@@ -251,11 +224,8 @@ class BilinearPassiveHeatExchangerFormulation(BilinearDarcyWeisbachBranchFormula
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         branch._pipe_area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
 
-        f_max_local = min(
-            grid.max_mass_flow_kgs,
-            hydraulicsmodel.calc_max_mass_flow(
-                branch.diameter_m, grid.fluid_density_kg_per_m3, grid.v_max_mps
-            ),
+        f_max_local = hydraulicsmodel.calc_local_max_mass_flow(
+            grid, branch, grid.fluid_density_kg_per_m3, grid.v_max_mps
         )
 
         return [

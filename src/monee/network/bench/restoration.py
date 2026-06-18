@@ -57,7 +57,12 @@ from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 # -- electrical line catalogue --
 _HV_LINE = {"length_m": 5000, "r_ohm_per_m": 3e-5, "x_ohm_per_m": 4e-5, "parallel": 1}
 _MV_LINE = {"length_m": 200, "r_ohm_per_m": 7e-5, "x_ohm_per_m": 7e-5, "parallel": 1}
-_MV_LINE_LONG = {"length_m": 500, "r_ohm_per_m": 7e-5, "x_ohm_per_m": 7e-5, "parallel": 1}
+_MV_LINE_LONG = {
+    "length_m": 500,
+    "r_ohm_per_m": 7e-5,
+    "x_ohm_per_m": 7e-5,
+    "parallel": 1,
+}
 
 # -- gas pipe catalogue (short lengths for solver convergence) --
 _HP_PIPE = {"diameter_m": 0.5, "length_m": 200}

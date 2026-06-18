@@ -175,16 +175,24 @@ def _sep(label: str = "") -> str:
     return f"<span style='color:{_DIM_COLOR};font-size:10px'>{label.upper()}</span>"
 
 
+def _format_component_header(
+    name: str | None, typename, component_id=None, include_id: bool = True
+) -> str:
+    """Build the bold hover header: optional name plus dim-colored type/id.
+
+    With ``include_id`` the dim span reads ``"typename #id"`` (nodes); without
+    it the span is just the ``typename`` (branches).
+    """
+    suffix = f"{typename} #{component_id}" if include_id else f"{typename}"
+    if name:
+        return f"<b>{name}</b>  <span style='color:{_DIM_COLOR}'>{suffix}</span>"
+    return f"<b>{suffix}</b>"
+
+
 def _node_hover(row: dict, children: list[dict], node_name: str | None) -> str:
     type_name = row.get("_type", "Node")
     node_id = row.get("id", "?")
-    if node_name:
-        header = (
-            f"<b>{node_name}</b>"
-            f"  <span style='color:{_DIM_COLOR}'>{type_name} #{node_id}</span>"
-        )
-    else:
-        header = f"<b>{type_name} #{node_id}</b>"
+    header = _format_component_header(node_name, type_name, node_id, include_id=True)
 
     lines = [header, _sep()]
     for k, v in row.items():
@@ -208,12 +216,7 @@ def _node_hover(row: dict, children: list[dict], node_name: str | None) -> str:
 
 def _branch_hover(row: dict, from_id, to_id, branch_name: str | None) -> str:
     type_name = row.get("_type", "Branch")
-    if branch_name:
-        header = (
-            f"<b>{branch_name}</b>  <span style='color:{_DIM_COLOR}'>{type_name}</span>"
-        )
-    else:
-        header = f"<b>{type_name}</b>"
+    header = _format_component_header(branch_name, type_name, include_id=False)
 
     lines = [
         header,
@@ -251,7 +254,9 @@ def _node_label_and_color(row: dict) -> tuple[str, str]:
     return "", _TL_GRAY
 
 
-def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:  # NOSONAR
+def _branch_label_and_color(
+    row: dict, is_cp: bool = False
+) -> tuple[str, str]:  # NOSONAR
     """Return (short inline label, colour) for a branch result row.
 
     Single-grid branches use the traffic-light palette; coupling branches
@@ -312,6 +317,17 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]: 
                 pass
 
     return "", cp_color if is_cp else _TL_GRAY
+
+
+# Branch line styling shared between the result and network plots
+
+
+def _branch_line_style(is_cp: bool) -> dict:
+    """Width + dash for a branch line: coupling branches are thin and dotted."""
+    return {
+        "width": 3.5 if not is_cp else 2,
+        "dash": "dot" if is_cp else "solid",
+    }
 
 
 # Graph layout  –  spread out nodes for readability
@@ -493,9 +509,7 @@ def plot_result(  # NOSONAR
 
         default_color = _ACCENT["cp"] if is_cp else _TL_GRAY
         label, color = (
-            _branch_label_and_color(row, is_cp=is_cp)
-            if row
-            else ("", default_color)
+            _branch_label_and_color(row, is_cp=is_cp) if row else ("", default_color)
         )
 
         hover = (
@@ -528,11 +542,7 @@ def plot_result(  # NOSONAR
                 mode="lines",
                 hoverinfo="none",
                 showlegend=False,
-                line={
-                    "color": color,
-                    "width": 3.5 if not is_cp else 2,
-                    "dash": "dot" if is_cp else "solid",
-                },
+                line={"color": color, **_branch_line_style(is_cp)},
                 opacity=0.65,
             )
         )
@@ -562,21 +572,36 @@ def plot_result(  # NOSONAR
             x=[None],
             y=[None],
             mode="markers",
-            marker={"size": 11, "color": _TL_GREEN, "symbol": "square", "line": {"width": 0}},
+            marker={
+                "size": 11,
+                "color": _TL_GREEN,
+                "symbol": "square",
+                "line": {"width": 0},
+            },
             name="OK  (< 70 % / vm ±5 %)",
         ),
         go.Scatter(
             x=[None],
             y=[None],
             mode="markers",
-            marker={"size": 11, "color": _TL_YELLOW, "symbol": "square", "line": {"width": 0}},
+            marker={
+                "size": 11,
+                "color": _TL_YELLOW,
+                "symbol": "square",
+                "line": {"width": 0},
+            },
             name="Warning  (70–90 % / vm ±10 %)",
         ),
         go.Scatter(
             x=[None],
             y=[None],
             mode="markers",
-            marker={"size": 11, "color": _TL_RED, "symbol": "square", "line": {"width": 0}},
+            marker={
+                "size": 11,
+                "color": _TL_RED,
+                "symbol": "square",
+                "line": {"width": 0},
+            },
             name="Critical  (≥ 90 % / vm > ±10 %)",
         ),
         go.Scatter(

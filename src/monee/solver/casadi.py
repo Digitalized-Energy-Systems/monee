@@ -66,27 +66,23 @@ import time
 import numpy as np
 
 from monee.model import Const, Intermediate, Network, Var
-from monee.model.extension.islanding.core import NetworkIslandingConfig
-from monee.model.formulation.registry import attach_formulations
 from monee.problem.core import OptimizationProblem
 
 from .core import (
     OperatorEquationAssembly,
     SolverInterface,
     SolverResult,
+    apply_child_overwrites,
     apply_post_process_all,
     compute_bound_violations,
-    find_ignored_nodes,
+    finalize_solution,
     ignore_branch,
     ignore_child,
     ignore_compound,
     ignore_node,
     inject_vars,
-    mark_he_flow_prescription,
-    mark_heat_balance_slacks,
-    mark_ignored_components,
-    persist_solution,
-    pin_floating_hydraulic_gauges,
+    mark_slacks_and_prescriptions,
+    prepare_solve_network,
 )
 
 try:  # CasADi is an optional backend; keep monee importable without it.
@@ -400,37 +396,22 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         self._simulation = simulation
         self._reg = []
         m = CasModel()
-        network = input_network.copy()
 
         # --- network prep (mirrors GEKKOSolver.solve) ---
-        for ext in network.extensions:
-            ext.prepare(network)
-        attach_formulations(network, formulation, simulation=simulation)
-        islanding_config = next(
-            (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
-            None,
+        network, ignored_nodes, _islanding_config = prepare_solve_network(
+            input_network,
+            optimization_problem=optimization_problem,
+            formulation=formulation,
+            simulation=simulation,
+            exclude_unconnected_nodes=exclude_unconnected_nodes,
         )
-        ignored_nodes = set()
-        if optimization_problem is None or exclude_unconnected_nodes:
-            ignored_nodes = find_ignored_nodes(network, islanding_config)
-            if ignored_nodes:
-                mark_ignored_components(network, ignored_nodes)
-        if optimization_problem is not None:
-            optimization_problem._apply(network)
 
         nodes = network.nodes
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                continue
-            for child in network.childs_by_ids(node.child_ids):
-                if child.active:
-                    child.model.overwrite(node.model, node.grid)
+        apply_child_overwrites(network, nodes, ignored_nodes)
 
         branches = network.branches
         compounds = network.compounds
-        pin_floating_hydraulic_gauges(network, ignored_nodes)
-        mark_heat_balance_slacks(network, ignored_nodes)
-        mark_he_flow_prescription(network, ignored_nodes)
+        mark_slacks_and_prescriptions(network, ignored_nodes)
 
         # --- variable injection (CasADi symbols) ---
         inject_vars(self._inject, nodes, branches, compounds, network, ignored_nodes)
@@ -540,9 +521,9 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             for (model, key, _), v in zip(leftover, vals):
                 model.__dict__[key] = Intermediate(value=float(v))
 
-        apply_post_process_all(nodes, branches, compounds, network)
-        persist_solution(network, input_network)
-        violations = compute_bound_violations(nodes, branches, compounds, network)
+        violations = finalize_solution(
+            nodes, branches, compounds, network, input_network
+        )
         objective = float(sol["f"]) if m.obj_terms else 0.0
         return SolverResult(
             network,
@@ -586,18 +567,13 @@ class CasADiTimeseries:
         cs._simulation = simulation
         cs._reg = []
         m = CasModel()
-        network = input_network.copy()
 
-        for ext in network.extensions:
-            ext.prepare(network)
-        attach_formulations(network, formulation, simulation=simulation)
-        islanding_config = next(
-            (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
-            None,
+        network, ignored, _islanding_config = prepare_solve_network(
+            input_network,
+            optimization_problem=None,
+            formulation=formulation,
+            simulation=simulation,
         )
-        ignored = find_ignored_nodes(network, islanding_config)
-        if ignored:
-            mark_ignored_components(network, ignored)
         nodes = network.nodes
 
         # Declare every time-varying attribute as a CasADi parameter BEFORE the
@@ -609,16 +585,9 @@ class CasADiTimeseries:
         self._params = []  # (model, key, param_sx, series)
         self._declare_params(network, timeseries_data)
 
-        for node in nodes:
-            if ignore_node(node, network, ignored):
-                continue
-            for child in network.childs_by_ids(node.child_ids):
-                if child.active:
-                    child.model.overwrite(node.model, node.grid)
+        apply_child_overwrites(network, nodes, ignored)
         branches, compounds = network.branches, network.compounds
-        pin_floating_hydraulic_gauges(network, ignored)
-        mark_heat_balance_slacks(network, ignored)
-        mark_he_flow_prescription(network, ignored)
+        mark_slacks_and_prescriptions(network, ignored)
 
         inject_vars(cs._inject, nodes, branches, compounds, network, ignored)
 

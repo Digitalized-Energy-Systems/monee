@@ -66,7 +66,33 @@ def reference_gas_density(grid):
     return p_abs * grid.molar_mass / (grid.universal_gas_constant * grid.t_k)
 
 
-def calc_C_squared(diameter_m, length_m, t_k, compressibility, r_specific=R_specific):  # NOSONAR
+def linearized_pressure_pu(grid, psq_pu_from, psq_pu_to):
+    r"""Linearize :math:`\sqrt{p_{sq}}` around the grid's nominal pressure
+    :math:`p_0`, returning ``(p_from, p_to, p_avg)`` (per-unit).
+
+    :math:`p \approx p_0 + (p_{sq} - p_0^2) / (2 p_0)`, affine in ``pressure_squared_pu``,
+    so it keeps the density / gauge-offset expressions linear (MILP) or conic
+    (convex MIQCQP); the NLP also uses it for its density estimate."""
+    p0 = grid.nominal_pressure_pu
+    x0 = p0**2
+    p_from = p0 + (1 / (2 * p0)) * (psq_pu_from - x0)
+    p_to = p0 + (1 / (2 * p0)) * (psq_pu_to - x0)
+    p_avg = 0.5 * (p_from + p_to)
+    return p_from, p_to, p_avg
+
+
+def ideal_gas_density_eq(density_var, grid, p_avg_pu, pressure_ambient_pa):
+    r"""Ideal-gas density constraint :math:`\rho = p_{abs} M / (R T)` with the
+    ABSOLUTE pressure :math:`p_{abs} = p_{ref} \cdot p_{avg} + p_{amb}` (gauge ``p_avg``
+    times the reference pressure plus the ambient offset)."""
+    return density_var == (grid.pressure_ref_pa * p_avg_pu + pressure_ambient_pa) * (
+        grid.molar_mass
+    ) / (grid.universal_gas_constant * grid.t_k)
+
+
+def calc_C_squared(
+    diameter_m, length_m, t_k, compressibility, r_specific=R_specific
+):  # NOSONAR
     numerator = math.pi**2 * diameter_m**5
     denominator = 16 * length_m * r_specific * t_k * compressibility
     c_squared = numerator / denominator

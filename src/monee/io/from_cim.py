@@ -4,6 +4,13 @@ from dataclasses import dataclass, field
 
 import monee.express as mx
 import monee.model as mm
+from monee.io._utils import (
+    _class_name,
+    _get,
+    _num,
+    _resolve_single_node,
+    _resolve_two_endpoints,
+)
 from monee.model.branch import GenericPowerBranch
 
 logger = logging.getLogger(__name__)
@@ -47,23 +54,6 @@ class CimImportReport:
         )
         for reason, count in sorted(self.skipped.items()):
             logger.warning("CIM import: skipped %d x %s", count, reason)
-
-
-def _get(obj, attr, default=None):
-    """Safe attribute read that also turns empty CIM references into *default*."""
-    value = getattr(obj, attr, default)
-    return default if value in ("", None) else value
-
-
-def _num(value, default=0.0):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _class_name(obj) -> str:
-    return type(obj).__name__
 
 
 def _terminals(equipment) -> list:
@@ -117,15 +107,16 @@ def _node_of(terminal, tn_to_node):
 # Branches: lines and transformers                                            #
 # --------------------------------------------------------------------------- #
 def _add_line(obj, net, tn_to_node, base_kv_of, report):
-    terminals = _terminals(obj)
-    if len(terminals) != 2:
-        report.skip("ACLineSegment without exactly 2 terminals")
+    resolved = _resolve_two_endpoints(
+        _terminals(obj),
+        lambda terminal: _node_of(terminal, tn_to_node),
+        report,
+        "ACLineSegment without exactly 2 terminals",
+        "ACLineSegment with unresolved endpoint",
+    )
+    if resolved is None:
         return
-    from_node = _node_of(terminals[0], tn_to_node)
-    to_node = _node_of(terminals[1], tn_to_node)
-    if from_node is None or to_node is None:
-        report.skip("ACLineSegment with unresolved endpoint")
-        return
+    from_node, to_node = resolved
 
     base_kv = base_kv_of(from_node)
     base_z = base_kv**2 / net_base_mva(net)  # ohms per p.u.
@@ -213,15 +204,18 @@ def _transformer_ends_by_owner(objects):
 # --------------------------------------------------------------------------- #
 # Children: loads, generators, slack                                          #
 # --------------------------------------------------------------------------- #
-def _single_node(obj, tn_to_node):
-    terminals = _terminals(obj)
-    return _node_of(terminals[0], tn_to_node) if terminals else None
+def _single_node(obj, tn_to_node, report, unresolved_msg):
+    return _resolve_single_node(
+        _terminals(obj),
+        lambda terminal: _node_of(terminal, tn_to_node),
+        report,
+        unresolved_msg,
+    )
 
 
 def _add_load(obj, net, tn_to_node, report):
-    node = _single_node(obj, tn_to_node)
+    node = _single_node(obj, tn_to_node, report, "load with unresolved bus")
     if node is None:
-        report.skip("load with unresolved bus")
         return
     mx.create_power_load(
         net, node, p_mw=_num(_get(obj, "p")), q_mvar=_num(_get(obj, "q"))
@@ -230,9 +224,8 @@ def _add_load(obj, net, tn_to_node, report):
 
 
 def _add_generator(obj, net, tn_to_node, gen_sign, report):
-    node = _single_node(obj, tn_to_node)
+    node = _single_node(obj, tn_to_node, report, "generator with unresolved bus")
     if node is None:
-        report.skip("generator with unresolved bus")
         return
     # CGMES SSH uses load reference at the terminal; *gen_sign* flips it so the
     # value handed to PowerGenerator is a positive generation magnitude.
@@ -243,9 +236,10 @@ def _add_generator(obj, net, tn_to_node, gen_sign, report):
 
 
 def _add_ext_grid(obj, net, tn_to_node, report):
-    node = _single_node(obj, tn_to_node)
+    node = _single_node(
+        obj, tn_to_node, report, "ExternalNetworkInjection with unresolved bus"
+    )
     if node is None:
-        report.skip("ExternalNetworkInjection with unresolved bus")
         return
     # Voltage setpoint from the regulating control target, if present.
     control = _get(obj, "RegulatingControl")

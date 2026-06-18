@@ -287,11 +287,7 @@ class GekkoInfeasibilityReport:
             )
             for v in self.variables_at_bounds[:max_items]:
                 which_upper = "upper" if v["at_upper"] and not v["at_lower"] else "both"
-                which = (
-                    "lower"
-                    if v["at_lower"] and not v["at_upper"]
-                    else which_upper
-                )
+                which = "lower" if v["at_lower"] and not v["at_upper"] else which_upper
                 lines.append(
                     f"  {v['display_name']}: value={v['value']:.6g} "
                     f"bounds=[{v['lower']}, {v['upper']}] (at {which})"

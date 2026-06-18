@@ -22,8 +22,10 @@ from monee.visualization.result_visualization import (
     _GRID_SYMBOL,
     _PANEL,
     _TL_GRAY,
+    _branch_line_style,
     _compute_layout,
     _fmt,
+    _format_component_header,
     _grid_type,
     _sep,
 )
@@ -148,12 +150,7 @@ def _node_hover(int_node, children: list) -> str:
     nid = getattr(int_node, "id", "?")
     nname = getattr(int_node, "name", None)
 
-    if nname:
-        header = (
-            f"<b>{nname}</b>  <span style='color:{_DIM_COLOR}'>{typename} #{nid}</span>"
-        )
-    else:
-        header = f"<b>{typename} #{nid}</b>"
+    header = _format_component_header(nname, typename, nid, include_id=True)
 
     lines = [header, _sep()]
     for k, v in _model_params(model).items():
@@ -184,10 +181,7 @@ def _branch_hover(int_branch, from_id, to_id) -> str:
     typename = type(model).__name__
     bname = getattr(int_branch, "name", None)
 
-    if bname:
-        header = f"<b>{bname}</b>  <span style='color:{_DIM_COLOR}'>{typename}</span>"
-    else:
-        header = f"<b>{typename}</b>"
+    header = _format_component_header(bname, typename, include_id=False)
 
     lines = [
         header,
@@ -353,11 +347,7 @@ def plot_network(  # NOSONAR
                 mode="lines",
                 hoverinfo="none",
                 showlegend=False,
-                line={
-                    "color": color,
-                    "width": 3.5 if not is_cp else 2,
-                    "dash": "dot" if is_cp else "solid",
-                },
+                line={"color": color, **_branch_line_style(is_cp)},
                 opacity=0.55,
             )
         )

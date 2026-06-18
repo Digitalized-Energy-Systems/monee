@@ -4,6 +4,13 @@ from dataclasses import dataclass, field
 
 import monee.express as mx
 import monee.model as mm
+from monee.io._utils import (
+    _class_name,
+    _get,
+    _num,
+    _resolve_single_node,
+    _resolve_two_endpoints,
+)
 from monee.model.branch import GasPipe, PowerLine, WaterPipe
 
 logger = logging.getLogger(__name__)
@@ -68,22 +75,6 @@ def _lazy_esdl():
             "Install it with `pip install pyESDL`."
         ) from exc
     return EnergySystemHandler, esdl
-
-
-def _get(obj, attr, default=None):
-    value = getattr(obj, attr, default)
-    return default if value in ("", None) else value
-
-
-def _num(value, default=0.0):
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _class_name(obj) -> str:
-    return type(obj).__name__
 
 
 def _walk_assets(area):
@@ -202,15 +193,16 @@ def _power_mw(asset) -> float:
 
 
 def _add_transport(asset, kind, net, dsu, node_of_group, report):
-    ports = _ports(asset)
-    if len(ports) != 2:
-        report.skip(f"{_class_name(asset)} without exactly 2 ports")
+    resolved = _resolve_two_endpoints(
+        _ports(asset),
+        lambda port: _node_for_port(port, dsu, node_of_group),
+        report,
+        f"{_class_name(asset)} without exactly 2 ports",
+        f"{_class_name(asset)} with unresolved endpoint",
+    )
+    if resolved is None:
         return
-    a = _node_for_port(ports[0], dsu, node_of_group)
-    b = _node_for_port(ports[1], dsu, node_of_group)
-    if a is None or b is None:
-        report.skip(f"{_class_name(asset)} with unresolved endpoint")
-        return
+    a, b = resolved
     length_m = _num(_get(asset, "length"), 1.0) or 1.0
     name = _get(asset, "name")
 
@@ -254,10 +246,13 @@ def _add_transport(asset, kind, net, dsu, node_of_group, report):
 
 
 def _add_child(asset, cls, net, dsu, node_of_group, report):
-    ports = _ports(asset)
-    node = _node_for_port(ports[0], dsu, node_of_group) if ports else None
+    node = _resolve_single_node(
+        _ports(asset),
+        lambda port: _node_for_port(port, dsu, node_of_group),
+        report,
+        f"{cls} with unresolved bus/junction",
+    )
     if node is None:
-        report.skip(f"{cls} with unresolved bus/junction")
         return
 
     if cls in _EL_DEMAND:

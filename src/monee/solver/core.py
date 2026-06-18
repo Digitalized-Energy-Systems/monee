@@ -908,6 +908,77 @@ def mark_he_flow_prescription(network: Network, ignored_nodes):  # NOSONAR
         )
 
 
+def prepare_solve_network(  # NOSONAR
+    input_network: Network,
+    optimization_problem=None,
+    formulation=None,
+    simulation: bool = False,
+    exclude_unconnected_nodes: bool = False,
+):
+    """Backend-agnostic solve-time network preparation.
+
+    Copies *input_network*, runs each extension's ``prepare``, attaches the
+    effective formulations, locates the islanding config, computes the ignored
+    nodes (and pre-marks ignored components) and finally applies the
+    optimization problem. Returns ``(network, ignored_nodes, islanding_config)``.
+
+    The ignored-node computation runs when there is no optimization problem or
+    ``exclude_unconnected_nodes`` is set; ``optimization_problem._apply`` runs
+    only when a problem is present - mirroring every call site exactly. The
+    timeseries drivers reproduce their behaviour by passing the same flags
+    (CasADi timeseries: ``optimization_problem=None``; Gurobi timeseries:
+    ``exclude_unconnected_nodes=False``).
+    """
+    from monee.model.extension.islanding.core import NetworkIslandingConfig
+    from monee.model.formulation.registry import attach_formulations
+
+    network = input_network.copy()
+    for ext in network.extensions:
+        ext.prepare(network)
+    attach_formulations(network, formulation, simulation=simulation)
+    islanding_config = next(
+        (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
+        None,
+    )
+    ignored_nodes: set = set()
+    if optimization_problem is None or exclude_unconnected_nodes:
+        ignored_nodes = find_ignored_nodes(network, islanding_config)
+        if ignored_nodes:
+            mark_ignored_components(network, ignored_nodes)
+    if optimization_problem is not None:
+        optimization_problem._apply(network)
+    return network, ignored_nodes, islanding_config
+
+
+def apply_child_overwrites(network: Network, nodes, ignored_nodes) -> None:
+    """Apply each active child's ``overwrite`` onto its host node's model."""
+    for node in nodes:
+        if ignore_node(node, network, ignored_nodes):
+            continue
+        for child in network.childs_by_ids(node.child_ids):
+            if child.active:
+                child.model.overwrite(node.model, node.grid)
+
+
+def mark_slacks_and_prescriptions(network: Network, ignored_nodes) -> None:
+    """Pin floating hydraulic gauges, mark heat-balance slacks and decide the
+    dynamic heat-exchanger flow prescription - the backend-agnostic marking trio
+    run after the child overwrites and before variable injection."""
+    pin_floating_hydraulic_gauges(network, ignored_nodes)
+    mark_heat_balance_slacks(network, ignored_nodes)
+    mark_he_flow_prescription(network, ignored_nodes)
+
+
+def finalize_solution(
+    nodes, branches, compounds, network: Network, input_network: Network
+) -> dict[str, float]:
+    """Post-solve trio: evaluate post-processes, persist solved values back into
+    *input_network* (warm start) and return the bound-violation report."""
+    apply_post_process_all(nodes, branches, compounds, network)
+    persist_solution(network, input_network)
+    return compute_bound_violations(nodes, branches, compounds, network)
+
+
 def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
     """Call ``inject_fn(model, component, category)`` on each active component;
     ignored components get :func:`inject_nans` instead.

@@ -48,6 +48,16 @@ def calc_max_mass_flow(diameter_m, fluid_density_kg_per_m3, v_max_mps):
     return calc_pipe_area(diameter_m) * fluid_density_kg_per_m3 * v_max_mps
 
 
+def calc_local_max_mass_flow(grid, branch, density, v_max):
+    r"""Per-pipe mass-flow upper bound [kg/s]: the smaller of ``grid.max_mass_flow_kgs``
+    and the velocity cap :math:`\pi/4 \cdot D^2 \cdot \rho \cdot v_{max}`. ``density`` is the
+    fluid density and ``v_max`` the velocity cap used for the velocity bound."""
+    return min(
+        grid.max_mass_flow_kgs,
+        calc_max_mass_flow(branch.diameter_m, density, v_max),
+    )
+
+
 def calc_min_diameter_for_mass_flow(
     mass_flow_kgs, fluid_density_kg_per_m3, v_design_mps
 ):

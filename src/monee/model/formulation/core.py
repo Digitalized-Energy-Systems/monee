@@ -9,10 +9,14 @@ class Formulation:
 
 
 class BranchFormulation(Formulation):
-    def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):  # NOSONAR
+    def minimize(
+        self, branch, grid, from_node_model, to_node_model, **kwargs
+    ):  # NOSONAR
         return []
 
-    def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):  # NOSONAR
+    def equations(
+        self, branch, grid, from_node_model, to_node_model, **kwargs
+    ):  # NOSONAR
         return []
 
 

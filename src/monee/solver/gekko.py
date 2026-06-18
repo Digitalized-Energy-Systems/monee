@@ -12,8 +12,6 @@ from monee.model import (
     Network,
     Var,
 )
-from monee.model.extension.islanding.core import NetworkIslandingConfig
-from monee.model.formulation.registry import attach_formulations
 from monee.problem.core import OptimizationProblem
 
 from .core import (
@@ -21,17 +19,13 @@ from .core import (
     SolverInterface,
     SolverResult,
     StepState,
-    apply_post_process_all,
-    compute_bound_violations,
-    find_ignored_nodes,
+    apply_child_overwrites,
+    finalize_solution,
     generate_real_topology,
-    ignore_node,
     inject_vars,
-    mark_he_flow_prescription,
-    mark_heat_balance_slacks,
-    mark_ignored_components,
+    mark_slacks_and_prescriptions,
     persist_solution,
-    pin_floating_hydraulic_gauges,
+    prepare_solve_network,
     remove_cps,
     withdraw_vars,
 )
@@ -171,57 +165,29 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
         m.options.WEB = 0
         m.options.IMODE = 1 if simulation else 3
         m.solver_options = _solver_options(self.solver)
-        network = input_network.copy()
 
-        for ext in network.extensions:
-            ext.prepare(network)
-
-        # Attach the effective formulations and declare their vars on the
-        # solve-time copy (simulation=True additionally squares the model:
-        # phantom DOFs pinned, |m| warm-started, vm_pu_squared demoted).
-        attach_formulations(network, formulation, simulation=simulation)
-
-        islanding_config = next(
-            (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
-            None,
+        # Copy the network, run extension prepare/attach, locate the islanding
+        # config and compute ignored nodes BEFORE _apply so controllable filters
+        # checking component.ignored correctly exclude disconnected components.
+        network, ignored_nodes, _islanding_config = prepare_solve_network(
+            input_network,
+            optimization_problem=optimization_problem,
+            formulation=formulation,
+            simulation=simulation,
+            exclude_unconnected_nodes=exclude_unconnected_nodes,
         )
 
-        # Compute ignored_nodes BEFORE _apply so controllable filters checking
-        # component.ignored correctly exclude disconnected components.
-        ignored_nodes = set()
-        if optimization_problem is None or exclude_unconnected_nodes:
-            ignored_nodes = find_ignored_nodes(network, islanding_config)
-            if ignored_nodes:
-                mark_ignored_components(network, ignored_nodes)
-
-        if optimization_problem is not None:
-            optimization_problem._apply(network)
-
         nodes = network.nodes
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                continue
-            for child in network.childs_by_ids(node.child_ids):
-                if child.active:
-                    child.model.overwrite(node.model, node.grid)
+        apply_child_overwrites(network, nodes, ignored_nodes)
 
         branches = network.branches
         compounds = network.compounds
 
-        # Pin the pressure gauge of any hydraulic island without a grid-forming
-        # source (e.g. an HE-fed return loop) - removes a rank-deficient free DOF
-        # IPOPT would otherwise have to regularise.
-        pin_floating_hydraulic_gauges(network, ignored_nodes)
-
-        # Recognise each heat island's grid-forming node as the heat slack and
-        # drop its (dependent) nodal heat balance - removes the heat carrier's
-        # redundant constraint and is required for a square IMODE=1 solve.
-        mark_heat_balance_slacks(network, ignored_nodes)
-
-        # Decide per compound-internal SubHE whether the design flow prescribes
-        # the through-flow (supply/return islands with free-mass-flow slacks)
-        # or yields to a network-determined flow (e.g. a fixed sink downstream).
-        mark_he_flow_prescription(network, ignored_nodes)
+        # Pin floating hydraulic gauges, recognise each heat island's
+        # grid-forming node as the heat slack (dropping its dependent nodal heat
+        # balance, required for a square IMODE=1 solve) and decide each
+        # compound-internal SubHE's flow prescription.
+        mark_slacks_and_prescriptions(network, ignored_nodes)
 
         apm_name_map: dict[str, str] = {}
         inject_vars(
@@ -336,9 +302,9 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
         withdraw_vars(
             GEKKOSolver.withdraw_gekko_vars_attr, nodes, branches, compounds, network
         )
-        apply_post_process_all(nodes, branches, compounds, network)
-        persist_solution(network, input_network)
-        violations = compute_bound_violations(nodes, branches, compounds, network)
+        violations = finalize_solution(
+            nodes, branches, compounds, network, input_network
+        )
         solver_result = SolverResult(
             network,
             network.as_result_dataframe_dict(),

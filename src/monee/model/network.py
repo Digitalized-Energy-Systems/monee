@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 import networkx as nx
@@ -159,6 +160,17 @@ class Network:
 
     def all_components(self):
         return self.childs + self.compounds + self.branches + self.nodes
+
+    def iter_all_components(self) -> Iterator[Component]:
+        """Yield every component once in canonical traversal order: each node
+        immediately followed by its childs, then all branches, then all
+        compounds. Mirrors the ad-hoc traversal repeated across the simulation
+        layer so iteration order and child handling stay identical."""
+        for node in self.nodes:
+            yield node
+            yield from self.childs_by_ids(node.child_ids)
+        yield from self.branches
+        yield from self.compounds
 
     def all_models_with_grid(self):
         model_container_list = self.childs + self.compounds + self.branches + self.nodes
@@ -586,9 +598,7 @@ class Network:
         **connected_node_ids,
     ):
         next_compound_id = (
-            0
-            if len(self._compound_dict) == 0
-            else max(self._compound_dict.keys()) + 1
+            0 if len(self._compound_dict) == 0 else max(self._compound_dict.keys()) + 1
         )
         compound_id = overwrite_id if overwrite_id is not None else next_compound_id
         self.__force_blacklist = True
