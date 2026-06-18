@@ -140,7 +140,7 @@ One function call per format.
 ^^^
 Results are checked against pandapower and pandapipes on identical networks:
 voltages, pressures, and temperatures agree, and coupled multi-energy solves
-match the reference to machine precision.
+match the reference to at ~1e-9%-1%.
 :::
 
 ::::
