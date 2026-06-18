@@ -64,7 +64,7 @@ variants). The native gurobipy backend is 2 to 7 times faster than driving the
 same Gurobi through Pyomo (Group B), as it skips Pyomo's model-translation layer.
 
 The Pyomo backend trades that speed for solver flexibility. It drives any
-Pyomo-registered solver (Gurobi, SCIP, HiGHS, CBC, GLPK) and supports
+Pyomo-registered solver (Gurobi, SCIP, CBC, GLPK) and supports
 lexicographic objectives, so prefer it when you need a specific or open-source
 solver, or a global solver (SCIP) for the non-convex models.
 :::
@@ -100,12 +100,12 @@ monee.run_energy_flow_optimization(net, problem, backend="gurobipy")
 | Second-order cone | `EL_MISOCP` | gurobipy | Pyomo + Gurobi / SCIP |
 | Convex MIQCQP | `GAS_CONVEX_MIQCQP`, `CONVEX_MIQCQP` | gurobipy | Pyomo + Gurobi / SCIP |
 | Non-convex MIQCQP | `*_NONCONVEX_MIQCQP` | Pyomo + SCIP (global) | gurobipy / Pyomo + Gurobi |
-| LP / MILP heat & PWL | `HEAT_CONVEX_MILP`, `make_gas_milp_pwl_formulation()` | gurobipy / Pyomo + HiGHS | Pyomo + Gurobi |
+| LP / MILP heat & PWL | `HEAT_CONVEX_MILP`, `make_gas_milp_pwl_formulation()` | gurobipy / Pyomo + SCIP | Pyomo + Gurobi |
 
 ```{tip}
 When in doubt, take the default. A plain `run_energy_flow` already uses the fast
 in-process CasADi/IPOPT path for the smooth NLPs. For the (MI)QCQP and MISOCP
-models, name a solver (`solver="gurobi"`, `"scip"` or `"highs"` routes to Pyomo)
+models, name a solver (`solver="gurobi"` or `"scip"` routes to Pyomo)
 and add `backend="gurobipy"` when you want the fastest native Gurobi path. See
 {doc}`../concepts/solvers` for the full routing rules and
 {doc}`../concepts/formulations` for what each formulation class models.

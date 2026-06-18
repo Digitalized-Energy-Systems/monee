@@ -160,7 +160,7 @@ Both extensions only take effect in multi-period runs, see
 .. tip::
 
    With the default ``misocp=True``, pair the benchmark with a
-   MIQCP-capable solver such as Gurobi.  For the nonlinear variant
+   MIQCP-capable solver such as SCIP or Gurobi.  For the nonlinear variant
    (``misocp=False``), use the :class:`~monee.solver.PyomoSolver` with
    ipopt and relaxed tolerances.
 
@@ -268,5 +268,5 @@ See also
       :link-type: doc
       :shadow: sm
 
-      Install solver binaries and run MISOCP formulations with Gurobi or
-      HiGHS.
+      Install solver binaries and run MISOCP formulations with SCIP or
+      Gurobi.

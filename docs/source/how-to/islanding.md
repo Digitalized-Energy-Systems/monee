@@ -8,7 +8,7 @@ islands converges. For the formulation, see {doc}`../concepts/islanding`.
 
 ## Prerequisites
 
-* monee installed with a MIP-capable solver (GEKKO or Pyomo + HiGHS / CBC /
+* monee installed with a MIP-capable solver (GEKKO or Pyomo + SCIP / CBC /
   Gurobi).
 * A `Network` with at least one node that has no reachable path to the external
   grid, that is, a second island.
@@ -139,10 +139,10 @@ back-ends support this:
 | Solver | Notes |
 |---|---|
 | `GEKKOSolver` | Built-in APOPT handles MILP; sufficient for most islanding problems |
-| `PyomoSolver` | Use HiGHS (`highs`), CBC (`cbc`), or Gurobi (`gurobi`) for larger problems |
+| `PyomoSolver` | Use SCIP (`scip`), CBC (`cbc`), or Gurobi (`gurobi`) for larger problems |
 
 ```python
-result = mn.run_energy_flow(net, solver=mn.PyomoSolver(solver_name="highs"))
+result = mn.run_energy_flow(net, solver=mn.PyomoSolver(solver_name="scip"))
 ```
 
 ---
@@ -159,7 +159,7 @@ explicitly.
 the node count, so an all-zero solution is never a tuning issue. Check instead
 that an `active` grid-forming child exists in each island, and that the back-end
 is MIP-capable. The energization variables `e_*` are binary, so use GEKKO
-(APOPT) or Pyomo with `highs`, `cbc`, `gurobi`, or `scip`.
+(APOPT) or Pyomo with `scip`, `cbc`, or `gurobi`.
 
 **Islanding lost after saving and loading.** The islanding configuration is
 registered as a network extension and is not persisted by
@@ -167,5 +167,5 @@ registered as a network extension and is not persisted by
 from JSON.
 
 **Solver does not support integers.** Some Pyomo solver interfaces (for example
-IPOPT) reject integer variables and raise an error. Switch to HiGHS, CBC, or
+IPOPT) reject integer variables and raise an error. Switch to SCIP, CBC, or
 Gurobi.

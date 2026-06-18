@@ -3,7 +3,7 @@ Use the Pyomo solver
 ====================
 
 The Pyomo solver interface lets you back monee with any solver that Pyomo
-supports, including Gurobi, HiGHS, SCIP, GLPK, CBC, and CPLEX. Use it when
+supports, including Gurobi, SCIP, GLPK, CBC, and CPLEX. Use it when
 you need a MILP or MIQCP back-end, for example to solve an AC optimal power
 flow with the :data:`~monee.model.formulation.EL_MISOCP_FORMULATION`.
 
@@ -16,38 +16,36 @@ Install Pyomo and at least one solver back-end:
 
 .. tab-set::
 
-   .. tab-item:: HiGHS (recommended)
+   .. tab-item:: SCIP (recommended)
 
-      Open-source LP / MILP / MIQCP solver. Works out of the box on most
-      platforms.
-
-      .. code-block:: bash
-
-          pip install highspy
-
-      or via conda:
+      Open-source MINLP / MILP solver. It handles the MIQCQP and MISOCP
+      models monee generates for optimal power flow, so it is the safe
+      default for the Pyomo back-end.
 
       .. code-block:: bash
 
-          conda install -c conda-forge highs
-
-   .. tab-item:: GLPK
-
-      Open-source LP / MILP solver.
-
-      .. code-block:: bash
-
-          conda install -c conda-forge glpk
+          conda install -c conda-forge pyscipopt
 
    .. tab-item:: Gurobi
 
       Commercial solver with a free academic licence available at
       `gurobi.com <https://www.gurobi.com/academia/academic-program-and-licenses/>`_.
-      Install the Python bindings after obtaining a licence:
+      It also solves the MIQCQP and MISOCP models and often outperforms SCIP
+      on them when a licence is available. Install the Python bindings after
+      obtaining a licence:
 
       .. code-block:: bash
 
           pip install gurobipy
+
+   .. tab-item:: GLPK
+
+      Open-source LP / MILP solver. It cannot solve the MIQCQP / MISOCP
+      models, so use it only for linear formulations.
+
+      .. code-block:: bash
+
+          conda install -c conda-forge glpk
 
 ----
 
@@ -61,8 +59,8 @@ solver (``"apopt"``, ``"bpopt"``, ``"ipopt"``) routes to Pyomo automatically:
 
     import monee
 
-    # Plain energy flow via Pyomo + HiGHS
-    result = monee.run_energy_flow(net, solver="highs")
+    # Plain energy flow via Pyomo + SCIP
+    result = monee.run_energy_flow(net, solver="scip")
 
     # Optimisation via Pyomo + Gurobi
     result = monee.solve(net, optimization_problem=problem, solver="gurobi")
@@ -93,7 +91,7 @@ Minimal example
 ===============
 
 Build a small electricity grid and solve an AC optimal power flow with the
-MISOCP relaxation and HiGHS:
+MISOCP relaxation and SCIP:
 
 .. code-block:: python
 
@@ -113,8 +111,8 @@ MISOCP relaxation and HiGHS:
     # Switch to the MISOCP formulation
     net.apply_formulation(monee.EL_MISOCP_FORMULATION)
 
-    # Solve with Pyomo + HiGHS
-    result = monee.solve(net, solver="highs")
+    # Solve with Pyomo + SCIP
+    result = monee.solve(net, solver="scip")
     print(result.objective)
 
 ----
@@ -210,15 +208,14 @@ The ``solver_name`` argument is forwarded to ``pyomo.environ.SolverFactory``:
    * - Value
      - Solver
      - Notes
-   * - ``"highs"``
-     - HiGHS
-     - Open-source LP / MILP / MIQCP. ``pip install highspy``.
-   * - ``"gurobi"``
-     - Gurobi
-     - Commercial, requires a valid licence.
    * - ``"scip"``
      - SCIP
-     - Open-source MINLP / MILP. ``conda install -c conda-forge pyscipopt``.
+     - Open-source MINLP / MILP; solves the MIQCQP / MISOCP models.
+       Recommended default. ``conda install -c conda-forge pyscipopt``.
+   * - ``"gurobi"``
+     - Gurobi
+     - Commercial, requires a valid licence. Solves the MIQCQP / MISOCP
+       models and often outperforms SCIP on them.
    * - ``"glpk"``
      - GLPK
      - Open-source, LP / MILP only.
@@ -247,7 +244,7 @@ formulation tries to use them.
 
    Piecewise-linear constraints are translated differently per back-end:
    Pyomo uses an SOS2 ``Piecewise`` construct, which requires a MIP-capable
-   solver (HiGHS, Gurobi, SCIP, CBC, ...), whereas GEKKO approximates the
+   solver (SCIP, Gurobi, CBC, ...), whereas GEKKO approximates the
    same data with cubic splines. A PWL formulation that solves fine under
    GEKKO + IPOPT therefore needs a MIP solver under Pyomo.
 

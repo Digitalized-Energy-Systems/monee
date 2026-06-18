@@ -12,7 +12,7 @@ monee adds islanding as a set of mixed-integer constraints on top of the
 carrier's normal steady-state equations. The per-node energisation variables
 (`e_el`, `e_gas`, `e_water`) are binary, so islanding works best with a
 mixed-integer (MIP) capable back-end such as `GEKKOSolver`, `GurobipySolver`,
-or `PyomoSolver` with a MIP solver like HiGHS or Gurobi. `CasADiSolver` also
+or `PyomoSolver` with a MIP solver like SCIP or Gurobi. `CasADiSolver` also
 reads the islanding config, but IPOPT relaxes the integers, so it does not
 return a true binary solution.
 

@@ -178,4 +178,4 @@ Next steps
   time series with varying demand profiles.
 - Explore :doc:`../how-to/load_shedding` for the ready-made one-call interface.
 - Read :doc:`../how-to/use_pyomo_solver` to switch to a MILP solver back-end
-  (HiGHS, Gurobi, etc.) for integer-programming formulations.
+  (SCIP, Gurobi, etc.) for integer-programming formulations.

@@ -21,12 +21,15 @@ from __future__ import annotations
 
 import os
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
 import monee.express as mx
 import monee.model as mm
+import monee.problem as mp
+from monee.model import GasLinepack, LumpedThermalCapacitance
 from monee.model.child import ExtPowerGrid
 from monee.problem.core import Objectives, OptimizationProblem
 from monee.simulation import TimeseriesData, run_multi_period, run_timeseries
@@ -347,10 +350,6 @@ def build_storage_dispatch(out_path):
 def build_storage_prescribed(out_path):
     """Prescribed battery dispatch in a plain timeseries: SoC integrates the fixed
     charge/discharge schedule. Mirrors the storage.rst prescribed-dispatch block."""
-    import monee.express as mx
-    import monee.model as mm
-    from monee.simulation import TimeseriesData, run_timeseries
-
     dispatch = [1.0, 0.5, -1.0, -1.5, 0.0, 0.5]
     net = mx.create_multi_energy_network()
     bus0 = mx.create_bus(net)
@@ -425,10 +424,6 @@ def build_storage_prescribed(out_path):
 def build_storage_gas(out_path):
     """Prescribed gas-storage charge/discharge cycle over 8 hours. Mirrors the
     storage.rst gas-storage block."""
-    import monee.express as mx
-    import monee.model as mm
-    from monee.simulation import TimeseriesData, run_timeseries
-
     dispatch = [0.05, 0.05, 0.0, 0.0, -0.05, -0.05, 0.0, 0.0]
     net_g = mx.create_multi_energy_network()
     j0 = mx.create_gas_junction(net_g)
@@ -522,11 +517,6 @@ def build_storage_gas(out_path):
 def build_concepts_multi_period(out_path):
     """Multi-period battery dispatch (concepts/multi_period.rst): controllable
     storage with a cyclic terminal SoC over a 6-period horizon."""
-    import monee.express as mx
-    import monee.model as mm
-    from monee.problem.core import OptimizationProblem
-    from monee.simulation import TimeseriesData, run_multi_period
-
     LOAD = [0.4, 0.5, 1.4, 1.8, 1.5, 0.4]
 
     net = mx.create_multi_energy_network()
@@ -632,10 +622,6 @@ def build_concepts_multi_period(out_path):
 def build_temporal_extensions_1(out_path):
     """LTC thermal inertia: same network solved with and without
     LumpedThermalCapacitance; junction temperatures for a supply step-change."""
-    import monee.express as mx
-    from monee.model import LumpedThermalCapacitance
-    from monee.simulation import TimeseriesData, run_timeseries
-
     supply_temp = [1.0, 1.0, 1.0, 1.0, 0.8, 0.8, 0.8, 0.8]
 
     def build_net(with_ltc):
@@ -708,10 +694,6 @@ def build_temporal_extensions_1(out_path):
 def build_temporal_extensions_2(out_path):
     """Gas linepack buffering: same network solved with and without GasLinepack.
     Consumer demand, source feed rate, and linepack stored-mass deviation."""
-    import monee.express as mx
-    from monee.model import GasLinepack
-    from monee.simulation import TimeseriesData, run_timeseries
-
     DEMAND = [0.15, 0.16, 0.17, 0.14, 0.15, 0.10, 0.12, 0.04]  # kg/s
 
     def build_and_run(with_linepack):
@@ -947,11 +929,6 @@ def build_concepts_timeseries(out_path):
 def build_howto_multi_period_1(out_path):
     """Battery optimal dispatch over a 6-hour horizon (how-to/multi_period.rst):
     controllable storage shifts charge to off-peak to serve the midday peak."""
-    import monee.express as mx
-    import monee.model as mm
-    from monee.problem.core import OptimizationProblem
-    from monee.simulation import TimeseriesData, run_multi_period
-
     LOAD = [0.4, 0.5, 1.4, 1.8, 1.5, 0.4]
     net = mx.create_multi_energy_network()
     bus0 = mx.create_bus(net)
@@ -1054,11 +1031,6 @@ def build_howto_multi_period_1(out_path):
 def build_howto_multi_period_chp(out_path):
     """CHP multi-period dispatch: regulation tracks combined electrical and heat
     demand (how-to/multi_period.rst; controllable_cps, queries CHPControlNode)."""
-    import monee.express as mx
-    import monee.model as mm
-    import monee.problem as mp
-    from monee.simulation import TimeseriesData, run_multi_period
-
     EL_PROF = [0.8, 1.0, 1.4, 1.8, 1.6, 1.2]
     HEAT_PROF = [0.4, 0.5, 0.7, 0.9, 0.8, 0.6]
 
@@ -1165,10 +1137,6 @@ def build_howto_multi_period_chp(out_path):
 def build_howto_multi_period_linepack(out_path):
     """Gas linepack buffers the demand peak (how-to/multi_period.rst): stored mass
     rises at low demand and drains during the peak."""
-    import monee.express as mx
-    from monee.model import GasLinepack
-    from monee.simulation import TimeseriesData, run_multi_period
-
     DEMAND = [0.3, 0.3, 0.6, 0.9, 0.8, 0.4]
     net_lp = mx.create_multi_energy_network()
     j0 = mx.create_gas_junction(net_lp)
@@ -1374,8 +1342,6 @@ def build_benchmark_backend(out_path):
     """Backend performance comparison (benchmarks/backend_selection.md): two
     head-to-head solver-backend shoot-outs across representative cases. Reads the
     committed CSV and reproduces backend_comparison.py's make_plot interactively."""
-    import numpy as np
-
     df = pd.read_csv(_bench_csv("results", "backend_comparison.csv"))
 
     color = {
@@ -1553,8 +1519,6 @@ def build_benchmark_pandapower(out_path):
     """monee (electric, smooth-NLP) vs pandapower native AC solvers, rendered from
     the committed benchmark CSV. Solve time, voltage agreement and slack-power
     agreement across AC power flow, OPF and line-limited OPF."""
-    import numpy as np
-
     C_PANDAPOWER = CB_VERMILION
     C_MONEE = CB_GREEN
     C_VM = CB_BLUE
@@ -1750,8 +1714,6 @@ def build_benchmark_pandapipes(out_path):
     """monee (multi-energy NLP) vs pandapipes, rendered from the committed CSV:
     solve time, pressure and (where heat participates) temperature agreement for
     gas, heat and coupled MES flow."""
-    import numpy as np
-
     df = pd.read_csv(_bench_csv("results", "pandapipes_comparison.csv"))
 
     PANDAPIPES = "pandapipes"

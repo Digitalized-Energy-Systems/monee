@@ -39,7 +39,7 @@ call. *(Experimental: complex elements may not convert correctly.)*
 :link-type: doc
 :shadow: sm
 
-Plug in HiGHS, Gurobi, GLPK, or CBC as the solver back-end, required for
+Plug in SCIP, Gurobi, GLPK, or CBC as the solver back-end, required for
 MILP / MIQCP problems such as the MISOCP optimal power flow.
 :::
 

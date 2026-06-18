@@ -116,7 +116,6 @@ See {doc}`how-to/use_pyomo_solver` for a full walk-through.
 | Solver | Licence | Problem types | Install |
 |---|---|---|---|
 | [SCIP](https://scipopt.org/) | Open-source | LP · MILP · MIQCP · MINLP | `conda install -y pyscipopt` or `pip install pyscipopt` |
-| [HiGHS](https://highs.dev/) | Open-source | LP · MILP · QP | `pip install highspy` |
 | [GLPK](https://www.gnu.org/software/glpk/) | Open-source | LP · MILP | `conda install -c conda-forge glpk` |
 | [CBC](https://github.com/coin-or/Cbc) | Open-source | LP · MILP | `conda install -c conda-forge coincbc` |
 | [Gurobi](https://www.gurobi.com/) | Commercial | LP · MILP · MIQCP | requires licence |

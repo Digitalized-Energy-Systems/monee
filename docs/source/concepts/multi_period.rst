@@ -308,7 +308,7 @@ Solver backends
 
       Required for MILP / MIQCP problems: on/off switching, islanding, or
       networks with binary variables.  Requires an external solver such as
-      HiGHS, Gurobi, or CBC.
+      SCIP, Gurobi, or CBC.
 
 ----
 

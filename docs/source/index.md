@@ -115,7 +115,7 @@ Load shedding ships built in; add your own objectives and constraints.
 **Flexible solver back-ends**
 ^^^
 Solves with IPOPT by default, and routes any other solver name to Pyomo
-(HiGHS, Gurobi, GLPK, SCIP, CBC). Switch back-ends without changing model
+(SCIP, Gurobi, GLPK, CBC). Switch back-ends without changing model
 code. A MISOCP relaxation is available for convex OPF.
 :::
 

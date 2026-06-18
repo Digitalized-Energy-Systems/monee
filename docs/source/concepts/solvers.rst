@@ -10,7 +10,7 @@ and hands it to a numerical solver back-end. Four back-ends ship with monee:
   with no subprocess. Best for smooth nonlinear energy flow and NLP optimisation.
 - GEKKO: bundled, the fallback default when ``casadi`` is absent. Ships its own
   APOPT, BPOPT, and IPOPT binaries.
-- Pyomo: routes to any Pyomo-registered solver (Gurobi, HiGHS, SCIP, GLPK, CBC,
+- Pyomo: routes to any Pyomo-registered solver (Gurobi, SCIP, GLPK, CBC,
   CPLEX, …). Best for MILP and MIQCP problems.
 - gurobipy: native in-memory Gurobi, single-period only, an alternative to
   driving Gurobi through Pyomo's file round-trip.
@@ -43,7 +43,7 @@ automatically:
 
     # Names other than ipopt/apopt/bpopt route to Pyomo (solver must be installed):
     result = solve(net, optimization_problem=problem, solver="gurobi")
-    result = run_energy_flow(net, solver="highs")
+    result = run_energy_flow(net, solver="scip")
 
 The routing rules (implemented in :func:`~monee.solver.resolve_solver` in
 ``monee.solver.dispatch``) are:
@@ -53,7 +53,7 @@ The routing rules (implemented in :func:`~monee.solver.resolve_solver` in
   solver, so ``solver=None`` resolves the same way.
 - ``"apopt"`` and ``"bpopt"`` select the GEKKO back-end (its discrete-capable
   solvers).
-- Any other name (``"gurobi"``, ``"scip"``, ``"highs"``, ``"glpk"``,
+- Any other name (``"gurobi"``, ``"scip"``, ``"glpk"``,
   ``"cbc"``, …) is forwarded to Pyomo's ``SolverFactory``.
 - ``backend="casadi"`` / ``"gekko"`` / ``"pyomo"`` / ``"gurobipy"`` overrides
   the automatic routing. The CasADi and gurobipy back-ends each provide one
@@ -147,7 +147,7 @@ A concrete instance also works as the ``solver=`` argument of
       The :class:`~monee.solver.PyomoSolver` (``monee.solver.pyo``) translates
       the monee model into a `Pyomo <https://www.pyomo.org>`_
       ``ConcreteModel`` and delegates to any solver supported by Pyomo,
-      including Gurobi, GLPK, HiGHS, CBC, SCIP, and CPLEX.
+      including Gurobi, GLPK, CBC, SCIP, and CPLEX.
 
       Suitable for:
 
@@ -171,7 +171,7 @@ A concrete instance also works as the ``solver=`` argument of
 
       .. code-block:: python
 
-          result = solve(net, solver="highs")   # or "gurobi", "scip", "glpk", ...
+          result = solve(net, solver="scip")   # or "gurobi"
 
       See :doc:`../how-to/use_pyomo_solver` for a complete worked example
       including MISOCP optimal power flow.
@@ -413,7 +413,7 @@ in-process back-ends win, because they skip a subprocess or a file round-trip:
 
 GEKKO and Pyomo stay valuable for what they add rather than their speed: GEKKO
 ships its own binaries and an MINLP solver with no extra install, and Pyomo
-drives any registered solver (SCIP for global non-convex models, HiGHS, GLPK,
+drives any registered solver (SCIP for global non-convex models, GLPK,
 CBC) plus lexicographic objectives.
 
 See :doc:`../benchmarks/backend_selection` for the head-to-head timings and the
@@ -441,7 +441,7 @@ Choosing a solver
      - default (``"ipopt"``)
      - ``HEAT_NONCONVEX_MIQCQP_FORMULATION``
    * - AC optimal power flow (convex relaxation)
-     - Pyomo (``"gurobi"`` / ``"highs"``)
+     - Pyomo (``"scip"`` / ``"gurobi"``)
      - ``EL_MISOCP_FORMULATION``
    * - Custom MILP problem
      - Pyomo + MILP solver
@@ -475,7 +475,7 @@ See also
       :link-type: doc
       :shadow: sm
 
-      Install HiGHS / GLPK / Gurobi and run a MISOCP optimal power flow.
+      Install SCIP or Gurobi and run a MISOCP optimal power flow.
 
    .. grid-item-card:: Diagnose infeasibility
       :link: ../how-to/diagnose_infeasibility
