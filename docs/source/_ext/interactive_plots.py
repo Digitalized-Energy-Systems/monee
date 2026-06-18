@@ -65,6 +65,9 @@ CB_YELLOW = "#F0E442"
 BAR_LINE = "#222222"
 BAR_LINE_WIDTH = 1.1
 
+C_BLACK = "rgba(0,0,0,0)"
+C_GRIDCOLOR = "rgsba(80,80,80,0.12)"
+
 
 def _bar_marker(color, pattern=None):
     """Bar ``marker`` dict: solid *color* fill, crisp dark outline, optional hatch.
@@ -168,13 +171,13 @@ def _base_layout(fig, title, height=640):
         showlegend=False,
         font={"family": FONT_FAMILY, "size": 14, "color": TEXT},
         margin={"l": 60, "r": 25, "t": 90, "b": 55},
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor=C_BLACK,
+        paper_bgcolor=C_BLACK,
     )
-    fig.update_xaxes(showgrid=True, gridcolor="rgba(80,80,80,0.12)", zeroline=False)
+    fig.update_xaxes(showgrid=True, gridcolor=C_GRIDCOLOR, zeroline=False)
     fig.update_yaxes(
         showgrid=True,
-        gridcolor="rgba(80,80,80,0.12)",
+        gridcolor=C_BLACK,
         zeroline=True,
         zerolinecolor="rgba(80,80,80,0.25)",
     )
@@ -264,7 +267,7 @@ def _storage_dispatch_figure():
     capacity = 6.0
     hours = list(range(len(load)))
 
-    disp, soc, imp, bill = _solve_storage(capacity, capacity / 2.0, load, price)
+    disp, soc, _, __ = _solve_storage(capacity, capacity / 2.0, load, price)
     dispatch_colors = [C_CHG if v >= 0 else C_DIS for v in disp]
 
     fig = make_subplots(
@@ -1359,7 +1362,6 @@ def build_benchmark_backend(out_path):
         "pyomo-gurobi": "/",
         "gurobipy": "",
     }
-    GRID = "rgba(80,80,80,0.12)"
     AXIS_LINE = "rgba(128,128,128,0.5)"
     groups = [
         ("A", "Group A: GEKKO vs CasADi (smooth NLP)"),
@@ -1471,7 +1473,7 @@ def build_benchmark_backend(out_path):
 
     fig.update_xaxes(
         showgrid=True,
-        gridcolor=GRID,
+        gridcolor=C_GRIDCOLOR,
         gridwidth=1,
         zeroline=False,
         showline=False,
@@ -1504,12 +1506,12 @@ def build_benchmark_backend(out_path):
             "xanchor": "right",
             "x": 1.0,
             "font": {"size": 13, "color": TEXT},
-            "bgcolor": "rgba(0,0,0,0)",
+            "bgcolor": C_BLACK,
         },
         margin={"l": 60, "r": 60, "t": 50, "b": 70},
         font={"family": FONT_FAMILY, "size": 13, "color": TEXT},
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor=C_BLACK,
+        paper_bgcolor=C_BLACK,
         uniformtext={"mode": "hide", "minsize": 8},
     )
     return _write(fig, out_path, height_px=height_px)
@@ -1524,7 +1526,6 @@ def build_benchmark_pandapower(out_path):
     C_VM = CB_BLUE
     C_P = CB_ORANGE
     PP_TEXT = TEXT
-    PP_GRID = "rgba(80,80,80,0.12)"
     PP_AXIS_LINE = "rgba(128,128,128,0.5)"
     PANDAPOWER = "pandapower"
     CASADI = "monee · CasADi"
@@ -1663,7 +1664,7 @@ def build_benchmark_pandapower(out_path):
 
     fig.update_xaxes(
         showgrid=True,
-        gridcolor=PP_GRID,
+        gridcolor=C_GRIDCOLOR,
         gridwidth=1,
         zeroline=False,
         showline=False,
@@ -1695,7 +1696,7 @@ def build_benchmark_pandapower(out_path):
             "xanchor": "right",
             "x": 1.0,
             "font": {"size": 13, "color": PP_TEXT},
-            "bgcolor": "rgba(0,0,0,0)",
+            "bgcolor": C_BLACK,
         },
         margin={"l": 155, "r": 60, "t": 50, "b": 70},
         font={
@@ -1703,8 +1704,8 @@ def build_benchmark_pandapower(out_path):
             "size": 13,
             "color": PP_TEXT,
         },
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor=C_BLACK,
+        paper_bgcolor=C_BLACK,
         uniformtext={"mode": "hide", "minsize": 8},
     )
     return _write(fig, out_path, height_px=height_px)
@@ -1723,7 +1724,6 @@ def build_benchmark_pandapipes(out_path):
     C_PRESSURE = CB_BLUE
     C_TEMP = CB_ORANGE
     C_BANNER = TEXT
-    GRID = "rgba(80,80,80,0.12)"
     AXIS_LINE = "rgba(128,128,128,0.5)"
     AXIS_TITLE_SIZE = 14
     TICK_SIZE = 13
@@ -1870,7 +1870,7 @@ def build_benchmark_pandapipes(out_path):
 
     fig.update_xaxes(
         showgrid=True,
-        gridcolor=GRID,
+        gridcolor=C_GRIDCOLOR,
         gridwidth=1,
         zeroline=False,
         showline=False,
@@ -1903,12 +1903,12 @@ def build_benchmark_pandapipes(out_path):
             "xanchor": "right",
             "x": 1.0,
             "font": {"size": 13, "color": TEXT},
-            "bgcolor": "rgba(0,0,0,0)",
+            "bgcolor": C_BLACK,
         },
         margin={"l": 155, "r": 40, "t": 50, "b": 60},
         font={"family": FONT_FAMILY, "size": 13, "color": TEXT},
-        plot_bgcolor="rgba(0,0,0,0)",
-        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor=C_BLACK,
+        paper_bgcolor=C_BLACK,
         uniformtext={"mode": "hide", "minsize": 8},
     )
     return _write(fig, out_path, height_px=height)

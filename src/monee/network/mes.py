@@ -7,6 +7,7 @@ import monee.express as mx
 import monee.model as mm
 import monee.model.phys.core.hydraulics as hyd
 from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
+from monee.model.phys.nonlinear.gf import reference_gas_density
 
 REF_PA = 1000000
 REF_TEMP = 356
@@ -714,6 +715,10 @@ def create_gas_tree_net_for_power(  # NOSONAR
     mesh_diameter_factor=0.5,
     mesh_length_factor=2.0,
     mesh_seed=None,
+    auto_diameter=False,
+    auto_diameter_v_mps=None,
+    auto_diameter_headroom=1.5,
+    auto_min_diameter_m=0.02,
 ):
     """Build a gas grid on the spanning tree of ``power_net``.
 
@@ -721,6 +726,19 @@ def create_gas_tree_net_for_power(  # NOSONAR
     ``gas_gen_share`` and the HHV; ``extra_mesh_pipes`` add tie-lines so a single
     failure doesn't isolate a subtree. ``min_load_kgs`` / ``min_source_kgs``
     floor per-bus values at ~10 kW thermal.
+
+    ``auto_diameter`` (default off) sizes each tree pipe to the cumulative
+    downstream sink demand it must carry, instead of the flat
+    ``default_diameter_m``.  The required diameter is the smallest keeping the
+    gas design velocity at ``auto_diameter_v_mps`` (defaults to the grid's
+    ``v_max_mps``, i.e. the same 20 m/s cap the gas formulation enforces) after a
+    ``auto_diameter_headroom`` margin on the flow, floored at
+    ``auto_min_diameter_m`` (default 0.02 m, a DN20 service pipe, so leaf pipes
+    stay realistic rather than collapsing to zero).  Without it, the flat 0.3 m
+    default over LV-scale demands (~0.03 kg/s) makes the Weymouth pressure drop
+    (Δp² ∝ L·f·m²/D⁵) vanish - the gas hydraulics never move regardless of load.
+    Mirrors the ``auto_diameter`` mode of
+    :func:`create_heat_supply_return_net_for_power`.
 
     Returns ``{power_node_id → gas_junction_id}``.
     """
@@ -732,6 +750,9 @@ def create_gas_tree_net_for_power(  # NOSONAR
     gas_hhv_mj = gas_grid.higher_heating_value_kwh_per_kg * 3.6
 
     power_net_as_st = mm.to_spanning_tree(power_net)
+    slack_node = (
+        slack_node_id if slack_node_id is not None else power_net_as_st.first_node()
+    )
 
     bus_index_to_junction_index = {}
     for node in power_net_as_st.nodes:
@@ -739,14 +760,64 @@ def create_gas_tree_net_for_power(  # NOSONAR
             target_net, position=node.position, grid=gas_grid
         )
 
+    # Per-bus gas sink demand [kg/s]. Computed up front (not inline at sink
+    # creation) so capacity-based pipe sizing can sum it over each subtree.
+    bus_sink_kgs: dict = {}
+    for node in power_net_as_st.nodes:
+        p_load_mw = _node_power_load_mw(power_net, node)
+        if p_load_mw > 0 and gas_load_share > 0:
+            bus_sink_kgs[node.id] = round(
+                max(min_load_kgs, p_load_mw * gas_load_share / gas_hhv_mj), 4
+            )
+
+    # Capacity-based diameter: size every tree pipe for its cumulative downstream
+    # sink demand at the gas design velocity, so the Weymouth drop (∝ L·f·m²/D⁵)
+    # stays physical instead of vanishing under a flat oversized diameter. The
+    # subtree totals mirror the heat net's auto_diameter accumulation.
+    parent: dict = {}
+    subtree_kgs: dict = {}
+    if auto_diameter:
+        undirected = nx.Graph(power_net_as_st.graph)
+        parent = {slack_node: None}
+        for p, c in nx.bfs_edges(undirected, source=slack_node):
+            parent[c] = p
+        subtree_kgs = {nid: bus_sink_kgs.get(nid, 0.0) for nid in parent}
+        for c in reversed(list(nx.topological_sort(nx.bfs_tree(undirected, slack_node)))):
+            if parent.get(c) is not None:
+                subtree_kgs[parent[c]] += subtree_kgs[c]
+
+        design_v = (
+            auto_diameter_v_mps
+            if auto_diameter_v_mps is not None
+            else getattr(gas_grid, "v_max_mps", 20.0)
+        )
+        gas_density = reference_gas_density(gas_grid)
+
+        def _gas_diameter(downstream_kgs):
+            """Smallest gas-pipe diameter [m] carrying ``downstream_kgs`` at the
+            design velocity (with headroom), floored at ``auto_min_diameter_m``."""
+            d = hyd.calc_min_diameter_for_mass_flow(
+                downstream_kgs * auto_diameter_headroom, gas_density, design_v
+            )
+            return max(d, auto_min_diameter_m)
+
     for branch in power_net_as_st.branches:
         from_id = bus_index_to_junction_index[branch.from_node_id]
         to_id = bus_index_to_junction_index[branch.to_node_id]
+        if auto_diameter:
+            # Downstream endpoint = the one whose tree-parent is the other.
+            if parent.get(branch.to_node_id) == branch.from_node_id:
+                downstream = subtree_kgs[branch.to_node_id]
+            else:
+                downstream = subtree_kgs[branch.from_node_id]
+            diameter_m = _gas_diameter(downstream)
+        else:
+            diameter_m = default_diameter_m
         mx.create_gas_pipe(
             target_net,
             from_node_id=from_id,
             to_node_id=to_id,
-            diameter_m=default_diameter_m,
+            diameter_m=diameter_m,
             length_m=get_length(
                 target_net,
                 branch,
@@ -759,13 +830,11 @@ def create_gas_tree_net_for_power(  # NOSONAR
         )
 
     for node in power_net_as_st.nodes:
-        p_load_mw = _node_power_load_mw(power_net, node)
-        if p_load_mw > 0 and gas_load_share > 0:
-            mass_flow_kgs = max(min_load_kgs, p_load_mw * gas_load_share / gas_hhv_mj)
+        if node.id in bus_sink_kgs:
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
-                mass_flow_kgs=round(mass_flow_kgs, 4),
+                mass_flow_kgs=bus_sink_kgs[node.id],
             )
 
         p_gen_mw = _node_power_gen_mw(power_net, node)
@@ -791,9 +860,6 @@ def create_gas_tree_net_for_power(  # NOSONAR
             mesh_seed=mesh_seed,
         )
 
-    slack_node = (
-        slack_node_id if slack_node_id is not None else power_net_as_st.first_node()
-    )
     mx.create_ext_hydr_grid(
         target_net,
         node_id=bus_index_to_junction_index[slack_node],
