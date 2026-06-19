@@ -25,15 +25,6 @@ Choosing a generator
      - Recommended. Deterministic gas and heat overlays plus seedable
        coupling placement, with a supply/return DHS suited to the McCormick
        and smooth NLP formulations.
-   * - :func:`~monee.network.mes.generate_mes_based_on_power_net`
-     - Seedable
-     - Legacy. Randomised single-pipe heat grid and gas grid with deployment
-       rates instead of deterministic sizing. Takes a ``seed`` argument.
-   * - :func:`~monee.network.bench.mes_simbench.generate_mes_based_on_simbench_id`
-     - Global ``random``
-     - Legacy generator applied directly to a `simbench
-       <https://simbench.de>`_ grid (requires the ``simbench`` extra). Has no
-       seed parameter.
 
 All generators work on a copy of the input power network. The original is
 never modified.
@@ -84,50 +75,6 @@ supply/return DHS, coupling points) into a single call:
    mesh pipes land. Both take explicit seeds:
    ``coupling_kwargs={"seed": 42}`` and ``gas_kwargs={"mesh_seed": 7}``.
 
-Legacy randomised generator
----------------------------
-
-:func:`~monee.network.mes.generate_mes_based_on_power_net` is the older
-interface. Instead of deterministic sizing it deploys heat exchangers and gas
-sinks at random with the given rates, and places coupling points with per-type
-densities:
-
-.. code-block:: python
-
-    from monee.network import generate_mes_based_on_power_net
-
-    mes = generate_mes_based_on_power_net(
-        net_power,
-        heat_deployment_rate=0.5,
-        gas_deployment_rate=0.5,
-        chp_density=0.1,
-        p2g_density=0.02,
-        p2h_density=0.1,
-        seed=42,
-    )
-
-.. warning::
-
-   :func:`~monee.network.mes.generate_mes_based_on_power_net` takes a ``seed``
-   argument; pass it for reproducible networks. Leaving ``seed=None`` falls
-   back to the global :mod:`random` state. The simbench wrapper below has no
-   seed parameter at all, so seed the global :mod:`random` module before
-   calling it.
-
-:func:`~monee.network.bench.mes_simbench.generate_mes_based_on_simbench_id`
-applies the same overlay directly to a simbench code:
-
-.. code-block:: python
-
-    from monee.network.bench.mes_simbench import generate_mes_based_on_simbench_id
-
-    mes = generate_mes_based_on_simbench_id(
-        "1-LV-rural3--0-no_sw",
-        heat_deployment_rate=0.5,
-        gas_deployment_rate=0.5,
-    )
-
-----
 
 Gas overlay
 ===========

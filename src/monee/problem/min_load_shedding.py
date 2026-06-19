@@ -416,13 +416,6 @@ def create_min_load_shedding_problem(  # NOSONAR
     """
     problem = OptimizationProblem(debug=debug, lex_objectives=lex_objectives)
 
-    # Mutable so the auto-priority-floor hook can retune at _apply time.
-    # ``scale`` is a multiplicative factor applied on top of both the
-    # default ``demand`` weight AND any per-load weight returned by
-    # ``weight_for_load`` - the auto-floor hook uses it to lift every
-    # demand-side weight uniformly when the minimum effective per-load
-    # weight would otherwise fall below ``α·A_max``.  Default 1.0 makes
-    # it a no-op for legacy (no callback) usage.
     _weights = {
         "demand": float(demand_weight),
         "generator": float(generator_weight),

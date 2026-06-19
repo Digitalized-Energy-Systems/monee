@@ -51,7 +51,7 @@ PER_SOLVER_OPTIONS = {
     "gurobi": {
         "ScaleFlag": 2,
         "MIPFocus": 2,
-        "MIPGap": 1e-3,
+        "MIPGap": 1e-4,
         "TimeLimit": 300,
     },
     # Dual presolve reductions make SCIP spuriously prove infeasibility on the

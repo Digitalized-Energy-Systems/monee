@@ -33,11 +33,6 @@ class PowerGrid(Grid):
 
     sn_mva: float = 1
     vm_pu_max: float = 1.5
-    # Lower bound applied to bus ``vm_pu`` at node creation. 0 is unphysical and
-    # lets an NLP solver (IPOPT) drive the 1/vm current-equation Jacobian to
-    # infinity during restoration; a small positive floor keeps it bounded. 0.5
-    # is low enough to preserve realistic stressed / load-shedding operating
-    # points (e.g. ~0.68 pu) yet still bounds the Jacobian.
     vm_pu_min: float = 0.5
 
 
@@ -55,8 +50,6 @@ class WaterGrid(Grid):
     t_ref_k: float = 356
     pressure_ref_pa: float = 1000000
     max_mass_flow_kgs: float = 200
-    # v_max_mps caps per-pipe mass-flow via \pi/4 \cdot D^2 \cdot \rho \cdot v_max; combined with max_mass_flow_kgs
-    # by min(...), so it can only tighten. 5 m/s is generous for DH water.
     v_max_mps: float = 5.0
     fluid_density_kg_per_m3: float | None = None
     dynamic_visc_pas: float | None = None
@@ -68,10 +61,6 @@ class WaterGrid(Grid):
             self.dynamic_visc_pas = water_dynamic_viscosity_pas(self.t_ref_k)
 
 
-# Conditions and bounds shared by every lgas variant; only the gas-identity
-# constants (molar mass, viscosity, heating value) differ between them.
-# ``compressibility`` is intentionally absent: it is derived from the reference
-# pressure/temperature/molar mass in ``GasGrid.__post_init__``.
 _LGAS_COMMON = {
     "universal_gas_constant": 8.314,
     "t_k": 300,
@@ -94,11 +83,7 @@ GAS_GRID_ATTRS = {
     },
     # Methane / H-gas (pure natural gas): lighter and higher-calorific than
     # L-gas. The molar mass / HHV match monee's pre-2026 defaults (M=0.0165
-    # kg/mol, HHV=15.3 kWh/kg ~ methane). NOTE: compressibility is now DERIVED
-    # (real-gas Papay Z~=0.978 at 10 bar), not the old hardcoded ideal-gas Z=1,
-    # so this does NOT reproduce pre-2026 gas pressure drops byte-for-byte (the
-    # Weymouth C^2 ~ 1/Z shifts ~2.3%). For exact historical (ideal-gas) numbers
-    # construct GasGrid(..., compressibility=1) directly.
+    # kg/mol, HHV=15.3 kWh/kg ~ methane).
     "methane": {
         **_LGAS_COMMON,
         "molar_mass": 0.0165,
@@ -139,10 +124,6 @@ class GasGrid(Grid):
     pressure_squared_pu_max: float
     pressure_squared_pu_min: float
     compressibility: float | None = None
-    # Ambient pressure [Pa] added to node pressure to form the ABSOLUTE pressure
-    # the Weymouth/density physics require. 0.0 (default) => node pressures are
-    # absolute (monee's historical convention); STANDARD_ATMOSPHERE_PA => node
-    # pressures are gauge (pandapipes/standard-engineering convention).
     pressure_ambient_pa: float = 0.0
 
     def __post_init__(self):
@@ -161,19 +142,29 @@ class NoGrid(Grid):
 NO_GRID = NoGrid("None")
 
 
-def create_gas_grid(name, type="lgas", t_ref_k=None, pressure_ref_pa=None):
+def create_gas_grid(
+    name, type="lgas", t_ref_k=None, pressure_ref_pa=None, pressure_ambient_pa=None
+):
     """Return a :class:`GasGrid` populated from ``GAS_GRID_ATTRS[type]``.
 
     ``t_ref_k`` / ``pressure_ref_pa`` override the reference condition so the
     derived compressibility tracks the grid's actual operating pressure. Pass
     them here rather than mutating the grid afterwards, so ``__post_init__``
     derives Z from the final values (a post-construction assignment leaves the
-    already-derived Z stale)."""
+    already-derived Z stale).
+
+    ``pressure_ambient_pa`` selects the pressure convention: 0 (default) keeps
+    node pressures ABSOLUTE; :data:`STANDARD_ATMOSPHERE_PA` makes them GAUGE
+    (absolute = gauge + 1 atm), the standard way distribution operating pressures
+    are stated. It does not affect the derived Z (which depends on
+    ``pressure_ref_pa`` only)."""
     attrs = dict(GAS_GRID_ATTRS[type])
     if t_ref_k is not None:
         attrs["t_ref_k"] = t_ref_k
     if pressure_ref_pa is not None:
         attrs["pressure_ref_pa"] = pressure_ref_pa
+    if pressure_ambient_pa is not None:
+        attrs["pressure_ambient_pa"] = pressure_ambient_pa
     return GasGrid(name, **attrs)
 
 

@@ -243,134 +243,6 @@ def create_gas_net_for_power(
     return bus_index_to_junction_index
 
 
-def create_p2h_in_combined_generated_network(
-    new_mes_net: mm.Network,
-    net_power,
-    bus_to_heat_junc,
-    end_bus_to_heat_junc,
-    p2h_density,
-    seed=None,
-):
-    rng = random.Random(seed) if seed is not None else random
-    for power_node in net_power.nodes:
-        heat_junc = bus_to_heat_junc[power_node.id]
-        heat_junc_two = end_bus_to_heat_junc[power_node.id]
-        if (
-            rng.random() <= p2h_density
-            and heat_junc != heat_junc_two
-            and new_mes_net.has_branch_between(heat_junc, heat_junc_two)
-        ):
-            new_mes_net.remove_branch_between(heat_junc, heat_junc_two)
-            mx.create_p2h(
-                new_mes_net,
-                power_node_id=power_node.id,
-                heat_node_id=heat_junc_two,
-                heat_return_node_id=heat_junc,
-                heat_energy_mw=0.015,
-                diameter_m=0.003,
-                efficiency=0.4 * 0.5 * 0.5,
-            )
-
-
-def create_chp_in_combined_generated_network(
-    new_mes_net: mm.Network,
-    net_power,
-    bus_to_heat_junc,
-    end_bus_to_heat_junc,
-    bus_to_gas_junc,
-    chp_density,
-    seed=None,
-):
-    rng = random.Random(seed) if seed is not None else random
-    for power_node in net_power.nodes:
-        heat_junc = bus_to_heat_junc[power_node.id]
-        heat_junc_two = end_bus_to_heat_junc[power_node.id]
-        gas_junc = bus_to_gas_junc[power_node.id]
-        efficiency = 0.8 + rng.random() / 10
-        if (
-            rng.random() <= chp_density
-            and heat_junc != heat_junc_two
-            and new_mes_net.has_branch_between(heat_junc, heat_junc_two)
-        ):
-            new_mes_net.remove_branch_between(heat_junc, heat_junc_two)
-            mx.create_chp(
-                new_mes_net,
-                power_node_id=power_node.id,
-                heat_node_id=heat_junc_two,
-                heat_return_node_id=heat_junc,
-                gas_node_id=gas_junc,
-                mass_flow_setpoint_kgs=0.015 * rng.random(),
-                diameter_m=0.035,
-                efficiency_power=efficiency / 2,
-                efficiency_heat=efficiency / 2,
-            )
-
-
-def create_p2g_in_combined_generated_network(
-    new_mes_net, net_power, bus_to_gas_junc, p2g_density, seed=None
-):
-    rng = random.Random(seed) if seed is not None else random
-    for power_node in net_power.nodes:
-        gas_junc = bus_to_gas_junc[power_node.id]
-        if rng.random() <= p2g_density:
-            mx.create_p2g(
-                new_mes_net,
-                from_node_id=power_node.id,
-                to_node_id=gas_junc,
-                efficiency=0.7,
-                mass_flow_setpoint_kgs=0.045 * rng.random(),
-            )
-
-
-def generate_mes_based_on_power_net(
-    net_power: mm.Network,
-    heat_deployment_rate,
-    gas_deployment_rate,
-    chp_density=0.1,
-    p2g_density=0.02,
-    p2h_density=0.1,
-    seed=None,
-):
-    # Derive a distinct sub-seed per builder so a single `seed` makes the whole
-    # generation deterministic without coupling the per-builder RNG streams.
-    if seed is not None:
-        ss = random.Random(seed)
-        heat_seed, gas_seed, p2h_seed, chp_seed, p2g_seed = (
-            ss.random() for _ in range(5)
-        )
-    else:
-        heat_seed = gas_seed = p2h_seed = chp_seed = p2g_seed = None
-
-    new_mes_net = net_power.copy()
-    bus_to_heat_junc, end_bus_to_heat_junc = create_heat_net_for_power(
-        net_power, new_mes_net, heat_deployment_rate, seed=heat_seed
-    )
-    bus_to_gas_junc = create_gas_net_for_power(
-        net_power, new_mes_net, gas_deployment_rate, seed=gas_seed
-    )
-    create_p2h_in_combined_generated_network(
-        new_mes_net,
-        net_power,
-        bus_to_heat_junc,
-        end_bus_to_heat_junc,
-        p2h_density,
-        seed=p2h_seed,
-    )
-    create_chp_in_combined_generated_network(
-        new_mes_net,
-        net_power,
-        bus_to_heat_junc,
-        end_bus_to_heat_junc,
-        bus_to_gas_junc,
-        chp_density,
-        seed=chp_seed,
-    )
-    create_p2g_in_combined_generated_network(
-        new_mes_net, net_power, bus_to_gas_junc, p2g_density, seed=p2g_seed
-    )
-    return new_mes_net
-
-
 def create_monee_benchmark_net():
     random.seed(9002)
     pn = mm.Network(el_model=mm.PowerGrid(name="power", sn_mva=100))
@@ -719,8 +591,25 @@ def create_gas_tree_net_for_power(  # NOSONAR
     auto_diameter_v_mps=None,
     auto_diameter_headroom=1.5,
     auto_min_diameter_m=0.02,
+    pressure_ref_pa=REF_PA,
+    pressure_ambient_pa=0.0,
+    diameter_tiers=None,
 ):
     """Build a gas grid on the spanning tree of ``power_net``.
+
+    ``pressure_ref_pa`` / ``pressure_ambient_pa`` set the gas grid's reference
+    (nominal) pressure and the absolute/gauge convention (see
+    :func:`monee.model.grid.create_gas_grid`); the defaults reproduce the
+    historical 10 bar absolute grid.
+
+    ``diameter_tiers`` (default ``None``) selects a realistic trunk->branch->
+    service diameter taper instead of flow-based ``auto_diameter`` or the flat
+    ``default_diameter_m``. It is a list of ``(min_downstream_consumers,
+    diameter_m)`` pairs, sorted by descending threshold; each tree pipe is sized
+    by the number of demand-bearing junctions in the subtree it feeds, so mains
+    near the slack come out wide (many consumers) and leaf service pipes narrow.
+    At LV gas demands (grams/s) flow never sets the pipe size, so a structural
+    tier schedule is the realistic sizing rule rather than hydraulics.
 
     Loads/generators are sized from electrical magnitudes via ``gas_load_share`` /
     ``gas_gen_share`` and the HHV; ``extra_mesh_pipes`` add tie-lines so a single
@@ -743,7 +632,11 @@ def create_gas_tree_net_for_power(  # NOSONAR
     Returns ``{power_node_id → gas_junction_id}``.
     """
     gas_grid = mm.create_gas_grid(
-        "gas", type="lgas", t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA
+        "gas",
+        type="lgas",
+        t_ref_k=REF_TEMP,
+        pressure_ref_pa=pressure_ref_pa,
+        pressure_ambient_pa=pressure_ambient_pa,
     )
     target_net.set_default_grid("gas", gas_grid)
     # HHV [MJ/kg] of this grid's gas fluid (sizing matches the gas physics).
@@ -776,16 +669,31 @@ def create_gas_tree_net_for_power(  # NOSONAR
     # subtree totals mirror the heat net's auto_diameter accumulation.
     parent: dict = {}
     subtree_kgs: dict = {}
-    if auto_diameter:
+    subtree_consumers: dict = {}
+    if auto_diameter or diameter_tiers:
         undirected = nx.Graph(power_net_as_st.graph)
         parent = {slack_node: None}
         for p, c in nx.bfs_edges(undirected, source=slack_node):
             parent[c] = p
+        order = list(reversed(list(nx.topological_sort(nx.bfs_tree(undirected, slack_node)))))
         subtree_kgs = {nid: bus_sink_kgs.get(nid, 0.0) for nid in parent}
-        for c in reversed(list(nx.topological_sort(nx.bfs_tree(undirected, slack_node)))):
+        subtree_consumers = {nid: (1 if nid in bus_sink_kgs else 0) for nid in parent}
+        for c in order:
             if parent.get(c) is not None:
                 subtree_kgs[parent[c]] += subtree_kgs[c]
+                subtree_consumers[parent[c]] += subtree_consumers[c]
 
+    if diameter_tiers:
+        # Descending threshold order so the first match is the widest tier.
+        _tiers = sorted(diameter_tiers, key=lambda t: t[0], reverse=True)
+
+        def _tier_diameter(n_consumers):
+            for thresh, dia in _tiers:
+                if n_consumers >= thresh:
+                    return dia
+            return _tiers[-1][1]
+
+    if auto_diameter:
         design_v = (
             auto_diameter_v_mps
             if auto_diameter_v_mps is not None
@@ -804,13 +712,15 @@ def create_gas_tree_net_for_power(  # NOSONAR
     for branch in power_net_as_st.branches:
         from_id = bus_index_to_junction_index[branch.from_node_id]
         to_id = bus_index_to_junction_index[branch.to_node_id]
-        if auto_diameter:
-            # Downstream endpoint = the one whose tree-parent is the other.
-            if parent.get(branch.to_node_id) == branch.from_node_id:
-                downstream = subtree_kgs[branch.to_node_id]
-            else:
-                downstream = subtree_kgs[branch.from_node_id]
-            diameter_m = _gas_diameter(downstream)
+        # Downstream endpoint = the one whose tree-parent is the other.
+        if parent.get(branch.to_node_id) == branch.from_node_id:
+            downstream_node = branch.to_node_id
+        else:
+            downstream_node = branch.from_node_id
+        if diameter_tiers:
+            diameter_m = _tier_diameter(subtree_consumers[downstream_node])
+        elif auto_diameter:
+            diameter_m = _gas_diameter(subtree_kgs[downstream_node])
         else:
             diameter_m = default_diameter_m
         mx.create_gas_pipe(
@@ -1480,14 +1390,26 @@ def create_coupling_points_for_mes(  # NOSONAR
 
     if replace_primary_generation:
         # Drain primary generation so total rated capacity per carrier stays invariant.
+        # Measure the gas primary pool BEFORE draining: a gas distribution grid may
+        # carry no distributed primary gas generation (gas_gen_share=0), in which
+        # case there is nothing for P2G to displace and its gas output is additive
+        # green gas, not a replacement — so an empty pool is NOT an invariance
+        # violation and the gas check is skipped (electricity/heat still enforced).
+        gas_primary_pool_kgs = sum(
+            abs(float(getattr(c.model, "mass_flow_kgs", 0.0) or 0.0))
+            for c in mes_net.childs
+            if isinstance(c.model, mm.Source) and isinstance(c.grid, mm.GasGrid)
+        )
         unabsorbed_p = _drain_power_gen_capacity(mes_net, cp_power_out_mw)
         unabsorbed_g = _drain_gas_source_capacity(mes_net, cp_gas_out_kgs)
         unabsorbed_h = _drain_heat_gen_capacity(mes_net, cp_heat_out_mw)
-        for label, asked, left in (
+        checks = [
             ("PowerGenerator", cp_power_out_mw, unabsorbed_p),
-            ("gas Source", cp_gas_out_kgs, unabsorbed_g),
             ("heat (HeatGenerator + HX-Gen)", cp_heat_out_mw, unabsorbed_h),
-        ):
+        ]
+        if gas_primary_pool_kgs > 1e-12:
+            checks.append(("gas Source", cp_gas_out_kgs, unabsorbed_g))
+        for label, asked, left in checks:
             if left > 1e-9 and asked > 0:
                 # Hard error by design: an unabsorbed remainder means the CP
                 # output exceeds the primary pool, so total rated capacity is

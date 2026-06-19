@@ -127,6 +127,7 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
         max_import_kgs=None,
         max_export_kgs=None,
         pin_temperature=True,
+        free_pressure_bounds=None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -139,12 +140,22 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
         self.pressure_pu = pressure_pu
         self.t_k = t_k
         self.pin_temperature = pin_temperature
+        self.free_pressure_bounds = free_pressure_bounds
 
     def overwrite(self, node_model, grid):
-        """Pin pressure; pin temperature only if ``pin_temperature`` (default True).
-        Set False on return-side slacks so T emerges from upstream heat balance."""
-        node_model.pressure_pu = Const(self.pressure_pu)
-        node_model.pressure_squared_pu = Const(self.pressure_pu**2)
+
+        if self.free_pressure_bounds is not None:
+            lo, hi = self.free_pressure_bounds
+            
+            psq = getattr(node_model, "pressure_squared_pu", None)
+            p = getattr(node_model, "pressure_pu", None)
+            if type(psq) is Var:
+                psq.min, psq.max = lo * lo, hi * hi
+            if type(p) is Var:
+                p.min, p.max = lo, hi
+        else:
+            node_model.pressure_pu = Const(self.pressure_pu)
+            node_model.pressure_squared_pu = Const(self.pressure_pu**2)
         if self.pin_temperature:
             node_model.t_pu = Const(self.t_k / grid.t_ref_k)
             node_model.t_k = Const(self.t_k)
