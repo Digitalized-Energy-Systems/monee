@@ -158,7 +158,6 @@ class GurobipySolver(SolverInterface):
     _LEX_ABS_TOL = 1e-9
 
     _LEX_AUX_MIPGAP = 1e-2
-    _LEX_AUX_TIMELIMIT = 15.0
 
     def __init__(self, params: dict | None = None):
         self._backend_name = "gurobipy"
@@ -650,29 +649,18 @@ class GurobipySolver(SolverInterface):
 
     def _solve_lexicographic(self, gm, user_obj_exprs, aux_obj_exprs):
         """Lexicographic solve: optimise the user objective first, then the aux
-        (formulation-tightening) objective without degrading the user tier.
+        (formulation-tightening) objective without degrading the user tier."""
 
-        Uses Gurobi's native hierarchical multi-objective (``setObjectiveN``
-        with priorities) whenever the objectives are at most quadratic - a
-        single solve, no explicit cap constraint - hoisting any quadratic term
-        onto an auxiliary so the multi-objective stays linear.  A genuinely
-        *nonlinear* objective (NLP formulations) cannot be expressed in the
-        multi-objective API and routes to the portable two-phase fallback."""
-        if not self._is_nonlinear(sum(user_obj_exprs)) and not self._is_nonlinear(
+        if self._is_nonlinear(sum(user_obj_exprs)) or self._is_nonlinear(
             sum(aux_obj_exprs)
         ):
-            return self._solve_lexicographic_native(gm, user_obj_exprs, aux_obj_exprs)
-        return self._solve_lexicographic_two_phase(gm, user_obj_exprs, aux_obj_exprs)
+            return self._solve_lexicographic_two_phase(gm, user_obj_exprs, aux_obj_exprs)
+        gm.update()  # flush pending constraints so the Num* counts are accurate
+        if gm.NumQConstrs > 0 or gm.NumGenConstrs > 0:
+            return self._solve_lexicographic_two_phase(gm, user_obj_exprs, aux_obj_exprs)
+        return self._solve_lexicographic_native(gm, user_obj_exprs, aux_obj_exprs)
 
     def _solve_lexicographic_native(self, gm, user_obj_exprs, aux_obj_exprs):
-        """Native hierarchical objectives: higher priority = optimised first.
-
-        The user tier is held strict (``reltol=0``, ``abstol=_LEX_ABS_TOL``) so
-        optimising the aux tier cannot degrade it - a non-zero ``reltol`` would
-        *loosen* Gurobi's default (``ObjNRelTol=0``) and let the primary
-        objective drift by that fraction.  (Any residual spread between this and
-        the two-phase/Pyomo result is the ``MIPGap`` optimality tolerance on the
-        large auto-scaled user objective: ~``MIPGap·|user|``, not lex drift.)"""
         GRB = self._GRB
         gm.ModelSense = GRB.MINIMIZE
         gm.setObjectiveN(
@@ -689,14 +677,12 @@ class GurobipySolver(SolverInterface):
             priority=1,
             name="aux",
         )
-        # Loosen only the aux pass (see _LEX_AUX_* docs): per-objective env so
-        # the user tier keeps the model's global tolerances.
-        if self._LEX_AUX_MIPGAP is not None or self._LEX_AUX_TIMELIMIT is not None:
+        # Loosen the gap on the aux pass only (per-objective env) so the user
+        # tier keeps the model's global tolerances. No separate time cap: the
+        # aux pass shares the global TimeLimit, so raising it tightens the cone.
+        if self._LEX_AUX_MIPGAP is not None:
             env_aux = gm.getMultiobjEnv(1)
-            if self._LEX_AUX_MIPGAP is not None:
-                env_aux.setParam("MIPGap", self._LEX_AUX_MIPGAP)
-            if self._LEX_AUX_TIMELIMIT is not None:
-                env_aux.setParam("TimeLimit", self._LEX_AUX_TIMELIMIT)
+            env_aux.setParam("MIPGap", self._LEX_AUX_MIPGAP)
             try:
                 gm.optimize()
             finally:
@@ -708,8 +694,9 @@ class GurobipySolver(SolverInterface):
     def _solve_lexicographic_two_phase(self, gm, user_obj_exprs, aux_obj_exprs):
         """Portable two-phase lexicographic: minimise ``Sum(user)`` then
         ``Sum(aux)`` under ``Sum(user) <= S* + slack``.  Handles the
-        quadratic/nonlinear objectives ``setObjectiveN`` cannot."""
-        # Phase 1: user objective only.
+        quadratic/nonlinear objectives ``setObjectiveN`` cannot, and is the
+        correct path for MISOCP/MIQCP models (see :meth:`_solve_lexicographic`)."""
+        # Phase 1: user objective only - solved to the model's (tight) MIPGap.
         self._set_objective(gm, user_obj_exprs)
         gm.optimize()
         success, report = self._classify(gm, phase_label="Lexicographic phase 1")
@@ -720,9 +707,18 @@ class GurobipySolver(SolverInterface):
         slack = self._lex_cap_slack(s_star, self._params.get("MIPGap", 0.0))
         self._add_temp_constr(gm, sum(user_obj_exprs) <= s_star + slack, name="lex_cap")
 
-        # Phase 2: aux objective under the phase-1 cap.
         self._set_objective(gm, aux_obj_exprs)
-        gm.optimize()
+        if self._LEX_AUX_MIPGAP is not None:
+            gm.setParam("MIPGap", self._LEX_AUX_MIPGAP)
+            try:
+                gm.optimize()
+            finally:
+                gm.setParam(
+                    "MIPGap",
+                    self._params.get("MIPGap", DEFAULT_GUROBI_PARAMS["MIPGap"]),
+                )
+        else:
+            gm.optimize()
         return self._classify(gm, phase_label="Lexicographic phase 2")
 
     # --------- equation-building passes (mirror PyomoSolver) ---------
