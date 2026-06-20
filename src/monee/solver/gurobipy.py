@@ -152,14 +152,13 @@ class GurobipySolver(SolverInterface):
             (e.g. ``{"TimeLimit": 60, "MIPGap": 1e-4}``).
     """
 
-    # Snap-to-bound tolerance; sub-epsilon noise re-injected as a warm start
-    # otherwise drifts the next solve's incumbent off its bound.
     _BOUND_SNAP_TOL = 1e-9
 
-    # Lexicographic cap slack (mirrors PyomoSolver): never exclude a phase-1
-    # incumbent the solver accepted within its MIPGap tolerance.
     _LEX_REL_TOL = 1e-6
     _LEX_ABS_TOL = 1e-9
+
+    _LEX_AUX_MIPGAP = 1e-2
+    _LEX_AUX_TIMELIMIT = 15.0
 
     def __init__(self, params: dict | None = None):
         self._backend_name = "gurobipy"
@@ -690,7 +689,20 @@ class GurobipySolver(SolverInterface):
             priority=1,
             name="aux",
         )
-        gm.optimize()
+        # Loosen only the aux pass (see _LEX_AUX_* docs): per-objective env so
+        # the user tier keeps the model's global tolerances.
+        if self._LEX_AUX_MIPGAP is not None or self._LEX_AUX_TIMELIMIT is not None:
+            env_aux = gm.getMultiobjEnv(1)
+            if self._LEX_AUX_MIPGAP is not None:
+                env_aux.setParam("MIPGap", self._LEX_AUX_MIPGAP)
+            if self._LEX_AUX_TIMELIMIT is not None:
+                env_aux.setParam("TimeLimit", self._LEX_AUX_TIMELIMIT)
+            try:
+                gm.optimize()
+            finally:
+                gm.discardMultiobjEnvs()
+        else:
+            gm.optimize()
         return self._classify(gm, phase_label="Lexicographic (native priorities)")
 
     def _solve_lexicographic_two_phase(self, gm, user_obj_exprs, aux_obj_exprs):

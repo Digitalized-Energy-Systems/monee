@@ -43,16 +43,23 @@ def test_auto_backend_routing_for_gekko_names():
 
 def test_auto_backend_pyomo_for_unknown_names():
     # WHEN
-    gurobi_backend = _auto_backend("gurobi")
     scip_backend = _auto_backend("scip")
     glpk_backend = _auto_backend("glpk")
     unknown_backend = _auto_backend("definitely_not_a_solver")
 
     # THEN
-    assert gurobi_backend == "pyomo"
     assert scip_backend == "pyomo"
     assert glpk_backend == "pyomo"
     assert unknown_backend == "pyomo"
+
+
+def test_auto_backend_gurobi_routes_to_gurobipy_single_period():
+    # 'gurobi' auto-routes to the native gurobipy backend for single-period
+    # solves when gurobipy is importable, and falls back to pyomo when the
+    # context can't provide it (multi-period passes gurobipy_supported=False).
+    pytest.importorskip("gurobipy")
+    assert _auto_backend("gurobi", gurobipy_supported=True) == "gurobipy"
+    assert _auto_backend("gurobi", gurobipy_supported=False) == "pyomo"
 
 
 # resolve_solver - defaults & instances
@@ -188,15 +195,26 @@ def test_resolve_gurobipy_backend_rejects_other_solver_name():
         resolve_solver("ipopt", backend="gurobipy")
 
 
-def test_resolve_gurobi_still_routes_to_pyomo_by_default():
-    # Auto-routing is unchanged: 'gurobi' without an explicit backend stays Pyomo.
-    # GIVEN
+def test_resolve_gurobi_routes_to_gurobipy_by_default():
+    # 'gurobi' without an explicit backend now resolves to the native gurobipy
+    # backend (single-period); pass backend='pyomo' to force the round-trip.
+    pytest.importorskip("gurobipy")
+
+    # WHEN
+    s = resolve_solver("gurobi")
+
+    # THEN
+    assert isinstance(s, GurobipySolver)
+
+
+def test_resolve_gurobi_pyomo_backend_explicit():
+    # The Pyomo Gurobi path is still reachable via an explicit backend.
     pyo_env = pytest.importorskip("pyomo.environ")
     if not pyo_env.SolverFactory("gurobi").available(exception_flag=False):
         pytest.skip("Gurobi not installed for Pyomo on this system.")
 
     # WHEN
-    s = resolve_solver("gurobi")
+    s = resolve_solver("gurobi", backend="pyomo")
 
     # THEN
     assert isinstance(s, PyomoSolver)

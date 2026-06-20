@@ -2,14 +2,18 @@
 
 Concrete instances pass through unchanged. IPOPT (the default solver) routes to
 the in-process **CasADi** backend when installed (falling back to GEKKO's bundled
-IPOPT otherwise); the discrete GEKKO solvers (APOPT/BPOPT) route to GEKKO; any
-other name is forwarded to Pyomo. Default is therefore CasADi/IPOPT (GEKKO/IPOPT
-without casadi).
+IPOPT otherwise); the discrete GEKKO solvers (APOPT/BPOPT) route to GEKKO;
+``gurobi`` routes to the native **gurobipy** backend for single-period solves
+(falling back to Pyomo's Gurobi plugin for multi-period or when ``gurobipy`` is
+not importable); any other name is forwarded to Pyomo. Default is therefore
+CasADi/IPOPT (GEKKO/IPOPT without casadi).
 
 ``backend='gurobipy'`` selects the native in-memory Gurobi backend
 (:class:`~monee.solver.gurobipy.GurobipySolver`) instead of driving Gurobi
 through Pyomo's file round-trip; it is single-period only and the solver name
-must be ``'gurobi'`` (the sole solver it provides).
+must be ``'gurobi'`` (the sole solver it provides). Single-period ``gurobi``
+already resolves here by default; pass ``backend='pyomo'`` to force the Pyomo
+round-trip instead.
 
 ``backend='casadi'`` selects the in-process CasADi/IPOPT backend
 (:class:`~monee.solver.casadi.CasADiSolver`), which builds the NLP once as an
@@ -36,12 +40,16 @@ GEKKO_SOLVERS: dict[str, int] = {
 
 
 def _casadi_available() -> bool:
-    """Whether the optional CasADi backend can be imported. IPOPT requests
-    (including the default) route to CasADi when it is, and fall back to GEKKO's
-    bundled IPOPT when it is not - so ``import monee`` and the default solve path
-    never hard-require casadi."""
     try:
         import casadi  # noqa: F401
+    except ImportError:
+        return False
+    return True
+
+
+def _gurobipy_available() -> bool:
+    try:
+        import gurobipy  # noqa: F401
     except ImportError:
         return False
     return True
@@ -132,7 +140,10 @@ def _dispatch_backend(
     the native Gurobi / CasADi solvers; pass ``None`` where those backends are
     unavailable (e.g. multi-period)."""
     name = (solver or "ipopt").lower() if isinstance(solver, str) else "ipopt"
-    chosen_backend = backend or _auto_backend(name)
+    
+    chosen_backend = backend or _auto_backend(
+        name, gurobipy_supported=gurobipy_factory is not None
+    )
 
     if chosen_backend == "gekko":
         if name not in GEKKO_SOLVERS:
@@ -245,7 +256,7 @@ def resolve_multi_period_solver(
     )
 
 
-def _auto_backend(name: str) -> str:
+def _auto_backend(name: str, gurobipy_supported: bool = True) -> str:
     """Route a solver name to a default backend.
 
     ``ipopt`` (the default solver) routes to the in-process **CasADi** backend
@@ -254,10 +265,18 @@ def _auto_backend(name: str) -> str:
     faster, with full coverage of the smooth formulations (incl. gas/heat splines
     and temporal/multi-period coupling). It falls back to GEKKO's bundled IPOPT
     when casadi is absent. The discrete-capable GEKKO solvers (``apopt`` /
-    ``bpopt``) stay on GEKKO; any other name goes to Pyomo.
+    ``bpopt``) stay on GEKKO.
+
+    ``gurobi`` routes to the native in-memory **gurobipy** backend (no Pyomo
+    file round-trip) when that backend is usable in this context -
+    ``gurobipy_supported`` (single-period only) and the ``gurobipy`` module is
+    importable - and falls back to Pyomo's Gurobi plugin otherwise (multi-period
+    or no gurobipy). Any other name goes to Pyomo.
     """
     if name == "ipopt":
         return "casadi" if _casadi_available() else "gekko"
     if name in GEKKO_SOLVERS:
         return "gekko"
+    if name == "gurobi" and gurobipy_supported and _gurobipy_available():
+        return "gurobipy"
     return "pyomo"
