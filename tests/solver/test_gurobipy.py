@@ -376,11 +376,11 @@ def test_lexicographic_matches_single_phase_on_unstressed_net():
 
 
 @requires_gurobi
-def test_lexicographic_misocp_routes_to_two_phase():
-    """MISOCP models carry quadratic (SOC) constraints. Gurobi's hierarchical
-    multi-objective (``setObjectiveN``) returns suboptimal first-tier solutions
-    on such models, so lex must take the portable two-phase path - NOT the native
-    single-solve path - whenever the model has quadratic/general constraints."""
+def test_lexicographic_uses_native_priorities_when_objective_linear():
+    """The router picks the native ``setObjectiveN`` path (single solve) when the
+    objectives are linear/quadratic; only a genuinely nonlinear (NLExpr)
+    objective falls back to two-phase. MISOCP shedding objectives are linear, so
+    they take the native path."""
     from monee.solver.gurobipy import GurobipySolver
 
     # GIVEN
@@ -407,72 +407,36 @@ def test_lexicographic_misocp_routes_to_two_phase():
 
     # THEN
     assert result.success
-    assert calls["two_phase"] == 1
-    assert calls["native"] == 0
+    assert calls["native"] == 1
+    assert calls["two_phase"] == 0
 
 
 @requires_gurobi
-def test_lexicographic_two_phase_handles_quadratic_user_objective():
-    """With ext grids on, the user objective carries a quadratic slack term, and
-    the MISOCP net carries SOC constraints. Both push lex onto the two-phase
-    path, which must solve the quadratic user objective successfully."""
-    from monee.problem.min_load_shedding import create_min_load_shedding_problem
+def test_lexicographic_disables_dual_reductions():
+    """Lex solves disable Gurobi's dual (reduced-cost) presolve reductions, which
+    on the ill-conditioned MISOCP per-unit model otherwise fix load-regulation
+    vars at "shed" and presolve away the served-load optimum. The flag is set on
+    the model inside ``_solve_lexicographic`` (covering native + two-phase)."""
     from monee.solver.gurobipy import GurobipySolver
 
-    # GIVEN: include_ext_grids=True => quadratic ext-slack in the user objective.
-    prob = create_min_load_shedding_problem(
-        bounds_vm=(0.5, 1.5),
-        bounds_pressure=(0.5, 1.5),
-        bounds_t=(0.5, 1.5),
-        include_ext_grids=True,
-        lex_objectives=True,
-    )
     solver = GurobipySolver()
-    calls = {"native": 0, "two_phase": 0}
-    on, ot = solver._solve_lexicographic_native, solver._solve_lexicographic_two_phase
-    solver._solve_lexicographic_native = lambda *a, **k: (
-        calls.__setitem__("native", calls["native"] + 1) or on(*a, **k)
-    )
-    solver._solve_lexicographic_two_phase = lambda *a, **k: (
-        calls.__setitem__("two_phase", calls["two_phase"] + 1) or ot(*a, **k)
-    )
+    seen = {}
+    orig_native = solver._solve_lexicographic_native
+
+    def spy_native(gm, *a, **k):
+        seen["DualReductions"] = gm.getParamInfo("DualReductions")[2]  # current value
+        return orig_native(gm, *a, **k)
+
+    solver._solve_lexicographic_native = spy_native
 
     # WHEN
-    result = solver.solve(_build_misocp_net(), optimization_problem=prob)
+    result = solver.solve(
+        _build_misocp_net(), optimization_problem=_make_shedding_problem(True)
+    )
 
     # THEN
     assert result.success
-    assert calls["two_phase"] == 1
-    assert calls["native"] == 0
-
-
-@requires_gurobi
-def test_lexicographic_router_picks_native_only_for_linear_models():
-    """Router unit test: the native ``setObjectiveN`` path is used only when the
-    model is purely linear; any quadratic or general (nonlinear) constraint
-    routes to the two-phase fallback."""
-    from monee.solver.gurobipy import GurobipySolver, _require_gurobipy
-
-    gp, GRB, _ = _require_gurobipy()
-    solver = GurobipySolver()
-    solver._gp, solver._GRB = gp, GRB
-
-    def route(add_quadratic):
-        gm = gp.Model()
-        gm.setParam("OutputFlag", 0)
-        x = gm.addVar(lb=0, ub=1, name="x")
-        y = gm.addVar(lb=0, ub=1, name="y")
-        gm.addConstr(x + y <= 1)  # linear
-        if add_quadratic:
-            gm.addConstr(x * x + y * y <= 1)  # quadratic / SOC
-        picked = {}
-        solver._solve_lexicographic_native = lambda *a, **k: picked.setdefault("p", "native")
-        solver._solve_lexicographic_two_phase = lambda *a, **k: picked.setdefault("p", "two_phase")
-        solver._solve_lexicographic(gm, [x], [y])
-        return picked["p"]
-
-    assert route(add_quadratic=False) == "native"
-    assert route(add_quadratic=True) == "two_phase"
+    assert seen["DualReductions"] == 0
 
 
 # --------------------------------------------------------------------------- #

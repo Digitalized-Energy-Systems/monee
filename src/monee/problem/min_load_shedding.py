@@ -573,33 +573,6 @@ def create_min_load_shedding_problem(  # NOSONAR
         _calc_objective
     )
 
-    # Quadratic ext-grid slack toward zero exchange, weighted at
-    # demand_weight · EXT_SLACK_WEIGHT_RATIO. Off when include_ext_grids=False.
-    if include_ext_grids:
-
-        def _ext_slack_models(network):
-            out = []
-            for model in network.all_models():
-                if isinstance(model, (ExtPowerGrid, ExtHydrGrid)):
-                    out.append(model)
-            return out
-
-        def _ext_slack_data(_model):
-            return _weights["demand"] * EXT_SLACK_WEIGHT_RATIO
-
-        def _ext_slack_calc(model_to_data):
-            total = 0
-            for model, weight in model_to_data.items():
-                if isinstance(model, ExtPowerGrid):
-                    total = total + model.p_mw * model.p_mw * weight
-                elif isinstance(model, ExtHydrGrid):
-                    total = total + model.mass_flow_kgs * model.mass_flow_kgs * weight
-            return total
-
-        objectives.with_models(_ext_slack_models).data(_ext_slack_data).calculate(
-            _ext_slack_calc
-        )
-
     problem.objectives = objectives
 
     constraints = Constraints()

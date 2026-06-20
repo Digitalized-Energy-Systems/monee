@@ -20,32 +20,27 @@ from monee.model.multi import (
 # Fallback HHV (kWh/kg) when a gas grid is missing ``higher_heating_value_kwh_per_kg``.
 _HHV_DEFAULT = DEFAULT_GAS_HHV_KWH_PER_KG
 
+_UNBOUND_MAX_I_KA = 999.0
+
 
 def line_loading_limit(branch_model, side: str, max_loading: float):
-    """LP-writable line-loading constraint.
 
-    AC: ``loading_*_percent ≤ max``. MISOCP: emit
-    ``current_pu_squared · scale² ≤ max²`` using the formulation-stashed
-    ``_misocp_loading_*_scale_squared`` (the sqrt form is LP-incompatible).
-    """
     if side not in ("from", "to"):
         raise ValueError(f"side must be 'from' or 'to', got {side!r}")
+    max_i_ka = getattr(branch_model, "max_i_ka", None)
+    if max_i_ka is None or max_i_ka >= _UNBOUND_MAX_I_KA:
+        return True
     scale_attr = f"_misocp_loading_{side}_scale_squared"
     if hasattr(branch_model, scale_attr):
         scale_sq = getattr(branch_model, scale_attr)
-        return branch_model.current_pu_squared * scale_sq <= max_loading * max_loading
+        if scale_sq <= 0:
+            return True
+        return branch_model.current_pu_squared <= (max_loading * max_loading) / scale_sq
     return getattr(branch_model, f"loading_{side}_pu") <= max_loading
 
 
 def cp_input_rated_mw(component):  # NOSONAR
-    """Return ``(carrier, rated_input_mw)`` for a coupling-point component or
-    ``None`` if *component* is not a coupling point.
 
-    ``carrier`` is ``'gas'`` or ``'power'`` (the carrier the CP draws *from*).
-    ``rated_input_mw`` is the nameplate input the CP consumes at regulation 1.0.
-    Used both by the resilience metric (to account CP curtailment) and by
-    ``min_load_shedding`` (to treat CPs as additional loads in the objective).
-    """
     model = component.model
     grid = getattr(component, "grid", None)
 

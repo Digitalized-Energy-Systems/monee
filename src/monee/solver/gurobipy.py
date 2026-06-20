@@ -68,18 +68,10 @@ from .core import (
 
 _log = logging.getLogger(__name__)
 
-# Gurobi parameter defaults for the native backend.  Deliberately minimal -
-# ~kW precision at MW scale (MIPGap) and a wall-clock cap (TimeLimit) - letting
-# Gurobi auto-tune everything else.  Note: the ScaleFlag=2 / MIPFocus=2 pair
-# tuned for the *pyomo* file path does NOT transfer here; on the native model
-# MIPFocus=2 sent the MISOCP load-shedding solve from ~0.6 s to ~9 s (it forces
-# bound-proving work the auto strategy avoids).  Override per solve via
-# ``GurobipySolver(params=...)``.
 DEFAULT_GUROBI_PARAMS: dict = {
     "MIPGap": 1e-3,
     "TimeLimit": 300,
 }
-
 
 def _require_gurobipy():
     """Import gurobipy lazily so a missing install doesn't break other backends."""
@@ -651,12 +643,12 @@ class GurobipySolver(SolverInterface):
         """Lexicographic solve: optimise the user objective first, then the aux
         (formulation-tightening) objective without degrading the user tier."""
 
+        # DualReductions are dangerous for that kind of lex solve
+        gm.setParam("DualReductions", 0)
+
         if self._is_nonlinear(sum(user_obj_exprs)) or self._is_nonlinear(
             sum(aux_obj_exprs)
         ):
-            return self._solve_lexicographic_two_phase(gm, user_obj_exprs, aux_obj_exprs)
-        gm.update()  # flush pending constraints so the Num* counts are accurate
-        if gm.NumQConstrs > 0 or gm.NumGenConstrs > 0:
             return self._solve_lexicographic_two_phase(gm, user_obj_exprs, aux_obj_exprs)
         return self._solve_lexicographic_native(gm, user_obj_exprs, aux_obj_exprs)
 
