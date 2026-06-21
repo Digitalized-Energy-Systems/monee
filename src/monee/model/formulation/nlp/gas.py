@@ -75,12 +75,10 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         self,
         friction_model="constant",
         smoothing_eps=1e-3,
-        n_breakpoints=12,
     ):
         assert friction_model in FRICTION_MODELS, friction_model
         self.friction_model = friction_model
         self.smoothing_eps = smoothing_eps
-        self.n_breakpoints = n_breakpoints
 
     def ensure_var(self, model, simulation=False, grid=None):
         # mass_flow_kgs is already the signed flow (model defines it as pos − neg);

@@ -127,12 +127,10 @@ class SmoothDarcyWeisbachBranchFormulation(BranchFormulation):
         self,
         friction_model="constant",
         smoothing_eps=1e-3,
-        n_breakpoints=12,
     ):
         assert friction_model in FRICTION_MODELS, friction_model
         self.friction_model = friction_model
         self.smoothing_eps = smoothing_eps
-        self.n_breakpoints = n_breakpoints
 
     def ensure_var(self, model, simulation=False, grid=None):
         _ensure_smooth_flow_vars(model, self.friction_model, simulation)
@@ -167,12 +165,10 @@ class SmoothPassiveHeatExchangerFormulation(BranchFormulation):
         self,
         friction_model="constant",
         smoothing_eps=1e-3,
-        n_breakpoints=12,
     ):
         assert friction_model in FRICTION_MODELS, friction_model
         self.friction_model = friction_model
         self.smoothing_eps = smoothing_eps
-        self.n_breakpoints = n_breakpoints
 
     def ensure_var(self, model, simulation=False, grid=None):
         _ensure_smooth_flow_vars(model, self.friction_model, simulation)

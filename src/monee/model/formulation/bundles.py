@@ -145,7 +145,6 @@ def make_gas_milp_pwl_formulation(n_breakpoints: int = 12) -> NetworkFormulation
 def make_gas_nlp_formulation(
     friction_model: str = "constant",
     smoothing_eps: float = 1e-3,
-    n_breakpoints: int = 12,
 ) -> NetworkFormulation:
     """Pure-NLP Weymouth gas formulation for GEKKO IPOPT/APOPT.
 
@@ -159,7 +158,6 @@ def make_gas_nlp_formulation(
             GasPipe: SmoothWeymouthBranchFormulation(
                 friction_model=friction_model,
                 smoothing_eps=smoothing_eps,
-                n_breakpoints=n_breakpoints,
             ),
         },
         node_type_to_formulations={(Junction, GasGrid): GasNodeFormulation()},
@@ -240,7 +238,6 @@ HEAT_CONVEX_MILP_FORMULATION = make_heat_convex_milp_formulation(num_partitions=
 def make_heat_nlp_formulation(
     friction_model: str = "constant",
     smoothing_eps: float = 1e-3,
-    n_breakpoints: int = 12,
 ) -> NetworkFormulation:
     """Pure-NLP Darcy-Weisbach water/heat formulation for GEKKO IPOPT/APOPT.
 
@@ -254,13 +251,11 @@ def make_heat_nlp_formulation(
             WaterPipe: SmoothDarcyWeisbachBranchFormulation(
                 friction_model=friction_model,
                 smoothing_eps=smoothing_eps,
-                n_breakpoints=n_breakpoints,
             ),
             HeatExchanger: SmoothHeatExchangerFormulation(),
             PassiveHeatExchanger: SmoothPassiveHeatExchangerFormulation(
                 friction_model=friction_model,
                 smoothing_eps=smoothing_eps,
-                n_breakpoints=n_breakpoints,
             ),
         },
         node_type_to_formulations={(Junction, WaterGrid): WaterNodeFormulation()},
@@ -291,6 +286,13 @@ def make_smooth_nlp_formulation(friction_model: str = "constant"):
     )
 
 
+"""
+Full NLP Formulation, specialized to use with IPOPT.
+
+Electricity Full AC
+Gas Full Weymouth with constant friction model
+Heat Full Non-Convex bilinear heat model
+"""
 SMOOTH_NLP_FORMULATION = make_smooth_nlp_formulation()
 
 
@@ -307,19 +309,34 @@ def make_convex_miqcqp_formulation(num_partitions: int = 1) -> NetworkFormulatio
     )
 
 
+"""
+Convex MIQCQP formulation
+
+Uses MISOCP relaxation for electricity, convex weymouth relaxation, and
+McCormick-Heat relaxation (MILP)
+
+Exact quadratic models across all three carriers - for global MIQCQP
+solvers (SCIP, Gurobi). No relaxation gap, no trigonometric terms.
+"""
 CONVEX_MIQCQP_FORMULATION = make_convex_miqcqp_formulation()
 
-# Exact quadratic models across all three carriers - for global MIQCQP
-# solvers (SCIP, Gurobi). No relaxation gap, no trigonometric terms.
+"""
+Nonconvex MIQCQP formulation
+
+Exact quadratic models across all three carriers - for global MIQCQP
+solvers (SCIP, Gurobi). No relaxation gap, no trigonometric terms.
+"""
 NONCONVEX_MIQCQP_FORMULATION = combine(
     EL_NONCONVEX_MIQCQP_FORMULATION,
     GAS_NONCONVEX_MIQCQP_FORMULATION,
     HEAT_NONCONVEX_MIQCQP_FORMULATION,
 )
 
-# The deliberate hybrid Network() applies by default: exact polar AC for
-# electricity, the MISOCP-shaped relaxed Weymouth for gas and the bilinear
-# Darcy-Weisbach for heat. Documented here so its mixed nature is explicit.
+"""
+EL NLP
+GAS CONVEX MIQCQP
+HEAT NONConvex MIQCQP
+"""
 DEFAULT_SIMULATION_FORMULATION = combine(
     EL_NLP_FORMULATION,
     GAS_CONVEX_MIQCQP_FORMULATION,

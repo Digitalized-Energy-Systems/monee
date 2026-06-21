@@ -32,6 +32,7 @@ from .network import (
     Network,
     transform_network,
     to_spanning_tree,
+    to_backbone,
     calc_coordinates,
 )
 from .node import Bus, Junction

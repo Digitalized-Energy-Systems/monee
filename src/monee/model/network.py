@@ -813,8 +813,100 @@ def _clean_up_compound(network: Network, compound):
     return fully_intact
 
 
-def to_spanning_tree(network: Network):
-    return transform_network(network, nx.minimum_spanning_tree)
+def to_spanning_tree(network: Network, *, weight=None):
+    """Minimum spanning tree of *network*.
+
+    ``weight=None`` (default) keeps unit edge weights, i.e. a fixed but
+    cost-agnostic spanning tree (unchanged historical behaviour). Pass a
+    callable ``weight(branch, node_from, node_to) -> float`` to weight edges
+    (e.g. by pipe length) and obtain a minimum-weight tree.
+    """
+
+    def _mst(g):
+        if weight is not None:
+            for u, v, _key, data in g.edges(keys=True, data=True):
+                data["weight"] = float(
+                    weight(
+                        data["internal_branch"],
+                        g.nodes[u]["internal_node"],
+                        g.nodes[v]["internal_node"],
+                    )
+                )
+        return nx.minimum_spanning_tree(g, weight="weight")
+
+    return transform_network(network, _mst)
+
+
+def to_backbone(
+    network: Network,
+    *,
+    method="span",
+    weight=None,
+    terminals=None,
+    steiner_method="mehlhorn",
+):
+    """Backbone subgraph of *network* used as the layout skeleton for grid
+    generation.
+
+    ``method="span"`` returns a spanning tree over all nodes (see
+    :func:`to_spanning_tree`; ``weight`` is forwarded). ``method="steiner"``
+    returns an approximate minimum Steiner tree connecting only ``terminals``
+    plus the transit nodes needed to link them, dropping nodes no terminal
+    needs.
+    """
+    if method == "span":
+        return to_spanning_tree(network, weight=weight)
+    if method == "steiner":
+        if terminals is None:
+            raise ValueError("steiner backbone requires a terminals set")
+        return transform_network(
+            network, _steiner_transform(set(terminals), weight, steiner_method)
+        )
+    raise ValueError(f"unknown backbone method {method!r}; expected 'span' or 'steiner'")
+
+
+def _steiner_transform(terminals, weight, steiner_method):
+    """Graph transform that reduces a MultiGraph to the Steiner tree over
+    *terminals*. Computed on a simple weighted projection (cheapest parallel
+    edge per pair) for robustness, then mapped back to the original multi-edges
+    so node/branch attributes survive."""
+    from networkx.algorithms.approximation import steiner_tree
+
+    def _transform(g):
+        simple = nx.Graph()
+        for node_id, data in g.nodes(data=True):
+            simple.add_node(node_id, **data)
+        for u, v, key, data in g.edges(keys=True, data=True):
+            w = (
+                float(
+                    weight(
+                        data["internal_branch"],
+                        g.nodes[u]["internal_node"],
+                        g.nodes[v]["internal_node"],
+                    )
+                )
+                if weight is not None
+                else 1.0
+            )
+            if not simple.has_edge(u, v) or w < simple[u][v]["weight"]:
+                simple.add_edge(u, v, weight=w, _mkey=key)
+
+        present = [t for t in terminals if t in simple]
+        result = nx.MultiGraph()
+        if len(present) <= 1:
+            for node_id in present:
+                result.add_node(node_id, **g.nodes[node_id])
+            return result
+
+        tree = steiner_tree(simple, present, weight="weight", method=steiner_method)
+        for node_id in tree.nodes:
+            result.add_node(node_id, **g.nodes[node_id])
+        for u, v in tree.edges():
+            key = simple[u][v]["_mkey"]
+            result.add_edge(u, v, key=key, **g[u][v][key])
+        return result
+
+    return _transform
 
 
 def transform_network(network: Network, graph_transform):

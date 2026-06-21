@@ -54,6 +54,48 @@ def get_length(
     return distance.distance(node1.position, node2.position).m
 
 
+def _length_weight(branch, node_from, node_to):
+    """Edge weight = pipe length [m]: ``length_m`` if set, else geodesic
+    distance between the endpoint positions, else the default length."""
+    length = getattr(branch.model, "length_m", None)
+    if length is not None:
+        return float(length)
+    if node_from.position is not None and node_to.position is not None:
+        return distance.distance(node_from.position, node_to.position).m
+    return float(DEFAULT_LENGTH)
+
+
+def _resolve_backbone_weight(weight):
+    return _length_weight if weight == "length" else weight
+
+
+def _demand_supply_terminals(power_net, slack_node_id):
+    """Buses a Steiner backbone must connect: the slack plus every bus that
+    carries electrical load or generation."""
+    terminals = {slack_node_id}
+    for node in power_net.nodes:
+        if (
+            _node_power_load_mw(power_net, node) > 0
+            or _node_power_gen_mw(power_net, node) > 0
+        ):
+            terminals.add(node.id)
+    return terminals
+
+
+def _make_backbone(power_net, slack_node_id, method, weight):
+    """Spanning-tree (default) or Steiner backbone of ``power_net`` used as the
+    shared gas/heat layout skeleton."""
+    weight_fn = _resolve_backbone_weight(weight)
+    if method == "steiner":
+        return mm.to_backbone(
+            power_net,
+            method="steiner",
+            weight=weight_fn,
+            terminals=_demand_supply_terminals(power_net, slack_node_id),
+        )
+    return mm.to_backbone(power_net, method="span", weight=weight_fn)
+
+
 def create_heat_net_for_power(
     power_net,
     target_net,
@@ -594,6 +636,8 @@ def create_gas_tree_net_for_power(  # NOSONAR
     pressure_ref_pa=REF_PA,
     pressure_ambient_pa=0.0,
     diameter_tiers=None,
+    backbone_method="span",
+    backbone_weight=None,
 ):
     """Build a gas grid on the spanning tree of ``power_net``.
 
@@ -642,9 +686,11 @@ def create_gas_tree_net_for_power(  # NOSONAR
     # HHV [MJ/kg] of this grid's gas fluid (sizing matches the gas physics).
     gas_hhv_mj = gas_grid.higher_heating_value_kwh_per_kg * 3.6
 
-    power_net_as_st = mm.to_spanning_tree(power_net)
     slack_node = (
-        slack_node_id if slack_node_id is not None else power_net_as_st.first_node()
+        slack_node_id if slack_node_id is not None else power_net.first_node()
+    )
+    power_net_as_st = _make_backbone(
+        power_net, slack_node, backbone_method, backbone_weight
     )
 
     bus_index_to_junction_index = {}
@@ -804,6 +850,8 @@ def create_heat_supply_return_net_for_power(  # NOSONAR
     auto_diameter_v_mps=None,
     auto_diameter_headroom=1.5,
     auto_min_diameter_m=None,
+    backbone_method="span",
+    backbone_weight=None,
 ):
     """Build a supply/return DHS grid on the spanning tree of ``power_net``.
 
@@ -864,12 +912,13 @@ def create_heat_supply_return_net_for_power(  # NOSONAR
         )
         return max(d, auto_floor_m)
 
-    power_net_as_st = mm.to_spanning_tree(power_net)
-
     # Orient supply pipes outward from the slack via BFS so every supply
     # junction has an incoming pipe (McCormick-DHS pins direction).
     slack_root = (
-        slack_node_id if slack_node_id is not None else power_net_as_st.first_node()
+        slack_node_id if slack_node_id is not None else power_net.first_node()
+    )
+    power_net_as_st = _make_backbone(
+        power_net, slack_root, backbone_method, backbone_weight
     )
     undirected = nx.Graph(power_net_as_st.graph)
     branch_lookup = {}
@@ -1433,19 +1482,31 @@ def generate_supply_return_mes_based_on_power_net(
     centralized=False,
     central_node_id=None,
     couplings=("chp", "p2g", "p2h"),
+    backbone_method="span",
+    backbone_weight=None,
     heat_kwargs=None,
     gas_kwargs=None,
     coupling_kwargs=None,
 ):
     """Wrap :func:`create_gas_tree_net_for_power` + :func:`create_heat_supply_return_net_for_power`
     + :func:`create_coupling_points_for_mes` into one call. ``gas_kwargs`` /
-    ``heat_kwargs`` / ``coupling_kwargs`` forward to those builders."""
+    ``heat_kwargs`` / ``coupling_kwargs`` forward to those builders.
+
+    ``backbone_method`` (``"span"`` default, or ``"steiner"``) and
+    ``backbone_weight`` (``None`` for unit weights, ``"length"``, or a callable)
+    set the shared gas/heat layout skeleton; both are forwarded to the layer
+    builders unless already overridden in ``gas_kwargs`` / ``heat_kwargs``."""
+    gas_kwargs = dict(gas_kwargs or {})
+    heat_kwargs = dict(heat_kwargs or {})
+    for kw in (gas_kwargs, heat_kwargs):
+        kw.setdefault("backbone_method", backbone_method)
+        kw.setdefault("backbone_weight", backbone_weight)
     new_mes_net = net_power.copy()
     bus_to_gas_junc = create_gas_tree_net_for_power(
-        net_power, new_mes_net, **(gas_kwargs or {})
+        net_power, new_mes_net, **gas_kwargs
     )
     bus_to_heat_supply, heat_return = create_heat_supply_return_net_for_power(
-        net_power, new_mes_net, **(heat_kwargs or {})
+        net_power, new_mes_net, **heat_kwargs
     )
     create_coupling_points_for_mes(
         new_mes_net,
