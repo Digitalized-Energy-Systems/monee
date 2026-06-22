@@ -32,7 +32,7 @@ class QCElectricityNodeFormulation(NodeFormulation):
 
 
 class QCElectricityBranchFormulation(BranchFormulation):
-    def ensure_var(self, branch):
+    def ensure_var(self, branch, simulation=False, grid=None, **kwargs):
         theta_u = getattr(branch, "angmax", getattr(branch, "delta_max", math.pi / 6))
         theta_M = getattr(branch, "big_m_theta", math.pi)
 
@@ -50,7 +50,8 @@ class QCElectricityBranchFormulation(BranchFormulation):
         branch.theta_M = theta_M
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
-        y = np.linalg.pinv([[branch.br_r + branch.br_x * 1j]])[0][0]
+        #y = np.linalg.pinv([[branch.br_r + branch.br_x * 1j]])[0][0]
+        y = np.linalg.pinv([[branch.br_r_pu + branch.br_x_pu * 1j]])[0][0]
         g, b = (np.real(y), np.imag(y))
 
         v_from_min = getattr(from_node_model, "min_vm_pu", getattr(from_node_model, "v_min", 0.8))
@@ -122,7 +123,7 @@ class QCElectricityBranchFormulation(BranchFormulation):
                 b_branch=b,
                 tap=branch.tap,
                 shift=branch.shift,
-                g_from=branch.g_fr,
+                g_from=branch.g_fr_pu,
                 on_off=branch.on_off,
             ),
             opfmodel.int_flow_from_q(
@@ -134,7 +135,7 @@ class QCElectricityBranchFormulation(BranchFormulation):
                 b_branch=b,
                 tap=branch.tap,
                 shift=branch.shift,
-                b_from=branch.b_fr,
+                b_from=branch.b_fr_pu,
                 on_off=branch.on_off,
             ),
             opfmodel.int_flow_to_p(
@@ -146,7 +147,7 @@ class QCElectricityBranchFormulation(BranchFormulation):
                 b_branch=b,
                 tap=branch.tap,
                 shift=branch.shift,
-                g_to=branch.g_to,
+                g_to=branch.g_fr_pu, #todo: ist das wirklich so richtig? in branch attributen aber kein to wert aktuell?
                 on_off=branch.on_off,
             ),
             opfmodel.int_flow_to_q(
@@ -158,7 +159,7 @@ class QCElectricityBranchFormulation(BranchFormulation):
                 b_branch=b,
                 tap=branch.tap,
                 shift=branch.shift,
-                b_to=branch.b_to,
+                b_to=branch.b_fr_pu,#todo ist das wirklich richtig?
                 on_off=branch.on_off,
             ),
             opfmodel.current_flow_equation(

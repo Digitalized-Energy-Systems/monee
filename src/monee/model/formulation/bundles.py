@@ -59,7 +59,10 @@ from .nlp.heat import (
     SmoothHeatExchangerFormulation,
     SmoothPassiveHeatExchangerFormulation,
 )
-
+from .quadratic_convex.cq_with_switch import (
+    QCElectricityBranchFormulation,
+    QCElectricityNodeFormulation,
+)
 
 def combine(*network_formulations: NetworkFormulation) -> NetworkFormulation:
     """Merge per-sector :class:`NetworkFormulation` objects into one apply.
@@ -105,7 +108,12 @@ EL_NONCONVEX_MIQCQP_FORMULATION = NetworkFormulation(
     node_type_to_formulations={Bus: ExactBranchFlowNodeFormulation()},
 )
 
-
+EL_QC_FORMULATION = NetworkFormulation(
+    branch_type_to_formulations={
+        GenericPowerBranch: QCElectricityBranchFormulation()
+    },
+    node_type_to_formulations={Bus: QCElectricityNodeFormulation()},
+)
 # ---------------------------------------------------------------------------
 # Gas
 # ---------------------------------------------------------------------------

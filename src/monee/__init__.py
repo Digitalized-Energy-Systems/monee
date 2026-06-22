@@ -149,7 +149,7 @@ def run_energy_flow(net: mm.Network, solver=None, simulation: bool = True, **kwa
             result = run_energy_flow(my_network, max_iter=500, tol=1e-5)
     """
     return run_energy_flow_optimization(
-        net, None, solver=solver, simulation=simulation, **kwargs
+        net, None, solver=solver, **kwargs
     )
 
 

@@ -5,8 +5,30 @@ from monee import mx, run_energy_flow, run_energy_flow_optimization
 import monee.model as mm
 #from monee.problem import create_load_shedding_optimization_problem
 from monee.solver.gekko import GEKKOSolver
-from monee.model.formulation import (AC_NETWORK_FORMULATION, MISOCP_NETWORK_FORMULATION, QC_NETWORK_FORMULATION)
+#from monee.model.formulation import (AC_NETWORK_FORMULATION, MISOCP_NETWORK_FORMULATION, QC_NETWORK_FORMULATION)
 import matplotlib.pyplot as plt
+
+
+import networkx as nx
+import pytest
+
+import monee
+#import monee.model as mm
+from monee import run_energy_flow, run_timeseries
+from monee.model import GasLinepack, LumpedThermalCapacitance
+from monee.model.core import value as mvalue
+from monee.model.formulation import (
+    EL_MISOCP_FORMULATION,
+    EL_QC_FORMULATION,
+
+)
+from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
+from monee.network import generate_supply_return_mes_based_on_power_net
+from monee.problem.min_load_shedding import create_min_load_shedding_problem
+from monee.simulation.timeseries import TimeseriesData
+from monee.solver import GEKKOSolver
+
+
 def PP_create_two_nodes_power_example(source_flow=0.1):
     net = pp.create_empty_network()
     bus0 = pp.create_bus(net, vn_kv=1)
@@ -807,21 +829,21 @@ print("--------------Pandapower AC--------------------------")
 PP_net = pp_create_66bus_high_meshed()
 PP_results = PP_test_power_network(PP_net, AC = True, show_results = False)
 print("--------------Monee AC--------------------------")
-monee_net_AC = monee_create_three_string_network()
-monee_net_AC.apply_formulation(AC_NETWORK_FORMULATION)
-monee_result_AC = monee_test_power_network(monee_net_AC, show_results = False)
+monee_net_MISOCP = monee_create_three_string_network()
+monee_net_MISOCP.apply_formulation(EL_MISOCP_FORMULATION)
+monee_result_MISOCP = monee_test_power_network(monee_net_MISOCP, show_results = False)
 #For result table comparison
 
 print("--------------Monee QC--------------------------")
 monee_net_QC = monee_create_three_string_network()
-monee_net_QC.apply_formulation(QC_NETWORK_FORMULATION)
+monee_net_QC.apply_formulation(EL_QC_FORMULATION)
 monee_result_QC = monee_test_power_network(monee_net_QC, show_results = False)
 #For result table comparison
 
-run_result_comparison(monee_result_AC, monee_result_QC, "Bus")
-run_result_comparison(monee_result_AC, monee_result_QC, "PowerLine")
-run_result_comparison(monee_result_AC, monee_result_QC, "PowerLoad")
-run_result_comparison(monee_result_AC, monee_result_QC, "PowerGenerator")
+run_result_comparison(monee_result_MISOCP, monee_result_QC, "Bus")
+run_result_comparison(monee_result_MISOCP, monee_result_QC, "PowerLine")
+run_result_comparison(monee_result_MISOCP, monee_result_QC, "PowerLoad")
+run_result_comparison(monee_result_MISOCP, monee_result_QC, "PowerGenerator")
 #column_comparison = compare_extracted_tables_more_than_percent(monee_result_AC, monee_result_QC)
 #print(column_comparison)
 '''
@@ -859,3 +881,5 @@ boxplot_comparison(lines1_mismatches, lines2_mismatches)
 # todo voltage fehlt da ein faktor? je kleiner desto näher ist QC an AC
 # in AC wird nicht mit squared gerechnet, gleich in
 # mit development mergen (da ist wurzel in current eingefügut )
+
+# Frage: in CQ with swithc line 150 und 162, g_to und b_to mit g_fr_pu ersetzt?
