@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 from monee import mx, run_energy_flow, run_energy_flow_optimization
 import monee.model as mm
-from monee.problem import create_load_shedding_optimization_problem
+#from monee.problem import create_load_shedding_optimization_problem
 from monee.solver.gekko import GEKKOSolver
 from monee.model.formulation import (AC_NETWORK_FORMULATION, MISOCP_NETWORK_FORMULATION, QC_NETWORK_FORMULATION)
 import matplotlib.pyplot as plt
@@ -544,7 +544,7 @@ def print_pp_summary(pp_net):
     print("PP provided total generation:", pp_net.res_sgen["p_mw"].sum())
     print("PP provided total external grid power:", pp_net.res_ext_grid["p_mw"].sum())
 
-def monee_opf(monee_net, extgrid_bounds = (-10,10), show_details = False):
+'''def monee_opf(monee_net, extgrid_bounds = (-10,10), show_details = False):
     print("----------------------monee_opf--------------------")
     problem = create_load_shedding_optimization_problem(
         bounds_el=(0.8, 1.2),
@@ -561,7 +561,7 @@ def monee_opf(monee_net, extgrid_bounds = (-10,10), show_details = False):
     if show_details == True:
         print("Run OPF for Monee Formulation")
         print(result)
-    return result
+    return result'''
 
 def compare_monee_results(result1, result2):
     lines1 = result1.get(mm.PowerLine)
