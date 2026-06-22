@@ -862,7 +862,9 @@ def to_backbone(
         return transform_network(
             network, _steiner_transform(set(terminals), weight, steiner_method)
         )
-    raise ValueError(f"unknown backbone method {method!r}; expected 'span' or 'steiner'")
+    raise ValueError(
+        f"unknown backbone method {method!r}; expected 'span' or 'steiner'"
+    )
 
 
 def _steiner_transform(terminals, weight, steiner_method):

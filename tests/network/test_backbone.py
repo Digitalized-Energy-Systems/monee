@@ -100,7 +100,9 @@ def test_spanning_tree_default_is_unit_weighted():
 
 def test_spanning_tree_length_weighted_minimises_length():
     pn = _triangle()
-    weighted = mm.to_spanning_tree(pn, weight=lambda branch, a, b: branch.model.length_m)
+    weighted = mm.to_spanning_tree(
+        pn, weight=lambda branch, a, b: branch.model.length_m
+    )
     assert len(list(weighted.branches)) == 2
     # Length weighting drops the long edge for the two short legs.
     assert frozenset((0, 2)) not in _edges(weighted)

@@ -686,9 +686,7 @@ def create_gas_tree_net_for_power(  # NOSONAR
     # HHV [MJ/kg] of this grid's gas fluid (sizing matches the gas physics).
     gas_hhv_mj = gas_grid.higher_heating_value_kwh_per_kg * 3.6
 
-    slack_node = (
-        slack_node_id if slack_node_id is not None else power_net.first_node()
-    )
+    slack_node = slack_node_id if slack_node_id is not None else power_net.first_node()
     power_net_as_st = _make_backbone(
         power_net, slack_node, backbone_method, backbone_weight
     )
@@ -721,7 +719,9 @@ def create_gas_tree_net_for_power(  # NOSONAR
         parent = {slack_node: None}
         for p, c in nx.bfs_edges(undirected, source=slack_node):
             parent[c] = p
-        order = list(reversed(list(nx.topological_sort(nx.bfs_tree(undirected, slack_node)))))
+        order = list(
+            reversed(list(nx.topological_sort(nx.bfs_tree(undirected, slack_node))))
+        )
         subtree_kgs = {nid: bus_sink_kgs.get(nid, 0.0) for nid in parent}
         subtree_consumers = {nid: (1 if nid in bus_sink_kgs else 0) for nid in parent}
         for c in order:
@@ -914,9 +914,7 @@ def create_heat_supply_return_net_for_power(  # NOSONAR
 
     # Orient supply pipes outward from the slack via BFS so every supply
     # junction has an incoming pipe (McCormick-DHS pins direction).
-    slack_root = (
-        slack_node_id if slack_node_id is not None else power_net.first_node()
-    )
+    slack_root = slack_node_id if slack_node_id is not None else power_net.first_node()
     power_net_as_st = _make_backbone(
         power_net, slack_root, backbone_method, backbone_weight
     )

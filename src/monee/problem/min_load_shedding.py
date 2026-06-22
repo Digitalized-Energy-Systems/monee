@@ -26,6 +26,7 @@ from monee.model.child import (
     Sink,
     Source,
 )
+from monee.model.core import Var
 from monee.model.grid import (
     DEFAULT_GAS_HHV_KWH_PER_KG,
     KGPS_KWHPERKG_TO_MW,
@@ -42,7 +43,6 @@ from monee.model.multi import (
     PowerToHeatControlNode,
     PowerToHeatHG,
 )
-from monee.model.core import Var
 from monee.model.node import Bus, Junction
 from monee.problem.core import (
     REGULATION_ATTR,

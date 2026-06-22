@@ -73,6 +73,7 @@ DEFAULT_GUROBI_PARAMS: dict = {
     "TimeLimit": 300,
 }
 
+
 def _require_gurobipy():
     """Import gurobipy lazily so a missing install doesn't break other backends."""
     try:
@@ -649,7 +650,9 @@ class GurobipySolver(SolverInterface):
         if self._is_nonlinear(sum(user_obj_exprs)) or self._is_nonlinear(
             sum(aux_obj_exprs)
         ):
-            return self._solve_lexicographic_two_phase(gm, user_obj_exprs, aux_obj_exprs)
+            return self._solve_lexicographic_two_phase(
+                gm, user_obj_exprs, aux_obj_exprs
+            )
         return self._solve_lexicographic_native(gm, user_obj_exprs, aux_obj_exprs)
 
     def _solve_lexicographic_native(self, gm, user_obj_exprs, aux_obj_exprs):

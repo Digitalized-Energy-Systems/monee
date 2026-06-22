@@ -140,7 +140,7 @@ def _dispatch_backend(
     the native Gurobi / CasADi solvers; pass ``None`` where those backends are
     unavailable (e.g. multi-period)."""
     name = (solver or "ipopt").lower() if isinstance(solver, str) else "ipopt"
-    
+
     chosen_backend = backend or _auto_backend(
         name, gurobipy_supported=gurobipy_factory is not None
     )

@@ -146,7 +146,7 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
 
         if self.free_pressure_bounds is not None:
             lo, hi = self.free_pressure_bounds
-            
+
             psq = getattr(node_model, "pressure_squared_pu", None)
             p = getattr(node_model, "pressure_pu", None)
             if type(psq) is Var:
