@@ -2,15 +2,14 @@
 01 · Minimum-cost load curtailment
 ==================================
 
-**Scenario.** A radial feeder connects a substation (Bus 0) to two loads via
-two line segments. Bus 1 serves a small **factory** (0.6 MW); Bus 2 serves a
-**warehouse** (0.4 MW).  An upstream fault limits the substation connection to
-at most 0.6 MW — far less than the combined 1.0 MW demand.  Some load must be
-shed.
+**Scenario.** A radial feeder connects a substation (Bus 0) to two loads over
+two line segments. Bus 1 serves a small factory (0.6 MW); Bus 2 serves a
+warehouse (0.4 MW). An upstream fault caps the substation connection at
+0.6 MW, far below the combined 1.0 MW demand, so some load must be shed.
 
-Interrupting the factory costs **30 monetary units/MW** (critical production
-process); interrupting the warehouse costs only **5 units/MW** (deferrable
-refrigeration).  The optimiser finds the cheapest curtailment plan.
+Interrupting the factory costs 30 monetary units/MW (a critical production
+process); interrupting the warehouse costs only 5 units/MW (deferrable
+refrigeration). The optimiser finds the cheapest curtailment plan.
 
 .. tip::
 
@@ -62,17 +61,17 @@ Defining the optimisation problem
 
 An :class:`~monee.problem.core.OptimizationProblem` has three building blocks:
 
-- **Controllables** — which attributes the solver may vary (here: the
+- **Controllables:** which attributes the solver may vary (here: the
   ``regulation`` fraction of each load).
-- **Constraints** — additional restrictions beyond the energy-flow equations
+- **Constraints:** additional restrictions beyond the energy-flow equations
   (here: the 0.6 MW substation limit).
-- **Objective** — the scalar to minimise (here: total curtailment cost).
+- **Objective:** the scalar to minimise (here: total curtailment cost).
 
 .. testcode::
 
     problem = mp.OptimizationProblem()
 
-    # ── Controllables ──────────────────────────────────────────────────────────
+    # Controllables
     # regulation ∈ [0, 1]: fraction of each load that remains served.
     # 1 = fully served, 0 = completely curtailed.
     problem.controllable_demands([
@@ -86,7 +85,7 @@ An :class:`~monee.problem.core.OptimizationProblem` has three building blocks:
         )
     ])
 
-    # ── Constraint ─────────────────────────────────────────────────────────────
+    # Constraint
     # The substation can inject at most 0.6 MW (upstream fault limit).
     constraints = mp.Constraints()
     constraints.select_types(mm.ExtPowerGrid).equation(
@@ -94,7 +93,7 @@ An :class:`~monee.problem.core.OptimizationProblem` has three building blocks:
     )
     problem.constraints = constraints
 
-    # ── Objective ──────────────────────────────────────────────────────────────
+    # Objective
     # Minimise total curtailment cost:
     #   cost = Σ (1 - regulation_i) × p_nominal_i × penalty_i
     #
@@ -126,7 +125,7 @@ Running the optimisation
 
     Objective (curtailment cost): 2.00
 
-The objective value of **2.00** matches the expected optimum: curtail the entire
+The objective value of 2.00 matches the expected optimum: curtail the entire
 warehouse (0.4 MW × penalty 5 = 2.0 units), which is far cheaper than reducing
 the factory.
 
@@ -166,10 +165,9 @@ substation import equals exactly the 0.6 MW limit:
 
 .. note::
 
-   Removing ``debug=False`` (the default) from
-   :class:`~monee.problem.core.OptimizationProblem` keeps the solver output
-   quiet.  Pass ``debug=True`` while developing to see which attributes were
-   made controllable.
+   :class:`~monee.problem.core.OptimizationProblem` accepts ``debug=False`` by
+   default, which keeps variable-promotion logging quiet.  Pass ``debug=True``
+   while developing to log which attributes were promoted to solver variables.
 
 ----
 
@@ -180,4 +178,4 @@ Next steps
   time series with varying demand profiles.
 - Explore :doc:`../how-to/load_shedding` for the ready-made one-call interface.
 - Read :doc:`../how-to/use_pyomo_solver` to switch to a MILP solver back-end
-  (HiGHS, Gurobi, etc.) for integer-programming formulations.
+  (SCIP, Gurobi, etc.) for integer-programming formulations.

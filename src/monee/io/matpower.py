@@ -2,26 +2,26 @@ import math
 
 import scipy.io
 
-# necessary for the construction
-from monee.model.branch import *  # noqa
-from monee.model.child import *  # noqa
-from monee.model.grid import *  # noqa
-from monee.model.node import *  # noqa
+# Imported so the @model decorator registers them in the model component
+# registry that native_dict_to_network resolves the string model_types against.
+# These are exactly the concrete model classes this importer constructs (by name).
+from monee.model.branch import GenericPowerBranch  # noqa: F401
+from monee.model.child import (  # noqa: F401
+    ExtPowerGrid,
+    PowerGenerator,
+    PowerLoad,
+)
+from monee.model.grid import PowerGrid  # noqa: F401
+from monee.model.node import Bus  # noqa: F401
 
 from .native import native_dict_to_network
 
 
 def as_controllable(start_value):
-    """
-    No docstring provided.
-    """
     return {"value": start_value, "max": None, "min": None}
 
 
 def number_of_lines_with_from_to(from_node, to_node, branch_list):
-    """
-    No docstring provided.
-    """
     number = 0
     for branch in branch_list:
         branch_id = branch["id"]
@@ -31,9 +31,6 @@ def number_of_lines_with_from_to(from_node, to_node, branch_list):
 
 
 def read_matpower_data(mat_data):
-    """
-    No docstring provided.
-    """
     mpc = mat_data["mpc"]
     base_mva = mpc["baseMVA"][0][0][0]
     bus_mat = mpc["bus"][0][0]
@@ -52,19 +49,16 @@ def read_matpower_data(mat_data):
     fill_child_dict(gen_mat, node_dict_list, child_dict_list)
     fill_branch_dict(branch_mat, branch_dict_list)
     return native_dict_to_network(
-        dict(
-            grids=grid_dict_list,
-            nodes=node_dict_list,
-            childs=child_dict_list,
-            branches=branch_dict_list,
-        )
+        {
+            "grids": grid_dict_list,
+            "nodes": node_dict_list,
+            "childs": child_dict_list,
+            "branches": branch_dict_list,
+        }
     )
 
 
 def fill_branch_dict(branch_mat, branch_dict_list):
-    """
-    No docstring provided.
-    """
     for i in range(len(branch_mat)):
         branch_dict = {}
         branch_row = branch_mat[i]
@@ -79,24 +73,21 @@ def fill_branch_dict(branch_mat, branch_dict_list):
         )
         branch_dict["from_node"] = int(branch_row[0])
         branch_dict["to_node"] = int(branch_row[1])
-        branch_dict["values"]["br_r"] = branch_row[2]
-        branch_dict["values"]["br_x"] = branch_row[3]
-        branch_dict["values"]["g_fr"] = 0
-        branch_dict["values"]["b_fr"] = branch_row[4] / 2
-        branch_dict["values"]["g_to"] = 0
-        branch_dict["values"]["b_to"] = branch_row[4] / 2
+        branch_dict["values"]["br_r_pu"] = branch_row[2]
+        branch_dict["values"]["br_x_pu"] = branch_row[3]
+        branch_dict["values"]["g_fr_pu"] = 0
+        branch_dict["values"]["b_fr_pu"] = branch_row[4] / 2
+        branch_dict["values"]["g_to_pu"] = 0
+        branch_dict["values"]["b_to_pu"] = branch_row[4] / 2
         branch_dict["values"]["tap"] = 1 if branch_row[8] == 0 else branch_row[8]
         branch_dict["values"]["shift"] = math.radians(branch_row[9])
-        branch_dict["values"]["max_i_ka"] = 0.319
+        branch_dict["values"]["max_i_ka"] = 999  # essentially unbound
         branch_dict["values"]["on_off"] = 1
         branch_dict["model_type"] = "GenericPowerBranch"
         branch_dict_list.append(branch_dict)
 
 
 def fill_child_dict(gen_mat, node_dict_list, child_dict_list):
-    """
-    No docstring provided.
-    """
     for i in range(len(gen_mat)):
         child_dict = {}
         gen_row = gen_mat[i]
@@ -110,8 +101,8 @@ def fill_child_dict(gen_mat, node_dict_list, child_dict_list):
             child_dict["values"]["va_degree"] = 0
         else:
             child_dict["model_type"] = "PowerGenerator"
-            child_dict["values"]["p_mw"] = gen_row[1]
-            child_dict["values"]["q_mvar"] = gen_row[2]
+            child_dict["values"]["p_mw"] = -gen_row[1]
+            child_dict["values"]["q_mvar"] = -gen_row[2]
         for node_dict in node_dict_list:
             if node_dict["id"] == gen_row[0]:
                 node_dict["child_ids"].append(child_dict["id"])
@@ -119,9 +110,6 @@ def fill_child_dict(gen_mat, node_dict_list, child_dict_list):
 
 
 def fill_node_dict(bus_mat, node_dict_list, child_dict_list):
-    """
-    No docstring provided.
-    """
     for i in range(len(bus_mat)):
         node_dict = {}
         bus_row = bus_mat[i]
@@ -129,7 +117,14 @@ def fill_node_dict(bus_mat, node_dict_list, child_dict_list):
         node_dict["grid_id"] = "power"
         node_dict["values"] = {}
         node_dict["values"]["vm_pu"] = as_controllable(bus_row[7])
-        node_dict["values"]["va_degree"] = as_controllable(bus_row[8])
+        # Seed the angle decision variable (va_radians); va_degree stays the
+        # model's derived Intermediate (= 180/π·va_radians). Setting va_degree
+        # here would overwrite that Intermediate with a free, unconstrained Var.
+        node_dict["values"]["va_radians"] = {
+            "value": bus_row[8] * math.pi / 180,
+            "min": -math.pi,
+            "max": math.pi,
+        }
         node_dict["values"]["base_kv"] = bus_row[9]
         node_dict["model_type"] = "Bus"
         node_dict["child_ids"] = []
@@ -137,17 +132,19 @@ def fill_node_dict(bus_mat, node_dict_list, child_dict_list):
         if bus_row[2] != 0 or bus_row[3] != 0:
             node_dict["child_ids"].append(len(child_dict_list))
             model_type = "PowerLoad" if bus_row[2] >= 0 else "PowerGenerator"
+            # bus_row[2] is the (signed) bus load. A PowerLoad stores p_mw as-is
+            # (positive = consumption). For the negative-load case a PowerGenerator
+            # built from magnitude abs(bus_row[2]) would store -abs(bus_row[2]),
+            # which equals the already-negative bus_row[2] - so storing the raw
+            # value is correct for both model types here.
             child_dict_list.append(
-                dict(
-                    id=len(child_dict_list),
-                    model_type=model_type,
-                    values=dict(p_mw=bus_row[2], q_mvar=bus_row[3]),
-                )
+                {
+                    "id": len(child_dict_list),
+                    "model_type": model_type,
+                    "values": {"p_mw": bus_row[2], "q_mvar": bus_row[3]},
+                }
             )
 
 
 def read_matpower_case(file):
-    """
-    No docstring provided.
-    """
     return read_matpower_data(scipy.io.loadmat(file))

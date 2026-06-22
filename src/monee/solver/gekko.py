@@ -9,30 +9,38 @@ from monee.model import (
     Const,
     GenericModel,
     Intermediate,
-    IntermediateEq,
     Network,
     Var,
 )
-from monee.model.core import tracked
 from monee.problem.core import OptimizationProblem
-from monee.simulation.step_state import StepState
 
 from .core import (
+    OperatorEquationAssembly,
     SolverInterface,
     SolverResult,
-    as_iter,
-    filter_intermediate_eqs,
-    find_ignored_nodes,
+    StepState,
+    apply_child_overwrites,
+    finalize_solution,
     generate_real_topology,
-    ignore_branch,
-    ignore_child,
-    ignore_compound,
-    ignore_node,
     inject_vars,
+    mark_slacks_and_prescriptions,
+    persist_solution,
+    prepare_solve_network,
     remove_cps,
     withdraw_vars,
 )
+from .infeasibility.apm import (
+    GekkoSolveError,
+    diagnose_gekko_infeasibility,
+    sanitize_apm_name,
+)
 
+# Reverse of dispatch.GEKKO_SOLVERS (name -> code), so a constructed GEKKOSolver
+# can report which solver it runs on SolverResult.solver_used.
+_GEKKO_CODE_TO_NAME: dict[int, str] = {1: "apopt", 2: "bpopt", 3: "ipopt"}
+
+# APOPT (SOLVER=1) MINLP options. IPOPT rejects the minlp_* keys, so they are
+# applied only for the APOPT path (see _solver_options).
 DEFAULT_SOLVER_OPTIONS = [
     "minlp_maximum_iterations 1000",
     "minlp_max_iter_with_int_sol 500",
@@ -48,50 +56,50 @@ DEFAULT_SOLVER_OPTIONS = [
     "constraint_convergence_tolerance 1.0e-4",
 ]
 
+# IPOPT (SOLVER=3) is a pure-NLP solver, the smooth gas/heat formulations target
+# it. Only IPOPT-valid option keys here.
+IPOPT_SOLVER_OPTIONS = [
+    "max_iter 3000",
+    "tol 1.0e-6",
+    "constr_viol_tol 1.0e-6",
+]
+
+
+def _solver_options(solver: int):
+    """APOPT keeps its MINLP options; IPOPT gets NLP-only options it accepts."""
+    return IPOPT_SOLVER_OPTIONS if solver == GEKKO_IPOPT else DEFAULT_SOLVER_OPTIONS
+
+
+GEKKO_IPOPT = 3
+
 
 class GekkoCubicSplineImpl:
     def __init__(self, m):
         self.m = m
 
-    def piecewise_eq(self, y, x, xs, ys, name=None):
+    def piecewise_eq(self, y, x, xs, ys, _name=None):
         xs = list(xs)
         ys = list(ys)
         return self.m.cspline(x, y, xs, ys)
 
 
-def _process_intermediate_eqs(m, model, equations):
-    """
-    No docstring provided.
-    """
-    for intermediate_eq in [eq for eq in equations if type(eq) is IntermediateEq]:
-        attr_intermediate_var = getattr(model, intermediate_eq.attr)
-        eq = (
-            intermediate_eq.eq() if callable(intermediate_eq.eq) else intermediate_eq.eq
-        )
-
-        if type(attr_intermediate_var) is Intermediate:
-            i = m.Intermediate(eq)
-            setattr(model, intermediate_eq.attr, i)
-
-
-class GEKKOSolver(SolverInterface):
-    """
-    No docstring provided.
-    """
-
+class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
     def __init__(self, solver=1):
         self.solver: int = solver
+        self._backend_name = "gekko"
+        self._solver_name = _GEKKO_CODE_TO_NAME.get(solver, str(solver))
+        self._simulation: bool = False
 
     @staticmethod
-    def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel, id):
-        # Collect tracked attr names before Var objects are replaced.
-        inter_step_attrs = [k for k, v in target.__dict__.items() if type(v) is tracked]
-        if inter_step_attrs:
-            target._inter_step_attrs = inter_step_attrs
+    def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel, id, name_map=None):
         i = 0
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
                 name = f"{id}.{value.name}" if value.name is not None else f"{id}.{i}"
+                if name_map is not None:
+                    # APMonitor sanitises names irreversibly; remember the
+                    # original for the infeasibility diagnostics.
+                    name_map[sanitize_apm_name(name)] = name
                 setattr(
                     target,
                     key,
@@ -109,14 +117,12 @@ class GEKKOSolver(SolverInterface):
 
     @staticmethod
     def withdraw_gekko_vars_attr(target: GenericModel):
-        inter_step_attrs = getattr(target, "_inter_step_attrs", [])
         for key, value in target.__dict__.items():
             if type(value) is GKVariable:
-                var_cls = tracked if key in inter_step_attrs else Var
                 setattr(
                     target,
                     key,
-                    var_cls(
+                    Var(
                         value=value.VALUE.value[0],
                         min=value.LOWER,
                         max=value.UPPER,
@@ -131,57 +137,71 @@ class GEKKOSolver(SolverInterface):
     def _add_equations(self, m, eqs):
         m.Equations(eqs)
 
-    def solve(
+    @staticmethod
+    def _solve_with_fallback(m, use_sim):
+        if use_sim:
+            try:
+                m.solve(disp=False)
+                return 1
+            except Exception as exc:
+                logging.warning(
+                    "Simulation (IMODE=1) solve failed; falling back to "
+                    "IMODE=3 - the fast square steady-state path was NOT used. "
+                    "The model is likely not square (check for phantom degrees "
+                    "of freedom / non-simulation formulations). Solver said: %s",
+                    exc,
+                )
+                m.options.IMODE = 3
+        m.solve(disp=False)
+        return m.options.IMODE
+
+    def solve(  # NOSONAR
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
         draw_debug=False,
         exclude_unconnected_nodes=False,
         step_state: StepState = None,
+        simulation=False,
+        formulation=None,
     ):
-        """
-        No docstring provided.
-        """
+        self._simulation = simulation
         m = GEKKO(remote=False)
         m.options.SOLVER = self.solver
         m.options.WEB = 0
-        m.options.IMODE = 3
-        m.solver_options = DEFAULT_SOLVER_OPTIONS
-        network = input_network.copy()
+        m.options.IMODE = 1 if simulation else 3
+        m.solver_options = _solver_options(self.solver)
 
-        if optimization_problem is not None:
-            optimization_problem._apply(network)
-
-        # Phase 1: add Var placeholders for all NetworkConstraint extensions
-        for ext in network.extensions:
-            ext.prepare(network)
-
-        # detect islanding config for topology-aware pre-filtering
-        from monee.model.islanding.core import NetworkIslandingConfig
-
-        islanding_config = next(
-            (e for e in network.extensions if isinstance(e, NetworkIslandingConfig)),
-            None,
+        # Copy the network, run extension prepare/attach, locate the islanding
+        # config and compute ignored nodes BEFORE _apply so controllable filters
+        # checking component.ignored correctly exclude disconnected components.
+        network, ignored_nodes, _islanding_config = prepare_solve_network(
+            input_network,
+            optimization_problem=optimization_problem,
+            formulation=formulation,
+            simulation=simulation,
+            exclude_unconnected_nodes=exclude_unconnected_nodes,
         )
 
-        ignored_nodes = set()
-        if optimization_problem is None or exclude_unconnected_nodes:
-            ignored_nodes = find_ignored_nodes(network, islanding_config)
-
         nodes = network.nodes
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                continue
-            for child in network.childs_by_ids(node.child_ids):
-                if child.active:
-                    child.model.overwrite(node.model, node.grid)
+        apply_child_overwrites(network, nodes, ignored_nodes)
 
         branches = network.branches
         compounds = network.compounds
 
+        # Pin floating hydraulic gauges, recognise each heat island's
+        # grid-forming node as the heat slack (dropping its dependent nodal heat
+        # balance, required for a square IMODE=1 solve) and decide each
+        # compound-internal SubHE's flow prescription.
+        mark_slacks_and_prescriptions(network, ignored_nodes)
+
+        apm_name_map: dict[str, str] = {}
         inject_vars(
             lambda model, comp, cat: GEKKOSolver.inject_gekko_vars_attr(
-                m, model, comp.nid if cat == "branch" else comp.tid
+                m,
+                model,
+                comp.nid if cat == "branch" else comp.tid,
+                name_map=apm_name_map,
             ),
             nodes,
             branches,
@@ -189,6 +209,11 @@ class GEKKOSolver(SolverInterface):
             network,
             ignored_nodes,
         )
+        if step_state is not None:
+            for ext in network.extensions:
+                ext.activate_timeseries(network, ignored_nodes, step_state=step_state)
+            self.mark_temporal_components(network, ignored_nodes)
+
         objs_exprs = []
         self.init_branches(branches)
         self.process_equations_nodes_childs(m, network, nodes, ignored_nodes)
@@ -201,20 +226,55 @@ class GEKKOSolver(SolverInterface):
 
         if step_state is not None:
             self.process_inter_step_equations(
-                m, network, nodes, branches, compounds, ignored_nodes, step_state
+                m,
+                network,
+                nodes,
+                branches,
+                compounds,
+                ignored_nodes,
+                step_state,
+                optimization_problem=optimization_problem,
             )
+            for ext in network.extensions:
+                m.Equations(
+                    ext.inter_step_equations(network, ignored_nodes, step_state)
+                )
+                m.Equations(
+                    ext.inter_temporal_equations(network, ignored_nodes, step_state)
+                )
 
-        # Phase 2: add NetworkConstraint extension equations after variable injection
         for ext in network.extensions:
             m.Equations(ext.equations(network, ignored_nodes))
 
         if objs_exprs:
-            m.Obj(sum(objs_exprs))
+            for expr in objs_exprs:
+                m.Obj(expr)
+
+        # IMODE=1 (square simulation) only applies to a plain flow: no objective
+        # of any kind (else IMODE=1 silently ignores it).
+        use_sim = (
+            simulation
+            and optimization_problem is None
+            and not objs_exprs
+            and not network.objectives
+        )
+        m.options.IMODE = 1 if use_sim else 3
 
         try:
-            m.solve(disp=False)
-        except Exception:
-            logging.error("Solver not converged.")
+            imode_used = self._solve_with_fallback(m, use_sim)
+        except Exception as exc:
+            # APMonitor's exception is just "@error: Solution Not Found";
+            # build a proper report from the run-directory artifacts instead.
+            report = diagnose_gekko_infeasibility(
+                m, name_map=apm_name_map, solver_message=str(exc)
+            )
+            if report is not None:
+                logging.error(
+                    "Solver not converged. Diagnostic report:\n%s",
+                    report.summary(max_items=25),
+                )
+            else:
+                logging.error("Solver not converged.")
             if draw_debug:
                 import matplotlib.pyplot as plt
 
@@ -226,168 +286,43 @@ class GEKKOSolver(SolverInterface):
                     width=0.4,
                 )
                 plt.savefig("debug-network.pdf")
+            # Best-effort warm-start handoff from the partial iterate.
+            try:
+                withdraw_vars(
+                    GEKKOSolver.withdraw_gekko_vars_attr,
+                    nodes,
+                    branches,
+                    compounds,
+                    network,
+                )
+                persist_solution(network, input_network)
+            except Exception:
+                pass
+            if report is not None:
+                raise GekkoSolveError(
+                    "GEKKO solve failed.\n\nDiagnostic report:\n"
+                    + report.summary(max_items=25),
+                    report=report,
+                ) from exc
             raise
         withdraw_vars(
             GEKKOSolver.withdraw_gekko_vars_attr, nodes, branches, compounds, network
         )
+        violations = finalize_solution(
+            nodes, branches, compounds, network, input_network
+        )
         solver_result = SolverResult(
-            network, network.as_result_dataframe_dict(), m.options.OBJFCNVAL
+            network,
+            network.as_result_dataframe_dict(),
+            m.options.OBJFCNVAL,
+            m.options.APPSTATUS == 1,
+            violations,
+            mode_used="simulation" if imode_used == 1 else "optimization",
+            backend_used=self.backend_name,
+            solver_used=self.solver_name,
         )
         return solver_result
 
-    def process_internal_oxf_components(self, m, network):
-        """
-        No docstring provided.
-        """
-        for constraint in network.constraints:
-            m.Equation(constraint(network))
-        obj = None
-        for objective in network.objectives:
-            if obj is not None:
-                obj = obj + objective(network)
-            else:
-                obj = objective(network)
-        if obj is not None:
-            m.Obj(obj)
-
-    def process_oxf_components(
-        self, m, network: Network, optimization_problem: OptimizationProblem
-    ):
-        """
-        No docstring provided.
-        """
-        if optimization_problem.constraints is not None and (
-            not optimization_problem.constraints.empty
-        ):
-            m.Equations(optimization_problem.constraints.all(network))
-        obj = None
-        for objective in optimization_problem.objectives.all(network):
-            if obj is not None:
-                obj = obj + objective
-            else:
-                obj = objective
-        if obj is not None:
-            m.Obj(obj)
-
-    def process_equations_compounds(self, m, network, compounds, ignored_nodes):
-        """
-        No docstring provided.
-        """
-        for compound in compounds:
-            if ignore_compound(compound, ignored_nodes):
-                continue
-
-            equations = compound.equations(network)
-
-            for expr in compound.minimize(network, sqrt_impl=m.sqrt):
-                m.Obj(expr)
-
-            if equations is not None:
-                _process_intermediate_eqs(m, compound, equations)
-                m.Equations(filter_intermediate_eqs(as_iter(equations)))
-
-    def process_equations_nodes_childs(self, m, network: Network, nodes, ignored_nodes):
-        """
-        No docstring provided.
-        """
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                continue
-            node_childs = network.childs_by_ids(node.child_ids)
-            grid = node.grid
-
-            from_branches = [
-                network.branch_by_id(branch_id).model
-                for branch_id in node.from_branch_ids
-                if not ignore_branch(
-                    network.branch_by_id(branch_id), network, ignored_nodes
-                )
-            ]
-            to_branches = [
-                network.branch_by_id(branch_id).model
-                for branch_id in node.to_branch_ids
-                if not ignore_branch(
-                    network.branch_by_id(branch_id), network, ignored_nodes
-                )
-            ]
-            connected_childs = [
-                child.model
-                for child in node_childs
-                if not ignore_child(child, ignored_nodes)
-            ]
-            equations = as_iter(
-                node.equations(
-                    grid,
-                    from_branches,
-                    to_branches,
-                    connected_childs,
-                    sin_impl=m.sin,
-                    cos_impl=m.cos,
-                    if_impl=m.if2,
-                    abs_impl=m.abs3,
-                    max_impl=m.max2,
-                    sign_impl=m.sign2,
-                    sqrt_impl=m.sqrt,
-                )
-            )
-            for expr in node.minimize(
-                grid, from_branches, to_branches, connected_childs, sqrt_impl=m.sqrt
-            ):
-                m.Obj(expr)
-
-            node_eqs = [eq for eq in equations if type(eq) is not bool or not eq]
-            _process_intermediate_eqs(m, node.model, node_eqs)
-            m.Equations(filter_intermediate_eqs(node_eqs))
-
-            for child in node_childs:
-                if ignore_child(child, ignored_nodes):
-                    continue
-                child_eqs = as_iter(child.equations(grid, node))
-
-                for expr in child.minimize(grid, node, sqrt_impl=m.sqrt):
-                    m.Obj(expr)
-
-                _process_intermediate_eqs(m, child.model, child_eqs)
-                m.Equations(filter_intermediate_eqs(child_eqs))
-
-    def process_equations_branches(
-        self, m, network, branches, ignored_nodes, objs_exprs
-    ):
-        """
-        No docstring provided.
-        """
-        # using spline instead of pwl as spline tends to outperform the gekko pwl
-        pwl_impl = GekkoCubicSplineImpl(m)
-        for branch in branches:
-            if ignore_branch(branch, network, ignored_nodes):
-                continue
-            grid = branch.grid
-
-            branch_eqs = as_iter(
-                branch.equations(
-                    grid,
-                    network.node_by_id(branch.from_node_id).model,
-                    network.node_by_id(branch.to_node_id).model,
-                    sin_impl=m.sin,
-                    cos_impl=m.cos,
-                    if_impl=m.if3,
-                    abs_impl=m.abs3,
-                    max_impl=m.max2,
-                    sign_impl=m.sign3,
-                    log_impl=m.log10,
-                    sqrt_impl=m.sqrt,
-                    exp_impl=m.exp,
-                    pwl_impl=pwl_impl,
-                )
-            )
-
-            for expr in branch.minimize(
-                grid,
-                network.node_by_id(branch.from_node_id).model,
-                network.node_by_id(branch.to_node_id).model,
-                sqrt_impl=m.sqrt,
-            ):
-                objs_exprs.append(expr)
-
-            _process_intermediate_eqs(m, branch.model, branch_eqs)
-            m.Equations(filter_intermediate_eqs(branch_eqs))
+    def _pwl_impl(self, m):
+        # spline outperforms GEKKO's native pwl
+        return GekkoCubicSplineImpl(m)

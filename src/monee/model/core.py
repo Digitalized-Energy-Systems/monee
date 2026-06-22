@@ -1,3 +1,4 @@
+import copy
 from abc import ABC, abstractmethod
 
 EL_KEY = "electricity"
@@ -9,46 +10,17 @@ GAS = GAS_KEY
 
 component_list = []
 
+_IMMUTABLE_PRIMITIVES = frozenset({int, float, bool, str, bytes, complex, type(None)})
+
 
 def model(cls):
-    """
-    Class decorator that registers a model class in the global component registry.
-
-    Applying ``@model`` to a ``NodeModel``, ``BranchModel``, ``ChildModel``, or
-    ``CompoundModel`` subclass adds the class to ``component_list``, which is used
-    by introspection utilities (e.g. serialisation helpers) to enumerate all known
-    component types at runtime.
-
-    Usage::
-
-        @model
-        class MyLoad(ChildModel):
-            def equations(self, grid, node_model, **kwargs):
-                return [self.p_mw == node_model.p_mw]
-    """
+    """Register a model class in the global ``component_list`` registry."""
     component_list.append(cls)
     return cls
 
 
 def upper(var_or_const):
-    """
-    Returns the upper bound (maximum value) of a variable or constant.
-
-    This function extracts the maximum allowed value from a Var instance, which may represent a decision variable or parameter in an optimization or simulation context. If the input is a Var and its `max` attribute is set, that value is returned; otherwise, the current value is returned. For non-Var inputs, the input is returned unchanged. Use this function to retrieve the upper bound for constraints, reporting, or validation.
-
-    Args:
-        var_or_const: A Var instance or a constant value. If a Var, must have a `max` attribute.
-
-    Returns:
-        float or Any: The maximum value for a Var, or the input value for constants.
-
-    Examples:
-        v = Var(5, max=10)
-        upper(v)         # Returns 10
-        upper(7)         # Returns 7
-        v2 = Var(3)
-        upper(v2)        # Returns 3 (since max is None)
-    """
+    """Return the upper bound of a ``Var`` (or its value if unbounded); pass through otherwise."""
     if isinstance(var_or_const, Var):
         if var_or_const.max is None:
             return var_or_const.value
@@ -57,24 +29,7 @@ def upper(var_or_const):
 
 
 def lower(var_or_const):
-    """
-    Returns the lower bound (minimum value) of a variable or constant.
-
-    This function is used to extract the minimum allowed value from a Var instance, which may represent a decision variable or parameter in an optimization or simulation context. If the input is a Var and its `min` attribute is set, that value is returned; otherwise, the current value is returned. For non-Var inputs, the input is returned unchanged. Use this function when you need to retrieve the lower bound for constraints, reporting, or validation.
-
-    Args:
-        var_or_const: A Var instance or a constant value. If a Var, must have a `min` attribute.
-
-    Returns:
-        float or Any: The minimum value for a Var, or the input value for constants.
-
-    Examples:
-        v = Var(5, min=2)
-        lower(v)         # Returns 2
-        lower(10)        # Returns 10
-        v2 = Var(7)
-        lower(v2)        # Returns 7 (since min is None)
-    """
+    """Return the lower bound of a ``Var`` (or its value if unbounded); pass through otherwise."""
     if isinstance(var_or_const, Var):
         if var_or_const.min is None:
             return var_or_const.value
@@ -83,68 +38,57 @@ def lower(var_or_const):
 
 
 def value(var_or_const):
-    """
-    Extract the scalar value from a ``Var``, ``Const``, or ``Intermediate``.
-
-    Plain Python numbers and other non-model types are returned unchanged.
-    This is the canonical way to read back a result after a solve, because
-    the solver replaces ``Var`` instances with its own objects during injection
-    and restores them (with updated ``.value``) during withdrawal.
-
-    Args:
-        var_or_const: A ``Var``, ``Const``, ``Intermediate``, or plain scalar.
-
-    Returns:
-        The ``.value`` attribute for model types, or *var_or_const* unchanged.
-
-    Examples::
-
-        v = Var(42.0)
-        value(v)       # 42.0
-        value(3.14)    # 3.14
-    """
-    if isinstance(var_or_const, Const | Var | Intermediate):
+    """Extract ``.value`` from a ``Var``/``Const``/``Intermediate``/``PostProcess``; pass through plain scalars."""
+    if isinstance(var_or_const, Const | Var | Intermediate | PostProcess):
         return var_or_const.value
     return var_or_const
 
 
+def set_initial_value(var, value) -> None:
+    """Seed a variable's initial guess / warm start, backend-agnostically.
+
+    A model attribute may be a monee :class:`Var` *or*, once a backend has run
+    ``inject_vars`` (e.g. in ``activate_timeseries``), the backend's own variable
+    object. monee ``Var`` / GEKKO ``GKVariable`` / Pyomo ``Var`` all expose a
+    settable ``value``; gurobipy ``Var`` instead carries its warm start in
+    ``Start`` (and has no ``value``, so ``var.value = ...`` raises). Duck-type on
+    the available attribute so callers in the model layer never need to know
+    which solver backend is active.
+
+    A backend symbol that seeds its warm start elsewhere (e.g. the CasADi
+    ``CasSym``, which captures ``x0`` at ``inject_vars`` time and exposes neither
+    attribute) is deliberately a silent no-op. A plain scalar/string target is
+    never a valid warm-start sink, so reject it loudly to catch the wrong-target
+    programming error the no-op would otherwise mask.
+    """
+    if hasattr(var, "value"):
+        var.value = value
+    elif hasattr(var, "Start"):  # gurobipy.Var
+        var.Start = value
+    elif isinstance(var, (int, float, complex, str, bool)):
+        raise TypeError(
+            f"set_initial_value got a non-variable target {var!r}; expected a "
+            "backend variable with a settable 'value' or 'Start'"
+        )
+
+
 class Var:
     """
-    A decision variable (or mutable parameter) in the energy-flow / optimisation model.
+    A decision variable (or mutable parameter) in the optimisation model.
 
-    During a solve the solver backend replaces ``Var`` instances with its own
-    internal variable objects via the injection/withdrawal protocol.  After the
-    solve, the result is written back to ``Var.value`` so callers can read it
-    with :func:`value`.
+    Sign convention for child components: positive = consumption (load),
+    negative = generation. ``PowerGenerator(p_mw=5)`` stores ``p_mw=-5``.
 
-    **Sign convention for child components** — positive values represent
-    *consumption* (load), negative values represent *generation* (injection).
-    Child model constructors such as :class:`PowerGenerator` and
-    :class:`Source` negate their constructor argument so that user-facing API
-    always receives positive magnitudes::
-
-        PowerGenerator(p_mw=5)   →  internally stores p_mw = -5  (generation)
-        PowerLoad(p_mw=5)        →  internally stores p_mw = +5  (consumption)
-
-    Comparison operators (``<``, ``<=``, ``>``, ``>=``) compare against the
-    *bound* of the variable, not the current value.  They return ``False``
-    when the relevant bound is ``None`` (i.e. the variable is unbounded in
-    that direction).  This is useful for bound-checking in formulation code::
-
-        v = Var(10, max=100)
-        v < 200   # True  — upper bound 100 < 200
-        v > 0     # False — lower bound is None (not 10)
-
-    Args:
-        value: Initial/default value.  Serves as the solver's starting point.
-        max: Upper bound.  ``None`` means unbounded above.
-        min: Lower bound.  ``None`` means unbounded below.
-        integer: If ``True``, the variable is constrained to integer values
-            (requires a MINLP-capable solver backend).
-        name: Optional symbolic name forwarded to the solver for diagnostics.
+    Comparison operators compare against the *bound*, not the value, and return
+    ``False`` if the relevant bound is ``None``.
     """
 
     def __init__(self, value, max=None, min=None, integer=False, name=None) -> None:
+
+        if not isinstance(value, float | int):
+            raise ValueError(
+                "The initial guess for the variable need to a numeric value!"
+            )
         self.value = value
         self.max = max
         self.min = min
@@ -152,46 +96,47 @@ class Var:
         self.name = name
 
     def __neg__(self):
-        """Return a negated copy with flipped bounds, preserving the concrete subtype (e.g. ``tracked``)."""
         actual_max = None if self.max is None else -self.max
         actual_min = None if self.min is None else -self.min
         return type(self)(
-            value=-self.value, max=actual_min, min=actual_max, name=self.name
+            value=-self.value,
+            max=actual_min,
+            min=actual_max,
+            integer=self.integer,
+            name=self.name,
         )
 
     def __mul__(self, other):
-        """Return a scaled copy with adjusted bounds, preserving the concrete subtype (e.g. ``tracked``)."""
         if isinstance(other, (int, float)) and other < 0:
-            # Negative multiplier flips the bounds.
             new_max = None if self.min is None else self.min * other
             new_min = None if self.max is None else self.max * other
         else:
             new_max = None if self.max is None else self.max * other
             new_min = None if self.min is None else self.min * other
         return type(self)(
-            value=self.value * other, max=new_max, min=new_min, name=self.name
+            value=self.value * other,
+            max=new_max,
+            min=new_min,
+            integer=self.integer,
+            name=self.name,
         )
 
     def __lt__(self, other):
-        """Compare the *upper bound* to *other*.  Returns ``False`` when ``max`` is ``None``."""
         if isinstance(other, float | int) and self.max is not None:
             return self.max < other
         return False
 
     def __le__(self, other):
-        """Compare the *upper bound* to *other*.  Returns ``False`` when ``max`` is ``None``."""
         if isinstance(other, float | int) and self.max is not None:
             return self.max <= other
         return False
 
     def __gt__(self, other):
-        """Compare the *lower bound* to *other*.  Returns ``False`` when ``min`` is ``None``."""
         if isinstance(other, float | int) and self.min is not None:
             return self.min > other
         return False
 
     def __ge__(self, other):
-        """Compare the *lower bound* to *other*.  Returns ``False`` when ``min`` is ``None``."""
         if isinstance(other, float | int) and self.min is not None:
             return self.min >= other
         return False
@@ -209,51 +154,26 @@ class Var:
     def __str__(self):
         return f"{self.value} ({self.min}, {self.max}), is int: {self.integer}"
 
+    def __deepcopy__(self, memo):
+        new = type(self).__new__(type(self))
+        memo[id(self)] = new
+        new.value = self.value
+        new.max = self.max
+        new.min = self.min
+        new.integer = self.integer
+        new.name = self.name
+        return new
 
-class tracked(Var):
-    """
-    A ``Var`` whose solved value is automatically carried to the next
-    timestep in a timeseries simulation.
 
-    Use this as a drop-in replacement for ``Var`` on any attribute that
-    should participate in inter-step state tracking.  The framework detects
-    ``tracked`` instances during variable injection, records the attribute
-    name on the model, and extracts the solved float value after each step
-    — no ``inter_step_vars()`` method required.
-
-    Example::
-
-        class RampGenerator(PowerGenerator):
-            def __init__(self, p_mw, ramp_up, ramp_down, **kwargs):
-                super().__init__(p_mw, **kwargs)
-                self.p_mw = tracked(p_mw, min=0, max=500)
-                self.ramp_up = ramp_up
-                self.ramp_down = ramp_down
-
-            def inter_step_equations(self, prev_state, component_id, **kwargs):
-                prev_p = prev_state.get(component_id, 'p_mw')
-                if prev_p is None:
-                    return []
-                return [
-                    self.p_mw - prev_p <= self.ramp_up,
-                    prev_p - self.p_mw <= self.ramp_down,
-                ]
-    """
+tracked = Var
 
 
 class Const:
     """
     A fixed (non-optimised) constant that participates in the model attribute protocol.
 
-    Use ``Const`` when a value must be readable by :func:`value` but should never
-    be turned into a solver decision variable.  The primary use-case is inside
-    ``overwrite()`` implementations, where a child component pins a node variable
-    to a fixed setpoint::
-
-        node_model.vm_pu = Const(1.02)   # fixed voltage — not a free variable
-
-    Args:
-        value: The fixed scalar value.
+    Used in ``overwrite()`` to pin a node variable to a fixed setpoint instead
+    of turning it into a free decision variable.
     """
 
     def __init__(self, value) -> None:
@@ -262,19 +182,19 @@ class Const:
     def __repr__(self):
         return f"Const({self.value!r})"
 
+    def __deepcopy__(self, memo):
+        new = Const.__new__(Const)
+        memo[id(self)] = new
+        new.value = self.value
+        return new
+
 
 class Intermediate:
     """
-    A placeholder for a computed (derived) quantity that is not itself a decision variable.
+    A computed (derived) quantity, not a decision variable.
 
-    The solver backend evaluates ``IntermediateEq`` expressions and writes the
-    result back to the corresponding ``Intermediate.value`` after each solve.
-    Use this when you want a model attribute to hold a derived quantity (e.g. a
-    line loading percentage) that can be read from results but is not an
-    independent variable in the optimisation.
-
-    Args:
-        value: Initial/default value before the first solve.
+    The solver evaluates the matching :class:`IntermediateEq` and writes the
+    result back to ``.value`` after each solve.
     """
 
     def __init__(self, value=0):
@@ -283,29 +203,20 @@ class Intermediate:
     def __repr__(self):
         return f"Intermediate({self.value!r})"
 
+    def __deepcopy__(self, memo):
+        new = Intermediate.__new__(Intermediate)
+        memo[id(self)] = new
+        new.value = self.value
+        return new
+
 
 class IntermediateEq:
     """
     Declares how to compute an :class:`Intermediate` attribute from other variables.
 
-    Return an ``IntermediateEq`` from a model's ``equations()`` method to
-    register a derived quantity.  The solver extracts it from the equation list,
-    evaluates the expression, and stores the result on the model attribute named
-    by *attr*::
-
-        class MyBranch(BranchModel):
-            def __init__(self):
-                self.loading_percent = Intermediate()
-
-            def equations(self, grid, from_node, to_node, **kwargs):
-                return [
-                    ...,  # regular constraints
-                    IntermediateEq("loading_percent", self.i_from_ka / self.max_i_ka * 100),
-                ]
-
-    Args:
-        attr: Name of the ``Intermediate`` attribute on the model.
-        eq: The expression (solver-native or Python numeric) to evaluate.
+    Return an ``IntermediateEq`` from a model's ``equations()`` to register a
+    derived quantity; the solver evaluates ``eq`` and stores the result on the
+    attribute named by ``attr``.
     """
 
     def __init__(self, attr, eq):
@@ -313,22 +224,39 @@ class IntermediateEq:
         self.eq = eq
 
 
+class PostProcess:
+    """A report-only quantity computed *after* the solve, outside the solver,
+    from the solved model values via ``fn(values)``, where ``values`` is a
+    namespace of the model's solved fields (read as ``values.vm_pu``).
+
+    Unlike :class:`Intermediate`, it is never injected as a solver variable nor
+    referenced by any equation - it carries no degrees of freedom and cannot
+    affect convergence or squareness. The clean home for derived reports (e.g.
+    ``vm_pu_squared = vm_pu^2``): physics stays in the solver, reporting outside.
+    """
+
+    def __init__(self, fn, value=0):
+        self.fn = fn  # callable(values_namespace) -> number
+        self.value = value
+
+    def __repr__(self):
+        return f"PostProcess({self.value!r})"
+
+    def __deepcopy__(self, memo):
+        new = PostProcess.__new__(PostProcess)
+        memo[id(self)] = new
+        new.fn = self.fn  # a function is atomic - share by reference
+        new.value = self.value
+        return new
+
+
 class GenericModel(ABC):
     """
     Base class for all component models (nodes, branches, children, compounds).
 
-    Provides the ``vars`` and ``values`` introspection properties that the solver
-    backends use to discover and inject decision variables.  Any attribute whose
-    name does not start with ``_`` is considered part of the model's public state
-    and will be included in ``vars``/``values`` and in the result DataFrames.
-
-    Subclasses should store parameters and decision variables as plain Python
-    attributes in ``__init__``.  Use :class:`Var` for decision variables,
-    :class:`Const` for fixed setpoints that must participate in the attribute
-    protocol, and plain scalars for parameters that never enter the solver.
-
-    Extra keyword arguments passed to ``__init__`` are stored in ``_ext_data``
-    and ignored by the solver.
+    Public attributes (no leading ``_``) form the solver-visible state. Use
+    :class:`Var` for decision variables, :class:`Const` for pinned setpoints,
+    plain scalars for parameters.
     """
 
     def __init__(self, **kwargs) -> None:
@@ -337,375 +265,113 @@ class GenericModel(ABC):
 
     @property
     def vars(self):
-        """All public attributes as a ``{name: value}`` dict (includes ``Var``, ``Const``, scalars)."""
         return {k: v for k, v in self.__dict__.items() if k[0] != "_"}
 
     @property
     def values(self):
-        """All public attributes with ``Var``/``Const``/``Intermediate`` unwrapped to scalars."""
         return {k: value(v) for k, v in self.__dict__.items() if k[0] != "_"}
 
     def is_cp(self):
-        """Return ``True`` if this model acts as a multi-grid control point.  Default: ``False``."""
         return False
+
+    def __deepcopy__(self, memo):
+        new = self.__class__.__new__(self.__class__)
+        memo[id(self)] = new
+        for k, v in self.__dict__.items():
+            if v is None or v.__class__ in _IMMUTABLE_PRIMITIVES:
+                new.__dict__[k] = v
+            else:
+                new.__dict__[k] = copy.deepcopy(v, memo)
+        return new
 
 
 class NodeModel(GenericModel):
-    """
-    Abstract base class for node models in a network, defining the interface for nodal equations and behavior.
-
-    NodeModel provides a foundation for representing nodes within various grid domains (e.g., electrical, gas, heat) in network simulations. Subclasses must implement the abstract `equations` method to specify the physical or operational relationships at the node, such as flow conservation, voltage balance, or other nodal constraints. This class is intended for use in extensible, multi-domain network modeling frameworks and supports integration with branch and child component models.
-
-    Example::
-
-        class MyNodeModel(NodeModel):
-            def equations(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
-                # Implement nodal balance equations
-                return [eq1, eq2]
-
-    Methods:
-        equations(grid, in_branch_models, out_branch_models, childs, ``**kwargs``): Abstract. Must be implemented by subclasses to define the system of equations for the node.
-    """
+    """Abstract base class for node models (buses, junctions). Subclasses define nodal equations."""
 
     @abstractmethod
     def equations(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
-        """
-        Defines the system of equations for a node in the network, relating incoming and outgoing branches and attached child components.
+        """Return nodal equations (e.g. flow conservation, voltage balance)."""
 
-        This abstract method must be implemented by subclasses to specify the physical or operational relationships governing the node's behavior within a grid. Use this method to model node constraints such as flow conservation, voltage balance, or other nodal conditions. It is typically called during network simulation or optimization to assemble the overall system equations.
-
-        Args:
-            grid: The grid object to which the node belongs (e.g., electrical, gas, or heat grid).
-            in_branch_models (list): List of branch model instances representing incoming branches to the node.
-            out_branch_models (list): List of branch model instances representing outgoing branches from the node.
-            childs (list): List of child component models attached to the node (e.g., loads, generators).
-            **kwargs: Additional keyword arguments for solver options or equation customization.
-
-        Returns:
-            Any: The equations or constraints representing the node's behavior. The return type and structure depend on the modeling framework and implementation.
-
-        Raises:
-            NotImplementedError: If not implemented in a subclass.
-
-        Examples:
-            .. code-block:: python
-
-                class MyNodeModel(NodeModel):
-                    def equations(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
-                        # Define nodal balance equations
-                        return [eq1, eq2]
-        """
-
-    def minimize(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
-        """
-        Minimization of an expression as minimization may necessary due to some formulation (when replacing
-        constraints with slack variables)
-
-        :param self: Description
-        """
+    def minimize(self, _grid, _in_branch_models, _out_branch_models, _childs, **kwargs):
+        """Optional objective contribution (e.g. slack penalties). Default: none."""
         return []
 
 
 class BranchModel(GenericModel):
-    """
-    Abstract base class for network branch models, defining the interface for branch-specific equations, loss calculation, and initialization.
-
-    BranchModel provides a common foundation for implementing custom branch types (such as power lines or pipes) in network simulations. Subclasses must implement the abstract `equations` method to define the physical relationships for the branch. Optional methods such as `loss_percent`, `is_cp`, and `init` can be overridden to customize loss calculations, control point designation, and initialization logic. This class inherits from GenericModel and is intended for use within extensible, multi-domain network modeling frameworks.
-
-    Attributes:
-        _ext_data (dict): Stores extra data passed during initialization for use in extended models.
-
-    Methods:
-        equations(grid, from_node_model, to_node_model, ``**kwargs``): Abstract. Must be implemented by subclasses to define branch equations.
-        loss_percent(): Returns the loss percentage for the branch (default 0; override as needed).
-        is_cp(): Indicates if the branch is a control point (default False; override as needed).
-        init(grid): Optional initialization logic for the branch (default is no-op).
-
-    Example::
-
-        class MyCustomBranch(BranchModel):
-            def equations(self, grid, from_node_model, to_node_model, **kwargs):
-                # Implement branch-specific equations
-                pass
-
-            def loss_percent(self):
-                # Custom loss calculation
-                return compute_actual_loss(self)
-
-            def is_cp(self):
-                # Mark this branch as a control point
-                return True
-
-            def init(self, grid):
-                # Custom initialization logic
-                pass
-    """
+    """Abstract base class for network branches (lines, pipes). Subclasses define branch equations."""
 
     @abstractmethod
     def equations(self, grid, from_node_model, to_node_model, **kwargs):
-        """
-        No docstring provided.
-        """
+        pass
 
-    def minimize(self, grid, from_node_model, to_node_model, **kwargs):
-        """
-        Minimization of an expression as minimization may necessary due to some formulation (when replacing
-        constraints with slack variables)
-
-        :param self: Description
-        """
+    def minimize(self, _grid, _from_node_model, _to_node_model, **kwargs):
         return []
 
     def loss_percent(self):
-        """
-        Returns the percentage of losses for the branch model, defaulting to zero.
-
-        This method provides a placeholder for calculating the loss percentage associated with a branch in the network, such as power or heat losses. By default, it returns 0, indicating no losses are considered. Override this method in subclasses to implement specific loss calculations relevant to the branch type.
-
-        Returns:
-            int: Always returns 0, representing zero loss percentage by default.
-
-        Examples:
-            .. code-block:: python
-
-                # In a custom branch model, override to provide actual loss calculation
-                class MyBranchModel(BranchModel):
-                    def loss_percent(self):
-                        return compute_actual_loss(self)
-
-            In base usage::
-
-                loss = branch_model.loss_percent()  # Returns 0 unless overridden
-        """
         return 0
 
     def is_cp(self):
-        """
-        Indicates whether the branch model represents a control point (CP) in the network.
-
-        This method is used to determine if the current branch model instance should be treated as a control point, which may affect optimization or control strategies in network simulations. By default, this implementation always returns False, meaning the branch is not a control point. Override this method in subclasses if specific branch types should be considered as control points.
-
-        Returns:
-            bool: False, indicating the branch model is not a control point by default.
-
-        Examples:
-            Check if a branch model is a control point:
-                if branch_model.is_cp():
-                    # Apply control logic
-                    ...
-        """
         return False
 
     def init(self, grid):
-        """
-        No docstring provided.
-        """
+        """Optional pre-solve initialization hook for the branch. Default: no-op."""
 
 
 class MultiGridBranchModel(BranchModel):
-    """
-    Abstract base class for branch models that couple multiple grid domains, such as electrical, gas, and heat networks.
-
-    This class extends BranchModel to support branches that interact with more than one grid type, enabling the modeling of multi-energy systems and sector coupling. Subclasses must implement the abstract `equations` method to define the physical or operational relationships across the involved grids. The `is_cp` method returns True by default, indicating that multi-grid branches are treated as control points in the network. The `init` method can be overridden to perform any setup or pre-processing required for multi-grid branches.
-
-    Methods:
-        equations(grids, from_node_model, to_node_model, ``**kwargs``): Abstract. Must be implemented by subclasses to define the system of equations for the multi-grid branch.
-        is_cp(): Returns True, indicating this branch is a control point by default.
-        init(grids): Optional initialization logic for the branch (default is no-op).
-
-    Example::
-
-        class MyMultiGridBranch(MultiGridBranchModel):
-            def equations(self, grids, from_node_model, to_node_model, **kwargs):
-                # Define equations coupling electrical and gas flows
-                return [eq1, eq2, eq3]
-
-            def init(self, grids):
-                self.el_grid = grids['el']
-                self.gas_grid = grids['gas']
-    """
+    """Branch that couples multiple grid domains (e.g. CHP, P2H). Always a control point."""
 
     @abstractmethod
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
-        """
-        Defines the system of equations for a multi-grid branch, relating variables across multiple grids and connected nodes.
-
-        This abstract method must be implemented by subclasses to specify the physical or operational relationships governing the branch's behavior in a multi-grid context (e.g., coupling between electrical, gas, and heat networks). Use this method when modeling branches that interact with more than one grid domain. The method is typically called during network simulation or optimization to assemble the overall system equations.
-
-        Args:
-            grids (dict): Dictionary of grid objects involved in the branch (e.g., {'el': el_grid, 'gas': gas_grid}).
-            from_node_model: Model instance representing the source node connected to the branch.
-            to_node_model: Model instance representing the destination node connected to the branch.
-            **kwargs: Additional keyword arguments for solver options or equation customization.
-
-        Returns:
-            Any: The equations or constraints representing the branch's behavior. The return type and structure depend on the modeling framework and implementation.
-
-        Raises:
-            NotImplementedError: If not implemented in a subclass.
-
-        Examples:
-            .. code-block:: python
-
-                class MyMultiGridBranch(MultiGridBranchModel):
-                    def equations(self, grids, from_node_model, to_node_model, **kwargs):
-                        # Define equations coupling electrical and gas flows
-                        return [eq1, eq2, eq3]
-        """
+        pass
 
     def is_cp(self):
-        """
-        Indicates that the multi-grid branch model is a control point (CP) in the network.
-
-        This method returns True to signal that this branch should be treated as a control point, which may affect optimization, control strategies, or system observability in multi-grid network simulations. Override this method in subclasses if a different control point designation is required.
-
-        Returns:
-            bool: Always returns True, indicating the branch is a control point.
-
-        Examples:
-            if branch_model.is_cp():
-                # Apply control logic specific to control points
-                ...
-        """
         return True
 
     def init(self, grids):
-        """
-        Initializes the multi-grid branch model with the provided grid objects.
-
-        This method is intended to perform any setup or pre-processing required before the branch is used in simulation or optimization, such as caching grid parameters or establishing references to grid-specific data. Override this method in subclasses to implement custom initialization logic for multi-grid branches. It is typically called once during network assembly or before equation evaluation.
-
-        Args:
-            grids (dict): Dictionary of grid objects relevant to the branch (e.g., {'el': el_grid, 'gas': gas_grid}).
-
-        Returns:
-            None
-
-        Examples:
-            class MyMultiGridBranch(MultiGridBranchModel):
-                def init(self, grids):
-                    self.el_grid = grids['el']
-                    self.gas_grid = grids['gas']
-        """
+        """Optional pre-solve initialization hook spanning grids. Default: no-op."""
 
 
 class MultiGridNodeModel(NodeModel):
-    """
-    Represents a node model for multi-grid networks, designating the node as a control point (CP) by default.
-
-    This class extends NodeModel to support nodes that participate in multiple grid domains (such as electrical, gas, and heat networks) and are treated as control points in network simulations. Use this class when modeling nodes that require special handling for optimization, control, or observability in multi-energy systems. The `is_cp` method returns True, indicating the node's control point status, which can influence system-level strategies.
-
-    Example::
-
-        node_model = MultiGridNodeModel(...)
-        if node_model.is_cp():
-            # Apply control logic for control points
-            ...
-
-    Methods:
-        is_cp(): Returns True, indicating this node is a control point in the multi-grid network.
-    """
+    """Node that participates in multiple grid domains. Always a control point."""
 
     def is_cp(self):
-        """
-        Indicates that the node model serves as a control point (CP) in a multi-grid network.
-
-        This method returns True to signal that this node should be treated as a control point, which may affect optimization, control strategies, or observability in multi-grid network simulations. Override this method in subclasses if a different control point designation is required.
-
-        Returns:
-            bool: Always returns True, indicating the node is a control point.
-
-        Examples:
-            if node_model.is_cp():
-                # Apply control logic specific to control points
-                ...
-        """
         return True
 
 
 class CompoundModel(GenericModel):
     """
-    Base class for composite components that span multiple nodes and/or carriers.
+    Composite component spanning multiple nodes/carriers (e.g. P2H unit).
 
-    A ``CompoundModel`` groups several sub-components (internal branches, child
-    attachments, etc.) into a single logical unit — for example a P2H unit that
-    internally creates a water pipe and couples it to an electricity bus.
-
-    Subclasses must implement :meth:`create`, which receives the network and
-    is expected to add the required sub-components.  Optionally override
-    :meth:`equations` to add coupling constraints between the sub-components'
-    variables, and :meth:`minimize` to contribute objective terms.
+    Subclasses implement :meth:`create` to add sub-components to the network,
+    and may override :meth:`equations` for coupling constraints.
     """
 
     @abstractmethod
     def create(self, network):
-        """
-        Materialise the compound's sub-components in *network*.
+        """Add sub-components (nodes, branches, children) to *network*."""
 
-        Called once when the compound is added to the network.  Implementations
-        should call ``network.node()``, ``network.branch()``, ``network.child_to()``
-        etc. to create internal topology.
-
-        Args:
-            network: The :class:`Network` the compound belongs to.
-        """
-
-    def equations(self, network, **kwargs):
-        """
-        Return coupling constraints between sub-component variables.
-
-        Override this method to add equations that link variables across the
-        compound's internal sub-components (e.g. energy-balance between the
-        electrical and hydraulic side of a P2H unit).  Returns an empty list
-        by default.
-        """
+    def equations(self, _network, **kwargs):
         return []
 
-    def minimize(self, network, **kwargs):
-        """
-        Minimization of an expression as minimization may necessary due to some formulation (when replacing
-        constraints with slack variables)
-
-        :param self: Description
-        """
+    def minimize(self, _network, **kwargs):
         return []
 
 
 class MultiGridCompoundModel(CompoundModel):
-    """
-    No docstring provided.
-    """
-
     def is_cp(self):
-        """
-        No docstring provided.
-        """
         return False
 
 
 class ChildModel(GenericModel):
     """
-    Base class for leaf components attached to a single node (loads, generators, ext-grids).
+    Leaf component attached to a single node (loads, generators, ext-grids).
 
-    **Sign convention** — the internal representation follows the *load convention*:
+    Load convention: positive = consumption, negative = generation. Generator
+    subclasses negate the user-supplied magnitude so the public API takes
+    positive numbers.
 
-    * **Positive** values represent *consumption* (load, sink).
-    * **Negative** values represent *generation* (injection, source).
-
-    Concrete subclasses such as :class:`PowerGenerator` and :class:`Source`
-    negate the user-supplied magnitude in ``__init__`` so that the public API
-    always accepts positive numbers for generators::
-
-        PowerGenerator(p_mw=5)   → self.p_mw = -5   (injecting 5 MW)
-        PowerLoad(p_mw=5)        → self.p_mw = +5   (consuming 5 MW)
-
-    Args:
-        regulation (float): Scaling factor applied to the component's setpoint,
-            in the range ``[0.0, 1.0]``.  A value of ``1.0`` (default) means
-            full output/consumption; ``0.0`` effectively disables the component.
-            The factor is used by multi-energy coupling components (P2H, CHP, …)
-            to model partial dispatch.
-        **kwargs: Forwarded to :class:`GenericModel`.
+    ``regulation`` in ``[0.0, 1.0]`` scales the setpoint; used by multi-energy
+    couplers (P2H, CHP) for partial dispatch.
     """
 
     def __init__(self, regulation: float = 1.0, **kwargs):
@@ -713,39 +379,17 @@ class ChildModel(GenericModel):
         self.regulation = regulation
 
     def overwrite(self, node_model, grid):
-        """
-        Pin node variables to fixed setpoints (optional).
-
-        Override this method in grid-forming components (e.g. ``ExtPowerGrid``)
-        to replace free node ``Var`` instances with ``Const`` values before the
-        solver runs.  The default implementation is a no-op.
-
-        Args:
-            node_model: The node model the child is attached to.
-            grid: The grid domain of the node.
-        """
+        """Pin node variables to fixed setpoints (grid-forming children). Default: no-op."""
 
     @abstractmethod
     def equations(self, grid, node_model, **kwargs):
-        """
-        No docstring provided.
-        """
+        pass
 
-    def minimize(self, grid, node_model, **kwargs):
-        """
-        Minimization of an expression as minimization may necessary due to some formulation (when replacing
-        constraints with slack variables)
-
-        :param self: Description
-        """
+    def minimize(self, _grid, _node_model, **kwargs):
         return []
 
 
 class Component(ABC):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         id,
@@ -766,39 +410,34 @@ class Component(ABC):
         self.independent = independent
         self.ignored = False
 
+        # Declarative only - which equations to use. Variable declaration
+        # (ensure_var) is deferred to the solver's attach_formulations() pass,
+        # which runs on the solve-time network copy.
         self.formulation = formulation
+        # Set by the Network builders when an explicit formulation= was passed;
+        # pinned formulations survive a solver-level formulation override.
+        self.formulation_pinned = False
 
     @property
     def tid(self):
-        """
-        No docstring provided.
-        """
         return f"{self.__class__.__name__}-{self.id}".lower()
 
     @property
     def nid(self):
-        """
-        No docstring provided.
-        """
         return f"{self.model.__class__.__name__}-{self.id}".lower()
 
-    @property
-    def formulation(self):
-        return self._formulation
-
-    @formulation.setter
-    def formulation(self, formulation):
-        self._formulation = formulation
-
-        if self._formulation is not None:
-            self._formulation.ensure_var(self.model)
+    def __deepcopy__(self, memo):
+        new = self.__class__.__new__(self.__class__)
+        memo[id(self)] = new
+        for k, v in self.__dict__.items():
+            if v is None or v.__class__ in _IMMUTABLE_PRIMITIVES:
+                new.__dict__[k] = v
+            else:
+                new.__dict__[k] = copy.deepcopy(v, memo)
+        return new
 
 
 class Child(Component):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         child_id,
@@ -839,10 +478,6 @@ class Child(Component):
 
 
 class Compound(Component):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         compound_id,
@@ -882,9 +517,6 @@ class Compound(Component):
         return form_eqs + model_eqs
 
     def component_of_type(self, comp_type):
-        """
-        No docstring provided.
-        """
         return [
             component
             for component in self.subcomponents
@@ -893,41 +525,7 @@ class Compound(Component):
 
 
 class Node(Component):
-    """
-    Represents a node in the network, managing connectivity, child components, and node-specific attributes.
-
-    The Node class extends Component to provide functionality for managing network nodes, including tracking incoming and outgoing branches, associated child components, and node-specific constraints or metadata. Nodes serve as connection points for branches and can represent buses, junctions, or other network entities. Use this class when constructing or modifying network topologies, performing connectivity analysis, or managing nodal attributes in simulation workflows.
-
-    Example:
-        node = Node(node_id=1, model=my_node_model, position=(10, 20))
-        node.add_from_branch_id((2, 1, 0))
-        node.add_to_branch_id((1, 3, 0))
-        node.remove_branch((2, 1, 0))
-
-    Parameters:
-        node_id: Unique identifier for the node.
-        model: The node's associated model object.
-        child_ids (list, optional): List of child component IDs attached to the node.
-        constraints (list, optional): List of operational constraints for the node.
-        grid (optional): The grid or domain to which the node belongs.
-        name (str, optional): Human-readable name for the node.
-        position (optional): Geographical or logical position of the node.
-        active (bool, optional): Whether the node is active in the network. Defaults to True.
-        independent (bool, optional): Whether the node is independent in the network. Defaults to True.
-
-    Attributes:
-        child_ids (list): IDs of child components attached to the node.
-        constraints (list): Operational constraints for the node.
-        from_branch_ids (list): Identifiers of incoming branches.
-        to_branch_ids (list): Identifiers of outgoing branches.
-        position: Geographical or logical position of the node.
-
-    Methods:
-        add_from_branch_id(branch_id): Registers a branch as incoming to the node.
-        add_to_branch_id(branch_id): Registers a branch as outgoing from the node.
-        _remove_branch(branch_id): Removes a branch from incoming or outgoing lists.
-        remove_branch(branch_id): Removes both a branch and its reversed counterpart from the node's branch lists.
-    """
+    """Network node tracking attached child components and incoming/outgoing branches."""
 
     def __init__(
         self,
@@ -990,84 +588,25 @@ class Node(Component):
         return form_eqs + model_eqs
 
     def add_from_branch_id(self, branch_id):
-        """
-        Adds a branch identifier to the list of incoming branches for the node.
-
-        Use this method to register a new incoming branch connection to the node, typically during network construction or when dynamically modifying the network topology. This ensures that the node maintains an accurate record of all branches entering it, which is essential for connectivity management and nodal analysis.
-
-        Args:
-            branch_id: The identifier of the branch to add as an incoming connection. Must be a hashable object representing the branch.
-
-        Returns:
-            None
-
-        Examples:
-            node.add_from_branch_id((1, 2, 0))  # Registers branch (1, 2, 0) as incoming to the node.
-        """
         self.from_branch_ids.append(branch_id)
 
     def add_to_branch_id(self, branch_id):
-        """
-        Adds a branch identifier to the list of outgoing branches for the node.
-
-        This method is used to register a new outgoing branch connection from the node, typically during network construction or when updating the network topology. Maintaining an accurate list of outgoing branches is essential for connectivity management, nodal analysis, and network traversal algorithms.
-
-        Args:
-            branch_id: The identifier of the branch to add as an outgoing connection. Should be a hashable object representing the branch.
-
-        Returns:
-            None
-
-        Examples:
-            node.add_to_branch_id((2, 3, 1))  # Registers branch (2, 3, 1) as outgoing from the node.
-        """
         self.to_branch_ids.append(branch_id)
 
     def _remove_branch(self, branch_id):
-        """
-        Removes a branch identifier from the node's incoming or outgoing branch lists.
-
-        This method is used internally to update the node's branch connections by removing the specified branch ID from either the `to_branch_ids` (outgoing) or `from_branch_ids` (incoming) lists. Use this method when you need to maintain accurate connectivity information after branch deletions or network reconfiguration. It is typically called by higher-level methods that manage node-branch relationships.
-
-        Args:
-            branch_id: The identifier of the branch to remove. Must match an entry in either `to_branch_ids` or `from_branch_ids`.
-
-        Returns:
-            None
-
-        Examples:
-            node._remove_branch((1, 2, 0))  # Removes branch (1, 2, 0) from the node's branch lists if present.
-        """
         if branch_id in self.to_branch_ids:
             self.to_branch_ids.remove(branch_id)
         elif branch_id in self.from_branch_ids:
             self.from_branch_ids.remove(branch_id)
 
     def remove_branch(self, branch_id):
-        """
-        Removes a branch identifier and its reversed counterpart from the node's branch lists.
-
-        This method updates the node's connectivity by removing both the specified branch ID and its reversed form (with the from/to nodes swapped) from the incoming and outgoing branch lists. Use this method when deleting a branch or reconfiguring the network to ensure all references to the branch are cleared, regardless of direction. It is typically called during network modification or cleanup operations.
-
-        Args:
-            branch_id: The identifier of the branch to remove, as a tuple (from_node, to_node, branch_index).
-
-        Returns:
-            None
-
-        Examples:
-            node.remove_branch((1, 2, 0))  # Removes both (1, 2, 0) and (2, 1, 0) from the node's branch lists if present.
-        """
+        """Remove ``branch_id`` and its reversed counterpart from both branch lists."""
         switched = (branch_id[1], branch_id[0], branch_id[2])
         self._remove_branch(branch_id)
         self._remove_branch(switched)
 
 
 class Branch(Component):
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         model,
@@ -1115,9 +654,6 @@ class Branch(Component):
 
     @property
     def tid(self):
-        """
-        No docstring provided.
-        """
         if self.id[0] > self.id[1]:
             return f"branch-{self.id[0]}-{self.id[1]}"
         else:

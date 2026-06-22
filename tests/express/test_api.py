@@ -4,6 +4,7 @@ from monee import mm, mx, run_energy_flow
 
 
 def test_api_el():
+    # GIVEN
     net = mm.Network()
 
     bus_0 = mx.create_bus(net)
@@ -27,14 +28,19 @@ def test_api_el():
     mx.create_ext_hydr_grid(net, junc_1)
     mx.create_sink(net, junc_2, 1)
 
-    mx.create_p2g(net, bus_0, junc_0, efficiency=0.9, mass_flow_setpoint=0.1)
+    mx.create_p2g(net, bus_0, junc_0, efficiency=0.9, mass_flow_setpoint_kgs=0.1)
 
+    # WHEN
     result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
 
     assert result is not None
 
 
 def test_api_el_super_ex():
+    # GIVEN
     net = mx.create_multi_energy_network()
 
     mx.create_ext_power_grid(net, 1)
@@ -48,16 +54,20 @@ def test_api_el_super_ex():
     mx.create_sink(net, 5, 1)
     mx.create_sink(net, 3, 1)
 
+    # WHEN
     result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
 
     assert result is not None
 
 
 def test_api_example_index():
+    # GIVEN
     # change doc if you change this!
     net = mx.create_multi_energy_network()
 
-    # electricity grid
     bus_0 = mx.create_bus(net)
     bus_1 = mx.create_bus(net)
 
@@ -65,39 +75,45 @@ def test_api_example_index():
     mx.create_ext_power_grid(net, bus_0)
     mx.create_power_load(net, bus_1, 0.1, 0)
 
-    # water-based district heating grid
     junc_0 = mx.create_water_junction(net)
     junc_1 = mx.create_water_junction(net)
     junc_2 = mx.create_water_junction(net)
 
     mx.create_ext_hydr_grid(net, junc_0)
     mx.create_water_pipe(net, junc_0, junc_1, diameter_m=0.12, length_m=100)
-    mx.create_sink(net, junc_2, mass_flow=1)
+    mx.create_sink(net, junc_2, mass_flow_kgs=1)
 
-    # creating connection between el and water grid
     mx.create_p2h(
         net,
         bus_1,
         junc_1,
         junc_2,
-        heat_energy_w=100_000,
+        heat_energy_mw=0.100,
         diameter_m=0.1,
         efficiency=0.9,
     )
 
+    # WHEN
     result = run_energy_flow(net)
-
     print(result)
+
+    # THEN
+    assert result.success
+
     assert result is not None
 
 
 def test_ext_power_grid_defaults():
+    # WHEN
     sig = inspect.signature(mx.create_ext_power_grid)
+
+    # THEN
     assert sig.parameters["p_mw"].default == 0
     assert sig.parameters["q_mvar"].default == 0
 
 
 def test_trafo():
+    # GIVEN
     net = mx.create_multi_energy_network()
 
     bus_hv = mx.create_bus(net, base_kv=110)
@@ -107,65 +123,84 @@ def test_trafo():
     mx.create_power_load(net, bus_lv, p_mw=1, q_mvar=0)
     mx.create_trafo(net, bus_lv, bus_hv, sn_trafo_mva=160)
 
+    # WHEN
     result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
 
     assert result is not None
 
 
 def test_gas_domain_functions():
-    """create_gas_ext_grid and create_gas_sink auto-create junctions."""
+    # GIVEN
+    # ext_grid and sink are called first so they auto-create the gas junctions
     net = mx.create_multi_energy_network()
 
-    # Call ext_grid and sink first so they trigger auto-node creation
     mx.create_gas_ext_grid(net, 0)
-    mx.create_gas_sink(net, 1, mass_flow=0.1)
+    mx.create_gas_sink(net, 1, mass_flow_kgs=0.1)
     mx.create_gas_pipe(net, 0, 1, diameter_m=0.1, length_m=100)
 
+    # WHEN
     result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
 
     assert result is not None
 
 
 def test_gas_source_auto_node():
-    """create_gas_source with a new node_id auto-creates a gas junction."""
+    # GIVEN
+    # create_gas_source with a new node_id auto-creates a gas junction
     net = mx.create_multi_energy_network()
 
-    mx.create_gas_source(net, 0, mass_flow=0.1)
+    mx.create_gas_source(net, 0, mass_flow_kgs=0.1)
     mx.create_gas_ext_grid(net, 1)
     mx.create_gas_pipe(net, 0, 1, diameter_m=0.1, length_m=100)
 
+    # WHEN
     result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
 
     assert result is not None
 
 
 def test_water_domain_functions():
-    """create_water_ext_grid and create_water_sink auto-create water junctions."""
+    # GIVEN
+    # create_water_ext_grid and create_water_sink auto-create water junctions
     net = mx.create_multi_energy_network()
 
     mx.create_water_ext_grid(net, 0)
-    mx.create_water_sink(net, 1, mass_flow=1)
+    mx.create_water_sink(net, 1, mass_flow_kgs=1)
     mx.create_water_pipe(net, 0, 1, diameter_m=0.12, length_m=100)
 
+    # WHEN
     result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
 
     assert result is not None
 
 
 def test_water_source_auto_node():
-    """create_water_source with a new node_id auto-creates a water junction.
-
-    The source (0.5 kg/s) and a larger sink (1.5 kg/s) share node 1, giving
-    a net consumption of 1 kg/s. The pipe carries forward flow (0→1) so the
-    direction variable stays at its default initialization of 1.
-    """
+    # GIVEN
+    # source (0.5 kg/s) and sink (1.5 kg/s) share auto-created node 1, giving
+    # 1 kg/s net consumption with forward pipe flow (0->1)
     net = mx.create_multi_energy_network()
 
     mx.create_water_ext_grid(net, 0)
-    mx.create_water_source(net, 1, mass_flow=0.5)  # auto-creates junction 1
-    mx.create_water_sink(net, 1, mass_flow=1.5)  # node 1 already exists
+    mx.create_water_source(net, 1, mass_flow_kgs=0.5)
+    mx.create_water_sink(net, 1, mass_flow_kgs=1.5)
     mx.create_water_pipe(net, 0, 1, diameter_m=0.12, length_m=100)
 
+    # WHEN
     result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
 
     assert result is not None

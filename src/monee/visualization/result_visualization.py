@@ -10,9 +10,7 @@ import plotly.graph_objects as go
 
 from monee.solver.core import SolverResult
 
-# ---------------------------------------------------------------------------
 # Theme  –  clean light mode
-# ---------------------------------------------------------------------------
 _BG = "#ffffff"  # pure white canvas
 _PANEL = "#f6f8fa"  # hover tooltip background
 _BORDER = "#d0d7de"  # subtle border / separator
@@ -54,27 +52,23 @@ _ID_COLS: frozenset[str] = frozenset({"id", "node_id"})
 _SKIP: frozenset[str] = _META_COLS | _ID_COLS | frozenset({"_type"})
 
 
-# ---------------------------------------------------------------------------
 # Value formatting
-# ---------------------------------------------------------------------------
 
 
 def _fmt(v) -> str:
     """Format a result value concisely for display."""
     if v is None:
-        return "—"
+        return "-"
     try:
         f = float(v)
         if math.isnan(f):
-            return "—"
+            return "-"
         return f"{f:.4g}"
     except (TypeError, ValueError):
         return str(v)
 
 
-# ---------------------------------------------------------------------------
 # Traffic-light helpers
-# ---------------------------------------------------------------------------
 
 
 def _bus_color(vm_pu) -> str:
@@ -105,9 +99,7 @@ def _line_color(loading_pct) -> str:
     return _TL_RED
 
 
-# ---------------------------------------------------------------------------
 # Grid-type detection (mirrors existing visualization.py)
-# ---------------------------------------------------------------------------
 
 
 def _grid_type(grid) -> str:
@@ -121,9 +113,7 @@ def _grid_type(grid) -> str:
     return "cp"
 
 
-# ---------------------------------------------------------------------------
 # Build result lookup maps
-# ---------------------------------------------------------------------------
 
 
 def _node_result_map(result: SolverResult) -> dict:
@@ -133,9 +123,9 @@ def _node_result_map(result: SolverResult) -> dict:
         if df.empty or "id" not in df.columns:
             continue
         if "node_id" in df.columns:
-            continue  # child — skip
+            continue  # child - skip
         if isinstance(df["id"].iloc[0], tuple):
-            continue  # branch — skip
+            continue  # branch - skip
         for _, row in df.iterrows():
             m[row["id"]] = {"_type": type_name, **row.to_dict()}
     return m
@@ -176,9 +166,7 @@ def _child_by_node_map(result: SolverResult) -> dict:
     return m
 
 
-# ---------------------------------------------------------------------------
 # Hover text builders
-# ---------------------------------------------------------------------------
 
 
 def _sep(label: str = "") -> str:
@@ -187,16 +175,24 @@ def _sep(label: str = "") -> str:
     return f"<span style='color:{_DIM_COLOR};font-size:10px'>{label.upper()}</span>"
 
 
+def _format_component_header(
+    name: str | None, typename, component_id=None, include_id: bool = True
+) -> str:
+    """Build the bold hover header: optional name plus dim-colored type/id.
+
+    With ``include_id`` the dim span reads ``"typename #id"`` (nodes); without
+    it the span is just the ``typename`` (branches).
+    """
+    suffix = f"{typename} #{component_id}" if include_id else f"{typename}"
+    if name:
+        return f"<b>{name}</b>  <span style='color:{_DIM_COLOR}'>{suffix}</span>"
+    return f"<b>{suffix}</b>"
+
+
 def _node_hover(row: dict, children: list[dict], node_name: str | None) -> str:
     type_name = row.get("_type", "Node")
     node_id = row.get("id", "?")
-    if node_name:
-        header = (
-            f"<b>{node_name}</b>"
-            f"  <span style='color:{_DIM_COLOR}'>{type_name} #{node_id}</span>"
-        )
-    else:
-        header = f"<b>{type_name} #{node_id}</b>"
+    header = _format_component_header(node_name, type_name, node_id, include_id=True)
 
     lines = [header, _sep()]
     for k, v in row.items():
@@ -220,12 +216,7 @@ def _node_hover(row: dict, children: list[dict], node_name: str | None) -> str:
 
 def _branch_hover(row: dict, from_id, to_id, branch_name: str | None) -> str:
     type_name = row.get("_type", "Branch")
-    if branch_name:
-        header = (
-            f"<b>{branch_name}</b>  <span style='color:{_DIM_COLOR}'>{type_name}</span>"
-        )
-    else:
-        header = f"<b>{type_name}</b>"
+    header = _format_component_header(branch_name, type_name, include_id=False)
 
     lines = [
         header,
@@ -241,9 +232,7 @@ def _branch_hover(row: dict, from_id, to_id, branch_name: str | None) -> str:
     return "<br>".join(lines)
 
 
-# ---------------------------------------------------------------------------
 # Key-metric label + traffic-light color
-# ---------------------------------------------------------------------------
 
 
 def _node_label_and_color(row: dict) -> tuple[str, str]:
@@ -265,14 +254,16 @@ def _node_label_and_color(row: dict) -> tuple[str, str]:
     return "", _TL_GRAY
 
 
-def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
+def _branch_label_and_color(
+    row: dict, is_cp: bool = False
+) -> tuple[str, str]:  # NOSONAR
     """Return (short inline label, colour) for a branch result row.
 
     Single-grid branches use the traffic-light palette; coupling branches
     fall back to the CP accent colour.
     """
     # single-grid electrical loading
-    for col in ("loading_percent", "loading_from_percent"):
+    for col in ("loading_pu", "loading_from_pu"):
         v = row.get(col)
         if v is not None:
             try:
@@ -281,7 +272,7 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
                 pass
 
     # single-grid hydraulic mass flow
-    for col in ("mass_flow", "mass_flow_pos"):
+    for col in ("mass_flow_kgs", "mass_flow_pos_kgs"):
         v = row.get(col)
         if v is not None:
             try:
@@ -304,7 +295,7 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
                 pass
 
     # multi-grid: gas / hydraulic flow
-    for col in ("gas_kgps", "from_mass_flow", "to_mass_flow"):
+    for col in ("gas_mass_flow_kgs", "from_mass_flow_kgs", "to_mass_flow_kgs"):
         v = row.get(col)
         if v is not None:
             try:
@@ -315,26 +306,37 @@ def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
                 pass
 
     # multi-grid: heat
-    for col in ("heat_w", "q_w"):
+    for col in ("q_mw", "q_mw_heat"):
         v = row.get(col)
         if v is not None:
             try:
                 f = float(v)
                 if not math.isnan(f):
-                    return f"{f:.3g} W", cp_color
+                    return f"{f:.3g} MW", cp_color
             except (TypeError, ValueError):
                 pass
 
     return "", cp_color if is_cp else _TL_GRAY
 
 
-# ---------------------------------------------------------------------------
+# Branch line styling shared between the result and network plots
+
+
+def _branch_line_style(is_cp: bool) -> dict:
+    """Width + dash for a branch line: coupling branches are thin and dotted."""
+    return {
+        "width": 3.5 if not is_cp else 2,
+        "dash": "dot" if is_cp else "solid",
+    }
+
+
 # Graph layout  –  spread out nodes for readability
-# ---------------------------------------------------------------------------
 
 
-def _compute_layout(graph: nx.Graph, network, use_monee_positions: bool) -> dict:
-    if use_monee_positions:
+def _compute_layout(graph: nx.Graph, _network, use_monee_positions: bool) -> dict:
+    if use_monee_positions and all(
+        graph.nodes[nid]["internal_node"].position is not None for nid in graph.nodes
+    ):
         return {
             nid: (
                 graph.nodes[nid]["internal_node"].position[0],
@@ -355,15 +357,20 @@ def _compute_layout(graph: nx.Graph, network, use_monee_positions: bool) -> dict
         except Exception:
             continue
 
+    if pos is None:
+        # Graphviz/pygraphviz unavailable - fall back to pure-networkx layouts.
+        try:
+            pos = nx.kamada_kawai_layout(graph)
+        except Exception:
+            pos = nx.spring_layout(graph, seed=42)
+
     return pos
 
 
-# ---------------------------------------------------------------------------
 # Main function
-# ---------------------------------------------------------------------------
 
 
-def plot_result(
+def plot_result(  # NOSONAR
     result: SolverResult,
     title: str | None = None,
     show_children: bool = True,
@@ -409,9 +416,7 @@ def plot_result(
     child_map = _child_by_node_map(result) if show_children else {}
     pos = _compute_layout(graph, network, use_monee_positions)
 
-    # -----------------------------------------------------------------------
     # Node data – collected per grid type
-    # -----------------------------------------------------------------------
     grid_data: dict[str, dict] = {
         g: {"x": [], "y": [], "tl_colors": [], "hover": [], "labels": []}
         for g in ("power", "water", "gas", "cp")
@@ -452,13 +457,13 @@ def plot_result(
                 mode="markers",
                 hoverinfo="skip",
                 showlegend=False,
-                marker=dict(
-                    symbol=_GRID_SYMBOL[gtype],
-                    size=42,
-                    color=d["tl_colors"],
-                    opacity=0.12,
-                    line=dict(width=0),
-                ),
+                marker={
+                    "symbol": _GRID_SYMBOL[gtype],
+                    "size": 42,
+                    "color": d["tl_colors"],
+                    "opacity": 0.12,
+                    "line": {"width": 0},
+                },
             )
         )
 
@@ -470,25 +475,23 @@ def plot_result(
                 mode="markers+text",
                 textposition="top center",
                 text=d["labels"],
-                textfont=dict(family=_FONT, size=11, color=_DIM_COLOR),
+                textfont={"family": _FONT, "size": 11, "color": _DIM_COLOR},
                 hovertext=d["hover"],
                 hoverinfo="text",
                 name=_GRID_LABEL[gtype],
-                marker=dict(
-                    symbol=_GRID_SYMBOL[gtype],
-                    size=24,
-                    color=d["tl_colors"],
-                    opacity=0.88,
-                    line=dict(width=3, color=_ACCENT[gtype]),
-                ),
+                marker={
+                    "symbol": _GRID_SYMBOL[gtype],
+                    "size": 24,
+                    "color": d["tl_colors"],
+                    "opacity": 0.88,
+                    "line": {"width": 3, "color": _ACCENT[gtype]},
+                },
             )
         )
 
-    # -----------------------------------------------------------------------
     # Branch traces
     # Lines are grouped by (color, is_cp) – one Scatter per color group.
     # A midpoint-marker trace carries per-branch hover text + inline labels.
-    # -----------------------------------------------------------------------
     color_groups: dict[tuple, list] = {}
 
     mid_x: list[float] = []
@@ -504,10 +507,9 @@ def plot_result(
         is_cp = int_branch.model.is_cp()  # use the model's own declaration
         bname = getattr(int_branch, "name", None)
 
+        default_color = _ACCENT["cp"] if is_cp else _TL_GRAY
         label, color = (
-            _branch_label_and_color(row, is_cp=is_cp)
-            if row
-            else ("", _ACCENT["cp"] if is_cp else _TL_GRAY)
+            _branch_label_and_color(row, is_cp=is_cp) if row else ("", default_color)
         )
 
         hover = (
@@ -540,11 +542,7 @@ def plot_result(
                 mode="lines",
                 hoverinfo="none",
                 showlegend=False,
-                line=dict(
-                    color=color,
-                    width=3.5 if not is_cp else 2,
-                    dash="dot" if is_cp else "solid",
-                ),
+                line={"color": color, **_branch_line_style(is_cp)},
                 opacity=0.65,
             )
         )
@@ -555,56 +553,67 @@ def plot_result(
         mode="markers+text",
         text=mid_label,
         textposition="middle right",
-        textfont=dict(family=_FONT, size=10, color=_DIM_COLOR),
+        textfont={"family": _FONT, "size": 10, "color": _DIM_COLOR},
         hovertext=mid_hover,
         hoverinfo="text",
         showlegend=False,
-        marker=dict(
-            size=9,
-            color=mid_colors,
-            symbol="circle",
-            opacity=0.90,
-            line=dict(width=1.5, color=_BG),
-        ),
+        marker={
+            "size": 9,
+            "color": mid_colors,
+            "symbol": "circle",
+            "opacity": 0.90,
+            "line": {"width": 1.5, "color": _BG},
+        },
     )
 
-    # -----------------------------------------------------------------------
     # Traffic-light legend entries
-    # -----------------------------------------------------------------------
     tl_legend = [
         go.Scatter(
             x=[None],
             y=[None],
             mode="markers",
-            marker=dict(size=11, color=_TL_GREEN, symbol="square", line=dict(width=0)),
+            marker={
+                "size": 11,
+                "color": _TL_GREEN,
+                "symbol": "square",
+                "line": {"width": 0},
+            },
             name="OK  (< 70 % / vm ±5 %)",
         ),
         go.Scatter(
             x=[None],
             y=[None],
             mode="markers",
-            marker=dict(size=11, color=_TL_YELLOW, symbol="square", line=dict(width=0)),
+            marker={
+                "size": 11,
+                "color": _TL_YELLOW,
+                "symbol": "square",
+                "line": {"width": 0},
+            },
             name="Warning  (70–90 % / vm ±10 %)",
         ),
         go.Scatter(
             x=[None],
             y=[None],
             mode="markers",
-            marker=dict(size=11, color=_TL_RED, symbol="square", line=dict(width=0)),
+            marker={
+                "size": 11,
+                "color": _TL_RED,
+                "symbol": "square",
+                "line": {"width": 0},
+            },
             name="Critical  (≥ 90 % / vm > ±10 %)",
         ),
         go.Scatter(
             x=[None],
             y=[None],
             mode="lines",
-            line=dict(color=_ACCENT["cp"], width=2, dash="dot"),
+            line={"color": _ACCENT["cp"], "width": 2, "dash": "dot"},
             name="Coupling branch (CP)",
         ),
     ]
 
-    # -----------------------------------------------------------------------
     # Assemble  –  render order: edges → midpoints → glow → markers → legend
-    # -----------------------------------------------------------------------
     all_traces = (
         edge_traces + [midpoint_trace] + glow_traces + marker_traces + tl_legend
     )
@@ -612,54 +621,54 @@ def plot_result(
     fig = go.Figure(
         data=all_traces,
         layout=go.Layout(
-            title=dict(
-                text=title or "Network Result",
-                font=dict(family=_FONT, size=18, color=_FONT_COLOR),
-                x=0.5,
-                xanchor="center",
-                y=0.97,
-            ),
+            title={
+                "text": title or "Network Result",
+                "font": {"family": _FONT, "size": 18, "color": _FONT_COLOR},
+                "x": 0.5,
+                "xanchor": "center",
+                "y": 0.97,
+            },
             paper_bgcolor=_BG,
             plot_bgcolor=_BG,
             hovermode="closest",
-            hoverlabel=dict(
-                bgcolor=_PANEL,
-                bordercolor=_BORDER,
-                font=dict(family=_FONT, size=12, color=_FONT_COLOR),
-                namelength=-1,
-            ),
-            xaxis=dict(
-                showgrid=False,
-                zeroline=False,
-                showticklabels=False,
-                showline=False,
-            ),
-            yaxis=dict(
-                showgrid=False,
-                zeroline=False,
-                showticklabels=False,
-                showline=False,
-                scaleanchor="x",  # equal aspect ratio keeps shapes undistorted
-            ),
-            font=dict(family=_FONT, color=_FONT_COLOR),
+            hoverlabel={
+                "bgcolor": _PANEL,
+                "bordercolor": _BORDER,
+                "font": {"family": _FONT, "size": 12, "color": _FONT_COLOR},
+                "namelength": -1,
+            },
+            xaxis={
+                "showgrid": False,
+                "zeroline": False,
+                "showticklabels": False,
+                "showline": False,
+            },
+            yaxis={
+                "showgrid": False,
+                "zeroline": False,
+                "showticklabels": False,
+                "showline": False,
+                "scaleanchor": "x",
+            },
+            font={"family": _FONT, "color": _FONT_COLOR},
             autosize=True,
-            margin=dict(l=30, r=200, t=60, b=30),
-            legend=dict(
-                title=dict(
-                    text="Legend",
-                    font=dict(family=_FONT, size=12, color=_DIM_COLOR),
-                ),
-                x=1.02,
-                y=1.0,
-                xanchor="left",
-                yanchor="top",
-                bgcolor="rgba(246, 248, 250, 0.95)",
-                bordercolor=_BORDER,
-                borderwidth=1,
-                font=dict(family=_FONT, size=11, color=_FONT_COLOR),
-                itemsizing="constant",
-                tracegroupgap=6,
-            ),
+            margin={"l": 30, "r": 200, "t": 60, "b": 30},
+            legend={
+                "title": {
+                    "text": "Legend",
+                    "font": {"family": _FONT, "size": 12, "color": _DIM_COLOR},
+                },
+                "x": 1.02,
+                "y": 1.0,
+                "xanchor": "left",
+                "yanchor": "top",
+                "bgcolor": "rgba(246, 248, 250, 0.95)",
+                "bordercolor": _BORDER,
+                "borderwidth": 1,
+                "font": {"family": _FONT, "size": 11, "color": _FONT_COLOR},
+                "itemsizing": "constant",
+                "tracegroupgap": 6,
+            },
         ),
     )
 

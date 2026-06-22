@@ -1,10 +1,24 @@
 import math
 
+from monee.model.phys.core.hydraulics import calc_pipe_area
+
+
+def pipe_insulation_ua(branch):
+    r"""Cylindrical-conduction insulation conductance :math:`UA = 2\pi\lambda L / \ln(r_{out}/r_{in})`
+    [W/K] of a buried/insulated pipe, with :math:`r_{in} = D/2` and
+    :math:`r_{out} = D/2 + \text{insulation\_thickness}`."""
+    pipe_outside_r = branch.diameter_m / 2 + branch.insulation_thickness_m
+    pipe_inside_r = branch.diameter_m / 2
+    return (
+        2
+        * math.pi
+        * branch.lambda_insulation_w_per_m_k
+        * branch.length_m
+        / math.log(pipe_outside_r / pipe_inside_r)
+    )
+
 
 def darcy_friction(reynolds_var):
-    """
-    No docstring provided.
-    """
     return 64 / (reynolds_var + 1)
 
 
@@ -15,21 +29,17 @@ def darcy_weisbach_equation(
     m_neg_sq,
     pipe_length,
     diameter_m,
-    fluid_density,
-    on_off=1,
+    fluid_density_kg_per_m3,
+    on_off=1,  # NOSONAR
     friction=None,
     **kwargs,
 ):
-    # friction = hydraulics.swamee_jain(
-    #     reynolds_var, diameter_m, roughness, kwargs["log_impl"]
-    # )
-    # if use_darcy_friction:
-    #     friction = darcy_friction(reynolds_var)
-    # return -velocity_var * abs(velocity_var) * friction == on_off * (
-    #     2 * (p_i - p_j) / (pipe_length / diameter_m * fluid_density)
-    # )
-    A = math.pi * diameter_m**2 / 4  # pipe cross-sectional area [m²]
+    A = calc_pipe_area(diameter_m)  # pipe cross-section [m^2]
 
-    Rm = friction * (pipe_length / diameter_m) * (1.0 / (2.0 * fluid_density * A**2))
+    resistance = (
+        friction
+        * (pipe_length / diameter_m)
+        * (1.0 / (2.0 * fluid_density_kg_per_m3 * A**2))
+    )
 
-    return (p_i - p_j) == Rm * -(m_pos_sq - m_neg_sq)
+    return (p_i - p_j) == resistance * -(m_pos_sq - m_neg_sq)

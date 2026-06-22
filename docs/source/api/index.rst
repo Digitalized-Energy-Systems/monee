@@ -20,6 +20,8 @@ By subpackages
    monee.express
    monee.model
    monee.model.formulation
+   monee.model.extension
+   monee.model.phys
    monee.io
    monee.network
    monee.problem

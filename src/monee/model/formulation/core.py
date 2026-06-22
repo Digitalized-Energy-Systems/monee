@@ -1,82 +1,66 @@
-class NetworkConstraint:
-    """
-    Solver-agnostic network-level constraint extension.
-
-    Analogous to ``BranchFormulation`` / ``NodeFormulation`` but spanning the
-    entire network.  Register with ``network.add_extension(constraint)``.
-
-    Phase 1 — ``prepare(network)``: called *before* variable injection; add
-    ``Var`` placeholders to model objects so the injection loop picks them up.
-
-    Phase 2 — ``equations(network, ignored_nodes) → list``: called *after*
-    variable injection; return relational expressions (``==``, ``<=``,
-    ``>=``) built from injected model attributes.  The solver registers them
-    with ``m.Equations(eqs)`` / ``pm.cons.add`` without inspecting their
-    content — exactly like branch/node equations.
-    """
-
-    def prepare(self, network) -> None:
-        """Add Var placeholders before variable injection (no-op by default)."""
-
-    def equations(self, network, ignored_nodes: set) -> list:
-        """Return solver-agnostic relational expressions (empty by default)."""
-        return []
-
-
 class Formulation:
-    def ensure_var(self, model):
-        pass
+    def ensure_var(self, model, simulation=False, grid=None):
+        """Declare/adjust the model's Vars for this formulation.
+
+        ``grid`` is the component's grid (None for grid-less components); it
+        lets formulations express grid-derived bounds on the Var abstraction
+        itself instead of mutating backend variables in ``equations()``.
+        """
 
 
 class BranchFormulation(Formulation):
-    def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
+    def minimize(
+        self, branch, grid, from_node_model, to_node_model, **kwargs
+    ):  # NOSONAR
         return []
 
-    def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
+    def equations(
+        self, branch, grid, from_node_model, to_node_model, **kwargs
+    ):  # NOSONAR
         return []
 
 
 class NodeFormulation(Formulation):
     def minimize(
         self,
-        node,
-        grid,
-        from_branch_models,
-        to_branch_models,
-        connected_child_models,
+        node,  # NOSONAR
+        grid,  # NOSONAR
+        from_branch_models,  # NOSONAR
+        to_branch_models,  # NOSONAR
+        connected_child_models,  # NOSONAR
         **kwargs,
     ):
         return []
 
     def equations(
         self,
-        node,
-        grid,
-        from_branch_models,
-        to_branch_models,
-        connected_child_models,
+        node,  # NOSONAR
+        grid,  # NOSONAR
+        from_branch_models,  # NOSONAR
+        to_branch_models,  # NOSONAR
+        connected_child_models,  # NOSONAR
         **kwargs,
     ):
         return []
 
 
 class CompoundFormulation(Formulation):
-    def minimize(self, compound, network, **kwargs):
+    def minimize(self, compound, network, **kwargs):  # NOSONAR
         return []
 
-    def equations(self, compound, network, **kwargs):
+    def equations(self, compound, network, **kwargs):  # NOSONAR
         return []
 
 
 class ChildFormulation(Formulation):
-    def minimize(self, child, grid, node, **kwargs):
+    def minimize(self, child, grid, node, **kwargs):  # NOSONAR
         return []
 
-    def equations(self, child, grid, node, **kwargs):
+    def equations(self, child, grid, node, **kwargs):  # NOSONAR
         return []
 
     def overwrite(self, child, node_model, grid):
-        pass
+        """Hook for subclasses to overwrite child model state; no-op by default."""
 
 
 def _or_dict(d: dict):
@@ -100,3 +84,30 @@ class NetworkFormulation:
         self.node_type_to_formulations = _or_dict(node_type_to_formulations)
         self.child_type_to_formulations = _or_dict(child_type_to_formulations)
         self.compound_type_to_formulations = _or_dict(compound_type_to_formulations)
+
+    def items(self):
+        """All ``(model_type | (model_type, grid_type), formulation)`` pairs."""
+        return (
+            list(self.branch_type_to_formulations.items())
+            + list(self.node_type_to_formulations.items())
+            + list(self.child_type_to_formulations.items())
+            + list(self.compound_type_to_formulations.items())
+        )
+
+    def lookup(self, model, grid) -> Formulation | None:
+        """The registered formulation matching *model* (and *grid*), or None.
+
+        Mirrors :meth:`monee.model.network.Network.apply_formulation` matching:
+        ``isinstance`` on the model type, exact type match on the grid when the
+        key is a ``(model_type, grid_type)`` tuple; on multiple matches the
+        last registration wins.
+        """
+        found = None
+        for type_or_tuple, formulation in self.items():
+            if isinstance(type_or_tuple, tuple):
+                tc, tg = type_or_tuple
+            else:
+                tc, tg = type_or_tuple, None
+            if isinstance(model, tc) and (tg is None or type(grid) is tg):
+                found = formulation
+        return found

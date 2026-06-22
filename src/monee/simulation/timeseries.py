@@ -7,25 +7,28 @@ from typing import Any
 import pandas
 
 from monee.model import Network
-from monee.model.core import Var, tracked
-from monee.model.core import value as _model_value
+from monee.model.core import Branch, Child, Compound, Node, Var
 from monee.simulation.core import solve
+from monee.simulation.result_utils import (
+    build_type_stats_html as _build_type_stats_html,
+)
 from monee.simulation.step_state import StepState
-from monee.solver.core import _TABLE_CSS, _col_summary, _display_df
+
+# Shared result-rendering helpers, imported from the solver's public reporting
+# surface (the simulation layer renders the same kind of result tables).
+from monee.solver.core import TABLE_CSS as _TABLE_CSS
+from monee.solver.core import col_summary as _col_summary
+from monee.solver.core import display_df as _display_df
+from monee.solver.dispatch import resolve_solver
 
 _log = logging.getLogger(__name__)
 
+_STEP_FAILED_MSG = "Step %d failed: %s"
+
 
 class TimeseriesData:
-    """
-    Holds time-varying attribute values for network components.
-
-    Series are registered by component type and lookup key (id or name), then
-    applied to the corresponding model attributes before each solve step.
-
-    All series must have the same length.  Mismatched lengths raise
-    ``ValueError`` at registration time so errors are caught before the run.
-    """
+    """Time-varying attribute values applied to model objects before each step.
+    All registered series must share a length (validated on add)."""
 
     def __init__(self):
         self._node_id_to_series: dict[Any, dict[str, list]] = {}
@@ -85,6 +88,16 @@ class TimeseriesData:
         """Register a time-varying attribute for a compound model (by name)."""
         self._add_to(self._compound_name_to_series, compound_name, attribute, series)
 
+    def add_objective_data(self, child_id, attribute: str, series) -> None:
+        """Alias for :meth:`add_child_series`; signals the attribute feeds an objective."""
+        self.add_child_series(child_id, attribute, series)
+
+    def add_objective_data_by_name(
+        self, child_name: str, attribute: str, series
+    ) -> None:
+        """Like :meth:`add_objective_data` but matches by component name."""
+        self.add_child_series_by_name(child_name, attribute, series)
+
     @classmethod
     def from_dataframe(
         cls,
@@ -93,28 +106,8 @@ class TimeseriesData:
         component_id=None,
         component_name: str = None,
     ) -> "TimeseriesData":
-        """
-        Build a ``TimeseriesData`` from a pandas DataFrame.
-
-        Each column of *df* is treated as a time-varying attribute.  Rows are
-        timesteps.
-
-        Args:
-            df: DataFrame where each column is an attribute name.
-            component_type: ``'node'``, ``'child'``, ``'branch'``, or
-                ``'compound'``.
-            component_id: Component identifier (id-based lookup).
-            component_name: Component name (name-based lookup; not available
-                for nodes).
-
-        Returns:
-            A new ``TimeseriesData`` with all columns registered.
-
-        Example::
-
-            df = pandas.DataFrame({'p_mw': [...], 'q_mvar': [...]})
-            td = TimeseriesData.from_dataframe(df, 'child', component_id=load_id)
-        """
+        """Build from a DataFrame (cols=attrs, rows=timesteps). ``component_type``
+        is ``node|child|branch|compound``; pass id or name."""
         _by_id = {
             "node": "add_node_series",
             "child": "add_child_series",
@@ -152,23 +145,13 @@ class TimeseriesData:
 
     @staticmethod
     def _set_model_attr(model, attr: str, value) -> None:
-        """Set *attr* on *model* to *value*.
-
-        * For plain (non-``Var``) attributes the value is replaced directly.
-        * For ordinary ``Var`` instances the value is updated in place so that
-          the type and bounds are preserved.
-        * For ``tracked`` instances the value *and* both bounds are set to the
-          series value, effectively pinning the variable at that setpoint for
-          this step while keeping the ``tracked`` type so the solved value is
-          still recorded in ``StepState`` for inter-step coupling.
-        """
+        """Set *attr*; for Vars pin value/min/max so it's fixed but stays a Var
+        (still discoverable via StepState)."""
         current = getattr(model, attr, None)
-        if type(current) is tracked:
+        if isinstance(current, Var):
             current.value = value
             current.min = value
             current.max = value
-        elif isinstance(current, Var):
-            current.value = value
         else:
             setattr(model, attr, value)
 
@@ -205,26 +188,21 @@ class TimeseriesData:
             for attr, series in self._compound_name_to_series[compound.name].items():
                 self._set_model_attr(compound.model, attr, series[timestep])
 
+    _dispatch = {
+        Node: apply_to_node,
+        Child: apply_to_child,
+        Branch: apply_to_branch,
+        Compound: apply_to_compound,
+    }
+
     def apply_to_network(self, net: Network, timestep: int) -> None:
         """Apply all registered series to *net* at *timestep*."""
-        for node in net.nodes:
-            self.apply_to_node(node, timestep)
-            for child in net.childs_by_ids(node.child_ids):
-                self.apply_to_child(child, timestep)
-        for branch in net.branches:
-            self.apply_to_branch(branch, timestep)
-        for compound in net.compounds:
-            self.apply_to_compound(compound, timestep)
+        for comp in net.iter_all_components():
+            self._dispatch[type(comp)](self, comp, timestep)
 
     @staticmethod
     def _merge_component_data(target: dict, source: dict) -> dict:
-        """
-        Attribute-level merge of two ``{component_id: {attr: series}}`` dicts.
-
-        For each component id in *source*: if absent from *target*, add it
-        wholesale.  If present, merge attribute dicts with *target* winning on
-        conflicts (self-wins semantics).
-        """
+        """Attribute-level merge with target-wins semantics on conflicts."""
         result = dict(target)
         for comp_id, attrs in source.items():
             if comp_id in result:
@@ -234,14 +212,7 @@ class TimeseriesData:
         return result
 
     def extend(self, td: "TimeseriesData") -> None:
-        """
-        Merge *td* into this ``TimeseriesData``.
-
-        For components present in both, attributes from *self* take priority
-        on conflicts.  Components present only in *td* are added wholesale.
-
-        Raises ``ValueError`` if the two objects have incompatible lengths.
-        """
+        """Merge *td*; self wins on attribute conflicts. Raises on length mismatch."""
         if (
             td._length is not None
             and self._length is not None
@@ -300,17 +271,7 @@ class TimeseriesData:
 
 @dataclass
 class StepResult:
-    """
-    Wraps the outcome of a single timeseries step.
-
-    Attributes:
-        step: Zero-based step index.
-        result: The ``SolverResult`` for this step, or ``None`` if *failed* or
-            *skipped*.
-        failed: ``True`` if the solve raised an exception.
-        skipped: ``True`` if the solve was not attempted (``solve_flag=False``).
-        error: The exception that caused the failure, or ``None``.
-    """
+    """Outcome of a single timeseries step."""
 
     step: int
     result: Any
@@ -320,42 +281,37 @@ class StepResult:
 
 
 class TimeseriesResult:
-    """
-    Holds the per-step results of a timeseries simulation run.
-
-    Steps that failed (convergence error, infeasibility) are represented by
-    ``StepResult`` entries with ``failed=True`` and ``result=None``.  They
-    are excluded from DataFrame queries but accessible via ``failed_steps``.
-    """
+    """Per-step results. Failed steps are excluded from DataFrame queries but
+    accessible via :attr:`failed_steps`."""
 
     def __init__(
         self,
         step_results: list[StepResult],
         datetime_index: pandas.DatetimeIndex | None = None,
+        backend_used: str | None = None,
+        solver_used: str | None = None,
     ) -> None:
         self._step_results = step_results
         self._datetime_index = datetime_index
+        #: Backend and solver convention selected for this timeseries run
+        #: (see :func:`monee.solver.dispatch.resolve_solver`).
+        self.backend_used = backend_used
+        self.solver_used = solver_used
         self._cache: dict[tuple, pandas.DataFrame] = {}
 
     @property
     def step_results(self) -> list[StepResult]:
-        """All ``StepResult`` objects, including failed steps."""
         return self._step_results
 
     @property
     def raw(self) -> list:
-        """
-        Successful ``SolverResult`` objects in step order.
-
-        Kept for backward compatibility.  Prefer ``step_results``.
-        """
+        """Successful ``SolverResult`` objects in step order (legacy; prefer ``step_results``)."""
         return [
             sr.result for sr in self._step_results if not sr.failed and not sr.skipped
         ]
 
     @property
     def failed_steps(self) -> list[int]:
-        """List of step indices that failed to converge."""
         return [sr.step for sr in self._step_results if sr.failed]
 
     def _successful(self) -> list[StepResult]:
@@ -371,7 +327,7 @@ class TimeseriesResult:
         step_indices = []
         for sr in self._successful():
             raw_df = sr.result.dataframes[model_type.__name__]
-            # Use component IDs as column names so callers can do df[bus_id]
+            # Column labels are component ids so callers can do df[bus_id].
             if "id" in raw_df.columns:
                 row = dict(zip(raw_df["id"], raw_df[attribute]))
             else:
@@ -383,41 +339,13 @@ class TimeseriesResult:
         return df
 
     def get_result_for(self, model_type, attribute: str) -> pandas.DataFrame:
-        """Return a DataFrame of *attribute* values across all successful steps.
-
-        One row per step, one column per component — **columns are labelled by
-        component id** so you can select a specific instance with
-        ``df[bus_id]`` instead of relying on positional indices.
-
-        Args:
-            model_type: The model class (e.g. ``mm.PowerLoad``, ``mm.Bus``).
-            attribute: The attribute name (e.g. ``'p_mw'``).
-
-        Example::
-
-            vm_df = ts_result.get_result_for(mm.Bus, "vm_pu")
-            print(vm_df[bus_home_id])   # time-series for one bus
-        """
+        """DataFrame of *attribute* values: rows=steps, cols=component ids."""
         if (model_type, attribute) in self._cache:
             return self._cache[model_type, attribute]
         return self._create_result_for(model_type, attribute)
 
     def __getitem__(self, component_id) -> pandas.DataFrame:
-        """Return all result attributes for *component_id* across every step.
-
-        Each column is one result attribute; each row is one successful step
-        (indexed by step number or datetime if a ``datetime_index`` was
-        provided).  Internal bookkeeping columns (``active``, ``independent``,
-        ``ignored``) are excluded.
-
-        Raises :exc:`KeyError` if *component_id* is not found in any step.
-
-        Example::
-
-            df = ts_result[bus_home_id]
-            print(df["vm_pu"])          # voltage series
-            print(df["va_degree"].min()) # worst angle
-        """
+        """All result attributes for *component_id* across every successful step."""
         rows: list[dict] = []
         step_indices: list[int] = []
         for sr in self._successful():
@@ -435,35 +363,29 @@ class TimeseriesResult:
             raise KeyError(component_id)
         return pandas.DataFrame(rows, index=self._make_index(step_indices))
 
+    @staticmethod
+    def _find_attr_value(dataframes, component_id, attribute: str):
+        for df in dataframes:
+            if "id" in df.columns and attribute in df.columns:
+                try:
+                    mask = df["id"] == component_id
+                except (ValueError, TypeError):
+                    mask = df["id"].apply(lambda x: x == component_id)
+                row = df[mask]
+                if not row.empty:
+                    return True, row.iloc[0][attribute]
+        return False, None
+
     def get_result_for_id(self, component_id, attribute: str) -> pandas.Series:
-        """
-        Return a ``Series`` of *attribute* values for a specific component
-        across all successful steps.
-
-        Args:
-            component_id: The component's id (as stored in the ``id`` column
-                of the result DataFrames).
-            attribute: The attribute name to retrieve.
-
-        Returns:
-            A ``Series`` indexed by step index (or datetime if a
-            ``datetime_index`` was provided to ``run()``).  Failed steps are
-            excluded.  A ``None`` entry is emitted for a step where the
-            component is absent (e.g. ignored due to islanding).
-        """
+        """Series of *attribute* for *component_id* across successful steps.
+        Yields ``None`` where the component is absent (e.g. islanded out)."""
         values = []
         step_indices = []
         for sr in self._successful():
-            found = False
-            for df in sr.result.dataframes.values():
-                if "id" in df.columns and attribute in df.columns:
-                    row = df[df["id"] == component_id]
-                    if not row.empty:
-                        values.append(row.iloc[0][attribute])
-                        found = True
-                        break
-            if not found:
-                values.append(None)
+            found, value = self._find_attr_value(
+                sr.result.dataframes.values(), component_id, attribute
+            )
+            values.append(value if found else None)
             step_indices.append(sr.step)
         return pandas.Series(
             values, index=self._make_index(step_indices), name=attribute
@@ -472,7 +394,7 @@ class TimeseriesResult:
     def summary(self):
         return repr(self)
 
-    def __repr__(self) -> str:
+    def __repr__(self) -> str:  # NOSONAR
         n_total = len(self._step_results)
         n_failed = len(self.failed_steps)
         n_skipped = sum(1 for sr in self._step_results if sr.skipped)
@@ -520,12 +442,7 @@ class TimeseriesResult:
         return "\n".join(lines)
 
     def __str__(self) -> str:
-        """Full per-type table dump showing the last successful step's data.
-
-        Printing all N steps inline would be impractical; the last step gives
-        a concrete snapshot of the network state.  Use ``get_result_for()`` or
-        ``self[component_id]`` to retrieve the full time-series programmatically.
-        """
+        """Per-type tables from the last successful step (full TS via ``get_result_for``)."""
         n_total = len(self._step_results)
         n_failed = len(self.failed_steps)
         successful = self._successful()
@@ -553,7 +470,7 @@ class TimeseriesResult:
                 lines.append("  " + line)
         return "\n".join(lines)
 
-    def _repr_html_(self) -> str:
+    def _repr_html_(self) -> str:  # NOSONAR
         n_total = len(self._step_results)
         n_failed = len(self.failed_steps)
         n_skipped = sum(1 for sr in self._step_results if sr.skipped)
@@ -578,46 +495,7 @@ class TimeseriesResult:
                 for type_name, df in sr.result.dataframes.items():
                     type_dfs.setdefault(type_name, []).append(df)
 
-            for type_name, dfs in type_dfs.items():
-                n_comp = len(dfs[0])
-                plural = "instance" if n_comp == 1 else "instances"
-                combined = pandas.concat(dfs, ignore_index=True)
-
-                # Build per-attribute stats table aggregated over all steps
-                vis = _display_df(combined).drop(
-                    columns=["id", "node_id"], errors="ignore"
-                )
-                num_cols = vis.select_dtypes(include="number").columns.tolist()
-                stat_rows = []
-                for col in num_cols:
-                    vals = combined[col].dropna()
-                    if vals.empty:
-                        continue
-                    stat_rows.append(
-                        {
-                            "attribute": col,
-                            "min": f"{float(vals.min()):.4g}",
-                            "mean": f"{float(vals.mean()):.4g}",
-                            "max": f"{float(vals.max()):.4g}",
-                        }
-                    )
-
-                if stat_rows:
-                    stats_df = pandas.DataFrame(stat_rows)
-                    tbl = stats_df.to_html(index=False, border=0, classes=[])
-                else:
-                    tbl = "<em style='color:#888'>(no numeric attributes)</em>"
-
-                sections.append(
-                    f"<details open style='margin-bottom:6px'>"
-                    f"<summary style='cursor:pointer;font-weight:bold;color:#333;"
-                    f"padding:2px 0'>{type_name} "
-                    f"<span style='color:#999;font-weight:normal'>"
-                    f"({n_comp} {plural})</span></summary>"
-                    f"<div style='color:#888;font-size:.82em;padding:1px 0 3px'>"
-                    f"aggregated over {len(dfs)} step{'s' if len(dfs) != 1 else ''}"
-                    f"</div>{tbl}</details>"
-                )
+            sections = _build_type_stats_html(type_dfs, "step")
 
         header = (
             f"<div style='font-weight:bold;font-size:1.05em;padding:4px 0 8px'>"
@@ -633,178 +511,297 @@ class TimeseriesResult:
         )
 
 
-def _attrs_to_track(model) -> list:
-    """
-    Return the list of attribute names whose solved values should be recorded
-    in ``StepState`` for *model*.
-
-    Two protocols are supported (both may coexist):
-
-    * **``tracked`` vars** — attributes that are currently ``tracked``
-      instances on the model (restored from ``tracked`` to ``tracked`` during
-      solver withdrawal so this check works post-solve).
-    * **``inter_step_vars()``** — explicit string-list method, kept for
-      backward compatibility.
-    """
-    attrs = [k for k, v in model.__dict__.items() if type(v) is tracked]
-    if hasattr(model, "inter_step_vars"):
-        for attr in model.inter_step_vars():
-            if attr not in attrs:
-                attrs.append(attr)
-    return attrs
-
-
-def _extract_step_state(state: StepState, net: Network) -> None:
-    """
-    Walk the solved network and record the values of all tracked attributes
-    into *state*.
-
-    Called after each timestep's solve + withdraw so that the values stored
-    are plain Python floats ready for the next step.
-    """
-    for node in net.nodes:
-        if node.ignored:
-            continue
-        for attr in _attrs_to_track(node.model):
-            v = getattr(node.model, attr, None)
-            if v is not None:
-                state.set(node.id, attr, _model_value(v))
-        for child in net.childs_by_ids(node.child_ids):
-            if child.ignored:
-                continue
-            for attr in _attrs_to_track(child.model):
-                v = getattr(child.model, attr, None)
-                if v is not None:
-                    state.set(child.id, attr, _model_value(v))
-    for branch in net.branches:
-        if branch.ignored:
-            continue
-        for attr in _attrs_to_track(branch.model):
-            v = getattr(branch.model, attr, None)
-            if v is not None:
-                state.set(branch.id, attr, _model_value(v))
-    for compound in net.compounds:
-        if compound.ignored:
-            continue
-        for attr in _attrs_to_track(compound.model):
-            v = getattr(compound.model, attr, None)
-            if v is not None:
-                state.set(compound.id, attr, _model_value(v))
-
-
-def apply_to_by_id(component, data: dict, timestep: int) -> None:
-    if component.id in data:
-        for attr, series in data[component.id].items():
-            setattr(component.model, attr, series[timestep])
-
-
-def apply_to_child(child, timeseries_data: TimeseriesData, timestep: int) -> None:
-    timeseries_data.apply_to_child(child, timestep)
-
-
-def apply_to_branch(branch, timeseries_data: TimeseriesData, timestep: int) -> None:
-    timeseries_data.apply_to_branch(branch, timestep)
-
-
-def apply_to_compound(compound, timeseries_data: TimeseriesData, timestep: int) -> None:
-    timeseries_data.apply_to_compound(compound, timestep)
-
-
 class StepHook(ABC):
-    """
-    Base class for objects that receive callbacks before and after each
-    timeseries step.
-
-    Implement one or both of ``pre_run`` / ``post_run`` — both are optional.
-    The base class provides silent no-ops so subclasses override only what they
-    need.
-
-    Both callbacks receive:
-
-    - *net*: the current-step network copy (timeseries data already applied).
-    - *base_net*: the original unmodified base network.
-    - *step*: zero-based step index.
-    - *step_state*: ``StepState`` carrying inter-step solved values (readable
-      and writable).
-
-    ``post_run`` additionally receives:
-
-    - *step_result*: ``StepResult`` for this step; ``step_result.failed`` is
-      ``True`` if the solve failed.
-    """
+    """Pre/post-step callbacks for timeseries runs. Both methods are optional no-ops."""
 
     def pre_run(
         self,
-        net: Network,
         base_net: Network,
         step: int,
         step_state: StepState,
     ) -> None:
-        """Called before the step's solve.  *net* already has timeseries data applied."""
+        """Called before the per-step network copy and timeseries application."""
 
     def post_run(
         self,
         net: Network,
-        base_net: Network,
         step: int,
         step_state: StepState,
         step_result: StepResult,
+        base_net: Network,
     ) -> None:
-        """Called after the step's solve (whether it succeeded or failed)."""
+        """Called after the step's solve (success or failure)."""
 
 
-def run(
+def _is_casadi_solver(solver) -> bool:
+    """True if *solver* is a CasADi backend instance (without hard-requiring the
+    optional casadi package: if casadi is absent the solver cannot be one)."""
+    try:
+        from monee.solver.casadi import CasADiSolver
+    except ImportError:
+        return False
+    return isinstance(solver, CasADiSolver)
+
+
+_TEMPORAL_METHODS = (
+    "inter_step_equations",
+    "inter_temporal_equations",
+    "inter_period_equations",
+)
+
+
+def _network_has_temporal_coupling(net: Network) -> bool:  # NOSONAR
+    """True if any component model/formulation or extension contributes
+    inter-step temporal coupling (storage SOC, ramp limits, linepack, LTC).
+
+    Models and formulations only define the temporal methods when they actually
+    couple across steps (the base classes do not), so ``hasattr`` is a reliable
+    signal there. Extensions declare no-op temporal methods on their base, so we
+    instead check whether the method is *overridden*.
+    """
+    from monee.model.extension.core import NetworkAspect
+
+    def _comp_temporal(comp) -> bool:
+        if any(hasattr(comp.model, m) for m in _TEMPORAL_METHODS):
+            return True
+        formulation = getattr(comp, "formulation", None)
+        return formulation is not None and any(
+            hasattr(formulation, m) for m in _TEMPORAL_METHODS
+        )
+
+    for comp in net.iter_all_components():
+        if _comp_temporal(comp):
+            return True
+    for ext in net.extensions:
+        if any(
+            getattr(type(ext), m, None) is not getattr(NetworkAspect, m, None)
+            for m in _TEMPORAL_METHODS
+        ):
+            return True
+    return False
+
+
+def _casadi_reuse_eligible(
+    net, solver, optimization_problem, step_hooks, timeseries_data, solver_kwargs
+) -> bool:
+    """Whether the build-once / re-solve CasADi graph-reuse path can replace the
+    per-step rebuild loop and produce identical results.
+
+    The parametric reuse driver only handles memory-less, id-addressed series on
+    a plain power flow, so it is gated to exactly those cases; anything else
+    (optimisation problem, step hooks observing temporal state, temporal coupling
+    in the network, name-addressed or compound series, or solver kwargs it cannot
+    honour) falls back to the standard loop.
+    """
+    if not _is_casadi_solver(solver):
+        return False
+    if optimization_problem is not None or step_hooks:
+        return False
+    # The reuse driver carries no inter-step state, so any temporal coupling
+    # (storage/linepack/LTC) must go through the per-step loop instead.
+    if _network_has_temporal_coupling(net):
+        return False
+    # CasADiTimeseries declares only id-addressed child/node/branch series as
+    # parameters; name-addressed and compound series are not wired.
+    td = timeseries_data
+    if (
+        td._child_name_to_series
+        or td._branch_name_to_series
+        or td._compound_id_to_series
+        or td._compound_name_to_series
+    ):
+        return False
+    # Only kwargs the reuse driver understands may be present.
+    if set(solver_kwargs) - {"simulation", "formulation"}:
+        return False
+    return True
+
+
+def _run_casadi_reuse(
+    net,
+    timeseries_data,
+    steps,
+    on_step_error,
+    progress_callback,
+    datetime_index,
+    solver_kwargs,
+) -> "TimeseriesResult":
+    """Build the CasADi NLP + IPOPT solver once and re-solve each step with a
+    warm start (no per-step rebuild/recompile). Equivalent results to the
+    standard loop for the gated cases (see :func:`_casadi_reuse_eligible`)."""
+    from monee.solver.casadi import CasADiTimeseries
+
+    ts = CasADiTimeseries(
+        net,
+        timeseries_data,
+        formulation=solver_kwargs.get("formulation"),
+        simulation=solver_kwargs.get("simulation", False),
+        steps=steps,
+    )
+    step_results: list[StepResult] = []
+    for step in range(steps):
+        try:
+            sr = StepResult(step=step, result=ts.step_result(step))
+        except Exception as exc:
+            if on_step_error == "raise":
+                raise
+            _log.warning(_STEP_FAILED_MSG, step, exc)
+            sr = StepResult(step=step, result=None, failed=True, error=exc)
+        step_results.append(sr)
+        if progress_callback is not None:
+            progress_callback(step, steps)
+    return TimeseriesResult(
+        step_results,
+        datetime_index=datetime_index,
+        backend_used="casadi",
+        solver_used="ipopt",
+    )
+
+
+def _is_gurobipy_solver(solver) -> bool:
+    """True if *solver* is the native gurobipy backend instance (without
+    hard-requiring gurobipy: if it's absent the solver cannot be one)."""
+    try:
+        from monee.solver.gurobipy import GurobipySolver
+    except ImportError:
+        return False
+    return isinstance(solver, GurobipySolver)
+
+
+def _extension_needs_step0_structure_switch(net) -> bool:
+    """True if any active extension emits a STRUCTURALLY different first-step
+    equation (e.g. LumpedThermalCapacitance(first_step_steady_state=True) emits
+    ``net_heat == 0`` at step 0 vs the inertia equation later). The build-once
+    parameter model cannot switch equation structure between steps (its carried
+    state is a fixed Var that is never None), so such cases must use the rebuild
+    loop. Detected generically via a private flag rather than by type."""
+    for ext in net.extensions:
+        if getattr(ext, "_first_step_steady_state", False):
+            return True
+    return False
+
+
+def _gurobipy_reuse_eligible(
+    net,
+    solver,
+    optimization_problem,
+    step_hooks,
+    timeseries_data,
+    solver_kwargs,
+    datetime_index,
+) -> bool:
+    """Whether the build-once / re-bound-per-step gurobipy model-reuse path can
+    replace the per-step rebuild loop and produce identical results.
+
+    Unlike the CasADi fast path, the gurobipy driver *does* wire inter-step
+    temporal coupling (storage SoC, the LTC extension, linepack) as per-step
+    parameters, so temporally-coupled networks stay eligible. It is gated out of
+    the cases it does not reproduce identically: an optimisation problem, step
+    hooks observing temporal state, name-addressed or compound series (only
+    id-addressed child/node/branch series are declared as parameters), solver
+    kwargs it cannot honour, and a custom ``datetime_index`` (the persistent
+    model bakes ``dt_h`` in at build time, so non-default/variable step spacing
+    is left to the rebuild loop).
+    """
+    if not _is_gurobipy_solver(solver):
+        return False
+    if optimization_problem is not None or step_hooks:
+        return False
+    if datetime_index is not None:
+        return False
+    # Build-once param model can't reproduce an extension's step-0 structural
+    # switch (e.g. LTC first_step_steady_state); leave those to the rebuild loop.
+    if _extension_needs_step0_structure_switch(net):
+        return False
+    td = timeseries_data
+    if (
+        td._child_name_to_series
+        or td._branch_name_to_series
+        or td._compound_id_to_series
+        or td._compound_name_to_series
+    ):
+        return False
+    if set(solver_kwargs) - {"simulation", "formulation"}:
+        return False
+    return True
+
+
+def _run_gurobipy_reuse(
+    net,
+    solver,
+    timeseries_data,
+    steps,
+    on_step_error,
+    progress_callback,
+    datetime_index,
+    solver_kwargs,
+) -> "TimeseriesResult":
+    """Build the gurobipy model once and re-bound + re-solve each step (carrying
+    state and the integer solution forward) instead of rebuilding every step.
+    Equivalent results to the standard loop for the gated cases (see
+    :func:`_gurobipy_reuse_eligible`)."""
+    from monee.solver.gurobipy import GurobipyTimeseries
+
+    ts = GurobipyTimeseries(
+        net,
+        timeseries_data,
+        formulation=solver_kwargs.get("formulation"),
+        simulation=solver_kwargs.get("simulation", False),
+        steps=steps,
+        params=solver._params,
+    )
+    step_results: list[StepResult] = []
+    for step in range(steps):
+        try:
+            sr = StepResult(step=step, result=ts.step_result(step))
+        except Exception as exc:
+            if on_step_error == "raise":
+                raise
+            _log.warning(_STEP_FAILED_MSG, step, exc)
+            sr = StepResult(step=step, result=None, failed=True, error=exc)
+        step_results.append(sr)
+        if progress_callback is not None:
+            progress_callback(step, steps)
+    return TimeseriesResult(
+        step_results,
+        datetime_index=datetime_index,
+        backend_used="gurobipy",
+        solver_used="gurobi",
+    )
+
+
+def run(  # NOSONAR
     net: Network,
-    timeseries_data: TimeseriesData,
+    timeseries_data: TimeseriesData | None = None,
     steps: int | None = None,
     step_hooks: list[StepHook | Callable] | None = None,
     solver=None,
+    backend: str | None = None,
     optimization_problem=None,
     solve_flag: bool = True,
     on_step_error: str = "raise",
     progress_callback: Callable[[int, int], None] | None = None,
     datetime_index: pandas.DatetimeIndex | None = None,
+    **solver_kwargs,
 ) -> TimeseriesResult:
+    """Run a timeseries simulation: copy net, apply timeseries, solve, collect.
+
+    ``steps`` defaults to ``timeseries_data.length``. ``on_step_error='skip'``
+    records a failed StepResult and continues. ``solver_kwargs`` are forwarded
+    to ``solver.solve(...)``.
     """
-    Run a timeseries simulation over *net*.
-
-    For each step the network is copied, registered timeseries values are
-    applied to component models, the network is solved, and results are
-    collected.
-
-    Args:
-        net: Base network.  Not modified; a fresh copy is made each step.
-        timeseries_data: Per-component attribute series.
-        steps: Number of steps to simulate.  Defaults to
-            ``timeseries_data.length`` when omitted.  Must not exceed the
-            series length.
-        step_hooks: Hooks called before and after each step.  Items may be
-            ``StepHook`` subclasses or plain callables
-            ``(net_copy, base_net, step) -> None`` called in the post-step
-            position.
-        solver: Solver instance.  If ``None``, the default GEKKO solver is
-            used.
-        optimization_problem: Optional optimization problem passed to the
-            solver.
-        solve_flag: If ``False``, timeseries data is applied and hooks are
-            called but no solve is attempted.  Useful for dry-run testing.
-        on_step_error: What to do when a step fails to converge.
-            ``'raise'`` (default) — re-raise the exception immediately.
-            ``'skip'`` — record the failure and continue to the next step.
-        progress_callback: Called after each step as
-            ``progress_callback(step, total_steps)``.
-        datetime_index: Optional ``pd.DatetimeIndex`` aligned to the steps.
-            Used as the row index of result DataFrames.
-
-    Returns:
-        A ``TimeseriesResult`` containing per-step outcomes.
-    """
+    if steps is None and timeseries_data is None:
+        raise ValueError(
+            "Without timeseries data, the number of steps *steps* needs to be provided."
+        )
     if steps is None:
         steps = timeseries_data.length
         if steps is None:
             raise ValueError(
                 "Cannot infer step count: no series registered and 'steps' not provided."
             )
+    if timeseries_data is None:
+        timeseries_data = TimeseriesData()
     if timeseries_data.length is not None and steps > timeseries_data.length:
         raise ValueError(
             f"'steps' ({steps}) exceeds the length of the registered series "
@@ -818,31 +815,95 @@ def run(
             f"on_step_error must be 'raise' or 'skip', got {on_step_error!r}"
         )
 
+    # Resolve solver/backend once up-front; reused across every step.
+    resolved_solver = resolve_solver(solver, backend=backend)
+
+    # CasADi graph-reuse fast path: build the NLP + IPOPT solver once and
+    # re-solve each step with a warm start instead of rebuilding/recompiling the
+    # whole model every step. Gated to the cases that produce identical results
+    # (plain power flow, id-addressed memory-less series, no hooks/optimisation).
+    if solve_flag and _casadi_reuse_eligible(
+        net,
+        resolved_solver,
+        optimization_problem,
+        step_hooks,
+        timeseries_data,
+        solver_kwargs,
+    ):
+        _log.debug("run_timeseries: using CasADi build-once graph-reuse fast path")
+        return _run_casadi_reuse(
+            net,
+            timeseries_data,
+            steps,
+            on_step_error,
+            progress_callback,
+            datetime_index,
+            solver_kwargs,
+        )
+
+    # gurobipy model-reuse fast path: build the gurobipy model once and re-bound
+    # the time-varying inputs (and carried inter-step state) per step instead of
+    # reconstructing the whole model every step. Gated to the cases that produce
+    # identical results (see :func:`_gurobipy_reuse_eligible`).
+    if solve_flag and _gurobipy_reuse_eligible(
+        net,
+        resolved_solver,
+        optimization_problem,
+        step_hooks,
+        timeseries_data,
+        solver_kwargs,
+        datetime_index,
+    ):
+        _log.debug("run_timeseries: using gurobipy build-once model-reuse fast path")
+        return _run_gurobipy_reuse(
+            net,
+            resolved_solver,
+            timeseries_data,
+            steps,
+            on_step_error,
+            progress_callback,
+            datetime_index,
+            solver_kwargs,
+        )
+
     step_results: list[StepResult] = []
     step_state = StepState()
 
     for step in range(steps):
-        net_copy = net.copy()
-        timeseries_data.apply_to_network(net_copy, step)
+        if datetime_index is not None:
+            # First step uses the first interval (matching the multi-period
+            # engine's _resolve_dt_h); later steps use the prior interval. Both
+            # engines then agree on dt_h for identical inputs. Falls back to the
+            # default 1.0 only when a single timestamp leaves no interval.
+            if step > 0:
+                delta = datetime_index[step] - datetime_index[step - 1]
+                step_state.dt_h = delta.total_seconds() / 3600.0
+            elif len(datetime_index) > 1:
+                delta = datetime_index[1] - datetime_index[0]
+                step_state.dt_h = delta.total_seconds() / 3600.0
 
         for hook in step_hooks:
             if isinstance(hook, StepHook):
-                hook.pre_run(net_copy, net, step, step_state)
+                hook.pre_run(net, step, step_state)
+
+        net_copy = net.copy()
+        timeseries_data.apply_to_network(net_copy, step)
 
         if solve_flag:
             try:
                 result = solve(
                     net_copy,
                     optimization_problem=optimization_problem,
-                    solver=solver,
+                    solver=resolved_solver,
                     step_state=step_state,
+                    **solver_kwargs,
                 )
-                _extract_step_state(step_state, result.network)
+                step_state.push(result.network)
                 sr = StepResult(step=step, result=result)
             except Exception as exc:
                 if on_step_error == "raise":
                     raise
-                _log.warning("Step %d failed: %s", step, exc)
+                _log.warning(_STEP_FAILED_MSG, step, exc)
                 sr = StepResult(step=step, result=None, failed=True, error=exc)
         else:
             sr = StepResult(step=step, result=None, skipped=True)
@@ -851,11 +912,16 @@ def run(
 
         for hook in step_hooks:
             if isinstance(hook, StepHook):
-                hook.post_run(net_copy, net, step, step_state, sr)
+                hook.post_run(net_copy, step, step_state, sr, net)
             else:
-                hook(net_copy, net, step)
+                hook(net_copy, step, step_state, sr, net)
 
         if progress_callback is not None:
             progress_callback(step, steps)
 
-    return TimeseriesResult(step_results, datetime_index=datetime_index)
+    return TimeseriesResult(
+        step_results,
+        datetime_index=datetime_index,
+        backend_used=getattr(resolved_solver, "backend_name", None),
+        solver_used=getattr(resolved_solver, "solver_name", None),
+    )

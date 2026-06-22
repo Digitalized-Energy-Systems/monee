@@ -8,6 +8,7 @@ from .core import (
     Const,
     Intermediate,
     IntermediateEq,
+    PostProcess,
     Component,
     model,
     upper,
@@ -36,6 +37,7 @@ from .network import (
 from .node import Bus, Junction
 from .branch import (
     GenericPowerBranch,
+    GasCompressor,
     GasPipe,
     PowerBranch,
     PowerLine,
@@ -43,11 +45,21 @@ from .branch import (
     HeatExchanger,
     HeatExchangerGenerator,
     HeatExchangerLoad,
+    PassiveHeatExchanger,
+    PassiveHeatExchangerGenerator,
+    PassiveHeatExchangerLoad,
     Trafo,
+)
+from .storage import (
+    ElectricStorage,
+    GasStorage,
+    ThermalStorage,
 )
 from .child import (
     ExtHydrGrid,
     ExtPowerGrid,
+    HeatGenerator,
+    HeatLoad,
     PowerGenerator,
     PowerLoad,
     Sink,
@@ -56,14 +68,19 @@ from .child import (
 )
 from .multi import (
     CHP,
+    CHPHG,
     GasToPower,
     PowerToGas,
     PowerToHeat,
+    PowerToHeatHG,
     GenericTransferBranch,
     GasToHeat,
+    GasToHeatHG,
     CHPControlNode,
+    CHPHGControlNode,
     GasToHeatControlNode,
     PowerToHeatControlNode,
+    SubHG,
 )
 from .grid import (
     create_gas_grid,
@@ -74,7 +91,10 @@ from .grid import (
     PowerGrid,
     Grid,
 )
-from .islanding import (
+from .extension import (
+    NetworkAspect,
+    LumpedThermalCapacitance,
+    GasLinepack,
     GridFormingMixin,
     IslandingMode,
     NetworkIslandingConfig,
@@ -83,4 +103,8 @@ from .islanding import (
     GasIslandingMode,
     GridFormingSource,
     WaterIslandingMode,
+)
+from .formulation import (
+    HEAT_CONVEX_MILP_FORMULATION,
+    make_heat_convex_milp_formulation,
 )

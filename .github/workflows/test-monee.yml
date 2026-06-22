@@ -45,6 +45,7 @@ jobs:
         restore-keys: pip-${{ runner.os }}-py${{ matrix.python-version }}-
     - name: Install dependencies
       run: |
+        pip install gurobipy
         pip install -r docs/requirements.txt
         pip install -e .[test]
         pip install ruff
@@ -89,6 +90,7 @@ jobs:
         restore-keys: pip-${{ runner.os }}-py${{ matrix.python-version }}-
     - name: Install dependencies
       run: |
+        pip install gurobipy
         pip install -r docs/requirements.txt
         pip install -e .[test]
         pip install ruff
@@ -101,7 +103,7 @@ jobs:
     - name: Test+Coverage
       run: pytest --cov --cov-report=xml -v -m "not pptest"
 
-  test-pp:
+  test-full:
     runs-on: ubuntu-latest
     defaults:
       run:
@@ -132,6 +134,7 @@ jobs:
         restore-keys: pip-${{ runner.os }}-py3.10-
     - name: Install dependencies
       run: |
+        pip install gurobipy
         pip install -r docs/requirements.txt
         pip install -e .[testpp]
         pip install ruff
@@ -147,8 +150,3 @@ jobs:
       with:
         token: ${{ secrets.CODECOV_TOKEN  }}
         fail_ci_if_error: false
-    - name: SonarQube Cloud Scan
-      uses: SonarSource/sonarqube-scan-action@v4
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}  # Needed to get PR information, if any
-        SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "monee"
-version = "1.1.0"
+version = "2.0.0"
 authors = [
   { name="Rico Schrage", email="rico.schrage@uol.de" },
 ]
@@ -24,37 +24,42 @@ classifiers = [
 license = "MIT"
 dependencies = [
     "scipy>=1.10.1",
-    "gekko>=1.0.6",
+    "casadi>=3.6",
+    "gekko>=1.3.2",
     "networkx>=3.0",
-    "numpy>=1.26.4",
-    "pandas>=1.5.3",
+    "numpy>=2.3.5",
+    "pandas>=2.3.3",
     "geopy>=2.4.1",
     "plotly>=6.3.0",
+    "pyscipopt>=5.0",
     "pyomo"
 ]
 
 [project.optional-dependencies]
 simbench = [
-    "simbench>=1.3.0",
-    "pandapower>=2.9.0"
+    "simbench>=1.6.1",
+    "pandapower>=3.3.3",
 ]
 test = [
     "pytest",
     "pytest-cov",
     "pre-commit",
+    # pip wheel ships a size-limited licence (2000 vars/constraints, no licence
+    # file needed); every gurobipy test model is tiny, so this lights up the
+    # native-Gurobi backend tests in CI.
+    "gurobipy",
 ]
 testpp = [
     "pytest",
-    "peext",
-    "simbench",
-    "pandapower==2.9.0",
-    "pandapipes==0.6.0",
-    "numpy==1.26.4",
+    "simbench==1.6.1",
+    "pandapower==3.3.3",
+    "pandapipes==0.14.0",
+    "numpy==2.3.5",
     "pytest-cov",
     "pre-commit",
-    "pandas==1.5.3",
+    "pandas==2.3.3",
     "kaleido",
-    "pygraphviz"
+    "gurobipy",
 ]
 
 [project.urls]
@@ -65,6 +70,7 @@ Issues = "https://github.com/Digitalized-Energy-Systems/monee/issues"
 [tool.pytest.ini_options]
 markers = [
     "pptest: marks tests as dependant on pandapower",
+    "benchmark: marks performance comparison tests (skipped by default unless selected via -m benchmark)",
 ]
 
 [tool.coverage.run]
@@ -81,6 +87,10 @@ ignore = ["E501"]
 "__init__.py" = [
     "I001", # allow unsorted imports in __init__.py
     "F401", # allow unused imports in __init__.py
+    "E402", # __init__ interleaves computed aliases with imports
+]
+"benchmarks/*" = [
+    "E402", # scripts suppress warnings / patch compat before heavy imports
 ]
 "examples/*" = [
     "ARG",  # allow unused arguments
