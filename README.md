@@ -59,7 +59,7 @@ pip install monee
 The default GEKKO solver (IPOPT) is bundled. For MILP/MIQCP problems, install a Pyomo-compatible solver:
 
 ```bash
-pip install highspy   # HiGHS - open source, recommended
+pip install pyscipopt   # SCIP - open source
 pip install gurobipy  # Gurobi - commercial, free academic licence available
 ```
 
@@ -122,7 +122,7 @@ problem = monee.create_min_load_shedding_problem(
 
 result = monee.run_energy_flow_optimization(
     net, problem,
-    solver=monee.PyomoSolver(), solver_name="highs",
+    solver="scip",
     exclude_unconnected_nodes=True,
 )
 
