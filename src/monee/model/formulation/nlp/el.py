@@ -13,17 +13,11 @@ from ..core import BranchFormulation, ChildFormulation, NodeFormulation
 
 SQRT_3 = np.sqrt(3)
 
-# Smoothing scale [MW] for the current-magnitude sqrt - same idiom as
-# smooth_abs in model.phys.nonlinear.smooth. Without it, \sqrt{p^2+q^2} has a
-# singular Jacobian at exactly zero flow, and the min=0 bounds on i_*_ka
-# pin the solver onto that point (e.g. a storage at zero dispatch).
 CURRENT_SMOOTHING_EPS_MW = 1e-4
 
 
 class AcPolarNlpNodeFormulation(NodeFormulation):
     def ensure_var(self, model, simulation=False, grid=None):
-        # Some multi-grid control nodes subclass Bus (so they match here) without
-        # a vm_pu attribute - only act on real voltage buses.
         if simulation and hasattr(model, "vm_pu"):
             model.vm_pu_squared = PostProcess(lambda v: v.vm_pu**2)
 
