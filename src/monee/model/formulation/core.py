@@ -53,6 +53,10 @@ class CompoundFormulation(Formulation):
 
 
 class ChildFormulation(Formulation):
+    """``child`` is the child model and ``node`` its parent node *model* (e.g. a
+    Bus), so ``node.vars[...]`` reads the node's solver variables directly -
+    consistent with the node-model arguments handed to Branch/Node formulations."""
+
     def minimize(self, child, grid, node, **kwargs):  # NOSONAR
         return []
 

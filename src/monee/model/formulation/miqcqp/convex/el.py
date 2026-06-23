@@ -4,7 +4,11 @@ r"""Branch-flow MISOCP electricity formulation: convex SOC relaxation
 import math
 
 from monee.model.core import Intermediate, IntermediateEq, Var
-from monee.model.formulation.core import BranchFormulation, NodeFormulation
+from monee.model.formulation.core import (
+    BranchFormulation,
+    ChildFormulation,
+    NodeFormulation,
+)
 from monee.model.phys.misoc.pf import (
     active_power_loss,
     reactive_power_loss,
@@ -46,6 +50,18 @@ class MISOCPElectricityNodeFormulation(NodeFormulation):
         ]
 
 
+class MISOCPShuntFormulation(ChildFormulation):
+    """Voltage-dependent bus shunt for the branch-flow model: ``p/q`` are linear
+    in the voltage-squared decision variable ``vm_pu_squared`` (``W``)."""
+
+    def equations(self, child, grid, node, **kwargs):
+        w = node.vars["vm_pu_squared"]
+        return [
+            child.p_mw == child.gs_mw * w,
+            child.q_mvar == -child.bs_mvar * w,
+        ]
+
+
 def _branch_tap(branch) -> float:
     """Off-nominal turns ratio (1.0 if absent or zero)."""
     tap = getattr(branch, "tap", 1.0) or 1.0
@@ -57,12 +73,6 @@ def _ell_physics_max(branch, w_max: float) -> float:
     return 4 * w_max / (branch.br_r_pu**2 + branch.br_x_pu**2)
 
 
-# Headroom factor on the thermal rating for the current_pu_squared bound. The bound is
-# a big-M tightening device, not the operational loading constraint (that one
-# is line_loading_limit()); 3x rating is far above any acceptable steady-state
-# loading while keeping the bound finite on near-zero-impedance lines, where
-# the voltage-derived 4*W_max/|Z|^2 explodes (~1e9) and wrecks the matrix
-# conditioning badly enough that SCIP/Gurobi spuriously prove infeasibility.
 _ELL_THERMAL_HEADROOM = 3.0
 
 

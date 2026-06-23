@@ -90,6 +90,53 @@ class PowerLoad(NoVarChildModel):
 
 
 @model
+class PowerShunt(ChildModel):
+    r"""Fixed shunt element: a constant admittance :math:`y = g + jb` tied to a
+    bus, modelling capacitor banks, reactors and line-charging lumped at a node.
+
+    Unlike a :class:`PowerLoad` (constant power) the draw follows the bus voltage,
+    since a fixed admittance carries :math:`S = y^* \cdot |V|^2`:
+
+    .. math::
+
+        p_{mw} = g_{s,mw} \cdot v^2 \qquad q_{mvar} = -b_{s,mvar} \cdot v^2
+
+    with ``v`` the per-unit voltage magnitude. ``gs_mw`` / ``bs_mvar`` are the
+    real / reactive power the element would draw at ``v = 1.0`` p.u. and map
+    directly to the MATPOWER bus ``GS`` (MW demanded) and ``BS`` (MVAr injected)
+    columns.
+
+    Sign (load convention, positive ``p_mw`` / ``q_mvar`` = consumption):
+
+    * ``gs_mw > 0`` is a resistive shunt dissipating real power; it is rarely
+      nonzero in practice.
+    * ``bs_mvar > 0`` is a capacitor that *injects* reactive power (the minus
+      sign above makes ``q_mvar`` negative), raising the local voltage.
+    * ``bs_mvar < 0`` is a reactor that absorbs reactive power, lowering it.
+
+    Because the draw scales with ``v^2``, the reactive support a capacitor gives
+    falls off exactly when voltage sags - the well-known weakness of fixed shunt
+    compensation, and the reason results differ from a constant-power source.
+
+    ``p_mw`` / ``q_mvar`` are decision Vars pinned to the equations above; the
+    voltage coupling itself is emitted by the electricity
+    :class:`~monee.model.formulation.core.ChildFormulation`, which binds ``v`` to
+    ``vm_pu`` (polar AC NLP) or ``v^2`` to ``vm_pu_squared`` (branch-flow MISOCP)
+    to keep each formulation in its native variable - the same split branches use.
+    """
+
+    def __init__(self, gs_mw, bs_mvar, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.gs_mw = gs_mw
+        self.bs_mvar = bs_mvar
+        self.p_mw = Var(0, name="shunt_p_mw")
+        self.q_mvar = Var(0, name="shunt_q_mvar")
+
+    def equations(self, grid, node_model, **kwargs):
+        return []
+
+
+@model
 class Source(NoVarChildModel):
     """Fixed-setpoint mass-flow source. Constructor takes positive magnitude; sign is internal.
 

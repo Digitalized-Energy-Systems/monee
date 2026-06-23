@@ -2,7 +2,8 @@
 Import MATPOWER case files
 ==========================
 
-monee reads MATPOWER ``.mat`` case files and converts them into a
+monee reads MATPOWER case files, both the ``.m`` text format that ``savecase``
+writes and the binary ``.mat`` format, and converts them into a
 :class:`~monee.model.Network`. Use this to load standard IEEE test cases
 (case9, case30, case118) or any network exported from MATPOWER or MATLAB.
 
@@ -21,7 +22,12 @@ Reading a MATPOWER file
 
     from monee.io.matpower import read_matpower_case
 
-    net = read_matpower_case("case9.mat")
+    net = read_matpower_case("case9.m")    # or "case9.mat"
+
+The reader dispatches on the file extension: ``.m`` is parsed as MATPOWER text,
+anything else is loaded as a binary ``.mat`` struct. The ``.m`` parser reads the
+literal numeric matrices that ``savecase`` emits; it does not evaluate MATLAB
+expressions inside a matrix (something ``savecase`` never produces).
 
 The returned :class:`~monee.model.Network` is ready for simulation:
 

@@ -673,11 +673,11 @@ class OperatorEquationAssembly:
                 if ignore_child(child, ignored_nodes):
                     continue
                 child_eqs = filter_bool_eqs(
-                    as_iter(child.equations(grid, node)),
+                    as_iter(child.equations(grid, node.model)),
                     context=f"child_{child.id}",
                 )
 
-                for expr in child.minimize(grid, node, sqrt_impl=m.sqrt):
+                for expr in child.minimize(grid, node.model, sqrt_impl=m.sqrt):
                     m.Obj(expr)
 
                 _process_intermediate_eqs(m, child.model, child_eqs)

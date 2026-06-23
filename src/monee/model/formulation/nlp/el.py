@@ -8,7 +8,7 @@ import numpy as np
 import monee.model.phys.nonlinear.ac as opfmodel
 from monee.model.core import Intermediate, IntermediateEq, PostProcess
 
-from ..core import BranchFormulation, NodeFormulation
+from ..core import BranchFormulation, ChildFormulation, NodeFormulation
 
 SQRT_3 = np.sqrt(3)
 
@@ -27,17 +27,19 @@ class AcPolarNlpNodeFormulation(NodeFormulation):
             model.vm_pu_squared = PostProcess(lambda v: v.vm_pu**2)
 
 
+class AcPolarNlpShuntFormulation(ChildFormulation):
+    """Voltage-dependent bus shunt for the polar NLP: ``p/q`` scale with ``vm_pu**2``."""
+
+    def equations(self, child, grid, node, **kwargs):
+        vm_sq = node.vars["vm_pu"] ** 2
+        return [
+            child.p_mw == child.gs_mw * vm_sq,
+            child.q_mvar == -child.bs_mvar * vm_sq,
+        ]
+
+
 class AcPolarNlpBranchFormulation(BranchFormulation):
     def ensure_var(self, branch, simulation=False, grid=None):
-        # Current magnitude and line loading are report-only quantities: nothing
-        # in the power-flow model consumes them, and a line-loading limit (when
-        # present) is a *constraint* added by the optimisation problem. Declaring
-        # them as passive intermediates - instead of free Vars pinned by an
-        # equality - means they add no variables/constraints to the model unless
-        # such a constraint references them, in which case the defining
-        # expression inlines into it. Mirrors the MISOCP formulation. For a plain
-        # power flow / dispatch this removes 4 vars + 4 constraints (2 nonlinear)
-        # per branch and only evaluates them once, after the solve, for results.
         branch.i_from_ka = Intermediate(0)
         branch.i_to_ka = Intermediate(0)
         branch.loading_from_pu = Intermediate(0)
@@ -47,8 +49,6 @@ class AcPolarNlpBranchFormulation(BranchFormulation):
         y = np.linalg.pinv([[branch.br_r_pu + branch.br_x_pu * 1j]])[0][0]
         g, b = (np.real(y), np.imag(y))
 
-        # Built once and reused for both i_*_ka and loading_*_pu, so the sqrt
-        # node is shared (the two intermediates differ only by the /max_i_ka).
         i_from_ka = (
             (branch.p_from_mw**2 + branch.q_from_mvar**2 + CURRENT_SMOOTHING_EPS_MW**2)
             ** 0.5

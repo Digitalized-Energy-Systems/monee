@@ -829,10 +829,11 @@ class GurobipySolver(SolverInterface):
             for child in node_childs:
                 if ignore_child(child, ignored_nodes):
                     continue
-                for expr in child.minimize(grid, node, sqrt_impl=nf.sqrt):
+                for expr in child.minimize(grid, node.model, sqrt_impl=nf.sqrt):
                     aux_obj_exprs.append(expr)
                 child_eqs = filter_bool_eqs(
-                    as_iter(child.equations(grid, node)), context=f"child_{child.id}"
+                    as_iter(child.equations(grid, node.model)),
+                    context=f"child_{child.id}",
                 )
                 self._process_intermediate_eqs(child.model, child_eqs)
                 self._add_equations(
