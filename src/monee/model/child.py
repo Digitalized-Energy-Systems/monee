@@ -1,6 +1,7 @@
 import math
 
 from .core import ChildModel, Const, Var, model
+from .grid import PowerGrid
 
 
 class GridFormingMixin:
@@ -37,6 +38,47 @@ class PowerGenerator(NoVarChildModel):
 
 
 @model
+class VoltageControlledGenerator(ChildModel):
+    """Voltage-controlled (PV-bus) generator: injects a fixed active power while
+    holding the bus voltage magnitude, leaving reactive power free to maintain it.
+
+    This is the MATPOWER PV bus (``BUS_TYPE == 2``): ``P`` is the generator
+    dispatch (fixed), ``|V|`` is pinned to the ``vm_pu`` setpoint, ``Q`` is a
+    free :class:`~monee.model.core.Var` that the reactive power balance solves,
+    and the bus angle stays free (the slack remains the angle reference).
+
+    Contrast with :class:`PowerGenerator` (fixed P *and* Q, i.e. a PQ bus) and
+    :class:`ExtPowerGrid` (the slack, which additionally pins the angle). Unlike
+    the islanding ``GridFormingGenerator`` it does not float ``P`` to absorb
+    imbalance, and it is not grid-forming - a PV bus needs a slack elsewhere.
+
+    The constructor takes a positive generation magnitude ``p_mw``; the sign is
+    handled internally (load convention, generation = negative). ``q_mvar`` only
+    seeds the free reactive Var.
+    """
+
+    def __init__(self, p_mw, vm_pu=1.0, q_mvar=0.0, **kwargs) -> None:
+        if isinstance(p_mw, (int, float)) and p_mw < 0:
+            raise ValueError(
+                f"VoltageControlledGenerator expects a positive generation "
+                f"magnitude; got p_mw={p_mw}.  Pass the absolute value - the "
+                f"sign is handled internally (load convention)."
+            )
+        super().__init__(**kwargs)
+        self.p_mw = -p_mw
+        self.q_mvar = Var(-q_mvar, name="gen_pv_q_mvar")
+        self.vm_pu = vm_pu
+
+    def overwrite(self, node_model, grid):
+        """Pin the bus voltage magnitude to the setpoint; the angle stays free."""
+        node_model.vm_pu = Const(self.vm_pu)
+        node_model.vm_pu_squared = Const(self.vm_pu * self.vm_pu)
+
+    def equations(self, grid, node_model, **kwargs):
+        return []
+
+
+@model
 class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
     """
     External slack-bus connection. Pins vm_pu and va_degree, leaves p_mw/q_mvar
@@ -70,6 +112,14 @@ class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
         node_model.vm_pu = Const(self.vm_pu)
         node_model.vm_pu_squared = Const(self.vm_pu * self.vm_pu)
         node_model.va_degree = Const(self.va_degree)
+        # The slack's free P/Q injection vars are MW-magnitude; declare scale =
+        # sn_mva so the backend hands IPOPT O(1) unknowns, matching the branch
+        # flow vars (per-unit conditioning). Runs before inject_vars.
+        if isinstance(grid, PowerGrid) and grid.sn_mva and grid.sn_mva != 1.0:
+            if isinstance(self.p_mw, Var):
+                self.p_mw.scale = grid.sn_mva
+            if isinstance(self.q_mvar, Var):
+                self.q_mvar.scale = grid.sn_mva
         # The slack bus is the angle reference: pin the angle decision variable
         # (va_degree is a derived Intermediate) - removes the free global-gauge
         # DOF, improving conditioning and squareness. Skipped when electricity

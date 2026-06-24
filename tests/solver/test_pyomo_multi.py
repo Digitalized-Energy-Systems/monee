@@ -59,7 +59,9 @@ def test_scaled_example_gas_incident_pyo():
     assert flow_result.success
     assert result.success
 
-    assert resilience[0] == 0
+    # Perfect resilience; abs_tol absorbs solver floating-point noise (the nodal
+    # balance is solved per-unit, so the residual is rounding, not exactly 0.0).
+    assert math.isclose(resilience[0], 0, abs_tol=1e-9)
     assert math.isclose(resilience[2], 0, abs_tol=0.01)
     assert result is not None
 

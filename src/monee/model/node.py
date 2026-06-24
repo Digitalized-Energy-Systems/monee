@@ -1,6 +1,7 @@
 import math
 
 from .core import Intermediate, IntermediateEq, NodeModel, PostProcess, Var, model
+from .grid import PowerGrid
 from .phys.core.hydraulics import junction_mass_flow_balance
 from .phys.nonlinear.ac import power_balance_equation
 from .phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
@@ -81,14 +82,13 @@ class Bus(NodeModel):
         signed_ap, signed_rp = self.calc_signed_power_values(
             from_branch_models, to_branch_models, child_models
         )
-        # Re-attach the report lambda each solve so it survives a native reload
-        # (which restores only the stored value, not the closure).
         self.va_degree = PostProcess(lambda v: 180 / math.pi * v.va_radians)
+        sn = grid.sn_mva if isinstance(grid, PowerGrid) else 1.0
         return [
             self.p_mw_equation(child_models),
             self.q_mvar_equation(child_models),
-            power_balance_equation(signed_ap),
-            power_balance_equation(signed_rp),
+            power_balance_equation(signed_ap, sn),
+            power_balance_equation(signed_rp, sn),
         ]
 
 

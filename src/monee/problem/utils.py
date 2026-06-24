@@ -23,10 +23,35 @@ _HHV_DEFAULT = DEFAULT_GAS_HHV_KWH_PER_KG
 _UNBOUND_MAX_I_KA = 999.0
 
 
-def line_loading_limit(branch_model, side: str, max_loading: float):
+def line_loading_limit(branch_model, side: str, max_loading: float, basis: str = "mva"):
+    """Cap branch loading at *max_loading* (per unit of the branch rating).
 
+    ``basis="mva"`` (default) caps apparent power as the per-unit loading-squared
+    form ``(p**2 + q**2) / (max_loading * max_s_mva)**2 <= 1`` - smooth, and the
+    same solution as MATPOWER's |S|^2 <= RATE_A^2. The normalization is what makes
+    it O(1): the bare ``p**2 + q**2 <= RATE_A**2`` form has residual/curvature of
+    order RATE_A^2 (~1e6-1e8 in MW), which ill-conditions the OPF and balloons the
+    IPOPT iteration count. When the branch carries no ``max_s_mva`` (None), it
+    falls back to the current basis below, so networks that only have ``max_i_ka``
+    keep their existing current-based behaviour.
+
+    ``basis="current"`` caps current as |I| <= max_loading * max_i_ka (the
+    original behaviour). Unbounded ratings drop the constraint.
+    """
     if side not in ("from", "to"):
         raise ValueError(f"side must be 'from' or 'to', got {side!r}")
+    if basis not in ("mva", "apparent", "current"):
+        raise ValueError(f"basis must be 'mva' or 'current', got {basis!r}")
+
+    if basis in ("mva", "apparent"):
+        max_s_mva = getattr(branch_model, "max_s_mva", None)
+        if max_s_mva is not None:
+            p = getattr(branch_model, f"p_{side}_mw")
+            q = getattr(branch_model, f"q_{side}_mvar")
+            limit = max_loading * max_s_mva
+            return (p**2 + q**2) / (limit * limit) <= 1.0
+        # No MVA rating on this branch: fall through to the current basis.
+
     max_i_ka = getattr(branch_model, "max_i_ka", None)
     if max_i_ka is None or max_i_ka >= _UNBOUND_MAX_I_KA:
         return True

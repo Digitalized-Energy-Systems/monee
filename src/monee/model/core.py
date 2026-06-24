@@ -83,7 +83,9 @@ class Var:
     ``False`` if the relevant bound is ``None``.
     """
 
-    def __init__(self, value, max=None, min=None, integer=False, name=None) -> None:
+    def __init__(
+        self, value, max=None, min=None, integer=False, name=None, scale=1.0
+    ) -> None:
 
         if not isinstance(value, float | int):
             raise ValueError(
@@ -92,8 +94,11 @@ class Var:
         self.value = value
         self.max = max
         self.min = min
+
         self.integer = integer
         self.name = name
+
+        self.scale = scale
 
     def __neg__(self):
         actual_max = None if self.max is None else -self.max
@@ -104,6 +109,7 @@ class Var:
             min=actual_max,
             integer=self.integer,
             name=self.name,
+            scale=self.scale,
         )
 
     def __mul__(self, other):
@@ -119,6 +125,7 @@ class Var:
             min=new_min,
             integer=self.integer,
             name=self.name,
+            scale=self.scale,
         )
 
     def __lt__(self, other):
@@ -162,6 +169,7 @@ class Var:
         new.min = self.min
         new.integer = self.integer
         new.name = self.name
+        new.scale = self.scale
         return new
 
 

@@ -21,6 +21,7 @@ class GenericPowerBranch(BranchModel):
         g_to_pu,
         b_to_pu,
         max_i_ka=3.19,
+        max_s_mva=None,
         backup=False,
         on_off=1,
         **kwargs,
@@ -34,9 +35,13 @@ class GenericPowerBranch(BranchModel):
         self.b_fr_pu = b_fr_pu
         self.g_to_pu = g_to_pu
         self.b_to_pu = b_to_pu
+
         self.max_i_ka = max_i_ka
+        self.max_s_mva = max_s_mva
+
         self.backup = backup
         self.on_off = on_off
+
         self.p_from_mw = Var(1, name="p_from_mw")
         self.q_from_mvar = Var(1, name="q_from_mvar")
         self.i_from_ka = Var(1, min=0, name="i_from_ka")

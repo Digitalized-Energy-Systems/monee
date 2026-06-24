@@ -55,21 +55,33 @@ Know these conventions before you optimise:
        ``va_radians`` decision :class:`~monee.model.core.Var` (bounded
        :math:`\pm\pi`). ``va_degree`` is not set from the case; it is a
        derived report value (:class:`~monee.model.core.PostProcess`) computed
-       from ``va_radians`` after each solve.
+       from ``va_radians`` after each solve. Isolated buses (``BUS_TYPE == 4``)
+       are dropped, together with their generators and incident branches.
    * - ``bus`` demand (``Pd``/``Qd``)
      - A :class:`~monee.model.child.PowerLoad` child at the bus, or a
        :class:`~monee.model.child.PowerGenerator` when ``Pd < 0`` (negative
        demand encodes generation).
+   * - ``bus`` shunt (``Gs``/``Bs``)
+     - A :class:`~monee.model.child.PowerShunt` child whose draw scales with
+       voltage (``p = Gs * vm^2``, ``q = -Bs * vm^2``), so ``Bs > 0`` injects
+       reactive power like a capacitor. Omitted when both are zero.
    * - ``gen`` rows
-     - An :class:`~monee.model.child.ExtPowerGrid` (slack) when ``Pg == 0`` and
-       ``Pg != Pmax``. Then ``p_mw`` and ``q_mvar`` become free variables and
-       ``vm_pu`` is pinned to the generator voltage setpoint. All other rows
-       become fixed :class:`~monee.model.child.PowerGenerator` children.
+     - Routed by the host bus ``BUS_TYPE``. The first in-service generator at a
+       reference bus (``BUS_TYPE == 3``) becomes the
+       :class:`~monee.model.child.ExtPowerGrid` slack (free ``p_mw``/``q_mvar``,
+       pinned ``vm_pu`` and angle). The first in-service generator at a PV bus
+       (``BUS_TYPE == 2``) becomes a
+       :class:`~monee.model.child.VoltageControlledGenerator` (fixed ``P``,
+       ``vm_pu`` held at ``Vg``, free ``Q``). Every other generator becomes a
+       fixed :class:`~monee.model.child.PowerGenerator`. Out-of-service
+       generators (``GEN_STATUS <= 0``) are kept but made inert
+       (``regulation = 0``). Import raises if no reference bus yields a slack.
    * - ``branch`` rows
      - A :class:`~monee.model.branch.GenericPowerBranch` with the pi-model
        parameters of the row: charging susceptance split evenly between both
        ends, ``tap = 1`` when the MATPOWER tap is ``0``, and the phase shift
-       converted to radians.
+       converted to radians. ``BR_STATUS == 0`` imports the branch with
+       ``on_off = 0`` (de-energised but retained).
 
 .. note::
 

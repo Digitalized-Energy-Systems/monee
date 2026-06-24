@@ -1,7 +1,13 @@
 import math
 
 
-def power_balance_equation(signed_flows):
+def power_balance_equation(signed_flows, scale=1.0):
+    # The nodal balance residual is MW-magnitude; dividing by the grid's
+    # apparent-power base expresses it per-unit (O(1)) so IPOPT's feasibility
+    # measure isn't dominated by the MW scale. Solution-invariant (scaling an
+    # equality by a nonzero constant). ``scale == 1`` is the inert default.
+    if scale != 1.0:
+        return sum(signed_flows) / scale == 0
     return sum(signed_flows) == 0
 
 
@@ -137,6 +143,7 @@ def int_flows(  # NOSONAR
     g_to_pu=0,
     b_to_pu=0,
     on_off=1,
+    s_base=1,
 ):
     """All four AC branch flow equations (P/Q at both ends) in one pass.
 
@@ -150,6 +157,11 @@ def int_flows(  # NOSONAR
     in the per-equation functions, so the only change is node sharing - the
     symbolic graph these equations contribute is ~halved, which speeds model
     assembly on every backend (the equation bodies are backend-agnostic).
+
+    The bracketed expressions are per-unit power on the grid's apparent-power
+    base; ``s_base`` (= ``grid.sn_mva``) scales them to the MW/MVAr that
+    ``p_*_mw``/``q_*_mvar`` and the nodal balance are expressed in. With the
+    default ``sn_mva = 1`` (per-unit == MW) this is a no-op.
 
     Returns ``[p_from_eq, q_from_eq, p_to_eq, q_to_eq]``.
     """
@@ -183,6 +195,14 @@ def int_flows(  # NOSONAR
         - (-b_branch * tr + g_branch * ti) / tap**2 * vvc
         - (-g_branch * tr - b_branch * ti) / tap**2 * vvs
     )
+
+    if s_base != 1:
+        p_from, q_from, p_to, q_to = (
+            s_base * p_from,
+            s_base * q_from,
+            s_base * p_to,
+            s_base * q_to,
+        )
 
     # Skip the ``on_off *`` factor only when it is the plain scalar 1 (the common
     # always-on case). A switchable line passes ``on_off`` as a decision variable

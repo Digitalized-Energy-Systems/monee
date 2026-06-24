@@ -6,7 +6,8 @@ import math
 import numpy as np
 
 import monee.model.phys.nonlinear.ac as opfmodel
-from monee.model.core import Intermediate, IntermediateEq, PostProcess
+from monee.model.core import Intermediate, IntermediateEq, PostProcess, Var
+from monee.model.grid import PowerGrid
 
 from ..core import BranchFormulation, ChildFormulation, NodeFormulation
 
@@ -44,6 +45,13 @@ class AcPolarNlpBranchFormulation(BranchFormulation):
         branch.i_to_ka = Intermediate(0)
         branch.loading_from_pu = Intermediate(0)
         branch.loading_to_pu = Intermediate(0)
+
+        sn = grid.sn_mva if isinstance(grid, PowerGrid) else 1.0
+        if sn and sn != 1.0:
+            for key in ("p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar"):
+                var = getattr(branch, key, None)
+                if isinstance(var, Var):
+                    var.scale = sn
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         y = np.linalg.pinv([[branch.br_r_pu + branch.br_x_pu * 1j]])[0][0]
@@ -86,9 +94,8 @@ class AcPolarNlpBranchFormulation(BranchFormulation):
                 g_to_pu=branch.g_to_pu,
                 b_to_pu=branch.b_to_pu,
                 on_off=branch.on_off,
+                s_base=grid.sn_mva,
             ),
-            # Report-only intermediates: inline into a line-loading limit when one
-            # references them, otherwise evaluated post-solve for results only.
             IntermediateEq("i_from_ka", i_from_ka),
             IntermediateEq("i_to_ka", i_to_ka),
             IntermediateEq("loading_from_pu", i_from_ka / branch.max_i_ka),

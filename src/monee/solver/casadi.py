@@ -116,13 +116,10 @@ class CasADiSolveError(RuntimeError):
 
 
 def _sx(x):
-    """Underlying CasADi expression of a :class:`CasSym`, or the value itself."""
     return x.e if isinstance(x, CasSym) else x
 
 
 class _Rel:
-    """A captured ``(residual, op)`` constraint: ``residual {==,<=} 0``."""
-
     __slots__ = ("r", "op")
 
     def __init__(self, r, op):
@@ -295,7 +292,7 @@ _IPOPT_OPTS = {
     "print_time": 0,
     "ipopt.print_level": 0,
     "ipopt.sb": "yes",
-    "ipopt.tol": 1e-8,
+    "ipopt.tol": 1e-6,
     "ipopt.max_iter": 3000,
 }
 
@@ -309,11 +306,10 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         _require_casadi()
         self._backend_name = "casadi"
         self._solver_name = "ipopt"
-        # Per-solve simulation flag, read by the shared branch pass to drop
-        # operational flow limits (mirrors GEKKOSolver).
+
         self._simulation: bool = False
         self._reg: list = []
-        # in-process timing (no subprocess at any layer):
+
         self.last_build_s = None  # nlpsol construction: graph -> derivative fns
         self.last_solve_s = None  # the IPOPT solve() call
         self.last_engine_s = None  # build + solve (the GEKKO "engine" analogue)
@@ -323,8 +319,6 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         m.Equations(eqs)
 
     def _pwl_impl(self, m):
-        """Smooth B-spline implementation of the gas/heat PWL hook (the GEKKO
-        backend uses a cubic spline; CasADi mirrors it with ``ca.interpolant``)."""
         return CasADiCubicSplineImpl(m)
 
     def _inject(self, model, comp, cat):  # NOSONAR
@@ -342,6 +336,13 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
                     if (v0 is None or (isinstance(v0, float) and math.isnan(v0)))
                     else float(v0)
                 )
+
+                scale = getattr(val, "scale", 1.0) or 1.0
+                phys = sx if scale == 1.0 else scale * sx
+                if scale != 1.0:
+                    lo = lo if lo == -INF else lo / scale
+                    hi = hi if hi == INF else hi / scale
+                    x0 = x0 / scale
                 self._reg.append(
                     {
                         "model": model,
@@ -350,18 +351,14 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
                         "lb": lo,
                         "ub": hi,
                         "x0": x0,
+                        "scale": scale,
                         "name": val.name,
                         "vmin": val.min,
                         "vmax": val.max,
                     }
                 )
-                setattr(model, key, CasSym(sx))
+                setattr(model, key, CasSym(phys))
             elif isinstance(val, Const):
-                # A boundary child's overwrite() can fold a time-varying input into
-                # a Const, e.g. ``node.t_pu = Const(ext_grid.t_k / t_ref)`` with a
-                # per-step CasADi parameter ``t_k``. Keep such symbolic values
-                # symbolic so the parameter still reaches the graph; only genuine
-                # numeric constants collapse to a float.
                 v = val.value
                 if isinstance(v, CasSym):
                     setattr(model, key, v)
@@ -506,7 +503,10 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         # --- write the solution back into the model ---
         for i, r in enumerate(reg):
             r["model"].__dict__[r["key"]] = Var(
-                value=float(x_opt[i]), min=r["vmin"], max=r["vmax"], name=r["name"]
+                value=float(x_opt[i]) * r.get("scale", 1.0),
+                min=r["vmin"],
+                max=r["vmax"],
+                name=r["name"],
             )
         # Evaluate any remaining CasSym attributes (inlined intermediates) in one pass.
         leftover = [
@@ -739,7 +739,10 @@ class CasADiTimeseries:
         xv = np.array(sol["x"]).flatten()
         for i, r in enumerate(self._var_entries):
             r["model"].__dict__[r["key"]] = Var(
-                value=float(xv[i]), min=r["vmin"], max=r["vmax"], name=r["name"]
+                value=float(xv[i]) * r.get("scale", 1.0),
+                min=r["vmin"],
+                max=r["vmax"],
+                name=r["name"],
             )
         for model, key, _psx, series in self._params:
             model.__dict__[key] = float(series[t])
@@ -943,7 +946,10 @@ class CasADiMultiPeriodSolver:
         # Scatter the solution back into every period's models.
         for i, r in enumerate(reg):
             r["model"].__dict__[r["key"]] = Var(
-                value=float(x_opt[i]), min=r["vmin"], max=r["vmax"], name=r["name"]
+                value=float(x_opt[i]) * r.get("scale", 1.0),
+                min=r["vmin"],
+                max=r["vmax"],
+                name=r["name"],
             )
         leftover = [
             (model, key, val.e)

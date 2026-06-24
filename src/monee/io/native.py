@@ -172,7 +172,14 @@ def _json_default(obj):
 # --------------------------------------------------------------------------- #
 # Deserialization (dict -> Network)                                            #
 # --------------------------------------------------------------------------- #
-def init_model(model_type, preprocessed_dict):
+
+_INIT_MODEL_CACHE = {}
+
+
+def _resolve_model_type(model_type):
+    cached = _INIT_MODEL_CACHE.get(model_type)
+    if cached is not None:
+        return cached
     model_type_dict = {
         component_cls.__name__: component_cls for component_cls in component_list
     }
@@ -182,7 +189,6 @@ def init_model(model_type, preprocessed_dict):
             f"your model class with @model?"
         )
     model_cls = model_type_dict[model_type]
-
     # Required params get 0; optional params keep their default. Real attr
     # values arrive via setattr, bypassing constructor transforms so the
     # serialized state round-trips exactly.
@@ -199,6 +205,13 @@ def init_model(model_type, preprocessed_dict):
         init_kwargs[argname] = (
             0 if param.default is inspect.Parameter.empty else param.default
         )
+    cached = (model_cls, init_kwargs)
+    _INIT_MODEL_CACHE[model_type] = cached
+    return cached
+
+
+def init_model(model_type, preprocessed_dict):
+    model_cls, init_kwargs = _resolve_model_type(model_type)
     model = model_cls(**init_kwargs)
     for key, value in preprocessed_dict.items():
         setattr(model, key, value)
@@ -279,19 +292,18 @@ def native_dict_to_network(dict_struct) -> Network:
 
 
 def _resolve_branch_grid(branch_dict, grid_by_name):
-    """Return the grid argument for re-creating a branch.
 
-    Single-grid branches get their concrete grid. Multi-grid (coupling) branches
-    return ``None`` so :meth:`Network.branch` rebuilds the grid-type mapping from
-    the endpoint node grids.
-    """
     grid_ids = branch_dict.get("grid_ids")
+
     if grid_ids is None:
         grid_id = branch_dict.get("grid_id")
         grid_ids = [grid_id] if grid_id is not None else []
+
     distinct = [grid_by_name[g] for g in dict.fromkeys(grid_ids)]
+
     if len(distinct) == 1:
         return distinct[0]
+
     return None
 
 
@@ -304,6 +316,8 @@ def load_to_network(file) -> Network:
 # --------------------------------------------------------------------------- #
 # Serialization (Network -> dict)                                              #
 # --------------------------------------------------------------------------- #
+
+
 def iter_concrete_grids(grid):
     """Yield the concrete grid object(s) backing a component.
 
@@ -397,7 +411,9 @@ def branch_to_dict(branch, grids):
 
 
 def node_to_dict(node, grids):
+
     fetch_grid_to_dict(grids, node.grid)
+
     return {
         "id": node.id,
         "grid_id": node.grid.name,
@@ -411,8 +427,8 @@ def node_to_dict(node, grids):
 
 
 def network_to_native_dict(network: Network) -> dict:
-    """Serialize *network* to the native, JSON-friendly ``dict`` form."""
     grids = {}
+
     node_dict_list = [
         node_to_dict(node, grids)
         for node in network.nodes
@@ -433,6 +449,7 @@ def network_to_native_dict(network: Network) -> dict:
         for compound in network.compounds
         if not network.is_blacklisted(compound)
     ]
+
     return {
         "version": FORMAT_VERSION,
         "grids": {
@@ -447,7 +464,8 @@ def network_to_native_dict(network: Network) -> dict:
 
 
 def write_omef_network(file, network: Network):
-    """Serialize *network* to *file* as native JSON."""
+
     to_serialize = network_to_native_dict(network)
+
     with open(file, "w", encoding="utf-8") as write_fp:
         json.dump(to_serialize, write_fp, indent=3, default=_json_default)
