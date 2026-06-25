@@ -2,11 +2,7 @@ import math
 
 
 def power_balance_equation(signed_flows, scale=1.0):
-    # The nodal balance residual is MW-magnitude; dividing by the grid's
-    # apparent-power base expresses it per-unit (O(1)) so IPOPT's feasibility
-    # measure isn't dominated by the MW scale. Solution-invariant (scaling an
-    # equality by a nonzero constant). ``scale == 1`` is the inert default.
-    if scale != 1.0:
+    if not math.isclose(scale, 1.0):
         return sum(signed_flows) / scale == 0
     return sum(signed_flows) == 0
 

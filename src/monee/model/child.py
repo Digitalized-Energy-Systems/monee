@@ -112,19 +112,17 @@ class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
         node_model.vm_pu = Const(self.vm_pu)
         node_model.vm_pu_squared = Const(self.vm_pu * self.vm_pu)
         node_model.va_degree = Const(self.va_degree)
-        # The slack's free P/Q injection vars are MW-magnitude; declare scale =
-        # sn_mva so the backend hands IPOPT O(1) unknowns, matching the branch
-        # flow vars (per-unit conditioning). Runs before inject_vars.
-        if isinstance(grid, PowerGrid) and grid.sn_mva and grid.sn_mva != 1.0:
+
+        if (
+            isinstance(grid, PowerGrid)
+            and grid.sn_mva
+            and not math.isclose(grid.sn_mva, 1.0)
+        ):
             if isinstance(self.p_mw, Var):
                 self.p_mw.scale = grid.sn_mva
             if isinstance(self.q_mvar, Var):
                 self.q_mvar.scale = grid.sn_mva
-        # The slack bus is the angle reference: pin the angle decision variable
-        # (va_degree is a derived Intermediate) - removes the free global-gauge
-        # DOF, improving conditioning and squareness. Skipped when electricity
-        # islanding manages bus angles itself (energisation-gated), which it
-        # flags in its prepare() before this runs.
+
         if not getattr(node_model, "_islanding_angle_managed", False):
             node_model.va_radians = Const(self.va_degree * math.pi / 180)
 
@@ -203,9 +201,8 @@ class Source(NoVarChildModel):
                 f"sign is handled internally (load convention)."
             )
         super().__init__(**kwargs)
+
         self.mass_flow_kgs = -mass_flow_kgs
-        # Distinct from the ExtHydrGrid/ConsumeHydrGrid ``t_k`` attribute:
-        # those pin the node temperature; this only types the inflow enthalpy.
         self.injection_t_k = t_k
 
 

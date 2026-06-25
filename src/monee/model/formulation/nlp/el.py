@@ -41,7 +41,7 @@ class AcPolarNlpBranchFormulation(BranchFormulation):
         branch.loading_to_pu = Intermediate(0)
 
         sn = grid.sn_mva if isinstance(grid, PowerGrid) else 1.0
-        if sn and sn != 1.0:
+        if sn and not math.isclose(grid.sn_mva, 1.0):
             for key in ("p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar"):
                 var = getattr(branch, key, None)
                 if isinstance(var, Var):

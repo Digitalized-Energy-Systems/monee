@@ -338,8 +338,8 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
                 )
 
                 scale = getattr(val, "scale", 1.0) or 1.0
-                phys = sx if scale == 1.0 else scale * sx
-                if scale != 1.0:
+                phys = sx if math.isclose(scale, 1.0) else scale * sx
+                if not math.isclose(scale, 1.0):
                     lo = lo if lo == -INF else lo / scale
                     hi = hi if hi == INF else hi / scale
                     x0 = x0 / scale

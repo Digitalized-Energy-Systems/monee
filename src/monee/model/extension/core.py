@@ -1,4 +1,7 @@
-class NetworkAspect:
+from abc import ABC
+
+
+class NetworkAspect(ABC):
     """
     Solver-agnostic network-level extension.
 
