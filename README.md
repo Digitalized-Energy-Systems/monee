@@ -19,7 +19,7 @@
 
 ---
 
-**monee** is a Python framework for steady-state simulation and optimal energy flow of **multi-energy systems (MES)**. It models electricity, gas, and district-heat networks in a single unified directed graph, couples them via standard conversion units (CHP, P2H, P2G, G2P), and exposes the coupled system to two solver back-ends. The framework is designed for research workflows that require flexible problem formulation, reproducible benchmarks, and straightforward integration with external optimisers.
+**monee** is a Python framework for steady-state simulation and optimal energy flow of **multi-energy systems (MES)**. It models electricity, gas, and district-heat networks in a single unified directed graph, couples them via standard conversion units (CHP, P2H, P2G, G2P, G2H), and exposes the coupled system to three solver back-ends (CasADi, GEKKO, and Pyomo). The framework is designed for research workflows that require flexible problem formulation, reproducible benchmarks, and straightforward integration with external optimisers.
 
 ## Capabilities
 
@@ -30,7 +30,7 @@
 - Coupling components: CHP, P2H (heat pump / electric boiler), P2G, G2P, G2H
 
 **Optimisation**
-- Optimal energy flow via GEKKO (IPOPT) or Pyomo (HiGHS, Gurobi, GLPK, CBC)
+- Optimal energy flow via CasADi or GEKKO (IPOPT) or Pyomo (SCIP, GLPK, CBC, Gurobi)
 - MISOCP relaxation for convex AC OPF
 - Built-in minimum-curtailment (load shedding) formulation with per-carrier bounds
 - Capacity limits on all external grid connections (`max_import` / `max_export`)
@@ -52,15 +52,24 @@
 
 ## Installation
 
+Requires **Python 3.10+**.
+
 ```bash
 pip install monee
 ```
 
-The default GEKKO solver (IPOPT) is bundled. For MILP/MIQCP problems, install a Pyomo-compatible solver:
+The core install bundles everything needed for both simulation and the default
+optimisation workflows:
+
+- **CasADi**: in-process IPOPT, the default solver when present.
+- **GEKKO**: bundles its own APOPT/BPOPT/IPOPT binaries; used as the IPOPT fallback if CasADi is unavailable.
+- **Pyomo**: for MILP/MIQCP problems such as MISOCP optimal power flow.
+
+Optional solvers and import formats are pulled in only when you need them:
 
 ```bash
-pip install pyscipopt   # SCIP - open source
-pip install gurobipy  # Gurobi - commercial, free academic licence available
+pip install monee[simbench]   # SimBench / pandapower grid import
+pip install gurobipy          # Gurobi - commercial, free academic licence available
 ```
 
 ---
@@ -93,42 +102,61 @@ mx.create_sink(net, j_return, mass_flow_kgs=1.0)
 
 # Coupling: bus_1 drives a heat pump that feeds the heating loop
 mx.create_p2h(net, bus_1, j_mid, j_return,
-              heat_mw=0.1, diameter_m=0.1, efficiency=0.9)
+              heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9)
 
 result = run_energy_flow(net)
 print(result.get(mm.Bus)[["vm_pu", "va_degree"]])
 print(result.get(mm.WaterPipe)[["mass_flow_kgs"]])
 ```
 
-Solvers are selected by name - `run_energy_flow(net, solver="gurobi")` routes GEKKO names (`apopt`, `bpopt`, `ipopt`) to the bundled GEKKO back-end and any other name to the matching Pyomo solver. By default `run_energy_flow` runs in **simulation mode** (`simulation=True`), squaring the model for a fast steady-state solve; pass `simulation=False` (or an optimisation problem) to solve in optimisation mode.
+Solvers are selected by name - `ipopt` routes to CasADi when installed (otherwise GEKKO), `apopt` and `bpopt` route to GEKKO, and any other name (e.g. `scip`, `gurobi`) is forwarded to the matching Pyomo solver. Override the back-end explicitly with `backend=...` if needed. By default `run_energy_flow` runs in **simulation mode** (`simulation=True`), squaring the model for a fast steady-state solve; pass `simulation=False` (or an optimisation problem) to solve in optimisation mode. Check `result.mode_used` to see which path actually ran.
 
 ---
 
-## Optimal energy flow and load shedding
+## Optimal energy flow
 
-Solve minimum-curtailment problems with per-carrier operational bounds:
+Swap `run_energy_flow` for `run_energy_flow_optimization` and pass a problem.
+monee ships ready-made formulations - economic dispatch and minimum load
+shedding - and you can also build your own (see *Extensibility* below).
+
+Economic dispatch minimises the total generation cost `Σ cost · p_gen` while
+respecting the network's physical limits. Give each generator a marginal
+`cost`, and the optimiser dispatches the cheaper units first:
 
 ```python
 import monee
+import monee.model as mm
+from monee import mx
 
-net.apply_formulation(monee.EL_MISOCP_FORMULATION)
+net = mx.create_multi_energy_network()
+bus_ext = mx.create_bus(net)
+bus_a   = mx.create_bus(net)
+bus_b   = mx.create_bus(net)
+mx.create_line(net, bus_ext, bus_a, length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+mx.create_line(net, bus_ext, bus_b, length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+mx.create_ext_power_grid(net, bus_ext)
+mx.create_power_load(net, bus_a, p_mw=0.1, q_mvar=0.0)
 
-problem = monee.create_min_load_shedding_problem(
-    bounds_vm=(0.9, 1.1),        # voltage bounds (pu)
-    bounds_t=(0.9, 1.1),         # temperature bounds (pu)
-    bounds_pressure=(0.9, 1.1),  # pressure bounds (pu)
-    include_ext_grids=True,
+# Two dispatchable generators with different marginal costs (currency/MW)
+mx.create_power_generator(net, bus_a, p_mw=0.15, q_mvar=0.0, cost=10.0)   # cheap
+mx.create_power_generator(net, bus_b, p_mw=0.15, q_mvar=0.0, cost=40.0)   # expensive
+
+problem = monee.create_economic_dispatch_problem(
+    ext_grid_cost_default=0.0,        # include the slack so it can be bounded
+    ext_grid_bounds=(-0.01, 0.01),    # substation import/export limit (MW)
 )
 
-result = monee.run_energy_flow_optimization(
-    net, problem,
-    solver="scip",
-    exclude_unconnected_nodes=True,
-)
+result = monee.run_energy_flow_optimization(net, problem, solver="ipopt")
 
-# regulation == 1.0: fully served; regulation == 0.0: completely shed
-print(result.dataframes["PowerLoad"][["regulation"]])
+# The cheap generator carries the load; the expensive one stays near zero.
+# (generation uses the load convention, so dispatched power is negative)
+print(result.get(mm.PowerGenerator)[["p_mw"]])
 ```
+
+For resilience studies, `create_min_load_shedding_problem` instead minimises
+curtailment with per-carrier operational bounds, returning a `regulation` per
+demand (`1.0` fully served, `0.0` completely shed). Both problems accept the
+same solver and formulation options.
 
 ---
 
@@ -165,13 +193,34 @@ net.apply_formulation(monee.EL_MISOCP_FORMULATION)
 Custom formulations follow the same pattern - subclass the appropriate base class and register it for the target component types:
 
 ```python
+from monee.model.core import Const, Var
 from monee.model.formulation.core import BranchFormulation, NetworkFormulation
 from monee.model.branch import GasPipe
 
 class MyGasPipeFormulation(BranchFormulation):
+    """Toy linear pipe: pressure drop proportional to the mass flow."""
+
+    def ensure_var(self, branch, simulation=False, grid=None):
+        # One signed mass-flow decision variable plus a geometric resistance the
+        # equation references; neutralise the Vars this linear model does not use.
+        branch.mass_flow_kgs = Var(0.1, name="mass_flow_kgs")
+        branch.resistance = Const(1e-3 * branch.length_m / branch.diameter_m**2)
+        branch.direction = Const(1)
+        for unused in ("velocity_mps", "reynolds_scaled", "gas_density_kg_per_m3",
+                       "friction", "mass_flow_pos_kgs_squared",
+                       "mass_flow_neg_kgs_squared"):
+            setattr(branch, unused, Const(0.0))
+
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
-        return [from_node_model.pressure_pu - to_node_model.pressure_pu
-                == branch.resistance * branch.mass_flow_kgs]
+        m = branch.mass_flow_kgs
+        mag = kwargs["sqrt_impl"](m * m)  # |m|, so it works in either flow direction
+        return [
+            from_node_model.pressure_pu - to_node_model.pressure_pu
+            == branch.resistance * m,
+            # the nodal balance consumes the positive / negative flow split
+            branch.mass_flow_pos_kgs == 0.5 * (mag + m),
+            branch.mass_flow_neg_kgs == 0.5 * (mag - m),
+        ]
 
 net.apply_formulation(NetworkFormulation(
     branch_type_to_formulations={GasPipe: MyGasPipeFormulation()},

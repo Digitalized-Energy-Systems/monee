@@ -112,3 +112,7 @@ docs/source/_static/interactive/
 examples/*.pdf
 examples/*.html
 examples/*.png
+
+benchmarks/results/*.html
+benchmarks/results/*.svg
+benchmarks/results/*.png

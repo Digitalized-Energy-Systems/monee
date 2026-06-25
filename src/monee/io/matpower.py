@@ -492,15 +492,17 @@ def build_matpower_opf(mpc, max_loading=1.0, limit_basis="mva"):
     network.apply_formulation(EL_NLP_FORMULATION)
 
     base = mpc["baseMVA"]
-    if base and base != 1:
-        for child in network.childs:
-            cm = child.model
-            if not hasattr(cm, "_cost_coeffs"):
-                continue
-            for attr in ("p_mw", "q_mvar"):
-                var = getattr(cm, attr, None)
-                if isinstance(var, Var):
-                    var.scale = base
+    power_scale = base if (base and base != 1) else 100.0
+    for child in network.childs:
+        for attr in ("p_mw", "q_mvar"):
+            var = getattr(child.model, attr, None)
+            if isinstance(var, Var):
+                var.scale = power_scale
+    for branch in network.branches:
+        for attr in ("p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar"):
+            var = getattr(branch.model, attr, None)
+            if isinstance(var, Var):
+                var.scale = power_scale
 
     problem = OptimizationProblem()
     objectives = Objectives()
