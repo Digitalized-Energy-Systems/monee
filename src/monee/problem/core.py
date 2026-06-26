@@ -521,6 +521,45 @@ class OptimizationProblem:
         )
         return self
 
+    def optimize_bus_voltages(self, vm_min=None, vm_max=None):
+        """Make the bus voltage magnitudes optimisation variables.
+
+        Bounds every bus voltage magnitude to ``[vm_min, vm_max]`` (when given)
+        and frees the slack: each :class:`ExtPowerGrid` stops pinning its bus
+        ``vm_pu``, so the reference voltage becomes a decision variable in the
+        same band and only the reference *angle* stays fixed - the optimal power
+        flow convention (MATPOWER/pandapower ``runopp`` optimise the slack
+        voltage within [VMIN, VMAX]).
+
+        Freeing the slack only makes sense when the buses carry a voltage band,
+        so the two go together. Pass no bounds to free the slack against limits
+        already on the buses (e.g. the per-bus VMIN/VMAX of a MATPOWER import).
+        """
+
+        def _apply_voltages(network: Network):
+            if vm_min is not None or vm_max is not None:
+                for node in network.nodes:
+                    self._bound_var(getattr(node.model, "vm_pu", None), vm_min, vm_max)
+                    self._bound_var(
+                        getattr(node.model, "vm_pu_squared", None),
+                        None if vm_min is None else vm_min * vm_min,
+                        None if vm_max is None else vm_max * vm_max,
+                    )
+            for child in network.childs:
+                if isinstance(child.model, ExtPowerGrid):
+                    child.model.regulate_vm = False
+
+        self._controllable_appliables.append(_apply_voltages)
+        return self
+
+    @staticmethod
+    def _bound_var(var, lo, hi):
+        if isinstance(var, Var):
+            if lo is not None:
+                var.min = lo
+            if hi is not None:
+                var.max = hi
+
     def controllable_ext(self):
         """Declare ExtPowerGrid / ExtHydrGrid connections controllable.
 

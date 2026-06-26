@@ -84,6 +84,12 @@ class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
     External slack-bus connection. Pins vm_pu and va_degree, leaves p_mw/q_mvar
     as free Vars absorbing the island's imbalance. Load convention: positive
     p_mw = import.
+
+    ``regulate_vm`` controls the voltage magnitude. When ``True`` (the default,
+    power-flow semantics) the bus |V| is held at ``vm_pu``. When ``False`` it is
+    left as the bus's bounded decision variable and only the reference *angle* is
+    pinned - the optimal-power-flow convention (MATPOWER/pandapower ``runopp``
+    optimise the slack voltage within [VMIN, VMAX]).
     """
 
     def __init__(
@@ -94,6 +100,7 @@ class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
         va_degree=0,
         max_import_mw=None,
         max_export_mw=None,
+        regulate_vm=True,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -106,11 +113,15 @@ class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
         self.q_mvar = Var(q_mvar, name="ext_grid_q_mvar")
         self.vm_pu = vm_pu
         self.va_degree = va_degree
+        self.regulate_vm = regulate_vm
 
     def overwrite(self, node_model, grid):
-        """Pin the bus voltage magnitude and angle to the configured setpoints."""
-        node_model.vm_pu = Const(self.vm_pu)
-        node_model.vm_pu_squared = Const(self.vm_pu * self.vm_pu)
+        """Pin the bus angle (always) and, when this slack regulates voltage, the
+        bus voltage magnitude too. With ``regulate_vm=False`` the magnitude stays
+        the bus's bounded Var so an OPF optimises it within [VMIN, VMAX]."""
+        if self.regulate_vm:
+            node_model.vm_pu = Const(self.vm_pu)
+            node_model.vm_pu_squared = Const(self.vm_pu * self.vm_pu)
         node_model.va_degree = Const(self.va_degree)
 
         if (

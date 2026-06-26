@@ -45,8 +45,9 @@ Plot only:      python benchmarks/simbench_opf_comparison.py --plot-only
 
 from __future__ import annotations
 
+import ctypes
 import os
-import signal
+import threading
 import warnings
 
 warnings.filterwarnings("ignore")
@@ -96,25 +97,43 @@ class _Timeout(Exception):
 
 @contextlib.contextmanager
 def _time_limit(seconds):
-    """SIGALRM-based wall-clock cap for a single solve (Unix, main thread).
+    """Wall-clock cap for a single solve, identical on every platform.
 
-    A solve that overruns raises ``_Timeout``, which the caller records as a
-    failure for that tool. ``seconds <= 0`` disables the cap.
+    A watcher thread injects ``_Timeout`` into the solving (main) thread via
+    ``PyThreadState_SetAsyncExc`` once *seconds* elapse; the caller records the
+    overrun as a failure. Like a signal handler the exception is delivered at the
+    next Python bytecode boundary, so a solve sitting in one long C call is capped
+    when it next returns to Python. No leaked worker (the solve runs in the main
+    thread); the watcher exits as soon as the block completes. ``seconds <= 0``
+    disables the cap. Unlike the old SIGALRM/setitimer version this needs no
+    Unix-only signal API, so it works the same on Windows, macOS and Linux.
     """
     if not seconds or seconds <= 0:
         yield
         return
 
-    def _raise(signum, frame):
-        raise _Timeout()
+    target_id = threading.get_ident()
+    done = threading.Event()
 
-    old = signal.signal(signal.SIGALRM, _raise)
-    signal.setitimer(signal.ITIMER_REAL, seconds)
+    def _set_async_exc(exc):
+        # exc=None clears any pending async exception on the target thread.
+        ctypes.pythonapi.PyThreadState_SetAsyncExc(ctypes.c_long(target_id), exc)
+
+    def _watch():
+        if done.wait(seconds):
+            return  # block finished within the cap; do not fire
+        _set_async_exc(ctypes.py_object(_Timeout))
+
+    watcher = threading.Thread(target=_watch, daemon=True)
+    watcher.start()
     try:
         yield
     finally:
-        signal.setitimer(signal.ITIMER_REAL, 0)
-        signal.signal(signal.SIGALRM, old)
+        done.set()
+        watcher.join()
+        # If the watcher fired just as the block finished (lost race), drop the
+        # not-yet-delivered _Timeout so it can't surface in unrelated later code.
+        _set_async_exc(None)
 
 
 @contextlib.contextmanager
@@ -297,7 +316,7 @@ def run_suite(max_bus=None, timeout=240.0):
             f"  [{k:2d}/{len(codes)}] {r['grid']:24s} n_bus {n_bus:5d}  "
             f"pp {'OK ' if pp_ok else 'FAIL'} {t_pp:7.2f}s  "
             f"monee {'OK ' if mn_ok else 'FAIL'} {t_mn:7.2f}s  "
-            + (f"|Δobj| {obj_rel:.2e}" if both else "")
+            + (f"|d_obj| {obj_rel:.2e}" if both else "")
         )
     return rows
 
@@ -316,7 +335,15 @@ GRID = "rgba(128,128,128,0.22)"
 AXIS_LINE = "rgba(128,128,128,0.5)"
 
 
-def make_plot(df: pd.DataFrame, out_html, out_png, out_svg=None):
+_DEFAULT_TITLE = (
+    "<b>monee (electric, NLP) vs pandapower AC-OPF across all SimBench grids</b><br>"
+    "<span style='font-size:20px;color:{text}'>40 grids "
+    "(no-switch, future scenario 2) via the MATPOWER exchange: "
+    "solve time, success rate, and objective agreement</span>"
+)
+
+
+def make_plot(df: pd.DataFrame, out_html, out_png, out_svg=None, title_text=None):
     import plotly.graph_objects as go
     from plotly.subplots import make_subplots
 
@@ -443,10 +470,7 @@ def make_plot(df: pd.DataFrame, out_html, out_png, out_svg=None):
 
     fig.update_layout(
         title={
-            "text": "<b>monee (electric, NLP) vs pandapower AC-OPF across all SimBench grids</b><br>"
-            f"<span style='font-size:20px;color:{TEXT}'>40 grids "
-            "(no-switch, future scenario 2) via the MATPOWER exchange: "
-            "solve time, success rate, and objective agreement</span>",
+            "text": (title_text or _DEFAULT_TITLE).format(text=TEXT),
             "x": 0.5,
             "xanchor": "center",
             "y": 0.975,
@@ -538,7 +562,7 @@ def main(max_bus=None, timeout=240.0):
             f"on the {len(both)} both solved: "
             f"avg time pp {both.t_pandapower_s.mean():.2f}s "
             f"monee {both.t_casadi_s.mean():.2f}s,  "
-            f"max |Δobj| rel {both.obj_rel_err.max():.2e}"
+            f"max |d_obj| rel {both.obj_rel_err.max():.2e}"
         )
     print(f"Wrote {CSV_PATH}")
 

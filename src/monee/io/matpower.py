@@ -519,6 +519,9 @@ def build_matpower_opf(mpc, max_loading=1.0, limit_basis="mva"):
             lambda m: line_loading_limit(m, "to", max_loading, basis=limit_basis)
         )
         problem.constraints = constraints
+    # The buses already carry their per-bus VMIN/VMAX (fill_node_dict); free the
+    # slack voltage so the OPF optimises it within that band, like MATPOWER.
+    problem.optimize_bus_voltages()
     return network, problem
 
 
