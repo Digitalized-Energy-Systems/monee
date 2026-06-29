@@ -249,7 +249,6 @@ def run_suite(max_bus=None, timeout=240.0):
                 obj_rel_err=obj_rel,
             )
         )
-        r = rows[-1]
         print(
             f"  [{k:2d}/{len(builders)}] {name:34s} n_bus {n_bus:5d}  "
             f"{'opf ' if has_opf else 'disp'}  "
