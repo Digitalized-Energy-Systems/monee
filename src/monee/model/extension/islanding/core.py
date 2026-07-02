@@ -120,10 +120,13 @@ def _build_connectivity_equations(
 class IslandingMode(NetworkAspect, ABC):
     """Per-carrier islanding base. Subclasses set ``carrier_grid_type`` and
     ``var_prefix``, and may override :meth:`add_physical_constraints` to add
-    e.g. angle pinning / pressure bounds."""
+    e.g. angle pinning / pressure bounds. ``big_m_conn`` (set by subclass
+    constructors) overrides the connectivity-arc big-M; ``None`` uses the
+    network-sized default ``len(nodes) * 10``."""
 
     carrier_grid_type: type
     var_prefix: str
+    big_m_conn: float | None = None
 
     def is_grid_forming(self, child) -> bool:
         return isinstance(child.model, GridFormingMixin) and child.active
@@ -138,6 +141,9 @@ class IslandingMode(NetworkAspect, ABC):
         )
         if not e_vars:
             return []
+        big_m = (
+            self.big_m_conn if self.big_m_conn is not None else len(network.nodes) * 10
+        )
         eqs = _build_connectivity_equations(
             network,
             gf_nodes,
@@ -146,7 +152,7 @@ class IslandingMode(NetworkAspect, ABC):
             c_fwd_vars,
             c_rev_vars,
             c_src_vars,
-            len(network.nodes) * 10,
+            big_m,
         )
         eqs += self.add_physical_constraints(network, gf_nodes, regular_nodes, e_vars)
         return eqs

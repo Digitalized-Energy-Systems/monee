@@ -247,6 +247,14 @@ class CasModel:
     def Equation(self, eq):  # NOSONAR
         if isinstance(eq, _Rel):
             self.cons.append(eq)
+        elif eq is False:
+            # Mirrors the Pyomo/Gurobipy backends (and core.filter_bool_eqs):
+            # a False sentinel is a structurally infeasible constraint from an
+            # over-deactivated component - drop it, but surface the error.
+            _log.warning(
+                "Dropping always-false (structurally infeasible) equation; "
+                "this usually means a node/branch was over-deactivated."
+            )
 
     def Equations(self, eqs):  # NOSONAR
         for eq in eqs:
@@ -287,7 +295,8 @@ class CasADiCubicSplineImpl:
         self.m.Equation(CasSym(_sx(y)) == CasSym(interp(_sx(x))))
 
 
-# IPOPT options shared by the single-shot solver and the timeseries driver.
+# Default IPOPT options shared by the single-shot solver and the timeseries
+# driver; overridable per instance via ``solver_options`` (merged over these).
 _IPOPT_OPTS = {
     "print_time": 0,
     "ipopt.print_level": 0,
@@ -296,16 +305,35 @@ _IPOPT_OPTS = {
     "ipopt.max_iter": 3000,
 }
 
+# draw_debug/verbose overlay: show the IPOPT log instead of silencing it.
+_IPOPT_DEBUG_OPTS = {
+    "print_time": 1,
+    "ipopt.print_level": 5,
+    "ipopt.sb": "no",
+}
+
+
+def _merged_ipopt_opts(solver_options: dict | None, debug: bool = False) -> dict:
+    opts = dict(_IPOPT_OPTS)
+    if debug:
+        opts.update(_IPOPT_DEBUG_OPTS)
+    if solver_options:
+        opts.update(solver_options)
+    return opts
+
 
 class CasADiSolver(OperatorEquationAssembly, SolverInterface):
     """In-process CasADi/IPOPT backend. Reuses the shared
     :class:`~monee.solver.core.OperatorEquationAssembly` equation passes; only
     variable injection, the solve, and the write-back are CasADi-specific."""
 
-    def __init__(self):
+    def __init__(self, solver_options: dict | None = None):
+        """``solver_options`` are CasADi/IPOPT options merged over the module
+        defaults (e.g. ``{"ipopt.max_iter": 500, "ipopt.tol": 1e-8}``)."""
         _require_casadi()
         self._backend_name = "casadi"
         self._solver_name = "ipopt"
+        self.solver_options = dict(solver_options) if solver_options else {}
 
         self._simulation: bool = False
         self._reg: list = []
@@ -340,8 +368,11 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
                 scale = getattr(val, "scale", 1.0) or 1.0
                 phys = sx if math.isclose(scale, 1.0) else scale * sx
                 if not math.isclose(scale, 1.0):
-                    lo = lo if lo == -INF else lo / scale
-                    hi = hi if hi == INF else hi / scale
+                    lo = lo / scale
+                    hi = hi / scale
+                    # A negative scale flips the interval; reorder after division.
+                    if lo > hi:
+                        lo, hi = hi, lo
                     x0 = x0 / scale
                 self._reg.append(
                     {
@@ -355,6 +386,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
                         "name": val.name,
                         "vmin": val.min,
                         "vmax": val.max,
+                        "integer": val.integer,
                     }
                 )
                 setattr(model, key, CasSym(phys))
@@ -482,7 +514,10 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         # nlpsol construction and speeds per-iteration evaluation.
         f, g = ca.cse([f, g])
         solver = ca.nlpsol(
-            "monee_casadi", "ipopt", {"x": X, "f": f, "g": g}, _IPOPT_OPTS
+            "monee_casadi",
+            "ipopt",
+            {"x": X, "f": f, "g": g},
+            _merged_ipopt_opts(self.solver_options, debug=draw_debug),
         )
         self.last_build_s = time.perf_counter() - t0
 
@@ -506,6 +541,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
                 value=float(x_opt[i]) * r.get("scale", 1.0),
                 min=r["vmin"],
                 max=r["vmax"],
+                integer=r.get("integer", False),
                 name=r["name"],
             )
         # Evaluate any remaining CasSym attributes (inlined intermediates) in one pass.
@@ -533,7 +569,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             objective,
             success,
             violations,
-            mode_used="optimization",
+            mode_used="simulation" if simulation else "optimization",
             backend_used=self.backend_name,
             solver_used=self.solver_name,
         )
@@ -564,10 +600,12 @@ class CasADiTimeseries:
         formulation=None,
         simulation=True,
         steps=None,
+        solver_options: dict | None = None,
     ):
         _require_casadi()
         self._td = timeseries_data
-        cs = CasADiSolver()
+        self._simulation = simulation
+        cs = CasADiSolver(solver_options=solver_options)
         cs._simulation = simulation
         cs._reg = []
         m = CasModel()
@@ -631,7 +669,10 @@ class CasADiTimeseries:
         # Merge duplicate sub-terms before the autodiff build (see CasADiSolver.solve).
         f, g = ca.cse([f, g])
         self._solver = ca.nlpsol(
-            "monee_ts", "ipopt", {"x": X, "f": f, "g": g, "p": P}, _IPOPT_OPTS
+            "monee_ts",
+            "ipopt",
+            {"x": X, "f": f, "g": g, "p": P},
+            _merged_ipopt_opts(cs.solver_options),
         )
 
         # One compiled function (X, P) -> all inlined-intermediate values, for
@@ -742,6 +783,7 @@ class CasADiTimeseries:
                 value=float(xv[i]) * r.get("scale", 1.0),
                 min=r["vmin"],
                 max=r["vmax"],
+                integer=r.get("integer", False),
                 name=r["name"],
             )
         for model, key, _psx, series in self._params:
@@ -775,7 +817,7 @@ class CasADiTimeseries:
             self._last_objective,
             success,
             violations,
-            mode_used="optimization",
+            mode_used="simulation" if self._simulation else "optimization",
             backend_used="casadi",
             solver_used="ipopt",
         )
@@ -783,7 +825,9 @@ class CasADiTimeseries:
     def run(self):
         """Solve every timestep, reusing the compiled solver. Returns a list of
         per-step ``{type_name: DataFrame}`` dicts (like
-        :attr:`SolverResult.dataframes`)."""
+        :attr:`SolverResult.dataframes`). A non-converged step raises
+        :class:`CasADiSolveError` (same failure contract as
+        :meth:`step_result`)."""
         results = []
         solve_total = 0.0
         iters_total = 0
@@ -791,6 +835,15 @@ class CasADiTimeseries:
             solve_s, stats = self._solve_step(t)
             solve_total += solve_s
             iters_total += stats.get("iter_count") or 0
+            success = bool(stats.get("success", False))
+            self.last_step_success = success
+            if not success:
+                self.last_solve_total_s = solve_total
+                self.last_iters_total = iters_total
+                raise CasADiSolveError(
+                    f"CasADi/IPOPT timeseries step {t} did not converge "
+                    f"(return status: {stats.get('return_status')!r})."
+                )
             results.append(self._network.as_result_dataframe_dict())
         self.last_solve_total_s = solve_total
         self.last_iters_total = iters_total
@@ -949,6 +1002,7 @@ class CasADiMultiPeriodSolver:
                 value=float(x_opt[i]) * r.get("scale", 1.0),
                 min=r["vmin"],
                 max=r["vmax"],
+                integer=r.get("integer", False),
                 name=r["name"],
             )
         leftover = [

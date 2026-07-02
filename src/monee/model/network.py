@@ -57,10 +57,12 @@ class Network:
         self._constraints = []
         self._objectives = []
         self._extensions: list[NetworkAspect] = []
-        self.__blacklist = []
-        self.__collected_components = []
-        self.__force_blacklist = False
-        self.__collect_components = False
+        # Identity map id(obj) -> obj: O(1) membership without relying on
+        # component __eq__/__hash__ (components are compared by identity).
+        self.__blacklist = {}
+        # One frame per in-flight compound() call; nesting pushes/pops frames
+        # so an inner compound collects into its own frame.
+        self.__collection_stack = []
         self.__current_grid = active_grid
         # Declarative network-level formulation choice. No default is seeded
         # here: components without an explicit choice fall back to
@@ -115,7 +117,16 @@ class Network:
 
     @property
     def grids(self):
-        return list({node.grid for node in self.nodes})
+        # Coupling control nodes carry list-valued grids - flatten them.
+        seen = set()
+        grids = []
+        for node in self.nodes:
+            node_grids = node.grid if isinstance(node.grid, list) else [node.grid]
+            for grid in node_grids:
+                if grid not in seen:
+                    seen.add(grid)
+                    grids.append(grid)
+        return grids
 
     @property
     def graph(self):
@@ -246,6 +257,10 @@ class Network:
         ]
         for u, v, key in incident:
             self.remove_branch_between(u, v, key=key)
+        node = self.node_by_id(node_id)
+        for child_id in list(node.child_ids):
+            if self.has_child(child_id):
+                self.remove_child(child_id)
         self._network_internal.remove_node(node_id)
 
     def remove_branch(self, branch_id):
@@ -254,15 +269,25 @@ class Network:
             branch.from_node_id, branch.to_node_id, key=branch_id[2]
         )
 
+    def has_compound(self, compound_id):
+        return compound_id in self._compound_dict
+
     def remove_compound(self, compound_id):
         compound: Compound = self.compound_by_id(compound_id)
         del self._compound_dict[compound_id]
         for subcomponent in compound.subcomponents:
             if isinstance(subcomponent, Node):
-                self.remove_node(subcomponent.id)
-            if isinstance(subcomponent, Branch):
+                if self.has_node(subcomponent.id):
+                    self.remove_node(subcomponent.id)
+            elif isinstance(subcomponent, Branch):
                 if self.has_branch(subcomponent.id):
                     self.remove_branch(subcomponent.id)
+            elif isinstance(subcomponent, Child):
+                if self.has_child(subcomponent.id):
+                    self.remove_child(subcomponent.id)
+            elif isinstance(subcomponent, Compound):
+                if self.has_compound(subcomponent.id):
+                    self.remove_compound(subcomponent.id)
 
     def remove_branch_between(self, node_one, node_two, key=0):
         self._network_internal.remove_edge(node_one, node_two, key)
@@ -272,14 +297,20 @@ class Network:
     def move_branch(self, branch_id, new_from_id, new_to_id):
         branch: Branch = self.branch_by_id(branch_id)
         self.remove_branch_between(branch_id[0], branch_id[1], key=branch_id[2])
-        return self.branch(
+        new_branch_id = self.branch(
             branch.model,
             new_from_id,
             new_to_id,
+            formulation=branch.formulation,
             constraints=branch.constraints,
             grid=branch.grid,
             name=branch.name,
         )
+        new_branch = self.branch_by_id(new_branch_id)
+        new_branch.formulation_pinned = branch.formulation_pinned
+        new_branch.active = branch.active
+        new_branch.independent = branch.independent
+        return new_branch_id
 
     def child_by_id(self, child_id):
         return self._child_dict[child_id]
@@ -314,7 +345,7 @@ class Network:
         return [self.branch_by_id(branch_id) for branch_id in branch_ids]
 
     def is_blacklisted(self, obj):
-        return obj in self.__blacklist
+        return id(obj) in self.__blacklist
 
     def has_node(self, node_id):
         return node_id in self._network_internal.nodes
@@ -323,9 +354,13 @@ class Network:
         return branch_id in self._network_internal.edges
 
     def get_branch_between(self, node_id_one, node_id_two, bid=0):
-        return self._network_internal.get_edge_data(node_id_one, node_id_two)[bid][
-            "internal_branch"
-        ]
+        edge_data = self._network_internal.get_edge_data(node_id_one, node_id_two)
+        if edge_data is None or bid not in edge_data:
+            raise ValueError(
+                f"There is no branch between node '{node_id_one}' and "
+                f"'{node_id_two}' with key {bid}."
+            )
+        return edge_data[bid]["internal_branch"]
 
     def has_branch_between(self, node_id_one, node_id_two):
         return self._network_internal.has_edge(node_id_one, node_id_two)
@@ -392,15 +427,20 @@ class Network:
         return [branch for branch in self.branches if isinstance(branch.model, cls)]
 
     def __insert_to_blacklist_if_forced(self, obj):
-        if self.__force_blacklist:
-            self.__blacklist.append(obj)
+        if self.__collection_stack:
+            self.__blacklist[id(obj)] = obj
 
     def __insert_to_container_if_collect_toggled(self, obj):
-        if self.__collect_components:
-            self.__collected_components.append(obj)
+        if self.__collection_stack:
+            self.__collection_stack[-1].append(obj)
 
     def node_by_id_or_create(self, node_id, auto_node_creator, auto_grid_key):
         if not self.has_node(node_id):
+            if auto_node_creator is None:
+                raise ValueError(
+                    f"The node id '{node_id}' does not exist and no "
+                    "auto_node_creator was provided to create it on the fly."
+                )
             return self.node_by_id(
                 self.node(auto_node_creator(), grid=auto_grid_key, overwrite_id=node_id)
             )
@@ -420,6 +460,8 @@ class Network:
         next_child_id = (
             0 if len(self._child_dict) == 0 else max(self._child_dict.keys()) + 1
         )
+        if overwrite_id is not None and overwrite_id in self._child_dict:
+            raise ValueError(f"A child with the id '{overwrite_id}' already exists.")
         child_id = overwrite_id if overwrite_id is not None else next_child_id
         child = Child(
             child_id,
@@ -427,7 +469,7 @@ class Network:
             formulation=formulation,
             constraints=constraints,
             name=name,
-            independent=not self.__collect_components,
+            independent=not self.__collection_stack,
         )
         child.formulation_pinned = formulation is not None
         self.__insert_to_blacklist_if_forced(child)
@@ -496,6 +538,8 @@ class Network:
             0 if len(self._network_internal) == 0 else max(self._network_internal) + 1
         )
         if overwrite_id is not None:
+            if overwrite_id in self._network_internal.nodes:
+                raise ValueError(f"A node with the id '{overwrite_id}' already exists.")
             node_id = overwrite_id
 
         grid = self._or_default(grid)
@@ -519,7 +563,7 @@ class Network:
             grid=grid,
             name=name,
             position=position,
-            independent=not self.__collect_components,
+            independent=not self.__collection_stack,
         )
         node.formulation_pinned = formulation is not None
         if child_ids is not None:
@@ -571,7 +615,7 @@ class Network:
                 }
             ),
             name=name,
-            independent=not self.__collect_components,
+            independent=not self.__collection_stack,
             **kwargs,
         )
         branch.formulation_pinned = formulation is not None
@@ -597,12 +641,10 @@ class Network:
         overwrite_id=None,
         **connected_node_ids,
     ):
-        next_compound_id = (
-            0 if len(self._compound_dict) == 0 else max(self._compound_dict.keys()) + 1
-        )
-        compound_id = overwrite_id if overwrite_id is not None else next_compound_id
-        self.__force_blacklist = True
-        self.__collect_components = True
+        # One collection frame per compound() call: nested calls collect into
+        # their own frame and an exception in create() discards the frame, so
+        # neither nesting nor failures leak components into other compounds.
+        self.__collection_stack.append([])
         try:
             model.create(
                 self,
@@ -611,20 +653,29 @@ class Network:
                     for k, v in connected_node_ids.items()
                 },
             )
+            subcomponents = self.__collection_stack[-1]
         finally:
-            self.__collect_components = False
-            self.__force_blacklist = False
+            self.__collection_stack.pop()
+        # Allocate the id only after create() ran: a nested compound() call in
+        # create() registers itself first and must not collide with ours.
+        next_compound_id = (
+            0 if len(self._compound_dict) == 0 else max(self._compound_dict.keys()) + 1
+        )
+        compound_id = overwrite_id if overwrite_id is not None else next_compound_id
         compound = Compound(
             compound_id=compound_id,
             formulation=formulation,
             model=model,
             constraints=constraints,
             connected_to=connected_node_ids,
-            subcomponents=self.__collected_components,
+            subcomponents=subcomponents,
         )
         compound.formulation_pinned = formulation is not None
         self._compound_dict[compound_id] = compound
-        self.__collected_components = []
+        # A nested compound is a subcomponent of the enclosing one and, like
+        # any compound-internal component, excluded from native save.
+        self.__insert_to_blacklist_if_forced(compound)
+        self.__insert_to_container_if_collect_toggled(compound)
         return compound_id
 
     def constraint(self, constraint_equation):
@@ -635,7 +686,7 @@ class Network:
 
     @staticmethod
     def _model_dict_to_input(container):
-        model_dict = container.model.__dict__
+        model_dict = container.model.vars
         input_dict = {
             "active": container.active,
             "id": container.id,
@@ -761,13 +812,15 @@ class Network:
         new._objectives = list(self._objectives)
         new._extensions = copy.deepcopy(self._extensions, memo)
         # Compound-construction transients - deepcopy preserves consistency
-        # if the copy ever lands mid-build.
-        new._Network__blacklist = copy.deepcopy(self._Network__blacklist, memo)
-        new._Network__collected_components = copy.deepcopy(
-            self._Network__collected_components, memo
+        # if the copy ever lands mid-build. The blacklist is keyed by object
+        # identity, so rebuild the keys from the copied objects.
+        new._Network__blacklist = {
+            id(v): v
+            for v in copy.deepcopy(list(self._Network__blacklist.values()), memo)
+        }
+        new._Network__collection_stack = copy.deepcopy(
+            self._Network__collection_stack, memo
         )
-        new._Network__force_blacklist = self._Network__force_blacklist
-        new._Network__collect_components = self._Network__collect_components
         new._Network__current_grid = copy.deepcopy(self._Network__current_grid, memo)
         # Default formulations are module-level singletons - share by reference.
         new._Network__default_formulation = dict(self._Network__default_formulation)
@@ -791,25 +844,26 @@ class Network:
 
 
 def _clean_up_compound(network: Network, compound):
-    node_components = compound.component_of_type(Node)
+    """Return True when every subcomponent of *compound* survived a graph
+    transform; otherwise remove the compound (with its remaining parts) so no
+    half-alive compound lingers."""
     fully_intact = True
-    for component in node_components:
+    for component in compound.component_of_type(Node):
         if not network.has_node(component.id):
             fully_intact = False
-    child_components = compound.component_of_type(Child)
-    for component in child_components:
+    for component in compound.component_of_type(Child):
         if not network.has_child(component.id):
             fully_intact = False
-    branch_components = compound.component_of_type(Branch)
-    for component in branch_components:
+    for component in compound.component_of_type(Branch):
         if not network.has_branch(component.id):
             fully_intact = False
-    compound_components = compound.component_of_type(Compound)
-    for component in compound_components:
-        compound_alive = _clean_up_compound(network, component)
-        if not compound_alive:
+    for component in compound.component_of_type(Compound):
+        if not network.has_compound(component.id):
             fully_intact = False
-    network.remove_compound(compound.id)
+        elif not _clean_up_compound(network, component):
+            fully_intact = False
+    if not fully_intact and network.has_compound(compound.id):
+        network.remove_compound(compound.id)
     return fully_intact
 
 
@@ -925,6 +979,11 @@ def transform_network(network: Network, graph_transform):
         branch_id = (from_id, to_id, key)
         network.node_by_id(from_id).add_from_branch_id(branch_id)
         network.node_by_id(to_id).add_to_branch_id(branch_id)
+    # Clean up compounds first: removing a broken compound also removes its
+    # surviving internal nodes, whose children the orphan sweep below catches.
+    for compound in network.compounds:
+        if network.has_compound(compound.id):
+            _clean_up_compound(network, compound)
     for child in network.childs:
         referenced = False
         for node in network.nodes:
@@ -932,8 +991,6 @@ def transform_network(network: Network, graph_transform):
                 referenced = True
         if not referenced:
             network.remove_child(child.id)
-    for compound in network.compounds:
-        _clean_up_compound(network, compound)
     return network
 
 

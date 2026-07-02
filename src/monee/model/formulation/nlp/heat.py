@@ -6,12 +6,13 @@ import monee.model.phys.nonlinear.smooth as smoothmodel
 import monee.model.phys.nonlinear.wf as owfmodel
 from monee.model.core import Const, Var
 
+from ..common import ensure_velocity_report
 from ..core import BranchFormulation
 from ..milp.heat import FixedFlowHeatExchangerFormulation
 from .gas import FRICTION_MODELS, _ensure_friction_vars, _pin, _seed_mag
 
 
-def _ensure_smooth_flow_vars(model, friction_model, simulation=False):
+def _ensure_smooth_flow_vars(model, friction_model, simulation=False, grid=None):
     model.mass_flow_kgs = Var(0.0, name="mass_flow_kgs")
     mag0 = _seed_mag(model) if simulation else 0.1
     model.mass_flow_mag_kgs = Var(mag0, min=0, name="mass_flow_mag_kgs")
@@ -20,8 +21,7 @@ def _ensure_smooth_flow_vars(model, friction_model, simulation=False):
     model.direction = Const(1)
     model.mass_flow_pos_kgs_squared = Const(0.0)
     model.mass_flow_neg_kgs_squared = Const(0.0)
-    if simulation:
-        _pin(model, "velocity_mps")
+    ensure_velocity_report(model, grid)
     _ensure_friction_vars(model, friction_model)
 
 
@@ -89,6 +89,7 @@ def _flow_and_pressure_eqs(
             branch.length_m,
             branch.diameter_m,
             grid.fluid_density_kg_per_m3,
+            on_off=branch.on_off,
         )
     )
     eqs += friction_eqs
@@ -133,7 +134,7 @@ class SmoothDarcyWeisbachBranchFormulation(BranchFormulation):
         self.smoothing_eps = smoothing_eps
 
     def ensure_var(self, model, simulation=False, grid=None):
-        _ensure_smooth_flow_vars(model, self.friction_model, simulation)
+        _ensure_smooth_flow_vars(model, self.friction_model, simulation, grid)
         model.alpha = Var(0.01, min=0, max=1, name="alpha")
         if simulation:
             _pin(model, "q_mw", "t_inc_pu")
@@ -171,7 +172,7 @@ class SmoothPassiveHeatExchangerFormulation(BranchFormulation):
         self.smoothing_eps = smoothing_eps
 
     def ensure_var(self, model, simulation=False, grid=None):
-        _ensure_smooth_flow_vars(model, self.friction_model, simulation)
+        _ensure_smooth_flow_vars(model, self.friction_model, simulation, grid)
         model.t_inc_pu = Var(1, min=-2, max=2, name="temperature_increase_pu")
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
@@ -181,10 +182,7 @@ class SmoothPassiveHeatExchangerFormulation(BranchFormulation):
         eqs += [
             mag * branch.t_inc_pu  # NOSONAR
             == -branch.q_mw * 1e6 / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * grid.t_ref_k),
-            branch.t_out_pu
-            == branch.temperature_ext_k / grid.t_ref_k
-            + (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref_k)
-            + branch.t_inc_pu,
+            branch.t_out_pu == branch.t_in_pu + branch.t_inc_pu,
         ]
         eqs += _temperature_transport_eqs(branch, from_node_model, to_node_model)
         return eqs

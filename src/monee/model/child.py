@@ -268,7 +268,16 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
 
 @model
 class ConsumeHydrGrid(NoVarChildModel):
-    """Hydraulic demand point: fixed pressure setpoint plus a free mass_flow_kgs Var."""
+    """Hydraulic demand point with a free ``mass_flow_kgs`` Var absorbing the
+    island's imbalance.
+
+    Unlike :class:`ExtHydrGrid` it pins nothing: the node's pressure and
+    temperature stay free (the solver pins one gauge per island without a
+    grid-forming source, see ``pin_floating_hydraulic_gauges``; pinning here
+    too would over-determine such islands). ``pressure_pu`` / ``t_k`` are
+    stored as descriptive setpoints only. ``overwrite`` bounds the free mass
+    flow to the grid's ``max_mass_flow_kgs`` where no explicit bound is set.
+    """
 
     def __init__(self, mass_flow_kgs=0.1, pressure_pu=1, t_k=293, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -278,6 +287,15 @@ class ConsumeHydrGrid(NoVarChildModel):
         )
         self.pressure_pu = pressure_pu
         self.t_k = t_k
+
+    def overwrite(self, node_model, grid):
+        max_flow = getattr(grid, "max_mass_flow_kgs", None)
+        if max_flow is None or not isinstance(self.mass_flow_kgs, Var):
+            return
+        if self.mass_flow_kgs.min is None:
+            self.mass_flow_kgs.min = -max_flow
+        if self.mass_flow_kgs.max is None:
+            self.mass_flow_kgs.max = max_flow
 
 
 @model

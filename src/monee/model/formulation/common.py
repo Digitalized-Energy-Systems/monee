@@ -8,8 +8,33 @@ once here and reused by ``nlp``, ``milp`` and ``miqcqp``.
 """
 
 from monee.model.core import Const, Intermediate, IntermediateEq, PostProcess, Var
+from monee.model.phys.core.hydraulics import calc_pipe_area
+from monee.model.phys.nonlinear.gf import reference_gas_density
 
 from .core import NodeFormulation
+
+
+def velocity_post_process(model, fluid_density_kg_per_m3):
+    r"""Deterministic velocity report :math:`v = \dot m / (\rho A)` for a pipe-like
+    branch, as a :class:`PostProcess` so it adds no solver variable/equation.
+    ``fluid_density_kg_per_m3`` is the (reference) density the velocity caps use."""
+    scale = fluid_density_kg_per_m3 * calc_pipe_area(model.diameter_m)
+    return PostProcess(
+        lambda v, s=scale: (v.mass_flow_pos_kgs - v.mass_flow_neg_kgs) / s
+    )
+
+
+def ensure_velocity_report(model, grid):
+    """Attach the ``velocity_mps`` report using the grid's density: the
+    reference gas density for gas grids, ``fluid_density_kg_per_m3`` for
+    water/heat grids (the density behind the velocity-based flow caps).
+    No-op when the grid exposes neither."""
+    if grid is None:
+        return
+    if hasattr(grid, "molar_mass"):
+        model.velocity_mps = velocity_post_process(model, reference_gas_density(grid))
+    elif hasattr(grid, "fluid_density_kg_per_m3"):
+        model.velocity_mps = velocity_post_process(model, grid.fluid_density_kg_per_m3)
 
 
 class GasNodeFormulation(NodeFormulation):

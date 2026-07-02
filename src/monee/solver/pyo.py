@@ -6,6 +6,7 @@ import tempfile
 import types
 
 import pyomo.environ as pyo
+from pyomo.core.expr.numvalue import NumericValue
 from pyomo.opt import SolverStatus, TerminationCondition
 
 from monee.model import (
@@ -27,6 +28,7 @@ from .core import (
     as_iter,
     filter_bool_eqs,
     filter_intermediate_eqs,
+    finalize_failed_solution,
     finalize_solution,
     ignore_branch,
     ignore_child,
@@ -45,7 +47,7 @@ DEFAULT_SOLVER_OPTIONS = {}
 # Gurobi defaults tuned for McCormick-DHS + MISOCP electrical:
 #   ScaleFlag=2 - aggressive geometric scaling for the SOC/bilinear blocks;
 #   MIPFocus=2  - close the gap (the LP root bound is already at the optimum);
-#   MIPGap=1e-3 - ~kW precision at MW scale (default 1e-4 wastes B&B).
+#   MIPGap=1e-4 - Gurobi's default gap, pinned explicitly (~W precision at MW scale).
 # NumericFocus stays at 0: was net-negative once Reynolds/pressure_pa scaling fixed.
 PER_SOLVER_OPTIONS = {
     "gurobi": {
@@ -63,6 +65,21 @@ PER_SOLVER_OPTIONS = {
         "limits/time": 300,
     },
 }
+
+
+def _effective_solver_options(solver_name: str) -> dict:
+    """Per-solver tuning for *solver_name*, inheriting the base solver's entry
+    for interface variants (``appsi_gurobi``, ``gurobi_direct``,
+    ``gurobi_persistent`` ... inherit ``gurobi``). Exact-name entries win."""
+    base = solver_name
+    if base.startswith("appsi_"):
+        base = base[len("appsi_") :]
+    for suffix in ("_direct", "_persistent"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    options = dict(PER_SOLVER_OPTIONS.get(base, {}))
+    options.update(PER_SOLVER_OPTIONS.get(solver_name, {}))
+    return options
 
 
 def _classic_scip_available() -> bool:
@@ -377,11 +394,10 @@ class PyomoSolver(SolverInterface):
         """
         for intermediate_eq in [eq for eq in equations if type(eq) is IntermediateEq]:
             attr_val = getattr(model_obj, intermediate_eq.attr)
-            eq = (
-                intermediate_eq.eq()
-                if isinstance(intermediate_eq.eq, types.FunctionType)
-                else intermediate_eq.eq
-            )
+            # callable() semantics as in core._process_intermediate_eqs, except
+            # Pyomo expressions/Vars, which are callable (calling evaluates them).
+            raw = intermediate_eq.eq
+            eq = raw() if callable(raw) and not isinstance(raw, NumericValue) else raw
 
             if type(attr_val) is Intermediate:
                 e = pyo.Expression(expr=eq)
@@ -523,7 +539,7 @@ class PyomoSolver(SolverInterface):
         solver = self._make_solver(solver_name)
         for k, v in DEFAULT_SOLVER_OPTIONS.items():
             solver.options[k] = v
-        for k, v in PER_SOLVER_OPTIONS.get(solver_name, {}).items():
+        for k, v in _effective_solver_options(solver_name).items():
             solver.options[k] = v
 
         solve_kwargs = {"tee": debug}
@@ -550,9 +566,14 @@ class PyomoSolver(SolverInterface):
         withdraw_vars(
             PyomoSolver.withdraw_pyomo_vars_attr, nodes, branches, compounds, network
         )
-        violations = finalize_solution(
-            nodes, branches, compounds, network, input_network
-        )
+        if success:
+            violations = finalize_solution(
+                nodes, branches, compounds, network, input_network
+            )
+        else:
+            violations = finalize_failed_solution(
+                nodes, branches, compounds, network, input_network
+            )
 
         # NaN fallback: pyo.value raises on unset Vars (e.g. McCormick aux on a
         # freshly-activated branch); SolverResult.success is the real outcome.
@@ -695,7 +716,10 @@ class PyomoSolver(SolverInterface):
         cos_impl = pyo.cos
         abs_impl = abs
         sqrt_impl = pyo.sqrt
-        log_impl = pyo.log
+        # Swamee-Jain and friends expect base-10 log (matches the GEKKO/CasADi/
+        # Gurobi backends); pyo.log is the natural log.
+        log_impl = pyo.log10
+        exp_impl = pyo.exp
 
         for node in nodes:
             if ignore_node(node, network, ignored_nodes):
@@ -731,6 +755,7 @@ class PyomoSolver(SolverInterface):
                     abs_impl=abs_impl,
                     sqrt_impl=sqrt_impl,
                     log_impl=log_impl,
+                    exp_impl=exp_impl,
                 )
             )
 
@@ -766,7 +791,9 @@ class PyomoSolver(SolverInterface):
         cos_impl = pyo.cos
         abs_impl = abs
         sqrt_impl = pyo.sqrt
-        log_impl = pyo.log
+        # Base-10 log, matching the other backends (Swamee-Jain friction).
+        log_impl = pyo.log10
+        exp_impl = pyo.exp
         pwl_impl = PyomoPWLImpl(pm, pw_repn="SOS2")
 
         def if_impl(*args, **kwargs):
@@ -802,6 +829,7 @@ class PyomoSolver(SolverInterface):
                     max_impl=max_impl,
                     sign_impl=sign_impl,
                     log_impl=log_impl,
+                    exp_impl=exp_impl,
                     sqrt_impl=sqrt_impl,
                     pwl_impl=pwl_impl,
                     simulation=self._simulation,

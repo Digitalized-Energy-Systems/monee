@@ -4,16 +4,15 @@ Multi-energy benchmark grid for grid restoration studies.
 Topology
 --------
 
-**Electricity** (~27 buses):
+**Electricity** (21 buses):
     Two 110 kV feeders (ext-grids) supply a meshed 20 kV distribution
-    backbone via transformers.  Three open chains (industrial,
+    backbone via four transformers.  Three chains (industrial,
     commercial, residential) carry loads and distributed generation.
-    A battery provides storage flexibility.
 
-**Gas** (~30 junctions):
+**Gas** (28 junctions):
     Two high-pressure feeders supply a medium-pressure distribution
-    network via compressors.  Three distribution chains serve gas sinks.
-    A gas storage cavern adds flexibility.
+    network via three compressors.  Three distribution chains plus two
+    spurs serve gas sinks.
 
 **Thermal / District Heating** (121 junctions -- 120 supply + 1 return):
     One heat plant feeds a 120-junction supply-pipe chain.  A single
@@ -21,14 +20,12 @@ Topology
     chain).  Heat exchangers bridge supply junctions to the return
     junction at consumer nodes.  Coupling points feed the supply chain.
 
-**Coupling points** (7 total -- all variants):
-    - 2 x CHP  (gas -> electricity + heat)
-    - 1 x P2H  (electricity -> heat)
-    - 1 x G2H  (gas -> heat)
-    - 1 x P2G  (electricity -> gas)
-    - 2 x G2P  (gas -> electricity)
+**Coupling points** (4 total):
+    - 2 x CHP-HG (gas -> electricity + heat)
+    - 1 x P2G    (electricity -> gas)
+    - 1 x G2P    (gas -> electricity)
 
-**Extensions**:
+**Extensions** (opt-in via flags):
     - ``GasLinepack``              -- inherent gas storage in pipes
     - ``LumpedThermalCapacitance``  -- thermal inertia at junctions (LTC)
 
@@ -37,14 +34,9 @@ sequence planning, and resilience studies.
 
 .. note::
 
-   This benchmark is designed for the ``PyomoSolver`` with **ipopt**.
-   Recommended solver options::
-
-       from monee.solver.pyo import DEFAULT_SOLVER_OPTIONS
-       DEFAULT_SOLVER_OPTIONS["max_iter"] = 5000
-       DEFAULT_SOLVER_OPTIONS["tol"] = 1e-4
-       DEFAULT_SOLVER_OPTIONS["acceptable_tol"] = 1e-3
-       DEFAULT_SOLVER_OPTIONS["acceptable_iter"] = 10
+   With the default ``misocp=True`` the benchmark is designed for the
+   ``PyomoSolver`` with a MIQCQP-capable solver (SCIP or Gurobi) and
+   solves with default solver options.
 """
 
 from __future__ import annotations
@@ -52,7 +44,6 @@ from __future__ import annotations
 import monee.express as mx
 import monee.model as mm
 from monee.model import GasLinepack, LumpedThermalCapacitance
-from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 
 # -- electrical line catalogue --
 _HV_LINE = {"length_m": 5000, "r_ohm_per_m": 3e-5, "x_ohm_per_m": 4e-5, "parallel": 1}
@@ -70,19 +61,7 @@ _MP_PIPE = {"diameter_m": 0.3, "length_m": 100}
 _MP_PIPE_SHORT = {"diameter_m": 0.3, "length_m": 80}
 
 # -- water pipe catalogue --
-_DH_PIPE = {"diameter_m": 0.15, "length_m": 100}
-_DH_PIPE_LONG = {"diameter_m": 0.15, "length_m": 150}
 _DH_TRUNK = {"diameter_m": 0.25, "length_m": 100}
-
-# -- heat sizing helpers --
-_CP = 4186.0  # water specific heat, J/(kg K)
-_DT = 25.0  # supply-return temperature drop, K
-_HHV_MJ = DEFAULT_GAS_HHV_MJ_PER_KG  # gas higher heating value, MJ/kg (lgas)
-
-
-def _mf(heat_mw):
-    """Convert heat load (MW) to mass flow (kg/s) for a 25 K drop."""
-    return heat_mw * 1e6 / (_CP * _DT)
 
 
 def create_restoration_benchmark(  # NOSONAR
@@ -121,11 +100,11 @@ def create_restoration_benchmark(  # NOSONAR
     for i in range(4):
         mv_sub.append(mx.create_bus(net, base_kv=20, name=f"MV_sub_{i}"))
 
-    # Transformers: HV -> MV
-    mx.create_trafo(net, hv1, mv_sub[0], sn_trafo_mva=63, name="Trafo_HV1_S0")
-    mx.create_trafo(net, hv1, mv_sub[1], sn_trafo_mva=63, name="Trafo_HV1_S1")
-    mx.create_trafo(net, hv2, mv_sub[2], sn_trafo_mva=63, name="Trafo_HV2_S2")
-    mx.create_trafo(net, hv2, mv_sub[3], sn_trafo_mva=63, name="Trafo_HV2_S3")
+    # Transformers HV -> MV (create_trafo: from-node = LV side, to-node = HV side)
+    mx.create_trafo(net, mv_sub[0], hv1, sn_trafo_mva=63, name="Trafo_HV1_S0")
+    mx.create_trafo(net, mv_sub[1], hv1, sn_trafo_mva=63, name="Trafo_HV1_S1")
+    mx.create_trafo(net, mv_sub[2], hv2, sn_trafo_mva=63, name="Trafo_HV2_S2")
+    mx.create_trafo(net, mv_sub[3], hv2, sn_trafo_mva=63, name="Trafo_HV2_S3")
 
     # Chain A: industrial (5 buses, mv_sub[0] -> mv_sub[1])
     ring_a = []

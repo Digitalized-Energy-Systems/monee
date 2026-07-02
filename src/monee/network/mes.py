@@ -108,7 +108,7 @@ def create_heat_net_for_power(
     design_flow_headroom=1.5,
     seed=None,
 ):
-    rng = random.Random(seed) if seed is not None else random
+    rng = random.Random(seed)
     heat_grid = mm.create_water_grid("water", t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA)
     target_net.set_default_grid("water", heat_grid)
 
@@ -136,12 +136,14 @@ def create_heat_net_for_power(
             # Passive: an in-line device on the distribution run - the tree
             # flow is already fixed by the downstream sinks, so a design-flow
             # prescribing HeatExchanger would over-determine the hydraulics.
+            # ~80 % of deployed heat components are loads (q_mw > 0), 20 %
+            # generators - matching the heat_deployment_rate intent.
             mx.create_passive_heat_exchanger(
                 target_net,
                 from_node_id=bus_index_to_junction_index[node.id],
                 to_node_id=bus_index_to_end_junction_index[node.id],
                 q_mw=(-1 if rng.random() > 0.8 else 1)
-                * -0.1
+                * 0.1
                 * rng.random()
                 * power_scale,
                 diameter_m=default_diameter_m,
@@ -233,7 +235,7 @@ def create_gas_net_for_power(
     seed=None,
     gas_type="lgas",
 ):
-    rng = random.Random(seed) if seed is not None else random
+    rng = random.Random(seed)
     gas_grid = mm.create_gas_grid(
         "gas", type=gas_type, t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA
     )
@@ -269,7 +271,7 @@ def create_gas_net_for_power(
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
-                mass_flow_kgs=round(0.1 + 0.5 * rng.random() * scaling, 2),
+                mass_flow_kgs=round((0.1 + 0.5 * rng.random()) * scaling, 2),
             )
     mx.create_source(
         target_net,
@@ -286,7 +288,7 @@ def create_gas_net_for_power(
 
 
 def create_monee_benchmark_net():
-    random.seed(9002)
+    seed = 9002
     pn = mm.Network(el_model=mm.PowerGrid(name="power", sn_mva=100))
 
     node_0 = pn.node(
@@ -297,7 +299,7 @@ def create_monee_benchmark_net():
     node_1 = pn.node(
         mm.Bus(base_kv=120),
         mm.EL,
-        child_ids=[pn.child(mm.ExtPowerGrid(p_mw=10, q_mvar=0, vm_pu=1, va_radians=0))],
+        child_ids=[pn.child(mm.ExtPowerGrid(p_mw=10, q_mvar=0, vm_pu=1, va_degree=0))],
     )
     node_2 = pn.node(
         mm.Bus(base_kv=120),
@@ -324,7 +326,8 @@ def create_monee_benchmark_net():
         mm.EL,
         child_ids=[pn.child(mm.GridFormingGenerator(p_mw_max=50, q_mvar_max=50))],
     )
-    max_i_ka = 319
+    # 0.319 kA \approx pandapower's NA2XS2Y 1x240 cable rating.
+    max_i_ka = 0.319
     pn.branch(
         mm.PowerLine(
             length_m=100,
@@ -395,11 +398,11 @@ def create_monee_benchmark_net():
     new_mes = pn.copy()
 
     # gas
-    bus_to_gas_junc = create_gas_net_for_power(pn, new_mes, 1, scaling=1)
+    bus_to_gas_junc = create_gas_net_for_power(pn, new_mes, 1, scaling=1, seed=seed)
 
     # # # heat
     bus_index_to_junction_index, _ = create_heat_net_for_power(
-        pn, new_mes, 1, mass_flow_rate_kgs=1, default_diameter_m=0.16
+        pn, new_mes, 1, mass_flow_rate_kgs=1, default_diameter_m=0.16, seed=seed + 1
     )
     new_water_junc = mx.create_water_junction(new_mes)
     mx.create_sink(
@@ -441,6 +444,10 @@ def create_monee_benchmark_net():
         mass_flow_setpoint_kgs=1,
         regulation=0,
     )
+    # CHP compounds discharge the heated water at heat_return_node_id. Here the
+    # sink-only side chain (new_water_junc..3) has no water source of its own,
+    # so it must sit on the discharge side: the CHP draws from the main heat
+    # net and feeds the chain's sinks/exchangers.
     mx.create_chp(
         new_mes,
         power_node_id=node_1,
@@ -503,7 +510,7 @@ def create_mv_multi_cigre():
 
     from monee.io.from_pandapower import from_pandapower_net
 
-    random.seed(9004)
+    seed = 9004
     pnet = pn.create_cigre_network_mv(with_der="pv_wind")
 
     monee_net = from_pandapower_net(pnet)
@@ -519,6 +526,7 @@ def create_mv_multi_cigre():
         # This reference grid was tuned for the pre-2026 methane-like gas; keep
         # it on that gas so the bench net stays feasible under realistic lgas.
         gas_type="methane",
+        seed=seed,
     )
     create_heat_net_for_power(
         monee_net,
@@ -529,6 +537,7 @@ def create_mv_multi_cigre():
         power_scale=100,
         length_scale=0.001,
         default_length=100000,
+        seed=seed + 1,
     )
 
     mx.create_power_generator(new_mes, 5, 2, 1)
@@ -564,12 +573,32 @@ def create_mv_multi_cigre():
             parallel=1,
             backup=True,
             on_off=0,
-            max_i_ka=319,
+            max_i_ka=0.319,
         ),
         5,
         2,
     )
+    _bound_el_branch_powers(new_mes, s_bound_mva=100.0)
     return new_mes
+
+
+def _bound_el_branch_powers(net: mm.Network, s_bound_mva: float):
+    """Give every unbounded electrical branch power Var finite, system-scale
+    bounds. The branch p/q Vars default to (-inf, inf); SCIP then runs spatial
+    branch-and-bound on unbounded variables ("cannot guarantee finite
+    termination") and may never find an incumbent on the nonconvex AC/coupling
+    core - the CIGRE bench net went from a 300 s timeout without any feasible
+    solution to solving in seconds once these domains are finite. The bound just
+    needs to dominate any physical flow (~2x the total system demand)."""
+    for branch in net.branches:
+        model = branch.model
+        for attr in ("p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar"):
+            var = getattr(model, attr, None)
+            if var is not None and hasattr(var, "min"):
+                if var.min is None:
+                    var.min = -s_bound_mva
+                if var.max is None:
+                    var.max = s_bound_mva
 
 
 def _add_gas_mesh_pipes(
@@ -589,7 +618,7 @@ def _add_gas_mesh_pipes(
     # The point is to give every junction more than one path to the
     # slack so single pipe failures don't isolate large subtrees - the
     # main reason additive CPs underperform on a tree layout.
-    rng = random.Random(mesh_seed) if mesh_seed is not None else random
+    rng = random.Random(mesh_seed)
     junctions = list(bus_index_to_junction_index.values())
     existing_pairs = set()
     for branch in target_net.branches:
@@ -1238,15 +1267,11 @@ def _drain_heat_gen_capacity(net: mm.Network, total_mw: float) -> float:
     if remaining <= 1e-12:
         return remaining
 
+    # HX generators carry q_mw_set < 0 (loads are > 0); drain their magnitude.
     return _drain_proportionally(
-        [
-            b
-            for b in net.branches
-            if isinstance(b.model, mm.HeatExchanger)
-            and float(getattr(b.model, "q_mw_set", 0.0) or 0.0) > 0
-        ],
-        get_mag=lambda b: float(getattr(b.model, "q_mw_set", 0.0) or 0.0),
-        set_mag=lambda b, v: setattr(b.model, "q_mw_set", v),
+        [b for b in net.branches if mm.hx_is_generating(b.model)],
+        get_mag=lambda b: abs(float(getattr(b.model, "q_mw_set", 0.0) or 0.0)),
+        set_mag=lambda b, v: setattr(b.model, "q_mw_set", -v),
         remove=lambda b: net.remove_branch_between(
             b.from_node_id, b.to_node_id, b.id[2]
         ),
@@ -1306,7 +1331,7 @@ def create_coupling_points_for_mes(  # NOSONAR
         if share < 0:
             raise ValueError(f"{share_name} must be >= 0")
 
-    rng = random.Random(seed) if seed is not None else random
+    rng = random.Random(seed)
 
     coupling_set = {c.lower() for c in couplings}
     valid = {"chp", "p2g", "p2h"}
@@ -1381,11 +1406,15 @@ def create_coupling_points_for_mes(  # NOSONAR
                     regulation=regulation,
                 )
             else:
+                # Compounds discharge the heated water at heat_return_node_id
+                # (see res.py), so the supply junction goes there and the
+                # shared return junction feeds the intake - the same side the
+                # HG variants inject at (heat_node_id = supply).
                 uid = mx.create_chp(
                     mes_net,
                     power_node_id=power_node_id,
-                    heat_node_id=heat_supply_junc,
-                    heat_return_node_id=heat_return_junc,
+                    heat_node_id=heat_return_junc,
+                    heat_return_node_id=heat_supply_junc,
                     gas_node_id=gas_junc,
                     mass_flow_setpoint_kgs=mass_flow_kgs,
                     diameter_m=chp_diameter_m,
@@ -1420,14 +1449,17 @@ def create_coupling_points_for_mes(  # NOSONAR
                     heat_node_id=heat_supply_junc,
                     heat_energy_mw=heat_mw,
                     efficiency=p2h_efficiency,
+                    regulation=regulation,
                 )
                 created.append({"type": "p2h", "node": power_node_id, "id": bid})
             else:
+                # Same orientation as the CHP compound above: heated water is
+                # discharged at heat_return_node_id = supply junction.
                 uid = mx.create_p2h(
                     mes_net,
                     power_node_id=power_node_id,
-                    heat_node_id=heat_supply_junc,
-                    heat_return_node_id=heat_return_junc,
+                    heat_node_id=heat_return_junc,
+                    heat_return_node_id=heat_supply_junc,
                     heat_energy_mw=heat_mw,
                     diameter_m=p2h_diameter_m,
                     efficiency=p2h_efficiency,

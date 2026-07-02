@@ -982,6 +982,20 @@ def finalize_solution(
     return compute_bound_violations(nodes, branches, compounds, network)
 
 
+def finalize_failed_solution(
+    nodes, branches, compounds, network: Network, input_network: Network
+) -> dict[str, float]:
+    """Post-solve trio for a solve without a usable solution: the withdrawn
+    values are meaningless (zeros / scrubbed initialisations), so copy the
+    pre-solve values back from the untouched *input_network* instead of
+    persisting them (which would clobber warm starts and carried storage
+    state), then evaluate post-processes and return the bound-violation
+    report."""
+    persist_solution(input_network, network)
+    apply_post_process_all(nodes, branches, compounds, network)
+    return compute_bound_violations(nodes, branches, compounds, network)
+
+
 def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
     """Call ``inject_fn(model, component, category)`` on each active component;
     ignored components get :func:`inject_nans` instead.
@@ -1408,9 +1422,11 @@ class StepState(InterStepState):
     ``max_steps`` caps how many solved networks are retained (``None`` =
     unlimited): each network is a full copy, so an open-ended run (e.g. a
     :class:`~monee.simulation.Stepper` paced by a co-simulation framework)
-    would otherwise grow memory without bound. Absolute ``step`` indices keep
-    their meaning when old networks are dropped; reading a dropped step falls
-    back to ``initial_state``."""
+    would otherwise grow memory without bound. Each push may carry an explicit
+    step number (so drivers that skip failed steps keep absolute indices
+    aligned with their own step numbering); absolute ``step`` indices keep
+    their meaning when old networks are dropped. Reading a dropped or
+    never-solved step falls back to ``initial_state``."""
 
     def __init__(
         self, initial_state: dict | None = None, max_steps: int | None = None
@@ -1418,25 +1434,50 @@ class StepState(InterStepState):
         if max_steps is not None and max_steps < 1:
             raise ValueError(f"max_steps must be >= 1 or None, got {max_steps}")
         self._networks: list = []
+        self._step_numbers: list[int] = []
+        # step number -> absolute position (self._dropped + list index) of its
+        # first occurrence, for O(1) absolute lookups.
+        self._pos_by_step: dict[int, int] = {}
         self._dropped: int = 0
         self._max_steps = max_steps
         self.dt_h: float = 1.0
         self._initial_state: dict = dict(initial_state) if initial_state else {}
 
-    def push(self, net) -> None:
+    def push(self, net, step: int | None = None) -> None:
+        """Append a solved network; ``step`` records the caller's step number
+        for absolute lookups (defaults to the push count)."""
+        pos = self._dropped + len(self._networks)
+        if step is None:
+            step = pos
         self._networks.append(net)
+        self._step_numbers.append(step)
+        self._pos_by_step.setdefault(step, pos)
         if self._max_steps is not None and len(self._networks) > self._max_steps:
+            dropped_step = self._step_numbers[0]
             del self._networks[0]
+            del self._step_numbers[0]
             self._dropped += 1
+            if self._pos_by_step.get(dropped_step) == self._dropped - 1:
+                del self._pos_by_step[dropped_step]
+                # Re-point a duplicate step number to its next occurrence so
+                # first-occurrence lookup semantics survive the drop.
+                try:
+                    i = self._step_numbers.index(dropped_step)
+                except ValueError:
+                    pass
+                else:
+                    self._pos_by_step[dropped_step] = self._dropped + i
 
     def _network_for_step(self, step: int):
         if not self._networks:
             return None
         if step < 0:
             return self._networks[step] if -step <= len(self._networks) else None
-        # Absolute index: shift by dropped prefix; dropped → fallback.
-        idx = step - self._dropped
-        return self._networks[idx] if 0 <= idx < len(self._networks) else None
+        # Absolute lookup by recorded step number; dropped/missing → fallback.
+        pos = self._pos_by_step.get(step)
+        if pos is None:
+            return None
+        return self._networks[pos - self._dropped]
 
     def get(self, component_id, attr: str, step: int = -1):
         net = self._network_for_step(step)

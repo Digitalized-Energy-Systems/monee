@@ -204,6 +204,32 @@ def test_run_timeseries_falls_back_when_hooks_present(monkeypatch):
     assert seen == [0, 1, 2]
 
 
+def test_run_timeseries_casadi_fast_path_forwards_solver_options(monkeypatch):
+    # The reuse driver must honour the resolved solver's per-instance IPOPT
+    # options: a 1-iteration cap cannot converge, so the first step raises.
+    import monee.simulation.timeseries as tsmod
+    from monee.solver.casadi import CasADiSolveError
+
+    calls = {"reuse": 0}
+    orig = tsmod._run_casadi_reuse
+
+    def _spy(*a, **k):
+        calls["reuse"] += 1
+        return orig(*a, **k)
+
+    monkeypatch.setattr(tsmod, "_run_casadi_reuse", _spy)
+
+    net = _two_line_net()
+    with pytest.raises(CasADiSolveError):
+        monee.run_timeseries(
+            net,
+            _load_profile_td(net, 3),
+            solver=CasADiSolver(solver_options={"ipopt.max_iter": 1}),
+            simulation=True,
+        )
+    assert calls["reuse"] == 1
+
+
 # --------------------------------------------------------------------------- #
 # Temporal coupling (storage) and multi-period
 # --------------------------------------------------------------------------- #

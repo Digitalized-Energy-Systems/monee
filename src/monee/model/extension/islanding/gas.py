@@ -44,7 +44,7 @@ class GasIslandingMode(IslandingMode):
     carrier_grid_type = GasGrid
     var_prefix = "gas"
 
-    def __init__(self, big_m_conn: int = 200) -> None:
+    def __init__(self, big_m_conn: float | None = None) -> None:
         self.big_m_conn = big_m_conn
 
     def prepare(self, network: Network) -> None:

@@ -57,10 +57,14 @@ class ConstraintResidual:
 def collect_constraint_residuals(  # NOSONAR
     pm: pyo.ConcreteModel, tol: float = 1e-4
 ) -> list[ConstraintResidual]:
-    """List constraints whose residual exceeds *tol*, sorted by magnitude."""
+    """List constraints whose residual exceeds *tol*, sorted by magnitude.
+
+    Scans every active constraint on the model - both the anonymous
+    ``pm.cons`` ConstraintList and the named physics constraints
+    ``PyomoSolver._add_equation`` attaches as model attributes."""
     violated = []
-    for idx in pm.cons:
-        con = pm.cons[idx]
+    for con in pm.component_data_objects(pyo.Constraint, active=True):
+        idx = con.name
         if con.body is None:
             continue
         try:
@@ -274,7 +278,7 @@ class InfeasibilityReport:
                 elif r.upper is not None:
                     bound_str = f"<= {r.upper}"
                 lines.append(
-                    f"  cons[{r.index}]: body={r.body_value:.6g} {bound_str} "
+                    f"  {r.index}: body={r.body_value:.6g} {bound_str} "
                     f"(residual={r.residual:.4g})"
                 )
             if len(self.constraint_residuals) > max_items:

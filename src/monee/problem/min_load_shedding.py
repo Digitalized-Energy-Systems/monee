@@ -15,6 +15,8 @@ from monee.model.branch import (
     PassiveHeatExchanger,
     PassiveHeatExchangerGenerator,
     PassiveHeatExchangerLoad,
+    hx_is_consuming,
+    hx_is_generating,
 )
 from monee.model.child import (
     ExtHydrGrid,
@@ -26,7 +28,6 @@ from monee.model.child import (
     Sink,
     Source,
 )
-from monee.model.core import Var
 from monee.model.grid import (
     DEFAULT_GAS_HHV_KWH_PER_KG,
     KGPS_KWHPERKG_TO_MW,
@@ -43,7 +44,7 @@ from monee.model.multi import (
     PowerToHeatControlNode,
     PowerToHeatHG,
 )
-from monee.model.node import Bus, Junction
+from monee.model.node import Junction
 from monee.problem.core import (
     REGULATION_ATTR,
     Constraints,
@@ -51,7 +52,12 @@ from monee.problem.core import (
     OptimizationProblem,
     nan_to_zero,
 )
-from monee.problem.utils import cp_input_rated_mw, line_loading_limit
+from monee.problem.utils import (
+    cp_input_rated_mw,
+    line_loading_limit,
+    make_node_var_bounds_hook,
+    make_vm_bounds_hook,
+)
 
 WEIGHT_DEMAND = 1e3
 WEIGHT_GENERATOR = 0.1
@@ -98,6 +104,15 @@ _COUPLING_POINT_TYPES = (
     PowerToHeatHG,
     GasToHeatHG,
 )
+
+
+def _is_consuming_demand(model):
+    """True for the demand-class models a ``weight_for_load`` callback applies
+    to. HX branches count only when their setpoint marks them as consuming;
+    generating HXs keep the generator weighting path."""
+    if isinstance(model, (HeatExchanger, PassiveHeatExchanger)):
+        return hx_is_consuming(model)
+    return isinstance(model, _DEMAND_TYPES)
 
 
 def _gas_mw_factor(grid):
@@ -219,10 +234,10 @@ def _make_auto_priority_floor_hook(  # NOSONAR
         if weight_for_load is not None:
             # Sample the minimum effective per-load weight.  We consider
             # every model that ``weight_fn`` would route through
-            # ``weight_for_load`` (demand + HX-objective types).
+            # ``weight_for_load`` (consuming demand-class models only).
             min_w: float | None = None
             for model in network.all_models():
-                if isinstance(model, _DEMAND_TYPES + _HE_OBJECTIVE_TYPES):
+                if _is_consuming_demand(model):
                     try:
                         w = weight_for_load(model)
                     except Exception:
@@ -352,24 +367,6 @@ def _calc_objective(model_to_data):
     )
 
 
-def _make_pressure_bounds_hook(bounds_pressure):
-    lo, hi = bounds_pressure
-
-    def _apply_pressure_bounds(network):
-        for component in network.all_components():
-            model = component.model
-            if type(model) is not Junction or not component.independent:
-                continue
-            p = getattr(model, "pressure_pu", None)
-            psq = getattr(model, "pressure_squared_pu", None)
-            if type(p) is Var:
-                p.min, p.max = lo, hi
-            if type(psq) is Var:
-                psq.min, psq.max = lo * lo, hi * hi
-
-    return _apply_pressure_bounds
-
-
 def create_min_load_shedding_problem(  # NOSONAR
     *,
     demand_weight=WEIGHT_DEMAND,
@@ -443,13 +440,18 @@ def create_min_load_shedding_problem(  # NOSONAR
         )
 
     if check_vm:
-        problem.bounds(bounds_vm, lambda m, _: type(m) is Bus, ["vm_pu"])
+        # Bound the actual decision var (vm_pu under the AC NLP, vm_pu_squared
+        # under MISOCP); a static bound on vm_pu alone is a no-op when it is
+        # only a reporting Intermediate.
+        problem._controllable_appliables.append(make_vm_bounds_hook(bounds_vm))
     if check_pressure:
         # Bound the actual decision var (pressure_pu under NLP, pressure_squared_pu
         # under the linearised gas formulation); a static bound on pressure_pu is
         # a no-op when it is only a reporting Intermediate.
         problem._controllable_appliables.append(
-            _make_pressure_bounds_hook(bounds_pressure)
+            make_node_var_bounds_hook(
+                Junction, "pressure_pu", "pressure_squared_pu", bounds_pressure
+            )
         )
     if check_t:
         problem.bounds(
@@ -465,9 +467,7 @@ def create_min_load_shedding_problem(  # NOSONAR
     # share the same aux-dominance lift.
     def weight_fn(model):
         scale = _weights.get("scale", 1.0)
-        if weight_for_load is not None and isinstance(
-            model, _DEMAND_TYPES + _HE_OBJECTIVE_TYPES
-        ):
+        if weight_for_load is not None and _is_consuming_demand(model):
             try:
                 w = weight_for_load(model)
             except Exception:
@@ -482,10 +482,8 @@ def create_min_load_shedding_problem(  # NOSONAR
             return _weights["demand"] * scale
         # Bare HeatExchanger / PassiveHeatExchanger: route by sign of q_mw_set.
         if isinstance(model, (HeatExchanger, PassiveHeatExchanger)):
-            q = getattr(model, "q_mw_set", 0)
-            if isinstance(q, (int, float)):
-                return (_weights["demand"] if q > 0 else _weights["generator"]) * scale
-            return _weights["demand"] * scale
+            key = "generator" if hx_is_generating(model) else "demand"
+            return _weights[key] * scale
         if isinstance(model, _GENERATOR_TYPES):
             return _weights["generator"]
         return 1

@@ -413,9 +413,11 @@ class CHP(MultiGridCompoundModel):
         self.mass_flow_kgs = mass_flow_setpoint_kgs
         self.q_mvar = q_mvar_setpoint
         self._old_regulation = self.regulation
+        self._active = True
 
     def set_active(self, activation_flag):
         if activation_flag:
+            self._active = True
             # Don't overwrite when controllable_cps has promoted the attr to a
             # Var - restore only the case where set_active(False) zeroed it.
             if isinstance(
@@ -427,7 +429,11 @@ class CHP(MultiGridCompoundModel):
             ) and not isinstance(self._control_node.regulation, bool):
                 self._control_node.regulation = self._old_regulation
         else:
-            self._old_regulation = self._control_node.regulation
+            # A repeated deactivate must not clobber the saved regulation
+            # with the already-zeroed value.
+            if self._active:
+                self._old_regulation = self._control_node.regulation
+                self._active = False
             self._control_node.gas_mass_flow_kgs = 0
             self._control_node.regulation = 0
 
@@ -497,16 +503,20 @@ class GasToHeat(MultiGridCompoundModel):
         self.heat_energy_mw = -heat_energy_mw
         self.regulation = regulation
         self._old_regulation = self.regulation
+        self._active = True
 
     def set_active(self, activation_flag):
         if activation_flag:
+            self._active = True
             # See CHP.set_active - skip restore when attr is already an LP Var.
             if isinstance(
                 self._control_node.regulation, (int, float)
             ) and not isinstance(self._control_node.regulation, bool):
                 self._control_node.regulation = self._old_regulation
         else:
-            self._old_regulation = self._control_node.regulation
+            if self._active:
+                self._old_regulation = self._control_node.regulation
+                self._active = False
             self._control_node.regulation = 0
 
     def create(
@@ -572,9 +582,11 @@ class PowerToHeat(MultiGridCompoundModel):
         self.load_q_mvar = q_mvar_setpoint
         self.regulation = regulation
         self._old_regulation = self.regulation
+        self._active = True
 
     def set_active(self, activation_flag):
         if activation_flag:
+            self._active = True
             # See ``CHP.set_active`` - skip restore when the attribute is
             # already an LP variable.
             if isinstance(
@@ -582,7 +594,9 @@ class PowerToHeat(MultiGridCompoundModel):
             ) and not isinstance(self._control_node.regulation, bool):
                 self._control_node.regulation = self._old_regulation
         else:
-            self._old_regulation = self._control_node.regulation
+            if self._active:
+                self._old_regulation = self._control_node.regulation
+                self._active = False
             self._control_node.regulation = 0
 
     def create(
@@ -814,6 +828,7 @@ class CHPHG(MultiGridCompoundModel):
         self.mass_flow_kgs = mass_flow_setpoint_kgs
         self.q_mvar = q_mvar_setpoint
         self._old_regulation = self.regulation
+        self._active = True
 
     def create(
         self,

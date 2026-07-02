@@ -1,3 +1,4 @@
+import contextlib
 import logging
 
 import networkx as nx
@@ -38,6 +39,11 @@ from .infeasibility.apm import (
 # Reverse of dispatch.GEKKO_SOLVERS (name -> code), so a constructed GEKKOSolver
 # can report which solver it runs on SolverResult.solver_used.
 _GEKKO_CODE_TO_NAME: dict[int, str] = {1: "apopt", 2: "bpopt", 3: "ipopt"}
+
+# The builtin, aliased because inject_gekko_vars_attr's legacy signature shadows
+# ``id``. GKVariable overrides ``__eq__`` (builds equations) so identity keys are
+# the only safe dict keys for the var-metadata registry.
+id_ = id
 
 # APOPT (SOLVER=1) MINLP options. IPOPT rejects the minlp_* keys, so they are
 # applied only for the APOPT path (see _solver_options).
@@ -91,7 +97,9 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
         self._simulation: bool = False
 
     @staticmethod
-    def inject_gekko_vars_attr(gekko: GEKKO, target: GenericModel, id, name_map=None):
+    def inject_gekko_vars_attr(
+        gekko: GEKKO, target: GenericModel, id, name_map=None, var_meta=None
+    ):
         i = 0
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
@@ -100,35 +108,51 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
                     # APMonitor sanitises names irreversibly; remember the
                     # original for the infeasibility diagnostics.
                     name_map[sanitize_apm_name(name)] = name
-                setattr(
-                    target,
-                    key,
-                    gekko.Var(
-                        value.value,
-                        lb=value.min,
-                        ub=value.max,
-                        integer=value.integer,
-                        name=name,
-                    ),
+                gk_var = gekko.Var(
+                    value.value,
+                    lb=value.min,
+                    ub=value.max,
+                    integer=value.integer,
+                    name=name,
                 )
+                if var_meta is not None:
+                    # GEKKO mangles names irreversibly (lowercased, "int_"
+                    # prefix, non-word chars -> "_"); keep the original Var so
+                    # withdraw can restore name/integer/scale exactly.
+                    var_meta[id_(gk_var)] = value
+                setattr(target, key, gk_var)
                 i += 1
             if type(value) is Const:
                 setattr(target, key, gekko.Const(value.value))
 
     @staticmethod
-    def withdraw_gekko_vars_attr(target: GenericModel):
+    def withdraw_gekko_vars_attr(target: GenericModel, var_meta=None):
         for key, value in target.__dict__.items():
             if type(value) is GKVariable:
-                setattr(
-                    target,
-                    key,
-                    Var(
-                        value=value.VALUE.value[0],
+                orig = var_meta.get(id_(value)) if var_meta is not None else None
+                val = value.VALUE.value[0]
+                if orig is not None:
+                    if orig.integer:
+                        val = int(round(val))
+                    new_var = Var(
+                        value=val,
                         min=value.LOWER,
                         max=value.UPPER,
+                        integer=orig.integer,
+                        name=orig.name,
+                        scale=orig.scale,
+                    )
+                else:
+                    # No registry (legacy callers): GEKKO's stored NAME is a
+                    # mangled artefact, best-effort only.
+                    new_var = Var(
+                        value=val,
+                        min=value.LOWER,
+                        max=value.UPPER,
+                        integer=value.NAME.startswith("int_"),
                         name=value.NAME.split("_")[-1],
-                    ),
-                )
+                    )
+                setattr(target, key, new_var)
             if type(value) is GK_Operators:
                 setattr(target, key, Const(value.VALUE.value))
             if type(value) is GK_Intermediate:
@@ -155,7 +179,7 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
         m.solve(disp=False)
         return m.options.IMODE
 
-    def solve(  # NOSONAR
+    def solve(
         self,
         input_network: Network,
         optimization_problem: OptimizationProblem = None,
@@ -167,6 +191,36 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
     ):
         self._simulation = simulation
         m = GEKKO(remote=False)
+        try:
+            return self._solve_with_model(
+                m,
+                input_network,
+                optimization_problem=optimization_problem,
+                draw_debug=draw_debug,
+                exclude_unconnected_nodes=exclude_unconnected_nodes,
+                step_state=step_state,
+                simulation=simulation,
+                formulation=formulation,
+            )
+        finally:
+            # APMonitor leaves its run directory behind on every solve; the
+            # diagnostics that read it (diagnose_gekko_infeasibility) have
+            # already run by the time we get here.
+            with contextlib.suppress(Exception):
+                m.cleanup()
+
+    def _solve_with_model(  # NOSONAR
+        self,
+        m: GEKKO,
+        input_network: Network,
+        *,
+        optimization_problem,
+        draw_debug,
+        exclude_unconnected_nodes,
+        step_state,
+        simulation,
+        formulation,
+    ):
         m.options.SOLVER = self.solver
         m.options.WEB = 0
         m.options.IMODE = 1 if simulation else 3
@@ -196,12 +250,17 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
         mark_slacks_and_prescriptions(network, ignored_nodes)
 
         apm_name_map: dict[str, str] = {}
+        var_meta: dict[int, Var] = {}
+        withdraw_fn = lambda target: GEKKOSolver.withdraw_gekko_vars_attr(  # noqa: E731
+            target, var_meta=var_meta
+        )
         inject_vars(
             lambda model, comp, cat: GEKKOSolver.inject_gekko_vars_attr(
                 m,
                 model,
                 comp.nid if cat == "branch" else comp.tid,
                 name_map=apm_name_map,
+                var_meta=var_meta,
             ),
             nodes,
             branches,
@@ -251,11 +310,13 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
                 m.Obj(expr)
 
         # IMODE=1 (square simulation) only applies to a plain flow: no objective
-        # of any kind (else IMODE=1 silently ignores it).
+        # of any kind (else IMODE=1 silently ignores it). m._objectives covers
+        # every m.Obj() call, including the node/child/compound minimize terms
+        # added inside the shared equation passes.
         use_sim = (
             simulation
             and optimization_problem is None
-            and not objs_exprs
+            and not m._objectives
             and not network.objectives
         )
         m.options.IMODE = 1 if use_sim else 3
@@ -289,7 +350,7 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
             # Best-effort warm-start handoff from the partial iterate.
             try:
                 withdraw_vars(
-                    GEKKOSolver.withdraw_gekko_vars_attr,
+                    withdraw_fn,
                     nodes,
                     branches,
                     compounds,
@@ -305,9 +366,7 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
                     report=report,
                 ) from exc
             raise
-        withdraw_vars(
-            GEKKOSolver.withdraw_gekko_vars_attr, nodes, branches, compounds, network
-        )
+        withdraw_vars(withdraw_fn, nodes, branches, compounds, network)
         violations = finalize_solution(
             nodes, branches, compounds, network, input_network
         )

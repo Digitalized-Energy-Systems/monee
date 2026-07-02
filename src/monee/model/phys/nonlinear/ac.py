@@ -143,16 +143,20 @@ def int_flows(  # NOSONAR
 ):
     """All four AC branch flow equations (P/Q at both ends) in one pass.
 
-    Mathematically identical to calling :func:`int_flow_from_p`,
-    :func:`int_flow_from_q`, :func:`int_flow_to_p` and :func:`int_flow_to_q`
-    separately, but the sub-terms shared across the four (``vm_from*vm_to``, the
-    sine/cosine of the bus-angle difference, ``vm_from**2``, ``vm_to**2``) are
-    built **once** and reused. The to-direction reuses the from-direction's
-    ``cos``/``sin`` via the even/odd identities ``cos(-x) = cos(x)`` and
-    ``sin(-x) = -sin(x)``. The numeric float coefficients are formed exactly as
-    in the per-equation functions, so the only change is node sharing - the
-    symbolic graph these equations contribute is ~halved, which speeds model
-    assembly on every backend (the equation bodies are backend-agnostic).
+    Matches calling :func:`int_flow_from_p`, :func:`int_flow_from_q`,
+    :func:`int_flow_to_p` and :func:`int_flow_to_q` separately *up to the
+    ``s_base`` scaling*: the per-equation functions have no ``s_base``
+    parameter (they express per-unit power, i.e. ``s_base = 1``), while this
+    function multiplies all four right-hand sides by ``s_base``. The sub-terms
+    shared across the four (``vm_from*vm_to``, the sine/cosine of the bus-angle
+    difference, ``vm_from**2``, ``vm_to**2``) are built **once** and reused.
+    The to-direction reuses the from-direction's ``cos``/``sin`` via the
+    even/odd identities ``cos(-x) = cos(x)`` and ``sin(-x) = -sin(x)``. The
+    numeric float coefficients are formed exactly as in the per-equation
+    functions, so apart from the ``s_base`` factor the only change is node
+    sharing - the symbolic graph these equations contribute is ~halved, which
+    speeds model assembly on every backend (the equation bodies are
+    backend-agnostic).
 
     The bracketed expressions are per-unit power on the grid's apparent-power
     base; ``s_base`` (= ``grid.sn_mva``) scales them to the MW/MVAr that

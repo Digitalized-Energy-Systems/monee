@@ -2,14 +2,9 @@ import monee.express as mx
 import monee.model as mm
 
 
-def _line(net, from_id, to_id, length_m, kv_class="120"):
-    """Add a PowerLine with parameters appropriate for the voltage class."""
-    if kv_class == "20":
-        r, x, max_i_ka = 3e-4, 3e-4, 0.30  # 20 kV cable   → ~10 MVA/line
-    elif kv_class == "110":
-        r, x, max_i_ka = 7e-5, 7e-5, 0.40  # 110 kV OHL    → ~76 MVA/line
-    else:  # 120 kV
-        r, x, max_i_ka = 3e-4, 3e-4, 0.30  # 120 kV cable  → ~62 MVA/line
+def _line(net, from_id, to_id, length_m):
+    """Add a 20 kV cable PowerLine (~10 MVA/line)."""
+    r, x, max_i_ka = 3e-4, 3e-4, 0.30
     net.branch(
         mm.PowerLine(
             length_m=length_m,
@@ -32,7 +27,7 @@ def create_urban_district_net() -> mm.Network:
     Suitable for: testing CHP-centred resilience.
 
     The heat grid uses a supply-return two-pipe structure: the CHP injects
-    heat on the return→supply side (r1→s1, ~176 kW) and a single
+    heat on the return→supply side (r1→s1, ~102 kW) and a single
     ``HeatExchangerLoad`` consumer extracts on the supply→return side (s3→r1).
     """
     net = mx.create_multi_energy_network()
@@ -49,10 +44,10 @@ def create_urban_district_net() -> mm.Network:
     mx.create_power_load(net, b3, p_mw=5, q_mvar=0.5)
     mx.create_power_load(net, b4, p_mw=4, q_mvar=0.5)
 
-    _line(net, b0, b1, length_m=500, kv_class="20")
-    _line(net, b1, b2, length_m=400, kv_class="20")
-    _line(net, b2, b3, length_m=300, kv_class="20")
-    _line(net, b2, b4, length_m=350, kv_class="20")
+    _line(net, b0, b1, length_m=500)
+    _line(net, b1, b2, length_m=400)
+    _line(net, b2, b3, length_m=300)
+    _line(net, b2, b4, length_m=350)
 
     g0 = mx.create_gas_junction(net, name="G0_ext")
     g1 = mx.create_gas_junction(net, name="G1")
@@ -84,8 +79,8 @@ def create_urban_district_net() -> mm.Network:
     mx.create_heat_exchanger(net, s3, r1, 0.2)
 
     # CHP: gas at G2 → power at B3, heat from r1→s1.
-    # heat_w = 0.40 × 0.008 kg/s × 3.6 × 11.79011 kWh/kg × 1e6 ≈ 135 822 W
-    # (default gas is now lgas, HHV 11.79011 kWh/kg; was 15.3 for methane)
+    # heat_w = 0.40 × 0.006 kg/s × 3.6 × 11.79011 kWh/kg × 1e6 ≈ 101 866 W
+    # (default gas is lgas, HHV 11.79011 kWh/kg)
     mx.create_chp(
         net,
         power_node_id=b3,
@@ -138,11 +133,11 @@ def _add_urban_district(net, idx: int, slack_bus, ext_gas_junction):
     mx.create_power_load(net, b3, p_mw=3, q_mvar=0.3)
     mx.create_power_load(net, b4, p_mw=2, q_mvar=0.3)
 
-    _line(net, slack_bus, b1, length_m=600, kv_class="20")
-    _line(net, b0, b1, length_m=400, kv_class="20")
-    _line(net, b1, b2, length_m=300, kv_class="20")
-    _line(net, b2, b3, length_m=250, kv_class="20")
-    _line(net, b2, b4, length_m=300, kv_class="20")
+    _line(net, slack_bus, b1, length_m=600)
+    _line(net, b0, b1, length_m=400)
+    _line(net, b1, b2, length_m=300)
+    _line(net, b2, b3, length_m=250)
+    _line(net, b2, b4, length_m=300)
 
     mx.create_line(
         net,
@@ -153,6 +148,7 @@ def _add_urban_district(net, idx: int, slack_bus, ext_gas_junction):
         x_ohm_per_m=3e-4,
         parallel=1,
         on_off=0,
+        max_i_ka=0.30,
         name=f"tie_b3_b4{suffix}",
     )
 
@@ -285,6 +281,7 @@ def create_large_urban_mes_net(n_districts: int = 6) -> mm.Network:
             x_ohm_per_m=3e-4,
             parallel=1,
             on_off=0,
+            max_i_ka=0.30,
             name=f"inter_district_power_{i}",
         )
         ga, gb = district_heads_gas[i], district_heads_gas[i + 1]

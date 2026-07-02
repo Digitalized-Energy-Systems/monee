@@ -84,10 +84,9 @@ nodes. monee sizes it automatically as ten times the total node count
 (`len(network.nodes) * 10`), so manual tuning is normally unnecessary.
 
 ```{note}
-The islanding modes accept a `big_m_conn` parameter (default 200), but the
-connectivity constraints do not currently read it, so treat it as reserved.
-Of the mode parameters, only `ElectricityIslandingMode`'s `angle_bound` is
-live today.
+The islanding modes accept a `big_m_conn` parameter. When passed explicitly it
+is used as the connectivity big-M; the default (`None`) falls back to the
+automatic `len(network.nodes) * 10` sizing described above.
 ```
 
 ---

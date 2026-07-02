@@ -9,6 +9,7 @@ import monee.model.phys.core.hydraulics as hydraulicsmodel
 import monee.model.phys.nonlinear.gf as ogfmodel
 from monee.model.core import Const
 
+from ...common import ensure_velocity_report
 from ...core import BranchFormulation
 
 
@@ -22,6 +23,7 @@ class RelaxedWeymouthBranchFormulation(BranchFormulation):
 
         model.friction = Const(f_const)
         model.reynolds_scaled = Const(0.0)
+        ensure_velocity_report(model, grid)
 
     def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
         return [

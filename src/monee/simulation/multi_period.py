@@ -16,18 +16,18 @@ from monee.simulation.result_utils import (
     build_type_stats_html as _build_type_stats_html,
 )
 from monee.simulation.step_state import PeriodState
-from monee.simulation.timeseries import TimeseriesData
+from monee.simulation.timeseries import TimeseriesData, _dt_h_at_step
 
 # Shared result-rendering helpers, imported from the solver's public reporting
 # surface (the simulation layer renders the same kind of result tables).
 from monee.solver.core import TABLE_CSS as _TABLE_CSS
 from monee.solver.core import (
     SolverResult,
+    apply_child_overwrites,
     find_ignored_nodes,
-    ignore_node,
     inject_vars,
-    mark_he_flow_prescription,
     mark_ignored_components,
+    mark_slacks_and_prescriptions,
     withdraw_vars,
 )
 from monee.solver.core import col_summary as _col_summary
@@ -72,17 +72,13 @@ def _prepare_period(
     if optimization_problem is not None:
         optimization_problem._apply(net_t)
 
-    for node in net_t.nodes:
-        if ignore_node(node, net_t, ignored_nodes):
-            continue
-        for child in net_t.childs_by_ids(node.child_ids):
-            if child.active:
-                child.model.overwrite(node.model, node.grid)
+    apply_child_overwrites(net_t, net_t.nodes, ignored_nodes)
 
-    # Decide per compound-internal SubHE whether the design flow prescribes
-    # the through-flow or yields to a network-determined flow (must run before
-    # var injection - the check relies on monee Var instances).
-    mark_he_flow_prescription(net_t, ignored_nodes)
+    # Same backend-agnostic marking trio as the single-period solvers (pin
+    # floating hydraulic gauges, mark heat-balance slacks, decide the dynamic
+    # HE flow prescription); must run before var injection - the checks rely
+    # on monee Var instances.
+    mark_slacks_and_prescriptions(net_t, ignored_nodes)
 
     return net_t, ignored_nodes
 
@@ -417,6 +413,7 @@ class GekkoMultiPeriodSolver:
         # Pass 1: prepare networks and inject variables for all periods.
         net_copies: list[Network] = []
         ignored_list: list[set] = []
+        var_meta: dict[int, Var] = {}
 
         for t in range(steps):
             _log.debug("Preparing period %d/%d", t + 1, steps)
@@ -428,6 +425,7 @@ class GekkoMultiPeriodSolver:
                     m,
                     model,
                     f"{comp.nid if cat == 'branch' else comp.tid}_t{_t}",
+                    var_meta=var_meta,
                 ),
                 net_t.nodes,
                 net_t.branches,
@@ -523,7 +521,9 @@ class GekkoMultiPeriodSolver:
 
         for net_t in net_copies:
             withdraw_vars(
-                GEKKOSolver.withdraw_gekko_vars_attr,
+                lambda target: GEKKOSolver.withdraw_gekko_vars_attr(
+                    target, var_meta=var_meta
+                ),
                 net_t.nodes,
                 net_t.branches,
                 net_t.compounds,
@@ -772,14 +772,8 @@ def _dt_h_from_datetime_index(
             f"datetime_index length ({len(datetime_index)}) is less than "
             f"steps ({steps})."
         )
-    diffs = [
-        (datetime_index[t] - datetime_index[t - 1]).total_seconds() / 3600.0
-        if t > 0
-        else (datetime_index[1] - datetime_index[0]).total_seconds() / 3600.0
-        if steps > 1
-        else 1.0
-        for t in range(steps)
-    ]
+    intervals = (_dt_h_at_step(datetime_index, t) for t in range(steps))
+    diffs = [1.0 if d is None else d for d in intervals]
     if any(d <= 0 for d in diffs):
         raise ValueError(
             "datetime_index must be strictly increasing; "
@@ -868,6 +862,10 @@ def run_mpc(
     Note: returned ``objective`` is the sum of per-window values and overcounts
     when ``execution_steps < horizon``.
 
+    A window whose solver reports an unsuccessful solve (``success=False``,
+    GEKKO style) raises a ``RuntimeError`` identifying the failed window;
+    backends that raise on failure (Pyomo) propagate their own error.
+
     Example::
 
         result = run_mpc(
@@ -893,6 +891,7 @@ def run_mpc(
         raise ValueError(f"horizon must be >= 1, got {horizon}.")
 
     all_net_copies: list[Network] = []
+    window_successes: list[bool] = []
     total_objective = 0.0
     current_initial_state = dict(initial_state) if initial_state else None
     offset = 0
@@ -930,6 +929,17 @@ def run_mpc(
             terminal_state=window_terminal_state,
             formulation=formulation,
         )
+        # Some backends (GEKKO) report failure via success=False instead of
+        # raising; carrying on would seed the next window from garbage state.
+        window_successes.append(window_result.success)
+        if not window_result.success:
+            raise RuntimeError(
+                f"run_mpc: window starting at step {offset} (periods "
+                f"{offset}..{offset + actual_window - 1} of {total_steps}) "
+                f"failed - the solver reported an unsuccessful solve. "
+                f"Aborting; state extracted from a failed window would "
+                f"poison all subsequent windows."
+            )
 
         n_execute = min(execution_steps, actual_window)
         executed_copies = window_result._net_copies[:n_execute]
@@ -947,7 +957,7 @@ def run_mpc(
     return MultiPeriodResult(
         all_net_copies,
         objective=total_objective,
-        success=True,
+        success=all(window_successes),
         datetime_index=exec_datetime_index,
         backend_used=getattr(solver, "_backend_name", None),
         solver_used=getattr(solver, "_solver_name", None),

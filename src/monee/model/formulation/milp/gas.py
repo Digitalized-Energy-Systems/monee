@@ -5,6 +5,7 @@ import monee.model.phys.core.hydraulics as hydraulicsmodel
 import monee.model.phys.nonlinear.gf as ogfmodel
 from monee.model.core import Const, Var
 
+from ..common import ensure_velocity_report
 from ..core import BranchFormulation
 
 
@@ -38,6 +39,7 @@ class PwlWeymouthBranchFormulation(BranchFormulation):
         model.mass_flow_neg_kgs_squared = Const(0.0)
         model.reynolds_scaled = Const(0.0)
         model.friction = Const(0.0)
+        ensure_velocity_report(model, grid)
         if hasattr(grid, "max_mass_flow_kgs"):
             # Pyomo Piecewise requires bounded x; 1.001x slack avoids endpoint
             # tightness. Declared on the Var abstraction so every backend gets

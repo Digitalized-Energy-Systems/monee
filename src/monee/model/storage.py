@@ -2,7 +2,7 @@
 Storage child models for multi-energy timeseries simulation.
 
 Each model exposes a tracked SoC variable persisted to ``StepState`` between
-timesteps; ``inter_step_equations`` couples it to the previous step.
+timesteps; ``inter_temporal_equations`` couples it to the previous step.
 
 Load convention: positive = charging (consume from network), negative = discharging.
 
@@ -19,6 +19,14 @@ from .core import ChildModel, Var, model
 
 if TYPE_CHECKING:
     from monee.simulation.step_state import InterStepState
+
+
+def _unity_regulation(regulation) -> bool:
+    return (
+        isinstance(regulation, (int, float))
+        and not isinstance(regulation, bool)
+        and regulation == 1
+    )
 
 
 @model
@@ -59,8 +67,10 @@ class ElectricStorage(ChildModel):
             abs(efficiency_charge - 1.0) > 1e-12
             or abs(efficiency_discharge - 1.0) > 1e-12
         )
-        self._p_min = -p_max_mw * regulation
-        self._p_max = p_max_mw * regulation
+        # Bounds limit the raw dispatch; the nodal balance scales it by
+        # regulation once, so the grid-side limit is p_max * regulation.
+        self._p_min = -p_max_mw
+        self._p_max = p_max_mw
 
     def make_controllable(self):
         """Promote ``p_mw`` (and loss-split vars if lossy) into solver Vars."""
@@ -88,6 +98,10 @@ class ElectricStorage(ChildModel):
         dt_h = temporal_state.dt_h
         if prev_e is None:
             prev_e = self._e_mwh_initial
+        # The nodal balance sees regulation * p_mw; integrate the same
+        # regulation-scaled power so the SoC conserves energy with the grid.
+        reg = self.regulation
+        unity = _unity_regulation(reg)
         if self._lossy:
             if isinstance(self.p_mw, (int, float)):
                 # Plain energy flow: fixed p_mw - sign-based efficiency.
@@ -97,14 +111,28 @@ class ElectricStorage(ChildModel):
                     if p >= 0
                     else dt_h * p / self.efficiency_discharge
                 )
+                if not unity:
+                    delta = delta * reg
                 return [self.e_mwh == prev_e + delta]
+            if unity:
+                return [
+                    self.e_mwh
+                    == prev_e
+                    + dt_h * self.efficiency_charge * self.p_charge_mw
+                    - dt_h * self.p_discharge_mw / self.efficiency_discharge,
+                ]
             return [
                 self.e_mwh
                 == prev_e
-                + dt_h * self.efficiency_charge * self.p_charge_mw
-                - dt_h * self.p_discharge_mw / self.efficiency_discharge,
+                + (
+                    dt_h * self.efficiency_charge * self.p_charge_mw
+                    - dt_h * self.p_discharge_mw / self.efficiency_discharge
+                )
+                * reg,
             ]
-        return [self.e_mwh == prev_e + dt_h * self.p_mw]
+        if unity:
+            return [self.e_mwh == prev_e + dt_h * self.p_mw]
+        return [self.e_mwh == prev_e + dt_h * self.p_mw * reg]
 
 
 @model
@@ -144,8 +172,9 @@ class GasStorage(ChildModel):
             abs(efficiency_charge - 1.0) > 1e-12
             or abs(efficiency_discharge - 1.0) > 1e-12
         )
-        self._flow_min = -flow_max_kgs * regulation
-        self._flow_max = flow_max_kgs * regulation
+        # Raw-dispatch bounds; the nodal balance applies regulation once.
+        self._flow_min = -flow_max_kgs
+        self._flow_max = flow_max_kgs
 
     def make_controllable(self):
         """Promote ``mass_flow_kgs`` (and loss-split vars if lossy) into solver Vars."""
@@ -176,6 +205,9 @@ class GasStorage(ChildModel):
         dt_s = temporal_state.dt_h * 3600.0
         if prev_m is None:
             prev_m = self._m_stored_kg_initial
+        # Integrate the regulation-scaled flow the nodal balance sees.
+        reg = self.regulation
+        unity = _unity_regulation(reg)
         if self._lossy:
             if isinstance(self.mass_flow_kgs, (int, float)):
                 f = float(self.mass_flow_kgs)
@@ -184,14 +216,28 @@ class GasStorage(ChildModel):
                     if f >= 0
                     else dt_s * f / self.efficiency_discharge
                 )
+                if not unity:
+                    delta = delta * reg
                 return [self.m_stored_kg == prev_m + delta]
+            if unity:
+                return [
+                    self.m_stored_kg
+                    == prev_m
+                    + dt_s * self.efficiency_charge * self.flow_charge_kgs
+                    - dt_s * self.flow_discharge_kgs / self.efficiency_discharge,
+                ]
             return [
                 self.m_stored_kg
                 == prev_m
-                + dt_s * self.efficiency_charge * self.flow_charge_kgs
-                - dt_s * self.flow_discharge_kgs / self.efficiency_discharge,
+                + (
+                    dt_s * self.efficiency_charge * self.flow_charge_kgs
+                    - dt_s * self.flow_discharge_kgs / self.efficiency_discharge
+                )
+                * reg,
             ]
-        return [self.m_stored_kg == prev_m + dt_s * self.mass_flow_kgs]
+        if unity:
+            return [self.m_stored_kg == prev_m + dt_s * self.mass_flow_kgs]
+        return [self.m_stored_kg == prev_m + dt_s * self.mass_flow_kgs * reg]
 
 
 @model
@@ -223,8 +269,9 @@ class ThermalStorage(ChildModel):
             max=m_stored_kg_max,
             name="m_stored_kg",
         )
-        self._flow_min = -flow_max_kgs * regulation
-        self._flow_max = flow_max_kgs * regulation
+        # Raw-dispatch bounds; the nodal balance applies regulation once.
+        self._flow_min = -flow_max_kgs
+        self._flow_max = flow_max_kgs
 
     def make_controllable(self):
         """Promote ``mass_flow_kgs`` into a solver Var."""
@@ -249,4 +296,8 @@ class ThermalStorage(ChildModel):
         if prev_m is None:
             prev_m = self._m_stored_kg_initial
         loss = prev_m * self.loss_factor_per_h * dt_h
-        return [self.m_stored_kg == prev_m - loss + dt_s * self.mass_flow_kgs]
+        # Integrate the regulation-scaled flow the nodal balance sees.
+        reg = self.regulation
+        if _unity_regulation(reg):
+            return [self.m_stored_kg == prev_m - loss + dt_s * self.mass_flow_kgs]
+        return [self.m_stored_kg == prev_m - loss + dt_s * self.mass_flow_kgs * reg]

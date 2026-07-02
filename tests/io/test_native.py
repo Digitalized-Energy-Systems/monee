@@ -565,6 +565,42 @@ def test_compound_id_and_active_preserved():
     assert restored.active is False
 
 
+def test_var_scale_roundtrip():
+    # GIVEN
+    pn, node_0, _ = _simple_power_network()
+    bus = pn.node_by_id(node_0).model
+    bus.vm_pu = mm.Var(1.0, name="scaled_vm")
+    bus.vm_pu.scale = 100.0
+
+    # WHEN
+    out = _roundtrip(pn)
+
+    # THEN
+    restored = out.node_by_id(node_0).model.vm_pu
+    assert isinstance(restored, mm.Var)
+    assert restored.scale == 100.0
+
+
+def test_load_edit_via_default_grid_save_roundtrip():
+    # GIVEN a loaded network whose file carries a grid named like a default
+    pn, node_0, _ = _simple_power_network()
+    out = _roundtrip(pn)
+
+    # WHEN adding a component through the default-grid path
+    new_node = out.node(mm.Bus(base_kv=1), grid=mm.EL_KEY)
+    out.branch(
+        mm.PowerLine(length_m=10, r_ohm_per_m=1e-4, x_ohm_per_m=5e-4, parallel=1),
+        node_0,
+        new_node,
+    )
+
+    # THEN the loaded grid replaced the default: one grid instance, save works
+    assert len({id(n.grid) for n in out.nodes}) == 1
+    struct = network_to_native_dict(out)
+    assert set(struct["grids"]) == {"power"}
+    assert struct["grids"]["power"]["values"]["sn_mva"] == 42
+
+
 def test_unserializable_public_attribute_raises():
     # GIVEN
     class Weird(mm.Bus):

@@ -605,6 +605,91 @@ def test_mva_line_limit_binds_at_rate_a():
     assert max(s_from, s_to) == pytest.approx(rate_a, abs=0.5)
 
 
+def test_powerflow_slack_seed_uses_load_convention():
+    # The slack's free P/Q vars are seeded with -Pg/-Qg (load convention),
+    # matching the OPF path in fill_opf_child_dict.
+    bus = [
+        [1, 3, 0, 0, 0, 0, 1, 1.0, 0, 110, 1, 1.1, 0.9],
+        [2, 1, 50, 10, 0, 0, 1, 1.0, 0, 110, 1, 1.1, 0.9],
+    ]
+    gen = [[1, 80, 5, 100, -100, 1.0, 100, 1, 200, 0]]
+    branch = [[1, 2, 0.01, 0.05, 0, 0, 0, 0, 0, 0, 1, -30, 30]]
+
+    net = read_matpower_data(_mpc(bus, gen, branch))
+
+    ext = next(c for c in net.childs if isinstance(c.model, ExtPowerGrid))
+    assert ext.model.p_mw.value == -80
+    assert ext.model.q_mvar.value == -5
+
+
+def _two_bus_opf_mpc(gencost):
+    bus = [
+        [1, 3, 0, 0, 0, 0, 1, 1.0, 0, 110, 1, 1.1, 0.9],
+        [2, 2, 50, 10, 0, 0, 1, 1.0, 0, 110, 1, 1.1, 0.9],
+    ]
+    gen = [
+        [1, 0, 0, 100, -100, 1.0, 100, 1, 200, 0],
+        [2, 0, 0, 100, -100, 1.0, 100, 1, 100, 0],
+    ]
+    branch = [[1, 2, 0.01, 0.05, 0, 0, 0, 0, 0, 0, 1, -30, 30]]
+    return {
+        "baseMVA": 100.0,
+        "bus": bus,
+        "gen": gen,
+        "branch": branch,
+        "gencost": gencost,
+    }
+
+
+def test_pwl_gencost_two_points_converted_to_linear():
+    # A 2-point PWL cost is exactly linear: (0, 0) -> (100, 1000) is 10 /MW.
+    gencost = [
+        [2, 0, 0, 2, 10.0, 0.0],
+        [1, 0, 0, 2, 0.0, 0.0, 100.0, 1000.0],
+    ]
+
+    net, _ = build_matpower_opf(_two_bus_opf_mpc(gencost))
+
+    gen2 = next(
+        c
+        for c in net.childs_by_ids(net.node_by_id(2).child_ids)
+        if isinstance(c.model, PowerGenerator)
+    )
+    assert gen2.model._cost_coeffs == [10.0, 0.0]
+
+
+def test_pwl_gencost_multipoint_warns_and_drops_cost():
+    gencost = [
+        [2, 0, 0, 2, 10.0, 0.0],
+        [1, 0, 0, 3, 0.0, 0.0, 50.0, 500.0, 100.0, 1500.0],
+    ]
+
+    with pytest.warns(UserWarning, match="piecewise-linear.*bus 2"):
+        net, _ = build_matpower_opf(_two_bus_opf_mpc(gencost))
+
+    gen2 = next(
+        c
+        for c in net.childs_by_ids(net.node_by_id(2).child_ids)
+        if isinstance(c.model, PowerGenerator)
+    )
+    assert not hasattr(gen2.model, "_cost_coeffs")
+
+
+def test_parse_m_strips_line_continuations():
+    mpc = _mpc_from_m_text(
+        "mpc.baseMVA = 100;\n"
+        "mpc.bus = [1 3 0 0 0 0 1 ...\n"
+        "  1.0 0 110 1 1.1 0.9;\n"
+        "  2 1 50 10 0 0 1 ... trailing text\n"
+        "  1.0 0 110 1 1.1 0.9];\n"
+        "mpc.gen = [1 80 5 100 -100 1.0 100 1 200 0];\n"
+        "mpc.branch = [1 2 0.01 0.05 0 0 0 0 0 0 1 -30 30];\n"
+    )
+    assert len(mpc["bus"]) == 2
+    assert mpc["bus"][0] == [1, 3, 0, 0, 0, 0, 1, 1.0, 0, 110, 1, 1.1, 0.9]
+    assert mpc["bus"][1] == [2, 1, 50, 10, 0, 0, 1, 1.0, 0, 110, 1, 1.1, 0.9]
+
+
 def test_import_simbench_net():
     # GIVEN
     network = read_matpower_case("tests/data/1-LV-rural3--1-no_sw.mat")

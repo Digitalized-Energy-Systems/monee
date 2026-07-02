@@ -1,12 +1,11 @@
 from monee.model.branch import GenericPowerBranch
 from monee.model.child import ExtPowerGrid, PowerGenerator
-from monee.model.node import Bus
 from monee.problem.core import (
     Constraints,
     Objectives,
     OptimizationProblem,
 )
-from monee.problem.utils import line_loading_limit
+from monee.problem.utils import line_loading_limit, make_vm_bounds_hook
 
 
 def create_economic_dispatch_problem(  # NOSONAR
@@ -21,7 +20,20 @@ def create_economic_dispatch_problem(  # NOSONAR
     debug=False,
 ):
     """Economic dispatch OPF minimising ``Σ cost · p_gen``. Set each generator's
-    ``cost`` (currency/MW) directly or per-period via TimeseriesData.add_objective_data."""
+    ``cost`` (currency/MW) directly or per-period via TimeseriesData.add_objective_data.
+
+    ``ext_grid_cost_default=None`` (the default) leaves the external grid out of
+    the objective entirely: slack import is free, so the optimum degenerates to
+    importing everything and dispatching no local generation. Pass a cost to
+    price the exchange.
+
+    ``bounds_lp`` only supports a zero lower bound: line loading is capped at
+    ``bounds_lp[1]``, and a non-zero minimum loading is rejected."""
+    if bounds_lp[0] != 0:
+        raise ValueError(
+            "bounds_lp[0] must be 0: a non-zero minimum line loading would "
+            f"force flow onto every line, got bounds_lp={bounds_lp!r}."
+        )
     problem = OptimizationProblem(debug=debug)
 
     problem.controllable_generators(["p_mw"])
@@ -37,7 +49,10 @@ def create_economic_dispatch_problem(  # NOSONAR
             )
 
     if check_vm:
-        problem.bounds(bounds_vm, lambda m, _: type(m) is Bus, ["vm_pu"])
+        # Bound the actual decision var (vm_pu under the AC NLP, vm_pu_squared
+        # under MISOCP); a static bound on vm_pu alone is a no-op when it is
+        # only a reporting Intermediate.
+        problem._controllable_appliables.append(make_vm_bounds_hook(bounds_vm))
     # The line-loading cap is enforced by the line_loading_limit *constraint*
     # below (added when check_lp). loading_*_pu are passive intermediates in
     # every electricity formulation (NLP and MISOCP), so a var-bounds override on

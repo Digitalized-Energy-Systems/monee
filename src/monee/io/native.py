@@ -88,6 +88,7 @@ def _encode_value(value):
             "min": value.min,
             "integer": value.integer,
             "name": value.name,
+            "scale": value.scale,
         }
     if isinstance(value, Const):
         return {_TYPE_KEY: "Const", "value": value.value}
@@ -113,6 +114,7 @@ def _decode_dict_value(value):
             min=value.get("min"),
             integer=value.get("integer", False),
             name=value.get("name"),
+            scale=value.get("scale", 1.0),
         )
     if tag == "Const":
         return Const(value["value"])
@@ -232,6 +234,14 @@ def native_dict_to_network(dict_struct) -> Network:
         grid_by_name[name] = init_model(
             grid_entry["model_type"], _decode_values(grid_entry["values"])
         )
+
+    # A loaded grid whose name collides with one of Network's default grids
+    # replaces that default: otherwise later default-grid additions would bind
+    # to a second same-named grid instance and re-saving would raise.
+    for key, default_grid in list(network._default_grid_models.items()):
+        loaded = grid_by_name.get(getattr(default_grid, "name", None))
+        if loaded is not None and isinstance(loaded, type(default_grid)):
+            network.set_default_grid(key, loaded)
 
     for child_dict in dict_struct["childs"]:
         model = init_model(

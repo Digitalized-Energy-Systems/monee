@@ -85,6 +85,7 @@ from monee.simulation import (
     GekkoMultiPeriodSolver,
     PyomoMultiPeriodSolver,
     Stepper,
+    NetworkChange,
 )
 from monee.solver import GEKKOSolver, PyomoSolver
 from monee.solver.core import persist_solution, compute_bound_violations

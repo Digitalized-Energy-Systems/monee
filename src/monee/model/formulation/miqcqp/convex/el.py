@@ -69,8 +69,11 @@ def _branch_tap(branch) -> float:
 
 
 def _ell_physics_max(branch, w_max: float) -> float:
-    r"""Per-unit :math:`|I|^2` upper bound from voltage bounds: :math:`4 \cdot W_{max} / |Z|^2`."""
-    return 4 * w_max / (branch.br_r_pu**2 + branch.br_x_pu**2)
+    r"""Per-unit :math:`|I|^2` upper bound from voltage bounds:
+    :math:`(1 + 1/tap)^2 \cdot W_{max} / |Z|^2` (from :math:`|V_i/tap - V_j| \le
+    (1/tap + 1)\sqrt{W_{max}}`); reduces to :math:`4 \cdot W_{max}/|Z|^2` at tap=1."""
+    tap = _branch_tap(branch)
+    return (1 + 1 / tap) ** 2 * w_max / (branch.br_r_pu**2 + branch.br_x_pu**2)
 
 
 _ELL_THERMAL_HEADROOM = 3.0
@@ -94,6 +97,12 @@ def _big_m(w_max: float) -> float:
 
 
 class MISOCPElectricityBranchFormulation(BranchFormulation):
+    """Branch-flow (BFM) MISOCP line/trafo model.
+
+    Known limitation: the branch-flow model works on voltage/current magnitudes
+    only, so a transformer phase shift (``branch.shift``) cannot be represented
+    and is silently ignored; only the magnitude ratio ``tap`` enters."""
+
     def ensure_var(self, branch, simulation=False, grid=None):
         branch.current_pu_squared = Var(1, min=0)
         branch.i_from_ka = Intermediate(0)
@@ -132,30 +141,20 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         # Used by line_loading_limit() instead of the sqrt-bearing form.
         branch._misocp_loading_from_scale_squared = (i_base_from / branch.max_i_ka) ** 2
         branch._misocp_loading_to_scale_squared = (i_base_to / branch.max_i_ka) ** 2
+        vd = voltage_drop(
+            from_node_model.vars["vm_pu_squared"],
+            to_node_model.vars["vm_pu_squared"],
+            _to_pu(branch.vars["p_from_mw"], grid),
+            _to_pu(branch.vars["q_from_mvar"], grid),
+            branch.current_pu_squared,
+            branch.br_r_pu,
+            branch.br_x_pu,
+            tap=tap,
+        )
         return [
             branch.current_pu_squared <= ell_phys * branch.on_off,
-            voltage_drop(
-                from_node_model.vars["vm_pu_squared"],
-                to_node_model.vars["vm_pu_squared"],
-                _to_pu(branch.vars["p_from_mw"], grid),
-                _to_pu(branch.vars["q_from_mvar"], grid),
-                branch.current_pu_squared,
-                branch.br_r_pu,
-                branch.br_x_pu,
-                tap=tap,
-            )
-            <= big_m * (1 - branch.on_off),
-            voltage_drop(
-                from_node_model.vars["vm_pu_squared"],
-                to_node_model.vars["vm_pu_squared"],
-                _to_pu(branch.vars["p_from_mw"], grid),
-                _to_pu(branch.vars["q_from_mvar"], grid),
-                branch.current_pu_squared,
-                branch.br_r_pu,
-                branch.br_x_pu,
-                tap=tap,
-            )
-            >= -big_m * (1 - branch.on_off),
+            vd <= big_m * (1 - branch.on_off),
+            vd >= -big_m * (1 - branch.on_off),
             *self._soc_constraints(branch, grid, from_node_model, tap),
             active_power_loss(
                 _to_pu(branch.vars["p_from_mw"], grid),

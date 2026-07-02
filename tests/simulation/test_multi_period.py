@@ -366,6 +366,47 @@ def test_mpc_state_propagation():
         )
 
 
+def test_mpc_failed_window_raises_with_window_info():
+    from monee.simulation.multi_period import MultiPeriodResult
+
+    # GIVEN
+    net, b0, b1, load_id, bat_id = _storage_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0] * 4)
+
+    class _FailingWindowSolver:
+        """GEKKO-style backend: reports failure via success=False, no raise."""
+
+        _backend_name = "stub"
+        _solver_name = "stub"
+
+        def __init__(self, fail_on_window):
+            self.calls = 0
+            self._fail_on_window = fail_on_window
+
+        def solve_multi_period(self, network, steps=None, **kwargs):
+            self.calls += 1
+            return MultiPeriodResult(
+                [network.copy() for _ in range(steps)],
+                objective=0.0,
+                success=self.calls != self._fail_on_window,
+            )
+
+    stub = _FailingWindowSolver(fail_on_window=2)
+
+    # WHEN / THEN: the second window (offset 2) fails and must abort loudly
+    with pytest.raises(RuntimeError, match="window starting at step 2"):
+        run_mpc(
+            net,
+            td,
+            total_steps=4,
+            horizon=2,
+            execution_steps=2,
+            solver=stub,
+        )
+    assert stub.calls == 2  # no windows solved past the failed one
+
+
 def test_repr_shows_temporal_evolution():
     # GIVEN
     net, b0, b1, load_id, bat_id = _storage_net()

@@ -50,6 +50,8 @@ from .branch import (
     PassiveHeatExchangerGenerator,
     PassiveHeatExchangerLoad,
     Trafo,
+    hx_is_consuming,
+    hx_is_generating,
 )
 from .storage import (
     ElectricStorage,

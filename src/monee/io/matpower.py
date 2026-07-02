@@ -1,5 +1,6 @@
 import math
 import re
+import warnings
 
 import scipy.io
 
@@ -35,15 +36,6 @@ _UNLIMITED_I_KA = 999
 
 def as_controllable(start_value):
     return {"value": start_value, "max": None, "min": None}
-
-
-def number_of_lines_with_from_to(from_node, to_node, branch_list):
-    number = 0
-    for branch in branch_list:
-        branch_id = branch["id"]
-        if branch_id[0] == from_node and branch_id[1] == to_node:
-            number += 1
-    return number
 
 
 def read_matpower_data(mat_data):
@@ -116,7 +108,6 @@ def _build_network(mpc):
 def fill_branch_dict(
     branch_mat, base_kv_by_id, branch_dict_list, isolated_bus_ids=frozenset()
 ):
-    from_to_count = {}
     for i in range(len(branch_mat)):
         branch_row = branch_mat[i]
         if (
@@ -124,13 +115,9 @@ def fill_branch_dict(
             or int(branch_row[1]) in isolated_bus_ids
         ):
             continue
-        from_node, to_node = int(branch_row[0]), int(branch_row[1])
-        parallel_idx = from_to_count.get((from_node, to_node), 0)
-        from_to_count[(from_node, to_node)] = parallel_idx + 1
         branch_dict = {}
         branch_dict["values"] = {}
         branch_dict["grid_id"] = "power"
-        branch_dict["id"] = (from_node, to_node, parallel_idx)
         branch_dict["from_node"] = int(branch_row[0])
         branch_dict["to_node"] = int(branch_row[1])
         branch_dict["values"]["br_r_pu"] = branch_row[2]
@@ -187,8 +174,10 @@ def fill_child_dict(
         if is_ref and in_service:
             ref_assigned.add(bus_id)
             child_dict["model_type"] = "ExtPowerGrid"
-            child_dict["values"]["p_mw"] = as_controllable(gen_row[1])
-            child_dict["values"]["q_mvar"] = as_controllable(gen_row[2])
+            # Load convention seed: generation Pg/Qg enters as -Pg/-Qg,
+            # matching the OPF path in fill_opf_child_dict.
+            child_dict["values"]["p_mw"] = as_controllable(-gen_row[1])
+            child_dict["values"]["q_mvar"] = as_controllable(-gen_row[2])
             child_dict["values"]["vm_pu"] = gen_row[5]
             child_dict["values"]["va_degree"] = 0
         elif is_pv and in_service:
@@ -308,6 +297,8 @@ def _mpc_from_m_text(text):
     # Strip '%' line comments (incl. the extended-format '%column_names%' rows).
     # The numeric core matrices never contain quoted '%', so this is safe.
     text = re.sub(r"%[^\n]*", "", text)
+    # Join MATLAB '...' line continuations into one logical line.
+    text = re.sub(r"\.\.\.[^\n]*\n", " ", text)
     base = re.search(r"mpc\.baseMVA\s*=\s*([0-9.eE+\-]+)", text)
 
     if base is None:
@@ -340,17 +331,31 @@ def read_matpower_case(file):
 
 
 # MATPOWER gencost columns: MODEL, STARTUP, SHUTDOWN, NCOST, then the cost data.
+_GENCOST_PIECEWISE = 1  # MODEL == 1: piecewise linear, (p, cost) breakpoints
 _GENCOST_POLYNOMIAL = 2  # MODEL == 2: polynomial cost, coefficients high->low degree
 _NCOST_COL = 3
 _COST_DATA_COL = 4
 
 
 def _gencost_coeffs(gencost_mat, row):
+    """Polynomial cost coefficients for generator *row*, or None.
+
+    A 2-point piecewise-linear cost is exactly linear and is converted to its
+    polynomial equivalent; other PWL costs return None (caller warns).
+    """
     cost_row = gencost_mat[row]
-    if int(cost_row[0]) != _GENCOST_POLYNOMIAL:
-        return None
+    model = int(cost_row[0])
     ncost = int(cost_row[_NCOST_COL])
-    return [float(c) for c in cost_row[_COST_DATA_COL : _COST_DATA_COL + ncost]]
+    if model == _GENCOST_POLYNOMIAL:
+        return [float(c) for c in cost_row[_COST_DATA_COL : _COST_DATA_COL + ncost]]
+    if model == _GENCOST_PIECEWISE and ncost == 2:
+        x0, y0, x1, y1 = (
+            float(v) for v in cost_row[_COST_DATA_COL : _COST_DATA_COL + 4]
+        )
+        if x1 != x0:
+            slope = (y1 - y0) / (x1 - x0)
+            return [slope, y0 - slope * x0]
+    return None
 
 
 def _polynomial(coeffs, p):
@@ -377,6 +382,7 @@ def fill_opf_child_dict(
     out-of-service generators are kept inert.
     """
     ref_assigned = set()
+    costless_pwl_gens = []
     for i in range(len(gen_mat)):
         gen_row = gen_mat[i]
         bus_id = int(gen_row[0])
@@ -386,6 +392,14 @@ def fill_opf_child_dict(
         p_max, p_min = gen_row[8], gen_row[9]  # PMAX, PMIN (MW)
         q_max, q_min = gen_row[3], gen_row[4]  # QMAX, QMIN (MVAr)
         coeffs = None if gencost_mat is None else _gencost_coeffs(gencost_mat, i)
+        if (
+            coeffs is None
+            and in_service
+            and gencost_mat is not None
+            and i < len(gencost_mat)
+            and int(gencost_mat[i][0]) == _GENCOST_PIECEWISE
+        ):
+            costless_pwl_gens.append((i, bus_id))
         is_ref = (
             bus_type_by_id.get(bus_id) == REF_BUS_TYPE and bus_id not in ref_assigned
         )
@@ -423,6 +437,18 @@ def fill_opf_child_dict(
             if node_dict["id"] == gen_row[0]:
                 node_dict["child_ids"].append(child_dict["id"])
         child_dict_list.append(child_dict)
+
+    if costless_pwl_gens:
+        listing = ", ".join(
+            f"gen {gen_idx} (bus {bus_id})" for gen_idx, bus_id in costless_pwl_gens
+        )
+        warnings.warn(
+            "MATPOWER piecewise-linear gencost (MODEL==1) is only supported for "
+            "exactly 2 distinct breakpoints (a linear cost); the cost of the "
+            "following generators was dropped from the OPF objective, so they "
+            f"stay dispatchable at zero cost: {listing}.",
+            stacklevel=2,
+        )
 
 
 def build_matpower_opf(mpc, max_loading=1.0, limit_basis="mva"):

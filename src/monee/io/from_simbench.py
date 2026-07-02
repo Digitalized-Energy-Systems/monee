@@ -9,6 +9,16 @@ from monee.simulation.timeseries import TimeseriesData
 logger = logging.getLogger(__name__)
 
 
+def _row_scaling(row) -> float:
+    try:
+        scaling = float(row.get("scaling", 1.0))
+    except (TypeError, ValueError):
+        return 1.0
+    if scaling != scaling or scaling < 0:  # NOSONAR NaN or invalid
+        return 1.0
+    return scaling
+
+
 def obtain_simbench_profile_by_pp_net(pp_net) -> TimeseriesData:  # NOSONAR
     """Build a :class:`TimeseriesData` from a simbench pandapower net.
 
@@ -18,7 +28,13 @@ def obtain_simbench_profile_by_pp_net(pp_net) -> TimeseriesData:  # NOSONAR
     through under their raw simbench column names.
     """
     td = TimeseriesData()
-    profiles = pp_net.profiles
+    profiles = getattr(pp_net, "profiles", None)
+    if not profiles:
+        raise ValueError(
+            "The pandapower net carries no simbench profiles ('net.profiles' is "
+            "missing or empty). Load the net with simbench.get_simbench_net(...) "
+            "or attach the profiles dict before calling this function."
+        )
 
     if "load" in profiles and hasattr(pp_net, "load") and len(pp_net.load):
         load_df = profiles["load"]
@@ -30,13 +46,20 @@ def obtain_simbench_profile_by_pp_net(pp_net) -> TimeseriesData:  # NOSONAR
                 profile = row["profile"]
                 p_col = f"{profile}_pload"
                 q_col = f"{profile}_qload"
+                # p_mw·scaling matches the base import, where to_mpc applies
+                # the per-load scaling factor.
+                scaling = _row_scaling(row)
                 if p_col in load_df.columns:
-                    contribution = load_df[p_col].to_numpy() * float(row["p_mw"])
+                    contribution = (
+                        load_df[p_col].to_numpy() * float(row["p_mw"]) * scaling
+                    )
                     p_total = (
                         contribution if p_total is None else p_total + contribution
                     )
                 if q_col in load_df.columns:
-                    contribution = load_df[q_col].to_numpy() * float(row["q_mvar"])
+                    contribution = (
+                        load_df[q_col].to_numpy() * float(row["q_mvar"]) * scaling
+                    )
                     q_total = (
                         contribution if q_total is None else q_total + contribution
                     )

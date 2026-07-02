@@ -113,6 +113,12 @@ class Var:
         )
 
     def __mul__(self, other):
+        if isinstance(other, Var | Const | Intermediate | PostProcess):
+            raise TypeError(
+                f"Cannot multiply a Var with a {type(other).__name__} before "
+                "solver injection. Build such expressions inside equations(), "
+                "which run after inject_vars, or use plain numbers."
+            )
         if isinstance(other, (int, float)) and other < 0:
             new_max = None if self.min is None else self.min * other
             new_min = None if self.max is None else self.max * other
@@ -662,7 +668,8 @@ class Branch(Component):
 
     @property
     def tid(self):
+        # Include the MultiGraph key so parallel branches get distinct tids.
         if self.id[0] > self.id[1]:
-            return f"branch-{self.id[0]}-{self.id[1]}"
+            return f"branch-{self.id[0]}-{self.id[1]}-{self.id[2]}"
         else:
-            return f"branch-{self.id[1]}-{self.id[0]}"
+            return f"branch-{self.id[1]}-{self.id[0]}-{self.id[2]}"

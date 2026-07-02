@@ -56,7 +56,7 @@ def _power_path_with_terminals():
     b0 = pn.node(
         mm.Bus(base_kv=20),
         mm.EL,
-        child_ids=[pn.child(mm.ExtPowerGrid(p_mw=0, q_mvar=0, vm_pu=1, va_radians=0))],
+        child_ids=[pn.child(mm.ExtPowerGrid(p_mw=0, q_mvar=0, vm_pu=1, va_degree=0))],
     )
     b1 = pn.node(mm.Bus(base_kv=20), mm.EL)
     b2 = pn.node(

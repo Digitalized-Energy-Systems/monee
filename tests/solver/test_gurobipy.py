@@ -506,11 +506,13 @@ def test_infeasible_model_reports_iis():
 
     # WHEN
     m.optimize()
-    success, report = solver._classify(m, phase_label="test")
+    success, report, status_str, tc_str = solver._classify(m, phase_label="test")
 
     # THEN
     assert success is False
     assert report is not None
+    assert status_str == "warning"
+    assert tc_str == "infeasible"
     summary = report.summary()
     assert "impossible_c" in summary or "x_var" in summary
 
@@ -728,6 +730,123 @@ def test_run_timeseries_gurobipy_falls_back_when_hooks_present(monkeypatch):
 
     assert calls["reuse"] == 0  # fast path skipped because hooks are present
     assert seen == [0, 1, 2]
+
+
+@requires_gurobi
+def test_run_timeseries_gurobipy_fast_path_raises_on_step_failure():
+    """A step without a usable solution under the build-once fast path raises
+    (default on_step_error='raise'), matching the rebuild loop's contract."""
+    import monee
+    from monee.simulation import TimeseriesData
+    from monee.solver.gurobipy import GurobipySolveError, GurobipySolver
+
+    net, load_id = _el_two_bus_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 1.5])
+
+    with pytest.raises(GurobipySolveError, match="step 0"):
+        monee.run_timeseries(net, td, solver=GurobipySolver(params={"TimeLimit": 0}))
+
+
+@requires_gurobi
+def test_run_timeseries_gurobipy_fast_path_skip_records_failed_steps():
+    """on_step_error='skip' records failed StepResults instead of raising."""
+    import monee
+    from monee.simulation import TimeseriesData
+    from monee.solver.gurobipy import GurobipySolver
+
+    net, load_id = _el_two_bus_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 1.5])
+
+    res = monee.run_timeseries(
+        net,
+        td,
+        solver=GurobipySolver(params={"TimeLimit": 0}),
+        on_step_error="skip",
+    )
+
+    assert res.failed_steps == [0, 1]
+    assert all(sr.failed and sr.result is None for sr in res.step_results)
+
+
+@requires_gurobi
+def test_run_timeseries_gurobipy_fast_path_skip_keeps_carried_state(monkeypatch):
+    """A skipped (infeasible) step must not poison the carried storage state:
+    the next step resumes from the last successful step's SoC, exactly like the
+    rebuild loop whose StepState is only pushed on success."""
+    import numpy as np
+
+    import monee
+    import monee.simulation.timeseries as tsmod
+    from monee.simulation import TimeseriesData
+    from monee.solver.gurobipy import GurobipySolver
+
+    calls = {"reuse": 0}
+    orig = tsmod._run_gurobipy_reuse
+    monkeypatch.setattr(
+        tsmod,
+        "_run_gurobipy_reuse",
+        lambda *a, **k: calls.__setitem__("reuse", calls["reuse"] + 1) or orig(*a, **k),
+    )
+
+    # e_initial=5: step 0 -> e=1, step 1 would need e=-3 (< e_min=0, infeasible),
+    # step 2 resumes from e=1 -> e=3. Carried zeros would instead give e=2.
+    dispatch = [-4.0, -4.0, 2.0]
+
+    net, sid = _el_net_with_storage(e_initial=5.0)
+    td = TimeseriesData()
+    td.add_child_series(sid, "p_mw", dispatch)
+    res_fast = monee.run_timeseries(
+        net, td, solver=GurobipySolver(), on_step_error="skip"
+    )
+
+    net2, sid2 = _el_net_with_storage(e_initial=5.0)
+    td2 = TimeseriesData()
+    td2.add_child_series(sid2, "p_mw", dispatch)
+    res_slow = monee.run_timeseries(
+        net2,
+        td2,
+        solver=GurobipySolver(),
+        on_step_error="skip",
+        step_hooks=[_NOOP_HOOK],
+    )
+
+    assert calls["reuse"] == 1
+    assert res_fast.failed_steps == [1]
+    assert res_slow.failed_steps == [1]
+    e_fast = res_fast.get_result_for_id(sid, "e_mwh").to_numpy()
+    e_slow = res_slow.get_result_for_id(sid2, "e_mwh").to_numpy()
+    assert np.nanmax(np.abs(e_fast - e_slow)) < 1e-6
+    assert abs(float(e_fast[-1]) - 3.0) < 1e-6
+
+
+@requires_gurobi
+def test_run_timeseries_gurobipy_falls_back_when_build_unsupported(monkeypatch):
+    """When the build-once driver cannot represent the case (build-time
+    ValueError/NotImplementedError), run_timeseries falls back to the per-step
+    rebuild loop instead of surfacing the build error."""
+    import monee
+    import monee.solver.gurobipy as gmod
+    from monee.simulation import TimeseriesData
+    from monee.solver.gurobipy import GurobipySolver
+
+    class _Unsupported:
+        def __init__(self, *args, **kwargs):
+            raise ValueError(
+                "compound temporal state is unsupported; use the per-step loop"
+            )
+
+    monkeypatch.setattr(gmod, "GurobipyTimeseries", _Unsupported)
+
+    net, load_id = _el_two_bus_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 1.5, 0.8])
+
+    res = monee.run_timeseries(net, td, solver=GurobipySolver())
+
+    assert res.failed_steps == []
+    assert len(res.step_results) == 3
 
 
 if __name__ == "__main__":

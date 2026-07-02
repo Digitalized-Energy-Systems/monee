@@ -52,6 +52,17 @@ _ID_COLS: frozenset[str] = frozenset({"id", "node_id"})
 _SKIP: frozenset[str] = _META_COLS | _ID_COLS | frozenset({"_type"})
 
 
+def _write_figure(fig: go.Figure, path: str, **kwargs) -> None:
+    """Export *fig* to *path* via plotly's static image engine (kaleido)."""
+    try:
+        fig.write_image(path, **kwargs)
+    except (ImportError, ValueError) as e:
+        raise ImportError(
+            "Static image export requires the optional 'kaleido' package. "
+            "Install it with 'pip install monee[plot]' or 'pip install kaleido'."
+        ) from e
+
+
 # Value formatting
 
 
@@ -124,9 +135,9 @@ def _node_result_map(result: SolverResult) -> dict:
             continue
         if "node_id" in df.columns:
             continue  # child - skip
-        if isinstance(df["id"].iloc[0], tuple):
-            continue  # branch - skip
         for _, row in df.iterrows():
+            if isinstance(row["id"], tuple):
+                continue  # branch - skip
             m[row["id"]] = {"_type": type_name, **row.to_dict()}
     return m
 
@@ -142,11 +153,11 @@ def _branch_result_map(result: SolverResult) -> dict:
     for type_name, df in result.dataframes.items():
         if df.empty or "id" not in df.columns:
             continue
-        if not isinstance(df["id"].iloc[0], tuple):
-            continue
         for _, row in df.iterrows():
-            entry = {"_type": type_name, **row.to_dict()}
             bid = row["id"]
+            if not isinstance(bid, tuple):
+                continue
+            entry = {"_type": type_name, **row.to_dict()}
             m[bid] = entry
             # reversed direction alias so graph.edges() order never misses
             m[(bid[1], bid[0], bid[2])] = entry
@@ -262,12 +273,14 @@ def _branch_label_and_color(
     Single-grid branches use the traffic-light palette; coupling branches
     fall back to the CP accent colour.
     """
-    # single-grid electrical loading
-    for col in ("loading_pu", "loading_from_pu"):
+    # single-grid electrical loading (result frames store per-unit values)
+    for col in ("loading_from_pu", "loading_to_pu"):
         v = row.get(col)
         if v is not None:
             try:
-                return f"{float(v):.0f}%", _line_color(v)
+                pct = float(v) * 100
+                if not math.isnan(pct):
+                    return f"{pct:.0f}%", _line_color(pct)
             except (TypeError, ValueError):
                 pass
 
@@ -404,6 +417,8 @@ def plot_result(  # NOSONAR
         show_children: Include child components in parent-node hover text.
         use_monee_positions: Use stored ``node.position`` coordinates.
         write_to: Optional path to export the figure (PDF / PNG / SVG).
+            Static export needs the optional ``kaleido`` package
+            (``pip install monee[plot]``).
 
     Returns:
         A :class:`plotly.graph_objects.Figure`.
@@ -673,6 +688,6 @@ def plot_result(  # NOSONAR
     )
 
     if write_to is not None:
-        fig.write_image(write_to)
+        _write_figure(fig, write_to)
 
     return fig

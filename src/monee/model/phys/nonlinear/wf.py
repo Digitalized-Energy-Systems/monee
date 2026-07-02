@@ -30,7 +30,7 @@ def darcy_weisbach_equation(
     pipe_length,
     diameter_m,
     fluid_density_kg_per_m3,
-    on_off=1,  # NOSONAR
+    on_off=1,
     friction=None,
     **kwargs,
 ):
@@ -42,4 +42,6 @@ def darcy_weisbach_equation(
         * (1.0 / (2.0 * fluid_density_kg_per_m3 * A**2))
     )
 
-    return (p_i - p_j) == resistance * -(m_pos_sq - m_neg_sq)
+    # on_off gates the pressure coupling exactly like gf.pipe_weymouth: an off
+    # pipe (flows big-M'd to 0) must not enforce p_i == p_j.
+    return (p_i - p_j) * on_off == resistance * -(m_pos_sq - m_neg_sq)

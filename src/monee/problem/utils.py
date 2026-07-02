@@ -16,6 +16,7 @@ from monee.model.multi import (
     PowerToHeatControlNode,
     PowerToHeatHG,
 )
+from monee.model.node import Bus
 
 # Fallback HHV (kWh/kg) when a gas grid is missing ``higher_heating_value_kwh_per_kg``.
 _HHV_DEFAULT = DEFAULT_GAS_HHV_KWH_PER_KG
@@ -62,6 +63,36 @@ def line_loading_limit(branch_model, side: str, max_loading: float, basis: str =
             return True
         return branch_model.current_pu_squared <= (max_loading * max_loading) / scale_sq
     return getattr(branch_model, f"loading_{side}_pu") <= max_loading
+
+
+def make_node_var_bounds_hook(node_type, attr, squared_attr, bounds):
+    """``_controllable_appliables`` hook bounding *attr* (and ``lo²..hi²`` on
+    *squared_attr*) on independent nodes of exactly *node_type*. Only Var-typed
+    attributes are touched: whichever of the pair the formulation uses as its
+    actual decision variable gets the bound, while reporting Intermediates are
+    left alone (a static bound there would be a no-op)."""
+    lo, hi = bounds
+
+    def _apply_bounds(network):
+        for component in network.all_components():
+            model = component.model
+            if type(model) is not node_type or not component.independent:
+                continue
+            v = getattr(model, attr, None)
+            vsq = getattr(model, squared_attr, None)
+            if type(v) is Var:
+                v.min, v.max = lo, hi
+            if type(vsq) is Var:
+                vsq.min, vsq.max = lo * lo, hi * hi
+
+    return _apply_bounds
+
+
+def make_vm_bounds_hook(bounds_vm):
+    """Bound bus voltage magnitudes on the formulation's actual decision
+    variable: ``vm_pu_squared`` under the MISOCP relaxation, ``vm_pu`` under
+    the AC NLP."""
+    return make_node_var_bounds_hook(Bus, "vm_pu", "vm_pu_squared", bounds_vm)
 
 
 def cp_input_rated_mw(component):  # NOSONAR

@@ -26,6 +26,20 @@ _log = logging.getLogger(__name__)
 _STEP_FAILED_MSG = "Step %d failed: %s"
 
 
+def _unsuccessful_solve_error(step: int, result) -> RuntimeError:
+    """Error for a solver that reported failure via ``success=False`` instead
+    of raising (Pyomo/GurobiPy style)."""
+    details = []
+    for attr in ("solver_status", "termination_condition"):
+        val = getattr(result, attr, None)
+        if val is not None:
+            details.append(f"{attr}={val}")
+    suffix = f" ({', '.join(details)})" if details else ""
+    return RuntimeError(
+        f"Step {step}: solver reported an unsuccessful solve (success=False){suffix}"
+    )
+
+
 class TimeseriesData:
     """Time-varying attribute values applied to model objects before each step.
     All registered series must share a length (validated on add)."""
@@ -320,7 +334,9 @@ class TimeseriesResult:
     def _make_index(self, step_indices: list[int]) -> pandas.Index:
         if self._datetime_index is not None:
             return self._datetime_index[step_indices]
-        return pandas.RangeIndex(len(step_indices))
+        # Label rows by step number (not positionally) so rows stay aligned
+        # after skipped/failed steps or bounded history.
+        return pandas.Index(step_indices)
 
     def _create_result_for(self, model_type, attribute: str) -> pandas.DataFrame:
         rows = []
@@ -581,6 +597,22 @@ def _network_has_temporal_coupling(net: Network) -> bool:  # NOSONAR
     return False
 
 
+def _dt_h_at_step(datetime_index, step: int) -> float | None:
+    """Inter-step interval in hours at *step* derived from *datetime_index*:
+    later steps use the interval to the prior timestamp, the first step borrows
+    the first interval, and ``None`` signals that a single timestamp leaves no
+    interval (callers keep their default of 1.0). Shared by the sequential
+    timeseries loop and the multi-period engine so both agree on dt_h for
+    identical inputs."""
+    if step > 0:
+        delta = datetime_index[step] - datetime_index[step - 1]
+    elif len(datetime_index) > 1:
+        delta = datetime_index[1] - datetime_index[0]
+    else:
+        return None
+    return delta.total_seconds() / 3600.0
+
+
 def _casadi_reuse_eligible(
     net, solver, optimization_problem, step_hooks, timeseries_data, solver_kwargs
 ) -> bool:
@@ -619,6 +651,7 @@ def _casadi_reuse_eligible(
 
 def _run_casadi_reuse(
     net,
+    solver,
     timeseries_data,
     steps,
     on_step_error,
@@ -637,6 +670,7 @@ def _run_casadi_reuse(
         formulation=solver_kwargs.get("formulation"),
         simulation=solver_kwargs.get("simulation", False),
         steps=steps,
+        solver_options=solver.solver_options,
     )
     step_results: list[StepResult] = []
     for step in range(steps):
@@ -735,33 +769,46 @@ def _run_gurobipy_reuse(
     progress_callback,
     datetime_index,
     solver_kwargs,
-) -> "TimeseriesResult":
+) -> "TimeseriesResult | None":
     """Build the gurobipy model once and re-bound + re-solve each step (carrying
     state and the integer solution forward) instead of rebuilding every step.
     Equivalent results to the standard loop for the gated cases (see
-    :func:`_gurobipy_reuse_eligible`)."""
+    :func:`_gurobipy_reuse_eligible`). Returns ``None`` when the build-once
+    driver cannot represent the case (e.g. compound temporal state or a deeper
+    lookback than one step), so the caller falls back to the rebuild loop."""
     from monee.solver.gurobipy import GurobipyTimeseries
 
-    ts = GurobipyTimeseries(
-        net,
-        timeseries_data,
-        formulation=solver_kwargs.get("formulation"),
-        simulation=solver_kwargs.get("simulation", False),
-        steps=steps,
-        params=solver._params,
-    )
+    try:
+        ts = GurobipyTimeseries(
+            net,
+            timeseries_data,
+            formulation=solver_kwargs.get("formulation"),
+            simulation=solver_kwargs.get("simulation", False),
+            steps=steps,
+            params=solver._params,
+        )
+    except (ValueError, NotImplementedError) as exc:
+        _log.debug(
+            "run_timeseries: gurobipy build-once driver unavailable (%s); "
+            "falling back to the per-step rebuild loop",
+            exc,
+        )
+        return None
     step_results: list[StepResult] = []
-    for step in range(steps):
-        try:
-            sr = StepResult(step=step, result=ts.step_result(step))
-        except Exception as exc:
-            if on_step_error == "raise":
-                raise
-            _log.warning(_STEP_FAILED_MSG, step, exc)
-            sr = StepResult(step=step, result=None, failed=True, error=exc)
-        step_results.append(sr)
-        if progress_callback is not None:
-            progress_callback(step, steps)
+    try:
+        for step in range(steps):
+            try:
+                sr = StepResult(step=step, result=ts.step_result(step))
+            except Exception as exc:
+                if on_step_error == "raise":
+                    raise
+                _log.warning(_STEP_FAILED_MSG, step, exc)
+                sr = StepResult(step=step, result=None, failed=True, error=exc)
+            step_results.append(sr)
+            if progress_callback is not None:
+                progress_callback(step, steps)
+    finally:
+        ts.dispose()
     return TimeseriesResult(
         step_results,
         datetime_index=datetime_index,
@@ -782,13 +829,24 @@ def run(  # NOSONAR
     on_step_error: str = "raise",
     progress_callback: Callable[[int, int], None] | None = None,
     datetime_index: pandas.DatetimeIndex | None = None,
+    dt_h: float | None = None,
     **solver_kwargs,
 ) -> TimeseriesResult:
     """Run a timeseries simulation: copy net, apply timeseries, solve, collect.
 
     ``steps`` defaults to ``timeseries_data.length``. ``on_step_error='skip'``
-    records a failed StepResult and continues. ``solver_kwargs`` are forwarded
-    to ``solver.solve(...)``.
+    records a failed StepResult and continues; a step whose solver reports an
+    unsuccessful solve (``result.success == False``) counts as failed exactly
+    like a raising solver. ``solver_kwargs`` are forwarded to
+    ``solver.solve(...)``.
+
+    ``dt_h`` sets the constant inter-step interval in hours seen by
+    ``inter_step_equations`` (default ``None`` keeps the StepState default of
+    1.0). ``datetime_index`` overrides ``dt_h`` with per-step intervals.
+
+    ``step_hooks`` entries may be :class:`StepHook` instances (receiving both
+    ``pre_run`` and ``post_run``) or plain callables, which only receive the
+    post-run call ``hook(net_copy, step, step_state, step_result, base_net)``.
     """
     if steps is None and timeseries_data is None:
         raise ValueError(
@@ -814,6 +872,19 @@ def run(  # NOSONAR
         raise ValueError(
             f"on_step_error must be 'raise' or 'skip', got {on_step_error!r}"
         )
+    if dt_h is not None and dt_h <= 0:
+        raise ValueError(f"dt_h must be positive; got {dt_h}.")
+    if datetime_index is not None:
+        if len(datetime_index) < steps:
+            raise ValueError(
+                f"datetime_index length ({len(datetime_index)}) is less than "
+                f"steps ({steps})."
+            )
+        if dt_h is not None:
+            _log.warning(
+                "Both dt_h and datetime_index were provided; dt_h will be "
+                "ignored and step durations will be derived from datetime_index."
+            )
 
     # Resolve solver/backend once up-front; reused across every step.
     resolved_solver = resolve_solver(solver, backend=backend)
@@ -833,6 +904,7 @@ def run(  # NOSONAR
         _log.debug("run_timeseries: using CasADi build-once graph-reuse fast path")
         return _run_casadi_reuse(
             net,
+            resolved_solver,
             timeseries_data,
             steps,
             on_step_error,
@@ -845,17 +917,23 @@ def run(  # NOSONAR
     # the time-varying inputs (and carried inter-step state) per step instead of
     # reconstructing the whole model every step. Gated to the cases that produce
     # identical results (see :func:`_gurobipy_reuse_eligible`).
-    if solve_flag and _gurobipy_reuse_eligible(
-        net,
-        resolved_solver,
-        optimization_problem,
-        step_hooks,
-        timeseries_data,
-        solver_kwargs,
-        datetime_index,
+    # The persistent gurobipy model bakes dt_h in at build time, so an explicit
+    # dt_h (like a datetime_index) must go through the rebuild loop.
+    if (
+        solve_flag
+        and dt_h is None
+        and _gurobipy_reuse_eligible(
+            net,
+            resolved_solver,
+            optimization_problem,
+            step_hooks,
+            timeseries_data,
+            solver_kwargs,
+            datetime_index,
+        )
     ):
         _log.debug("run_timeseries: using gurobipy build-once model-reuse fast path")
-        return _run_gurobipy_reuse(
+        reuse_result = _run_gurobipy_reuse(
             net,
             resolved_solver,
             timeseries_data,
@@ -865,22 +943,19 @@ def run(  # NOSONAR
             datetime_index,
             solver_kwargs,
         )
+        if reuse_result is not None:
+            return reuse_result
 
     step_results: list[StepResult] = []
     step_state = StepState()
+    if dt_h is not None and datetime_index is None:
+        step_state.dt_h = dt_h
 
     for step in range(steps):
         if datetime_index is not None:
-            # First step uses the first interval (matching the multi-period
-            # engine's _resolve_dt_h); later steps use the prior interval. Both
-            # engines then agree on dt_h for identical inputs. Falls back to the
-            # default 1.0 only when a single timestamp leaves no interval.
-            if step > 0:
-                delta = datetime_index[step] - datetime_index[step - 1]
-                step_state.dt_h = delta.total_seconds() / 3600.0
-            elif len(datetime_index) > 1:
-                delta = datetime_index[1] - datetime_index[0]
-                step_state.dt_h = delta.total_seconds() / 3600.0
+            interval = _dt_h_at_step(datetime_index, step)
+            if interval is not None:
+                step_state.dt_h = interval
 
         for hook in step_hooks:
             if isinstance(hook, StepHook):
@@ -898,7 +973,12 @@ def run(  # NOSONAR
                     step_state=step_state,
                     **solver_kwargs,
                 )
-                step_state.push(result.network)
+                # Backends that report failure instead of raising (Pyomo,
+                # GurobiPy) must hit the same failure contract as raising
+                # backends: no push, on_step_error honoured.
+                if getattr(result, "success", True) is False:
+                    raise _unsuccessful_solve_error(step, result)
+                step_state.push(result.network, step=step)
                 sr = StepResult(step=step, result=result)
             except Exception as exc:
                 if on_step_error == "raise":

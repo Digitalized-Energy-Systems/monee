@@ -22,30 +22,19 @@ class Bus(NodeModel):
     def calc_signed_power_values(
         self, from_branch_models, to_branch_models, child_models
     ):
+        # model.vars builds a dict per access - fetch once per model.
+        from_vars = [model.vars for model in from_branch_models]
+        to_vars = [model.vars for model in to_branch_models]
+        child_vars = [model.vars for model in child_models]
         signed_active_power = (
-            [
-                model.vars["p_from_mw"] * model.vars["on_off"]
-                for model in from_branch_models
-            ]
-            + [
-                model.vars["p_to_mw"] * model.vars["on_off"]
-                for model in to_branch_models
-            ]
-            + [model.vars["p_mw"] * model.vars["regulation"] for model in child_models]
+            [vs["p_from_mw"] * vs["on_off"] for vs in from_vars]
+            + [vs["p_to_mw"] * vs["on_off"] for vs in to_vars]
+            + [vs["p_mw"] * vs["regulation"] for vs in child_vars]
         )
         signed_reactive_power = (
-            [
-                model.vars["q_from_mvar"] * model.vars["on_off"]
-                for model in from_branch_models
-            ]
-            + [
-                model.vars["q_to_mvar"] * model.vars["on_off"]
-                for model in to_branch_models
-            ]
-            + [
-                model.vars["q_mvar"] * model.vars["regulation"]
-                for model in child_models
-            ]
+            [vs["q_from_mvar"] * vs["on_off"] for vs in from_vars]
+            + [vs["q_to_mvar"] * vs["on_off"] for vs in to_vars]
+            + [vs["q_mvar"] * vs["regulation"] for vs in child_vars]
         )
         return (signed_active_power, signed_reactive_power)
 
@@ -54,8 +43,8 @@ class Bus(NodeModel):
             "p_mw",
             sum(
                 [
-                    model.vars["p_mw"] * model.vars["regulation"]
-                    for model in child_models
+                    vs["p_mw"] * vs["regulation"]
+                    for vs in (model.vars for model in child_models)
                 ]
             ),
         )
@@ -65,8 +54,8 @@ class Bus(NodeModel):
             "q_mvar",
             sum(
                 [
-                    model.vars["q_mvar"] * model.vars["regulation"]
-                    for model in child_models
+                    vs["q_mvar"] * vs["regulation"]
+                    for vs in (model.vars for model in child_models)
                 ]
             ),
         )
@@ -94,7 +83,13 @@ class Bus(NodeModel):
 
 @model
 class Junction(NodeModel):
-    def __init__(self) -> None:
+    def __init__(self, **kwargs) -> None:
+        # Deliberately no super().__init__(): Junction sits in the cooperative
+        # MRO of the coupling control nodes (e.g. CHPControlNode =
+        # MultiGridNodeModel, Junction, Bus) where chaining further would hit
+        # Bus.__init__ which requires base_kv. Replicate the essential
+        # GenericModel state instead.
+        self._ext_data = kwargs
         self.t_k = PostProcess(lambda v: float("nan"))
         self.t_pu = Var(1, min=0.3, max=2, name="t_pu")
         self.pressure_squared_pu = Var(1, min=0.5, max=2, name="pressure_squared_pu")
@@ -102,53 +97,57 @@ class Junction(NodeModel):
         self.mass_flow_kgs = Intermediate(1)
 
     def calc_signed_mass_flow(self, from_branch_models, to_branch_models, child_models):
+        # model.vars builds a dict per access - fetch once per model.
+        from_vars = [model.vars for model in from_branch_models]
+        to_vars = [model.vars for model in to_branch_models]
+        child_vars = [model.vars for model in child_models]
         return (
             [
-                model.vars["from_mass_flow_kgs"] * model.vars["on_off"]
-                for model in from_branch_models
-                if "from_mass_flow_kgs" in model.vars
+                vs["from_mass_flow_kgs"] * vs["on_off"]
+                for vs in from_vars
+                if "from_mass_flow_kgs" in vs
             ]
             + [
-                model.vars["to_mass_flow_kgs"] * model.vars["on_off"]
-                for model in to_branch_models
-                if "to_mass_flow_kgs" in model.vars
+                vs["to_mass_flow_kgs"] * vs["on_off"]
+                for vs in to_vars
+                if "to_mass_flow_kgs" in vs
             ]
             + [
-                -model.vars["mass_flow_pos_kgs"] * model.vars["on_off"]
-                for model in from_branch_models
-                if "mass_flow_pos_kgs" in model.vars
+                -vs["mass_flow_pos_kgs"] * vs["on_off"]
+                for vs in from_vars
+                if "mass_flow_pos_kgs" in vs
             ]
             + [
-                model.vars["mass_flow_pos_kgs"] * model.vars["on_off"]
-                for model in to_branch_models
-                if "mass_flow_pos_kgs" in model.vars
+                vs["mass_flow_pos_kgs"] * vs["on_off"]
+                for vs in to_vars
+                if "mass_flow_pos_kgs" in vs
             ]
             + [
-                model.vars["mass_flow_neg_kgs"] * model.vars["on_off"]
-                for model in from_branch_models
-                if "mass_flow_neg_kgs" in model.vars
+                vs["mass_flow_neg_kgs"] * vs["on_off"]
+                for vs in from_vars
+                if "mass_flow_neg_kgs" in vs
             ]
             + [
-                -model.vars["mass_flow_neg_kgs"] * model.vars["on_off"]
-                for model in to_branch_models
-                if "mass_flow_neg_kgs" in model.vars
+                -vs["mass_flow_neg_kgs"] * vs["on_off"]
+                for vs in to_vars
+                if "mass_flow_neg_kgs" in vs
             ]
             + [
                 # Linepack: 0.5 splits net packing equally across both endpoints.
                 # Outflow-positive: charging (>0) leaves both junctions, hence +.
-                0.5 * model.vars["net_pack_kgs"] * model.vars["on_off"]
-                for model in from_branch_models
-                if "net_pack_kgs" in model.vars
+                0.5 * vs["net_pack_kgs"] * vs["on_off"]
+                for vs in from_vars
+                if "net_pack_kgs" in vs
             ]
             + [
-                0.5 * model.vars["net_pack_kgs"] * model.vars["on_off"]
-                for model in to_branch_models
-                if "net_pack_kgs" in model.vars
+                0.5 * vs["net_pack_kgs"] * vs["on_off"]
+                for vs in to_vars
+                if "net_pack_kgs" in vs
             ]
             + [
-                model.vars["mass_flow_kgs"] * model.vars["regulation"]
-                for model in child_models
-                if "mass_flow_kgs" in model.vars
+                vs["mass_flow_kgs"] * vs["regulation"]
+                for vs in child_vars
+                if "mass_flow_kgs" in vs
             ]
         )
 
@@ -172,37 +171,36 @@ class Junction(NodeModel):
 
             # node is FROM-end of these branches
             for bm in from_branch_models:
-                if (
-                    "mass_flow_pos_kgs" not in bm.vars
-                    or "mass_flow_neg_kgs" not in bm.vars
-                ):
+                vs = bm.vars
+                if "mass_flow_pos_kgs" not in vs or "mass_flow_neg_kgs" not in vs:
                     continue
-                mpos = bm.vars["mass_flow_pos_kgs"] * bm.vars.get("on_off", 1)
-                mneg = bm.vars["mass_flow_neg_kgs"] * bm.vars.get("on_off", 1)
+                on_off = vs.get("on_off", 1)
+                mpos = vs["mass_flow_pos_kgs"] * on_off
+                mneg = vs["mass_flow_neg_kgs"] * on_off
 
-                t_in = bm.vars["t_from_pu"]
-                t_out = self.t_pu * bm.vars.get("on_off", 1)
+                t_in = vs["t_from_pu"]
+                t_out = self.t_pu * on_off
                 terms.append(mneg * t_out - mpos * t_in)
 
             # node is TO-end of these branches
             for bm in to_branch_models:
-                if (
-                    "mass_flow_pos_kgs" not in bm.vars
-                    or "mass_flow_neg_kgs" not in bm.vars
-                ):
+                vs = bm.vars
+                if "mass_flow_pos_kgs" not in vs or "mass_flow_neg_kgs" not in vs:
                     continue
-                mpos = bm.vars["mass_flow_pos_kgs"] * bm.vars.get("on_off", 1)
-                mneg = bm.vars["mass_flow_neg_kgs"] * bm.vars.get("on_off", 1)
+                on_off = vs.get("on_off", 1)
+                mpos = vs["mass_flow_pos_kgs"] * on_off
+                mneg = vs["mass_flow_neg_kgs"] * on_off
 
-                t_in = bm.vars["t_to_pu"]  # inflow at to-end
-                t_out = self.t_pu * bm.vars.get("on_off", 1)
+                t_in = vs["t_to_pu"]  # inflow at to-end
+                t_out = self.t_pu * on_off
                 terms.append(-mneg * t_in + mpos * t_out)
 
             for nm in child_models:
-                if "mass_flow_kgs" not in nm.vars:
+                vs = nm.vars
+                if "mass_flow_kgs" not in vs:
                     continue
 
-                m_ext = nm.vars["mass_flow_kgs"] * nm.vars.get("regulation", 1)
+                m_ext = vs["mass_flow_kgs"] * vs.get("regulation", 1)
                 t_inj_k = getattr(nm, "injection_t_k", None)
                 if t_inj_k is not None and grid is not None:
                     # Defined-temperature injection (Source(t_k=...)): credit
@@ -220,16 +218,18 @@ class Junction(NodeModel):
                 else None
             )
             for nm in child_models:
-                if "q_mw_heat" not in nm.vars:
+                vs = nm.vars
+                if "q_mw_heat" not in vs:
                     continue
-                q = nm.vars["q_mw_heat"] * nm.vars.get("regulation", 1)
+                q = vs["q_mw_heat"] * vs.get("regulation", 1)
                 terms.append(q / scale_mw_per_kgs)
 
             # Branch-level heat injection at the TO end (e.g. GasToHeatHG).
             for bm in to_branch_models:
-                if "q_mw_heat" not in bm.vars:
+                vs = bm.vars
+                if "q_mw_heat" not in vs:
                     continue
-                q = bm.vars["q_mw_heat"] * bm.vars.get("on_off", 1)
+                q = vs["q_mw_heat"] * vs.get("on_off", 1)
                 terms.append(q / scale_mw_per_kgs)
 
             # Conduction-style regularizer keeps \partial(heat_bal)/\partial T_n non-zero
@@ -265,9 +265,9 @@ class Junction(NodeModel):
                     "mass_flow_kgs",
                     sum(
                         [
-                            model.vars["mass_flow_kgs"] * model.vars["regulation"]
-                            for model in child_models
-                            if "mass_flow_kgs" in model.vars
+                            vs["mass_flow_kgs"] * vs["regulation"]
+                            for vs in (model.vars for model in child_models)
+                            if "mass_flow_kgs" in vs
                         ]
                     ),
                 ),

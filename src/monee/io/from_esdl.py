@@ -78,9 +78,14 @@ def _lazy_esdl():
 
 
 def _walk_assets(area):
-    """Yield every asset in *area* and its nested sub-areas, depth-first."""
+    """Yield every asset in *area* and its nested sub-areas, depth-first.
+
+    Container assets (e.g. AbstractBuilding) can hold assets themselves, so
+    each yielded asset is also recursed into.
+    """
     for asset in _get(area, "asset", []) or []:
-        yield from asset
+        yield asset
+        yield from _walk_assets(asset)
     for sub_area in _get(area, "area", []) or []:
         yield from _walk_assets(sub_area)
 

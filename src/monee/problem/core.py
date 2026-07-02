@@ -14,13 +14,11 @@ from monee.model import (
     GasToHeatHG,
     GasToPower,
     GenericModel,
-    HeatExchanger,
     HeatExchangerGenerator,
     HeatExchangerLoad,
     HeatGenerator,
     HeatLoad,
     Network,
-    PassiveHeatExchanger,
     PassiveHeatExchangerGenerator,
     PassiveHeatExchangerLoad,
     PowerGenerator,
@@ -31,6 +29,8 @@ from monee.model import (
     Sink,
     Source,
     Var,
+    hx_is_consuming,
+    hx_is_generating,
 )
 from monee.model.storage import ElectricStorage, GasStorage, ThermalStorage
 
@@ -99,11 +99,18 @@ class Objectives:
         self._objectives = []
 
     def select(self, model_selection_function) -> Objective:
+        def _filter(component):
+            return (
+                model_selection_function(component.model)
+                and component.active
+                and (not component.ignored)
+            )
+
         objective = Objective(
             lambda network: [
-                model
-                for model in network.all_models()
-                if model_selection_function(model)
+                component.model
+                for component in network.all_components()
+                if _filter(component)
             ]
         )
         self._objectives.append(objective)
@@ -433,6 +440,11 @@ class OptimizationProblem:
     def bounds(self, minmax, component_condition=lambda _m, _g: True, attributes=None):
         """Override min/max for ``Var`` attributes on matching components.
         ``component_condition`` is ``(model, grid) -> bool``."""
+        if not attributes:
+            raise ValueError(
+                "bounds() requires a non-empty list of attribute names to bound, "
+                f"got {attributes!r}."
+            )
         self._bounds_for_controllables.append(
             (minmax[0], minmax[1], component_condition, attributes)
         )
@@ -482,16 +494,7 @@ class OptimizationProblem:
                         type(component.model) is Sink
                         and type(component.grid) is GasGrid
                     )
-                    or (
-                        isinstance(
-                            component.model, HeatExchanger | PassiveHeatExchanger
-                        )
-                        # q_mw is always a Var on these models; the consuming
-                        # setpoint lives in q_mw_set (= -q_mw), so a positive
-                        # consuming q_mw maps to q_mw_set < 0.
-                        and isinstance(component.model.q_mw_set, (int, float))
-                        and (component.model.q_mw_set < 0)
-                    )
+                    or hx_is_consuming(component.model)
                 )
                 and component.active
                 and (not component.ignored)
@@ -502,17 +505,21 @@ class OptimizationProblem:
 
     def controllable_generators(self, attributes):
         """Make PowerGenerator/HeatGenerator/HeatExchangerGenerator/
-        PassiveHeatExchangerGenerator/Source controllable. See
+        PassiveHeatExchangerGenerator/Source and generating (bare)
+        HeatExchanger/PassiveHeatExchanger controllable. See
         :meth:`controllable_demands` for the 0.0-locks-to-[0,0] caveat."""
         self.controllable(
             component_condition=lambda component: (
-                isinstance(
-                    component.model,
-                    HeatExchangerGenerator
-                    | PassiveHeatExchangerGenerator
-                    | PowerGenerator
-                    | HeatGenerator
-                    | Source,
+                (
+                    isinstance(
+                        component.model,
+                        HeatExchangerGenerator
+                        | PassiveHeatExchangerGenerator
+                        | PowerGenerator
+                        | HeatGenerator
+                        | Source,
+                    )
+                    or hx_is_generating(component.model)
                 )
                 and component.active
                 and (not component.ignored)

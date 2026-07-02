@@ -10,6 +10,7 @@ import monee.model.phys.nonlinear.hf as ohfmodel
 import monee.model.phys.nonlinear.wf as owfmodel
 from monee.model.core import Const, Var
 
+from ...common import ensure_velocity_report
 from ...core import BranchFormulation
 
 
@@ -30,6 +31,7 @@ class BilinearDarcyWeisbachBranchFormulation(BranchFormulation):
         model.t_out_pu = Var(1, min=0.3, max=2, name="t_out_pu")
         model.mass_flow_mag_kgs = Var(1, min=0, name="mass_flow_mag_kgs")
         model.alpha = Var(0.01, min=0, max=1, name="alpha")
+        ensure_velocity_report(model, grid)
         _pin_friction_const(model)
 
     def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
@@ -82,8 +84,7 @@ class BilinearDarcyWeisbachBranchFormulation(BranchFormulation):
             == branch.mass_flow_mag_kgs,
             branch.t_out_pu
             == branch.temperature_ext_k / grid.t_ref_k
-            + branch.alpha * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref_k)
-            + 0,
+            + branch.alpha * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref_k),
             branch.t_in_pu
             == branch.direction * to_node_model.vars["t_pu"]
             + (1 - branch.direction) * from_node_model.vars["t_pu"],
@@ -119,6 +120,7 @@ class PwlDarcyWeisbachBranchFormulation(BranchFormulation):
         model.t_out_pu = Var(1, min=0.3, max=2, name="t_out_pu")
         model.mass_flow_mag_kgs = Var(1, min=0, name="mass_flow_mag_kgs")
         model.alpha = Var(0.01, min=0, max=1, name="alpha")
+        ensure_velocity_report(model, grid)
         # \varphi = friction \cdot m^2, per flow direction; replaces the squared-mf Vars.
         model.phi_pwl_pos = Var(0, min=0, name="phi_pwl_pos")
         model.phi_pwl_neg = Var(0, min=0, name="phi_pwl_neg")
@@ -217,8 +219,8 @@ class BilinearPassiveHeatExchangerFormulation(BilinearDarcyWeisbachBranchFormula
         model.t_in_pu = Var(1, min=0, max=2, name="t_in_pu")
         model.t_out_pu = Var(1, min=0, max=2, name="t_out_pu")
         model.mass_flow_mag_kgs = Var(1, min=0, name="mass_flow_mag_kgs")
-        model.alpha = Var(0.01, min=0, max=1, name="alpha")
         model.t_inc_pu = Var(1, min=-2, max=2, name="temperature_increase_pu")
+        ensure_velocity_report(model, grid)
         _pin_friction_const(model)
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
@@ -257,10 +259,7 @@ class BilinearPassiveHeatExchangerFormulation(BilinearDarcyWeisbachBranchFormula
             == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs,
             branch.mass_flow_mag_kgs * branch.t_inc_pu  # NOSONAR
             == -branch.q_mw * 1e6 / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * grid.t_ref_k),
-            branch.t_out_pu
-            == branch.temperature_ext_k / grid.t_ref_k
-            + 1 * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref_k)
-            + branch.t_inc_pu,
+            branch.t_out_pu == branch.t_in_pu + branch.t_inc_pu,
             branch.t_in_pu
             == branch.direction * to_node_model.vars["t_pu"]
             + (1 - branch.direction) * from_node_model.vars["t_pu"],

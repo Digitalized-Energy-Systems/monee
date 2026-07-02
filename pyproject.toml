@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=64.0"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -10,16 +10,14 @@ authors = [
 ]
 description = "Framework for calculating the steady-state energy flow and for solving optimization problems in coupled energy grids (gas, heat, electricity)"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 classifiers = [
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Programming Language :: Python :: Implementation :: CPython",
-    "Programming Language :: Python :: Implementation :: PyPy",
 ]
 license = "MIT"
 dependencies = [
@@ -32,10 +30,13 @@ dependencies = [
     "geopy>=2.4.1",
     "plotly>=6.3.0",
     "pyscipopt>=5.0",
-    "pyomo"
+    "pyomo>=6.7"
 ]
 
 [project.optional-dependencies]
+plot = [
+    "kaleido",
+]
 simbench = [
     "simbench>=1.6.1",
     "pandapower>=3.3.3",
@@ -68,6 +69,7 @@ Repository = "https://github.com/Digitalized-Energy-Systems/monee"
 Issues = "https://github.com/Digitalized-Energy-Systems/monee/issues"
 
 [tool.pytest.ini_options]
+addopts = "-m 'not benchmark'"
 markers = [
     "pptest: marks tests as dependant on pandapower",
     "benchmark: marks performance comparison tests (skipped by default unless selected via -m benchmark)",

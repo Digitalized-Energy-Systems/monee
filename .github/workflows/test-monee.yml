@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13"]
     defaults:
       run:
         shell: bash -el {0}
@@ -56,14 +56,14 @@ jobs:
     - name: Doctests
       run: make -C docs doctest
     - name: Test+Coverage
-      run: pytest --cov --cov-report=xml -v -m "not pptest"
+      run: pytest --cov --cov-report=xml -v -m "not pptest and not benchmark"
 
   build-linux:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.11", "3.12", "3.13"]
     defaults:
       run:
         shell: bash -el {0}
@@ -101,7 +101,7 @@ jobs:
     - name: Doctests
       run: make -C docs doctest
     - name: Test+Coverage
-      run: pytest --cov --cov-report=xml -v -m "not pptest"
+      run: pytest --cov --cov-report=xml -v -m "not pptest and not benchmark"
 
   test-full:
     runs-on: ubuntu-latest
@@ -116,12 +116,12 @@ jobs:
     - name: Set up Miniconda
       uses: conda-incubator/setup-miniconda@v3
       with:
-        python-version: "3.10"
+        python-version: "3.11"
         channels: conda-forge,defaults
         channel-priority: strict
         activate-environment: monee-test
         cache-downloads: true
-        cache-downloads-key: conda-${{ runner.os }}-py3.10-pyscipopt-graphviz-v1
+        cache-downloads-key: conda-${{ runner.os }}-py3.11-pyscipopt-graphviz-v1
     - name: Install SCIP and graphviz via conda
       run: conda install -y pyscipopt graphviz pygraphviz
     - name: Get pip cache dir
@@ -130,8 +130,8 @@ jobs:
     - uses: actions/cache@v4
       with:
         path: ${{ steps.pip-cache.outputs.dir }}
-        key: pip-${{ runner.os }}-py3.10-testpp-${{ hashFiles('pyproject.toml', 'docs/requirements.txt') }}
-        restore-keys: pip-${{ runner.os }}-py3.10-
+        key: pip-${{ runner.os }}-py3.11-testpp-${{ hashFiles('pyproject.toml', 'docs/requirements.txt') }}
+        restore-keys: pip-${{ runner.os }}-py3.11-
     - name: Install dependencies
       run: |
         pip install gurobipy

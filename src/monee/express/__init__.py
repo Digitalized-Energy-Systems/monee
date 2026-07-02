@@ -97,10 +97,26 @@ def create_line(
     grid=None,
     name=None,
     on_off=1,
+    max_i_ka=None,
+    max_s_mva=None,
 ):
-    """Add a :class:`PowerLine` between two buses; missing buses are auto-created."""
+    """Add a :class:`PowerLine` between two buses; missing buses are auto-created.
+    ``max_i_ka`` / ``max_s_mva`` set the thermal rating (model defaults apply
+    when omitted)."""
+    rating_kwargs = {}
+    if max_i_ka is not None:
+        rating_kwargs["max_i_ka"] = max_i_ka
+    if max_s_mva is not None:
+        rating_kwargs["max_s_mva"] = max_s_mva
     return network.branch(
-        mm.PowerLine(length_m, r_ohm_per_m, x_ohm_per_m, parallel, on_off=on_off),
+        mm.PowerLine(
+            length_m,
+            r_ohm_per_m,
+            x_ohm_per_m,
+            parallel,
+            on_off=on_off,
+            **rating_kwargs,
+        ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
         constraints=constraints,
@@ -679,6 +695,7 @@ def create_g2h(
     diameter_m,
     efficiency,
     temperature_ext_k=293,
+    regulation=1,
     constraints=None,
 ):
     """Add a Gas-to-Heat compound with an internal water HX branch."""
@@ -688,6 +705,7 @@ def create_g2h(
             diameter_m=diameter_m,
             temperature_ext_k=temperature_ext_k,
             efficiency=efficiency,
+            regulation=regulation,
         ),
         constraints=constraints,
         gas_node_id=gas_node_id,
@@ -730,6 +748,7 @@ def create_p2h_hg(
     heat_energy_mw,
     efficiency,
     q_mvar_setpoint=0,
+    regulation=1,
     constraints=None,
 ):
     """Single-branch P2H using :class:`PowerToHeatHG` (heat injected at the to-node)."""
@@ -738,6 +757,7 @@ def create_p2h_hg(
             heat_energy_mw=heat_energy_mw,
             efficiency=efficiency,
             q_mvar_setpoint=q_mvar_setpoint,
+            regulation=regulation,
         ),
         from_node_id=power_node_id,
         to_node_id=heat_node_id,
@@ -751,6 +771,7 @@ def create_g2h_hg(
     heat_node_id,
     heat_energy_mw,
     efficiency,
+    regulation=1,
     constraints=None,
 ):
     """Single-branch G2H using :class:`GasToHeatHG` (heat injected at the to-node)."""
@@ -758,6 +779,7 @@ def create_g2h_hg(
         mm.GasToHeatHG(
             heat_energy_mw=heat_energy_mw,
             efficiency=efficiency,
+            regulation=regulation,
         ),
         from_node_id=gas_node_id,
         to_node_id=heat_node_id,

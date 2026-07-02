@@ -1,42 +1,5 @@
 import math
 
-REY_BINS = [
-    50,
-    100,
-    200,
-    400,
-    800,
-    1200,
-    1600,
-    2000,
-    2200,
-    2400,
-    2600,
-    2800,
-    3000,
-    3200,
-    3500,
-    3800,
-    4200,
-    4600,
-    5000,
-    6000,
-    7000,
-    8000,
-    1e4,
-    1.5e4,
-    2e4,
-    3e4,
-    5e4,
-    1e5,
-    2e5,
-    5e5,
-    1e6,
-    2e6,
-    5e6,
-    1e7,
-]
-
 
 def calc_pipe_area(diameter_m):
     return math.pi * diameter_m**2 / 4
@@ -93,14 +56,6 @@ def pipe_mass_flow(max_v, min_v, v):
     return min_v <= v <= max_v
 
 
-def flow_rate_equation(
-    mean_flow_velocity, flow_rate, diameter, fluid_density_kg_per_m3
-):
-    return mean_flow_velocity == flow_rate / (
-        fluid_density_kg_per_m3 * (diameter**2 * math.pi / 4)
-    )
-
-
 def swamee_jain(reynolds_var, diameter_m, roughness_m, log_func):
     term1 = roughness_m / diameter_m / 3.7
     term2 = 5.74 / (reynolds_var + 1) ** 0.9  # +1 avoids infeasibility at Re=0
@@ -154,34 +109,6 @@ def logspace(a, b, n):
     la = math.log10(a)
     lb = math.log10(b)
     return [10 ** (la + i * (lb - la) / (n - 1)) for i in range(n)]
-
-
-def piecewise_eq_friction(model, pwl):
-    D = model.diameter_m
-    eps = model.roughness_m
-
-    xs = []
-    xs += logspace(10.0, 2000.0, 4)
-    xs += logspace(2000.0, 4000.0, 4)[1:]
-    xs += logspace(4000.0, 1e7, 4)[1:]
-
-    # y at physical Re; x is rescaled (Re / REYNOLDS_SCALE) for the PWL.
-    ys = [friction_value(x, D, eps) for x in xs]
-    xs = [x / REYNOLDS_SCALE for x in xs]
-
-    # Anchor Re=0 so a no-flow branch stays feasible. Reuse f(10) to keep
-    # the (0, f(10)) slope finite; friction \cdot m^2 \equiv 0 at m=0 anyway.
-    xs = [0.0] + xs
-    ys = [ys[0]] + ys
-
-    xs, ys = filter_near_linear(xs, ys, rtol=1e-7)
-
-    pwl.piecewise_eq(
-        y=model.friction,
-        x=model.reynolds_scaled,
-        xs=xs,
-        ys=ys,
-    )
 
 
 def phi_pwl_breakpoints(

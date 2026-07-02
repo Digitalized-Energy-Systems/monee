@@ -40,7 +40,9 @@ class ElectricityIslandingMode(IslandingMode):
     carrier_grid_type = PowerGrid
     var_prefix = "el"
 
-    def __init__(self, angle_bound: float = 3.15, big_m_conn: int = 200) -> None:
+    def __init__(
+        self, angle_bound: float = 3.15, big_m_conn: float | None = None
+    ) -> None:
         self.angle_bound = angle_bound
         self.big_m_conn = big_m_conn
 
