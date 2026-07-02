@@ -27,6 +27,7 @@ def _fake_simbench_net():
     return SimpleNamespace(load=load, profiles=profiles)
 
 
+@pytest.mark.pptest
 def test_profile_includes_per_load_scaling():
     from monee.io.from_simbench import obtain_simbench_profile_by_pp_net
 
@@ -38,6 +39,7 @@ def test_profile_includes_per_load_scaling():
     assert attrs["q_mvar"] == pytest.approx([0.3, 0.4])
 
 
+@pytest.mark.pptest
 def test_missing_profiles_raises_clear_error():
     from monee.io.from_simbench import obtain_simbench_profile_by_pp_net
 

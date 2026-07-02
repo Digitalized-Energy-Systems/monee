@@ -285,6 +285,7 @@ def test_caller_net_not_mutated_without_sgens():
         assert list(net[name].columns) == cols
 
 
+@pytest.mark.pptest
 def test_strip_shifts_only_multiples_of_30_degrees():
     import monee.model as mm
     from monee.io.from_pandapower import _strip_transformer_vector_group_shifts

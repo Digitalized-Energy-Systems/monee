@@ -139,8 +139,16 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         i_mag_pu = sqrt_impl(branch.current_pu_squared)
         # loading^2 = current_pu_squared \cdot (I_base/max_i_ka)^2 is linear in current_pu_squared.
         # Used by line_loading_limit() instead of the sqrt-bearing form.
+        # max_i_ka is expressed in the from-side voltage basis (io/matpower.py:
+        # rate_a/(sqrt3*V_from)), so the to-side rated current is
+        # max_i_ka*V_from/V_to and the to-side loading scale reduces to
+        # i_base_from*tap (= sn/(sqrt3*V_from)); dividing i_to_ka by the raw
+        # max_i_ka inflated a transformer's loading_to_pu by the voltage ratio.
+        # For a line (equal base_kv, tap=1) both forms are identical.
         branch._misocp_loading_from_scale_squared = (i_base_from / branch.max_i_ka) ** 2
-        branch._misocp_loading_to_scale_squared = (i_base_to / branch.max_i_ka) ** 2
+        branch._misocp_loading_to_scale_squared = (
+            i_base_from * tap / branch.max_i_ka
+        ) ** 2
         vd = voltage_drop(
             from_node_model.vars["vm_pu_squared"],
             to_node_model.vars["vm_pu_squared"],
@@ -173,5 +181,7 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
             IntermediateEq("i_from_ka", i_mag_pu * i_base_from),
             IntermediateEq("i_to_ka", i_mag_pu * i_base_to),
             IntermediateEq("loading_from_pu", i_mag_pu * i_base_from / branch.max_i_ka),
-            IntermediateEq("loading_to_pu", i_mag_pu * i_base_to / branch.max_i_ka),
+            IntermediateEq(
+                "loading_to_pu", i_mag_pu * i_base_from * tap / branch.max_i_ka
+            ),
         ]

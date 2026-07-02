@@ -93,5 +93,15 @@ class AcPolarNlpBranchFormulation(BranchFormulation):
             IntermediateEq("i_from_ka", i_from_ka),
             IntermediateEq("i_to_ka", i_to_ka),
             IntermediateEq("loading_from_pu", i_from_ka / branch.max_i_ka),
-            IntermediateEq("loading_to_pu", i_to_ka / branch.max_i_ka),
+            # max_i_ka is expressed in the from-side voltage basis
+            # (io/matpower.py: rate_a/(sqrt3*V_from)); the to-side rated
+            # current is max_i_ka*V_from/V_to. Dividing i_to_ka by the raw
+            # max_i_ka inflated a transformer's loading_to_pu by the voltage
+            # ratio; for a line (equal base_kv) nothing changes.
+            IntermediateEq(
+                "loading_to_pu",
+                i_to_ka
+                * to_node_model.vars["base_kv"]
+                / (from_node_model.vars["base_kv"] * branch.max_i_ka),
+            ),
         ]
