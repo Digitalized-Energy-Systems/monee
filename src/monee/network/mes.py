@@ -119,7 +119,9 @@ def create_heat_net_for_power(
 
     for node in power_net_as_st.nodes:
         junc_id = mx.create_junction(target_net, position=node.position, grid=heat_grid)
-        sink_mass_flow = mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10  # NOSONAR
+        sink_mass_flow = (
+            mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10
+        )  # NOSONAR
         node_demand_kgs[node.id] = sink_mass_flow
         mx.create_sink(
             target_net,
@@ -1356,7 +1358,9 @@ def create_coupling_points_for_mes(  # NOSONAR
         n_units = int(round(density * len(candidate_node_ids)))
         target_nodes = [hub] * n_units
     else:
-        target_nodes = [nid for nid in candidate_node_ids if rng.random() < density]  # NOSONAR
+        target_nodes = [
+            nid for nid in candidate_node_ids if rng.random() < density
+        ]  # NOSONAR
 
     created = []
 
