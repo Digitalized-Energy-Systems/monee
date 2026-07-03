@@ -119,7 +119,7 @@ def create_heat_net_for_power(
 
     for node in power_net_as_st.nodes:
         junc_id = mx.create_junction(target_net, position=node.position, grid=heat_grid)
-        sink_mass_flow = mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10
+        sink_mass_flow = mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10  # NOSONAR
         node_demand_kgs[node.id] = sink_mass_flow
         mx.create_sink(
             target_net,
@@ -128,7 +128,7 @@ def create_heat_net_for_power(
         )
         bus_index_to_junction_index[node.id] = junc_id
         bus_index_to_end_junction_index[node.id] = junc_id
-        deployment_c_value = rng.random()
+        deployment_c_value = rng.random()  # NOSONAR
         if deployment_c_value < heat_deployment_rate:
             bus_index_to_end_junction_index[node.id] = mx.create_junction(
                 target_net, position=node.position, grid=heat_grid
@@ -142,14 +142,14 @@ def create_heat_net_for_power(
                 target_net,
                 from_node_id=bus_index_to_junction_index[node.id],
                 to_node_id=bus_index_to_end_junction_index[node.id],
-                q_mw=(-1 if rng.random() > 0.8 else 1)
+                q_mw=(-1 if rng.random() > 0.8 else 1)  # NOSONAR
                 * 0.1
-                * rng.random()
+                * rng.random()  # NOSONAR
                 * power_scale,
                 diameter_m=default_diameter_m,
             )
             end_sink_mass_flow = (
-                mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10
+                mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10  # NOSONAR
             )
             node_demand_kgs[node.id] += end_sink_mass_flow
             mx.create_sink(
@@ -266,12 +266,12 @@ def create_gas_net_for_power(
             grid=gas_grid,
         )
     for node in power_net_as_st.nodes:
-        deployment_c_value = rng.random()
+        deployment_c_value = rng.random()  # NOSONAR
         if deployment_c_value <= gas_deployment_rate:
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
-                mass_flow_kgs=round((0.1 + 0.5 * rng.random()) * scaling, 2),
+                mass_flow_kgs=round((0.1 + 0.5 * rng.random()) * scaling, 2),  # NOSONAR
             )
     mx.create_source(
         target_net,
@@ -631,7 +631,7 @@ def _add_gas_mesh_pipes(
         for j2 in junctions[i + 1 :]
         if frozenset((j1, j2)) not in existing_pairs
     ]
-    rng.shuffle(candidates)
+    rng.shuffle(candidates)  # NOSONAR
     for j1, j2 in candidates[:extra_mesh_pipes]:
         mx.create_gas_pipe(
             target_net,
@@ -1356,7 +1356,7 @@ def create_coupling_points_for_mes(  # NOSONAR
         n_units = int(round(density * len(candidate_node_ids)))
         target_nodes = [hub] * n_units
     else:
-        target_nodes = [nid for nid in candidate_node_ids if rng.random() < density]
+        target_nodes = [nid for nid in candidate_node_ids if rng.random() < density]  # NOSONAR
 
     created = []
 
@@ -1384,7 +1384,7 @@ def create_coupling_points_for_mes(  # NOSONAR
         if p_ref_mw <= 0:
             continue
 
-        unit_type = rng.choice(sorted(coupling_set))
+        unit_type = rng.choice(sorted(coupling_set))  # NOSONAR
 
         if unit_type == "chp":
             chp_p_target_mw = chp_p_share * cp_size_multiplier * p_ref_mw

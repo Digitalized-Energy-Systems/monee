@@ -25,6 +25,8 @@ _EXPERIMENTAL_NOTE = (
 _LOAD_CLASSES = {"EnergyConsumer", "ConformLoad", "NonConformLoad", "StationSupply"}
 # Default line current rating (kA) when no OperationalLimit is present.
 _UNBOUNDED_I_KA = 9999.0
+# Tolerance for treating physical parameters (impedance, admittance, sections) as zero.
+_ZERO_TOL = 1e-12
 
 
 @dataclass
@@ -136,7 +138,7 @@ def _add_line(obj, net, tn_to_node, base_kv_of, report):
     bch = _num(_get(obj, "bch"))  # total line charging susceptance [S]
     gch = _num(_get(obj, "gch"))
 
-    if r == 0.0 and x == 0.0:
+    if abs(r) < _ZERO_TOL and abs(x) < _ZERO_TOL:
         report.skip("ACLineSegment without impedance data (r=x=0, singular)")
         return
 
@@ -182,7 +184,7 @@ def _add_transformer(obj, ends, net, tn_to_node, base_kv_of, report):
         r_ohm += _num(_get(end, "r")) * ratio_sq
         x_ohm += _num(_get(end, "x")) * ratio_sq
 
-    if r_ohm == 0.0 and x_ohm == 0.0:
+    if abs(r_ohm) < _ZERO_TOL and abs(x_ohm) < _ZERO_TOL:
         report.skip("PowerTransformer without impedance data (r=x=0, singular)")
         return
 
@@ -282,12 +284,12 @@ def _add_shunt(obj, net, tn_to_node, report):
     if node is None:
         return
     sections = _num(_get(obj, "sections"), 1.0)
-    if sections == 0.0:
+    if abs(sections) < _ZERO_TOL:
         report.skip("ShuntCompensator switched out (sections=0)")
         return
     b_siemens = _num(_get(obj, "bPerSection")) * sections
     g_siemens = _num(_get(obj, "gPerSection")) * sections
-    if b_siemens == 0.0 and g_siemens == 0.0:
+    if abs(b_siemens) < _ZERO_TOL and abs(g_siemens) < _ZERO_TOL:
         report.skip("ShuntCompensator without b/g data")
         return
     base_kv = mx_base_kv(net, node)
