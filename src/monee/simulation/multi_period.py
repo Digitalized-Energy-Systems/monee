@@ -51,6 +51,10 @@ def _prepare_period(
     if timeseries_data is not None:
         timeseries_data.apply_to_network(net_t, t)
 
+    # Same stamp prepare_solve_network sets: extension prepare() hooks gated
+    # on it (islanding injection gating / energisation objective) must not
+    # activate when the optimization problem brings its own shedding vars.
+    net_t._solve_has_optimization_problem = optimization_problem is not None
     for ext in net_t.extensions:
         ext.prepare(net_t)
 
