@@ -97,12 +97,24 @@ Beyond the connectivity-flow integers, each carrier mode adds physical
 constraints so the state of de-energised nodes stays well-defined for the
 solver.
 
+### Island leadership
+
+An `ExtPowerGrid` / `ExtHydrGrid` always leads its connected component. A
+`GridFormingGenerator` / `GridFormingSource` leads only when its component
+(over the real topology: active branches with `on_off` not fixed to 0) has
+lost its ext grid — and then exactly one deterministic leader is chosen per
+island. `IslandingMode.prepare()` stamps `_gf_leading` on every grid-forming
+(non-ext) child accordingly, and the reference pins below apply only to
+leaders: an unconditional `vm_pu`/pressure pin at every grid-forming junction
+of an intact ext-led grid over-constrains the flow equations (no voltage or
+pressure gradient means no transport) and makes the solve infeasible.
+
 ### Electricity
 
 | Nodes | Constraint | Why |
 |---|---|---|
-| Grid-forming | $\theta_k = 0$ | Angle reference for each island |
-| Regular | $-M_\theta\, e_i \leq \theta_i \leq M_\theta\, e_i$ forces $\theta_i = 0$ when $e_i = 0$ | Numerical stability: prevents the angle from floating freely on de-energised buses |
+| Island-leading | $\theta_k = 0$ | Angle reference for each island |
+| Other | $-M_\theta\, e_i \leq \theta_i \leq M_\theta\, e_i$ forces $\theta_i = 0$ when $e_i = 0$ | Numerical stability: prevents the angle from floating freely on de-energised buses |
 
 $M_\theta$ is the mode's `angle_bound` parameter (default 3.15 rad).
 
@@ -112,9 +124,9 @@ no angle reference is defined there.
 
 The mode owns angle handling, not the grid-forming child.
 `ElectricityIslandingMode.prepare()` sets the `_islanding_angle_managed` flag
-on every active bus, and `GridFormingGenerator.overwrite()` pins only `vm_pu`,
-not `va_radians`, so the mode's $\theta_k = 0$ constraint stays the single
-angle reference per island.
+on every active bus, and `GridFormingGenerator.overwrite()` pins only `vm_pu`
+(and only when leading), not `va_radians`, so the mode's $\theta_k = 0$
+constraint stays the single angle reference per island.
 
 ### Gas and water
 
@@ -122,13 +134,26 @@ angle reference per island.
 |---|---|---|
 | Regular | $p_i \leq 2\, e_i$ | Forces $p_i = 0$ when $e_i = 0$ |
 
-`GridFormingSource.overwrite()` (or `ExtHydrGrid.overwrite()`) already pins the
-grid-forming junction's pressure to a setpoint, so GF nodes need no extra
-constraint.
+`GridFormingSource.overwrite()` (when leading, see above) or
+`ExtHydrGrid.overwrite()` already pins the grid-forming junction's pressure to
+a setpoint, so GF nodes need no extra constraint.
 
 The pressure bound matters most when switchable pipes are present, where a
 de-energised island with floating pressure can confuse NLP solvers. Without
 switchable pipes it is only a nice-to-have.
+
+### Fixed-injection gating (plain flow solves)
+
+For solves without an optimization problem, each mode replaces fixed numeric
+child injections (`p_mw`/`q_mvar` for electricity, `mass_flow_kgs` for gas and
+water) with variables tied to the host node's energisation binary
+($x = \text{setpoint} \cdot e_i$), and registers a network objective that
+minimises $\sum_i (1 - e_i)$. An island whose grid-forming capacity cannot
+cover its fixed demand then de-energises the fewest nodes needed to balance
+instead of rendering the whole solve infeasible — while the objective keeps
+blackout a last resort, never a free alternative to serving reachable load.
+Optimization problems are untouched: they bring their own shedding variables
+and are applied after `prepare()`.
 
 ---
 
@@ -148,9 +173,12 @@ which the solver appends to its normal energy-flow equations.
 
 **`find_ignored_nodes` interaction:** each solver looks up the registered
 `NetworkIslandingConfig` and passes it to `find_ignored_nodes`. With a config
-present, that function uses the complete network topology (all branches,
-including open ones) and keeps any island that contains a grid-forming child.
-This stops a second island's buses from being pruned before the solve starts.
+present, that function keeps any real-topology island that contains a
+grid-forming child, so a second island's buses are not pruned before the
+solve starts. Islands with neither an ext grid nor a grid-forming child are
+still pruned: their connectivity arcs are capped at zero, so they can never
+be energised, and keeping them would leave unservable loads (for example an
+optimization problem's priority floor) that make the model infeasible.
 
 **Persistence:** like all network extensions, the islanding config registered
 by `enable_islanding` (or `add_extension`) is not serialized by the native JSON

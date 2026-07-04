@@ -191,7 +191,7 @@ class LumpedThermalCapacitance(NetworkAspect):
         for branch in network.branches:
             if not isinstance(branch.grid, WaterGrid):
                 continue
-            if _branch_ignored(branch):
+            if not branch.active or _branch_ignored(branch):
                 continue
             bm = branch.model
             bvars = bm.vars
@@ -223,6 +223,10 @@ class LumpedThermalCapacitance(NetworkAspect):
                     terms.append(mneg * bvars["t_to_pu"] - mpos * t_n)
 
         for child in network.childs_by_ids(node.child_ids):
+            # Inactive/ignored childs never get solver vars injected — their
+            # raw model Vars would poison the expression (Var/float TypeError).
+            if not child.active or getattr(child, "ignored", False):
+                continue
             cm = child.model
             cvars = cm.vars
             if "mass_flow_kgs" in cvars:
@@ -243,7 +247,7 @@ class LumpedThermalCapacitance(NetworkAspect):
 
         # Branch heat_mw (e.g. GasToHeatHG) absorbed at the TO-node.
         for branch in network.branches:
-            if _branch_ignored(branch):
+            if not branch.active or _branch_ignored(branch):
                 continue
             bm = branch.model
             bvars = bm.vars

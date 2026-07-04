@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from monee.model.core import ChildModel, Const, Var, model
+from monee.model.core import ChildModel, Const, Intermediate, Var, model
 from monee.model.grid import GasGrid
 from monee.model.network import Network
 
@@ -28,6 +28,11 @@ class GridFormingSource(ChildModel, GridFormingMixin):
         self._t_k = t_k
 
     def overwrite(self, node_model, grid) -> None:
+        # Pin only when leading an island without an ext grid (stamped by
+        # IslandingMode.stamp_gf_leadership); a second absolute pressure pin
+        # in the same hydraulic island over-determines the drop equations.
+        if not getattr(self, "_gf_leading", True):
+            return
         node_model.pressure_pu = Const(self._pressure_pu)
         node_model.pressure_squared_pu = Const(self._pressure_pu**2)
         node_model.t_pu = Const(self._t_k / grid.t_ref_k)
@@ -43,11 +48,13 @@ class GasIslandingMode(IslandingMode):
 
     carrier_grid_type = GasGrid
     var_prefix = "gas"
+    gated_child_attrs = ("mass_flow_kgs",)
 
     def __init__(self, big_m_conn: float | None = None) -> None:
         self.big_m_conn = big_m_conn
 
     def prepare(self, network: Network) -> None:
+        self.prepare_common(network)
         for node in network.nodes:
             if isinstance(node.grid, GasGrid) and node.active:
                 node.model.e_gas = Var(1, min=0, max=1, integer=True, name="e_gas")
@@ -69,5 +76,17 @@ class GasIslandingMode(IslandingMode):
         for node in regular_nodes:
             e = e_vars[node.id]
             # 2.0 is the existing model bound; non-binding when e=1.
-            eqs.append(node.model.pressure_pu <= 2.0 * e)
+            # Gate in the squared domain when the model carries it: on
+            # squared-pressure formulations (MIQCQP) pressure_pu is only the
+            # sqrt(pressure_squared_pu) intermediate, which no quadratic
+            # solver writer accepts; p<=2e <=> p^2<=4e for binary e, and the
+            # squared form is linear (gas) or quadratic (water) instead.
+            # An Intermediate is not a solver variable yet — formulations that
+            # work in plain pressure space keep the squared attr as one; use
+            # pressure_pu directly there.
+            p2 = getattr(node.model, "pressure_squared_pu", None)
+            if p2 is not None and not isinstance(p2, Intermediate):
+                eqs.append(p2 <= 4.0 * e)
+            else:
+                eqs.append(node.model.pressure_pu <= 2.0 * e)
         return eqs

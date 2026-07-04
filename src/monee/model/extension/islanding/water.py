@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from monee.model.core import Var
+from monee.model.core import Intermediate, Var
 from monee.model.grid import WaterGrid
 from monee.model.network import Network
 
@@ -14,11 +14,13 @@ class WaterIslandingMode(IslandingMode):
 
     carrier_grid_type = WaterGrid
     var_prefix = "water"
+    gated_child_attrs = ("mass_flow_kgs",)
 
     def __init__(self, big_m_conn: float | None = None) -> None:
         self.big_m_conn = big_m_conn
 
     def prepare(self, network: Network) -> None:
+        self.prepare_common(network)
         for node in network.nodes:
             if isinstance(node.grid, WaterGrid) and node.active:
                 node.model.e_water = Var(1, min=0, max=1, integer=True, name="e_water")
@@ -39,5 +41,12 @@ class WaterIslandingMode(IslandingMode):
         eqs = []
         for node in regular_nodes:
             e = e_vars[node.id]
-            eqs.append(node.model.pressure_pu <= 2.0 * e)
+            # Same squared-domain gating as GasIslandingMode (p<=2e <=> p^2<=4e
+            # for binary e); see there for why pressure_pu cannot be used on
+            # squared-pressure formulations.
+            p2 = getattr(node.model, "pressure_squared_pu", None)
+            if p2 is not None and not isinstance(p2, Intermediate):
+                eqs.append(p2 <= 4.0 * e)
+            else:
+                eqs.append(node.model.pressure_pu <= 2.0 * e)
         return eqs

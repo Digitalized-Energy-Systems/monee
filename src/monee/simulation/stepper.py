@@ -210,6 +210,7 @@ class Stepper:
         "_t_h",
         "_carry_dt_h",
         "_work_net",
+        "_copy_base",
         "_record_changes",
         "_changes",
         "_max_changes",
@@ -232,6 +233,7 @@ class Stepper:
         max_history: int | None = None,
         record_changes: bool = True,
         max_changes: int | None = None,
+        copy_base: bool = True,
         **solver_kwargs: Any,
     ) -> None:
         if on_step_error not in ("raise", "skip"):
@@ -244,8 +246,13 @@ class Stepper:
             raise ValueError(f"max_changes must be >= 1 or None, got {max_changes}")
         self._base_net = net
         # Mutations accumulate on a working copy; the user's net stays untouched
-        # and is only the reset() baseline.
-        self._work_net = net.copy()
+        # and is only the reset() baseline. With copy_base=False the caller's
+        # net IS the working net (co-simulation hosts that mutate the network
+        # between steps see their edits picked up without an override channel);
+        # each step still solves on a per-step copy, but reset() loses its
+        # pristine baseline and is disabled.
+        self._copy_base = copy_base
+        self._work_net = net.copy() if copy_base else net
         self._solver = resolve_solver(solver, backend=backend)
         self._optimization_problem = optimization_problem
         self._timeseries_data = timeseries_data
@@ -580,6 +587,11 @@ class Stepper:
     ) -> None:
         """Clear step history, recreate the StepState, and discard structural
         mutations (the working net reverts to the base network)."""
+        if not self._copy_base:
+            raise RuntimeError(
+                "reset() is unavailable with copy_base=False: the working net "
+                "is the caller's live network, so no pristine baseline exists."
+            )
         if initial_state is not None:
             self._initial_state = dict(initial_state)
         self._state = StepState(

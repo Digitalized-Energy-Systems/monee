@@ -936,6 +936,10 @@ def prepare_solve_network(  # NOSONAR
     from monee.model.formulation.registry import attach_formulations
 
     network = input_network.copy()
+    # Read by the islanding extension: injection gating / the energisation
+    # objective only apply to plain flow solves - an optimization problem
+    # brings its own shedding vars and runs _apply after prepare.
+    network._solve_has_optimization_problem = optimization_problem is not None
     for ext in network.extensions:
         ext.prepare(network)
     attach_formulations(network, formulation, simulation=simulation)
@@ -1213,19 +1217,22 @@ def remove_cps(network: Network):
 def find_ignored_nodes(network: Network, islanding_config=None):  # NOSONAR
     """Return node IDs to exclude from the solve.
 
-    Default: active topology, only ExtPowerGrid/ExtHydrGrid children are
-    "leading". With *islanding_config*: full topology (backup lines included)
-    and any :class:`GridFormingMixin` child counts as leading for an
-    islanding-enabled carrier.
+    Default: only ExtPowerGrid/ExtHydrGrid children are "leading". With
+    *islanding_config*: any :class:`GridFormingMixin` child also counts as
+    leading for an islanding-enabled carrier.
+
+    Both cases use the real topology (active branches, on_off not fixed to 0;
+    switchable on_off Vars stay connected). A component with no leading child
+    can never be energised - the connectivity arcs over its severed branches
+    are capped at zero - so keeping it in the solve only leaves unservable
+    loads (e.g. an optimization problem's priority floor) that render the
+    model infeasible.
     """
     ignored_nodes = set()
     without_cps = network.copy()
     remove_cps(without_cps)
 
-    if islanding_config is not None:
-        topology = without_cps._network_internal.copy()
-    else:
-        topology = generate_real_topology(without_cps._network_internal)
+    topology = generate_real_topology(without_cps._network_internal)
 
     components = nx.connected_components(topology)
     for component in components:
@@ -1268,82 +1275,84 @@ def find_ignored_nodes(network: Network, islanding_config=None):  # NOSONAR
 
     # Leaf-stub pruning: a node with no active children and degree ≤ 1 in the
     # remaining active topology is a dead-end pump-target (infeasible LP).
-    # Iterate to fixed point. Skipped under islanding (topology there includes
-    # inactive backup branches, so degree overstates connectivity).
-    if islanding_config is None:
-        # Compound port children (e.g. SubHG on a CHPHG heat node) carry no
-        # demand of their own; they must not keep an otherwise-isolated
-        # junction alive.
-        compound_port_child_ids = {
-            sub.id
-            for compound in network.compounds
-            for sub in compound.subcomponents
-            if isinstance(sub, Child)
-        }
+    # Iterate to fixed point. Runs under islanding too: e-variables gate
+    # loads and angles/pressures, not the mixing/balance equations that make
+    # a childless dead-end junction infeasible, and the topology is the real
+    # one in both cases.
 
-        # Attachment ports of active multi-grid compounds: remove_cps strips
-        # the compound's transfer branches from the pruning copy, so these
-        # nodes look like childless dead-ends here - but in the real solve the
-        # compound re-attaches and carries flow through them. Ports whose grid
-        # connection is genuinely gone are still caught by the
-        # connected-component check above.
-        compound_attachment_node_ids = {
-            node_id
-            for compound in network.compounds
-            if compound.active and isinstance(compound.model, MultiGridCompoundModel)
-            for node_id in compound.connected_to.values()
-        }
+    # Compound port children (e.g. SubHG on a CHPHG heat node) carry no
+    # demand of their own; they must not keep an otherwise-isolated
+    # junction alive.
+    compound_port_child_ids = {
+        sub.id
+        for compound in network.compounds
+        for sub in compound.subcomponents
+        if isinstance(sub, Child)
+    }
 
-        def _has_real_active_child(int_node):
-            for cid in int_node.child_ids:
-                if cid in compound_port_child_ids:
-                    continue
-                if without_cps.child_by_id(cid).active:
-                    return True
-            return False
+    # Attachment ports of active multi-grid compounds: remove_cps strips
+    # the compound's transfer branches from the pruning copy, so these
+    # nodes look like childless dead-ends here - but in the real solve the
+    # compound re-attaches and carries flow through them. Ports whose grid
+    # connection is genuinely gone are still caught by the
+    # connected-component check above.
+    compound_attachment_node_ids = {
+        node_id
+        for compound in network.compounds
+        if compound.active and isinstance(compound.model, MultiGridCompoundModel)
+        for node_id in compound.connected_to.values()
+    }
 
-        def _has_mass_flow_anchor(int_node):
-            """A Junction at degree ≤ 1 needs a mass-flow-contributing child
-            (Sink / Source / ExtHydrGrid) to anchor mass conservation.
-            Heat-only children (HeatLoad / HeatGenerator) don't qualify -
-            with no outgoing pipe their heat_mw term has no enthalpy
-            stream to balance against and the junction becomes infeasible."""
-            for cid in int_node.child_ids:
-                if cid in compound_port_child_ids:
-                    continue
-                child = without_cps.child_by_id(cid)
-                if not child.active:
-                    continue
-                if "mass_flow_kgs" in getattr(child.model, "vars", {}):
-                    return True
-            return False
+    def _has_real_active_child(int_node):
+        for cid in int_node.child_ids:
+            if cid in compound_port_child_ids:
+                continue
+            if without_cps.child_by_id(cid).active:
+                return True
+        return False
 
-        while True:
-            new_stubs = set()
-            for node_id in topology.nodes:
-                if node_id in ignored_nodes:
-                    continue
-                if node_id in compound_attachment_node_ids:
-                    continue
-                int_node: Node = topology.nodes[node_id]["internal_node"]
-                active_degree = sum(
-                    1 for nb in topology.neighbors(node_id) if nb not in ignored_nodes
-                )
-                if active_degree > 1:
-                    continue
-                # Classical leaf stub: no real active children at all.
-                if not _has_real_active_child(int_node):
-                    new_stubs.add(node_id)
-                    continue
-                # Mass-balance dead-end: Junction at degree ≤ 1 whose only
-                # children are heat-only (heat_mw) - see _has_mass_flow_anchor.
-                if isinstance(int_node.model, Junction) and not _has_mass_flow_anchor(
-                    int_node
-                ):
-                    new_stubs.add(node_id)
-            if not new_stubs:
-                break
-            ignored_nodes.update(new_stubs)
+    def _has_mass_flow_anchor(int_node):
+        """A Junction at degree ≤ 1 needs a mass-flow-contributing child
+        (Sink / Source / ExtHydrGrid) to anchor mass conservation.
+        Heat-only children (HeatLoad / HeatGenerator) don't qualify -
+        with no outgoing pipe their heat_mw term has no enthalpy
+        stream to balance against and the junction becomes infeasible."""
+        for cid in int_node.child_ids:
+            if cid in compound_port_child_ids:
+                continue
+            child = without_cps.child_by_id(cid)
+            if not child.active:
+                continue
+            if "mass_flow_kgs" in getattr(child.model, "vars", {}):
+                return True
+        return False
+
+    while True:
+        new_stubs = set()
+        for node_id in topology.nodes:
+            if node_id in ignored_nodes:
+                continue
+            if node_id in compound_attachment_node_ids:
+                continue
+            int_node: Node = topology.nodes[node_id]["internal_node"]
+            active_degree = sum(
+                1 for nb in topology.neighbors(node_id) if nb not in ignored_nodes
+            )
+            if active_degree > 1:
+                continue
+            # Classical leaf stub: no real active children at all.
+            if not _has_real_active_child(int_node):
+                new_stubs.add(node_id)
+                continue
+            # Mass-balance dead-end: Junction at degree ≤ 1 whose only
+            # children are heat-only (heat_mw) - see _has_mass_flow_anchor.
+            if isinstance(int_node.model, Junction) and not _has_mass_flow_anchor(
+                int_node
+            ):
+                new_stubs.add(node_id)
+        if not new_stubs:
+            break
+        ignored_nodes.update(new_stubs)
 
     return ignored_nodes
 
