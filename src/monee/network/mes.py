@@ -40,18 +40,29 @@ def _node_power_gen_mw(power_net: mm.Network, node):
     return p_mw
 
 
+# Bus couplers / transformer stubs have zero-length power branches (and
+# co-located endpoints, so the geodesic fallback is ~0 too). A pipe derived
+# from them would divide by zero in the Weymouth denominator (Δp² ∝ L·ṁ²/D⁵);
+# floor every builder-derived FINAL pipe length (after length_scale) to 1 m.
+MIN_PIPE_LENGTH_M = 1.0
+
+
+def _floor_length(length_m: float) -> float:
+    return max(MIN_PIPE_LENGTH_M, float(length_m))
+
+
 def get_length(
     net: mm.Network, branch, node1_id, node2_id, default_length=DEFAULT_LENGTH
 ):
-    if hasattr(branch.model, "length_m"):
-        return branch.model.length_m
-    node1 = net.node_by_id(node1_id)
-    node2 = net.node_by_id(node2_id)
-
-    if node1.position is None or node2.position is None:
-        return default_length
-
-    return distance.distance(node1.position, node2.position).m
+    length = getattr(branch.model, "length_m", None)
+    if length is None:
+        node1 = net.node_by_id(node1_id)
+        node2 = net.node_by_id(node2_id)
+        if node1.position is None or node2.position is None:
+            length = default_length
+        else:
+            length = distance.distance(node1.position, node2.position).m
+    return float(length)
 
 
 def _length_weight(branch, node_from, node_to):
@@ -198,14 +209,16 @@ def create_heat_net_for_power(
             from_node_id=from_node_id,
             to_node_id=to_node_id,
             diameter_m=_trunk_diameter(downstream),
-            length_m=get_length(
-                target_net,
-                branch,
-                from_node_id,
-                to_node_id,
-                default_length=default_length,
-            )
-            * length_scale,
+            length_m=_floor_length(
+                get_length(
+                    target_net,
+                    branch,
+                    from_node_id,
+                    to_node_id,
+                    default_length=default_length,
+                )
+                * length_scale
+            ),
             temperature_ext_k=296.15,
             roughness_m=0.001,
             grid=heat_grid,
@@ -257,14 +270,16 @@ def create_gas_net_for_power(
             from_node_id=from_node_id,
             to_node_id=to_node_id,
             diameter_m=default_diameter_m * scaling,
-            length_m=get_length(
-                target_net,
-                branch,
-                from_node_id,
-                to_node_id,
-                default_length=default_length,
-            )
-            * length_scale,
+            length_m=_floor_length(
+                get_length(
+                    target_net,
+                    branch,
+                    from_node_id,
+                    to_node_id,
+                    default_length=default_length,
+                )
+                * length_scale
+            ),
             grid=gas_grid,
         )
     for node in power_net_as_st.nodes:
@@ -640,7 +655,9 @@ def _add_gas_mesh_pipes(
             from_node_id=j1,
             to_node_id=j2,
             diameter_m=default_diameter_m * mesh_diameter_factor,
-            length_m=default_length * mesh_length_factor * length_scale,
+            length_m=_floor_length(
+                default_length * mesh_length_factor * length_scale
+            ),
             grid=gas_grid,
         )
 
@@ -805,14 +822,16 @@ def create_gas_tree_net_for_power(  # NOSONAR
             from_node_id=from_id,
             to_node_id=to_id,
             diameter_m=diameter_m,
-            length_m=get_length(
-                target_net,
-                branch,
-                from_id,
-                to_id,
-                default_length=default_length,
-            )
-            * length_scale,
+            length_m=_floor_length(
+                get_length(
+                    target_net,
+                    branch,
+                    from_id,
+                    to_id,
+                    default_length=default_length,
+                )
+                * length_scale
+            ),
             grid=gas_grid,
         )
 
@@ -1002,14 +1021,16 @@ def create_heat_supply_return_net_for_power(  # NOSONAR
             from_node_id=from_id,
             to_node_id=to_id,
             diameter_m=default_diameter_m,
-            length_m=get_length(
-                target_net,
-                branch,
-                from_id,
-                to_id,
-                default_length=default_length,
-            )
-            * length_scale,
+            length_m=_floor_length(
+                get_length(
+                    target_net,
+                    branch,
+                    from_id,
+                    to_id,
+                    default_length=default_length,
+                )
+                * length_scale
+            ),
             temperature_ext_k=296.15,
             roughness_m=0.001,
             grid=heat_grid,
@@ -1162,9 +1183,11 @@ def create_heat_supply_return_net_for_power(  # NOSONAR
             from_node_id=return_junction,
             to_node_id=slack_supply_junction,
             diameter_m=closing_diameter_m,
-            length_m=return_length_m
-            if return_length_m is not None
-            else default_length * length_scale,
+            length_m=_floor_length(
+                return_length_m
+                if return_length_m is not None
+                else default_length * length_scale
+            ),
             temperature_ext_k=296.15,
             roughness_m=0.001,
             grid=heat_grid,
