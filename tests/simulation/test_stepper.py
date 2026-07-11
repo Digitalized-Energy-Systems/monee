@@ -958,3 +958,126 @@ def test_Stepper_overrides_ambiguous_raises_and_typed_key_resolves():
     )
     vm_slack = sr.result.get(mm.Bus)["vm_pu"].iloc[0]
     assert math.isclose(vm_slack, 1.05, rel_tol=1e-3)
+
+
+def _load_bus_vm(stepper):
+    load_id = child_id_by_type(stepper._work_net, mm.PowerLoad)
+    load_bus_id = stepper._work_net.child_by_id(load_id).node_id
+    return stepper._work_net.node_by_id(load_bus_id).model.vm_pu.value
+
+
+def test_Stepper_warm_start_persists_solution_into_working_net():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    load_bus_id = net.child_by_id(load_id).node_id
+    stepper = Stepper(net)
+
+    sr = stepper.step(dt_h=1.0)
+
+    solved_vm = sr.result.network.node_by_id(load_bus_id).model.vm_pu.value
+    work_vm = _load_bus_vm(stepper)
+    assert math.isclose(work_vm, solved_vm, rel_tol=1e-12)
+    assert abs(work_vm - 1.0) > 1e-6  # moved off the base initial value
+
+
+def test_Stepper_warm_start_false_leaves_working_net_values():
+    stepper = Stepper(_power_net(), warm_start=False)
+    stepper.step(dt_h=1.0)
+    assert _load_bus_vm(stepper) == 1.0
+
+
+def test_Stepper_warm_start_skipped_on_failed_step():
+    stepper = Stepper(_power_net(), on_step_error="skip")
+    stepper._solver.solve = _raising_solve
+
+    sr = stepper.step(dt_h=1.0)
+
+    assert sr.failed
+    assert _load_bus_vm(stepper) == 1.0
+
+
+def test_Stepper_warm_start_islanded_values_not_poisoned():
+    """Islanding writes NaN into the solved copy; the working net must keep the
+    last finite values so a rejoining component warm-starts sanely."""
+    net = _power_net()
+    line_id = _line_id(net)
+    stepper = Stepper(net)
+
+    stepper.step(dt_h=1.0)
+    vm_solved = _load_bus_vm(stepper)
+
+    stepper.deactivate(line_id)
+    stepper.step(dt_h=1.0)  # load bus islanded -> NaN in the solved copy
+    vm_islanded = _load_bus_vm(stepper)
+    assert not math.isnan(vm_islanded)
+    assert vm_islanded == vm_solved
+
+    stepper.activate(line_id)
+    sr = stepper.step(dt_h=1.0)
+    assert sr.result.success
+    assert math.isclose(_load_bus_vm(stepper), vm_solved, rel_tol=1e-6)
+
+
+def test_Stepper_reset_restores_base_initial_values():
+    stepper = Stepper(_power_net())
+    stepper.step(dt_h=1.0)
+    assert _load_bus_vm(stepper) != 1.0
+    stepper.reset()
+    assert _load_bus_vm(stepper) == 1.0
+
+
+def _spy_hint_at_solve(stepper):
+    """Record the backend's armed warm-start hint at each solve entry."""
+    if not hasattr(stepper._solver, "_warm_start_hint"):
+        pytest.skip("backend has no warm-start hint state")
+    seen = []
+    orig_solve = stepper._solver.solve
+
+    def solve(*args, **kwargs):
+        seen.append(stepper._solver._warm_start_hint)
+        return orig_solve(*args, **kwargs)
+
+    stepper._solver.solve = solve
+    return seen
+
+
+def test_Stepper_hints_solver_warm_only_after_first_success():
+    stepper = Stepper(_power_net())
+    seen = _spy_hint_at_solve(stepper)
+
+    stepper.step(dt_h=1.0)
+    stepper.step(dt_h=1.0)
+    stepper.reset()
+    stepper.step(dt_h=1.0)
+
+    assert seen == [False, True, False]
+
+
+def test_Stepper_warm_start_false_never_hints_warm():
+    stepper = Stepper(_power_net(), warm_start=False)
+    seen = _spy_hint_at_solve(stepper)
+
+    stepper.step(dt_h=1.0)
+    stepper.step(dt_h=1.0)
+
+    assert seen == [False, False]
+
+
+def test_Stepper_failed_step_drops_hint_for_retry():
+    stepper = Stepper(_power_net(), on_step_error="skip")
+    seen = _spy_hint_at_solve(stepper)
+    good_solve = stepper._solver.solve
+
+    def failing(*args, **kwargs):
+        seen.append(stepper._solver._warm_start_hint)
+        raise RuntimeError("boom")
+
+    stepper.step(dt_h=1.0)  # cold, succeeds -> warm values
+    stepper._solver.solve = failing
+    stepper.step(dt_h=1.0)  # warm-hinted, fails without consuming the hint
+    stepper._solver.solve = good_solve
+    stepper.step(dt_h=1.0)  # retry runs unhinted
+    stepper.step(dt_h=1.0)  # back to warm after the success
+
+    assert seen == [False, True, False, True]
+    assert stepper._solver._warm_start_hint is False  # never left armed

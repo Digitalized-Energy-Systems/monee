@@ -255,6 +255,12 @@ class SolverInterface(ABC):
         Concrete backends set ``_solver_name``; ``None`` when unknown."""
         return getattr(self, "_solver_name", None)
 
+    def set_warm_start_hint(self, active: bool) -> None:
+        """Declare whether the next solve's variable values are a previous
+        solution (set by drivers like the Stepper before each solve). Default
+        no-op; backends that tune their solver for a warm start override it
+        (CasADi switches IPOPT to warm-start options)."""
+
     @abstractmethod
     def solve(
         self,
@@ -1078,18 +1084,28 @@ def apply_post_process_all(nodes, branches, compounds, network) -> None:
         apply_post_process(compound.model)
 
 
+def _is_nan_value(v) -> bool:
+    return v is None or (isinstance(v, float) and math.isnan(v))
+
+
 def _copy_var_values(src, dst) -> None:
     """Copy ``.value`` for Var/Intermediate from *src* to *dst*. Intermediates
-    must be propagated so e.g. derived ``vm_pu`` isn't silently lost."""
+    must be propagated so e.g. derived ``vm_pu`` isn't silently lost. NaN/None
+    sources keep the destination's value: a persisted NaN is never a usable
+    warm start (injection scrubs it to 0), while the kept value lets e.g. a
+    rejoining islanded component restart from its last solved point."""
     for key, val in src.__dict__.items():
         if isinstance(val, (Var, Intermediate)):
             dst_attr = dst.__dict__.get(key)
             if isinstance(dst_attr, (Var, Intermediate)):
+                if _is_nan_value(val.value):
+                    continue
                 dst_attr.value = val.value
 
 
 def persist_solution(solved_copy: Network, original: Network) -> None:
-    """Propagate solved values back so the next ``inject_vars`` warm-starts."""
+    """Propagate solved values back so the next ``inject_vars`` warm-starts
+    (NaN/None values are skipped, see :func:`_copy_var_values`)."""
     for src_node, dst_node in zip(solved_copy.nodes, original.nodes):
         _copy_var_values(src_node.model, dst_node.model)
         for src_child, dst_child in zip(
@@ -1114,7 +1130,7 @@ def compute_bound_violations(  # NOSONAR
             if not isinstance(val, Var):
                 continue
             v = val.value
-            if v is None or (isinstance(v, float) and math.isnan(v)):
+            if _is_nan_value(v):
                 continue
             if val.min is not None and v < val.min - tol:
                 violations[f"{label}.{key}"] = val.min - v

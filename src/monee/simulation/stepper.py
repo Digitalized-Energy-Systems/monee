@@ -32,6 +32,7 @@ from monee.simulation.timeseries import (
     TimeseriesResult,
     _unsuccessful_solve_error,
 )
+from monee.solver.core import persist_solution
 from monee.solver.dispatch import resolve_solver
 
 _log = logging.getLogger(__name__)
@@ -193,7 +194,18 @@ class Stepper:
     a small number (the longest lookback any ``inter_step_equations`` needs,
     e.g. 8) for long runs; :meth:`to_timeseries_result` then only covers the
     retained window. ``max_changes`` likewise caps the recorded
-    :class:`NetworkChange` list (oldest events dropped first)."""
+    :class:`NetworkChange` list (oldest events dropped first).
+
+    ``warm_start`` (default on) carries each successful step's solved values
+    into the working net, so the next solve starts from the previous solution
+    instead of the base network's initial values; backends that support it
+    (CasADi/IPOPT) are additionally hinted to run with warm-start solver
+    options on those solves. Failed steps leave the working net untouched and
+    drop the hint for the next attempt, so a failure caused by the warm-start
+    options self-heals with a flat-start retry. With ``copy_base=False`` the
+    working net is the caller's live network, so warm starting writes solved
+    values into it; pass ``warm_start=False`` to keep it strictly
+    caller-owned."""
 
     __slots__ = (
         "_base_net",
@@ -211,6 +223,8 @@ class Stepper:
         "_carry_dt_h",
         "_work_net",
         "_copy_base",
+        "_warm_start",
+        "_warm_values",
         "_record_changes",
         "_changes",
         "_max_changes",
@@ -234,6 +248,7 @@ class Stepper:
         record_changes: bool = True,
         max_changes: int | None = None,
         copy_base: bool = True,
+        warm_start: bool = True,
         **solver_kwargs: Any,
     ) -> None:
         if on_step_error not in ("raise", "skip"):
@@ -252,6 +267,8 @@ class Stepper:
         # each step still solves on a per-step copy, but reset() loses its
         # pristine baseline and is disabled.
         self._copy_base = copy_base
+        self._warm_start = warm_start
+        self._warm_values = False
         self._work_net = net.copy() if copy_base else net
         self._solver = resolve_solver(solver, backend=backend)
         self._optimization_problem = optimization_problem
@@ -338,6 +355,7 @@ class Stepper:
 
         solve_dt_h = dt_h + self._carry_dt_h
         self._state.dt_h = solve_dt_h
+        self._solver.set_warm_start_hint(self._warm_values)
         try:
             result = self._solver.solve(
                 net_copy,
@@ -348,6 +366,9 @@ class Stepper:
             if getattr(result, "success", True) is False:
                 raise _unsuccessful_solve_error(step_idx, result)
         except Exception as exc:
+            # Drop the hint for the retry: if the warm-start solver options
+            # caused the failure, the next attempt runs the flat-start ones.
+            self._warm_values = False
             if self._on_step_error == "raise":
                 self._rollback_recording(recording_checkpoint)
                 raise
@@ -356,8 +377,18 @@ class Stepper:
             sr = StepResult(step=step_idx, result=None, failed=True, error=exc)
             self._record(sr, dt_h)
             return sr
+        finally:
+            # A patched/short-circuited solve may not consume the one-shot
+            # hint; never leave it armed on a shared solver instance.
+            self._solver.set_warm_start_hint(False)
 
         self._carry_dt_h = 0.0
+        if self._warm_start:
+            # net_copy holds the solution (the backend persisted it into its
+            # input network) and is structurally identical to the working net,
+            # so the next step's copy starts from this solution.
+            persist_solution(net_copy, self._work_net)
+            self._warm_values = True
         self._record_islanding_changes(
             result.network, step_idx, t_h_at_step, topo_changes
         )
@@ -601,6 +632,7 @@ class Stepper:
         self._step_count = 0
         self._t_h = 0.0
         self._carry_dt_h = 0.0
+        self._warm_values = False
         self._work_net = self._base_net.copy()
         self._changes = []
         self._changes_dropped = 0

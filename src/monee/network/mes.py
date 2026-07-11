@@ -1331,9 +1331,16 @@ def create_coupling_points_for_mes(  # NOSONAR
     """Add CHP / P2G / P2H coupling points to an MES network.
 
     ``density`` ∈ [0,1] is per-node Bernoulli in decentralised mode and
-    ``ceil(density·N)`` units on one hub in centralised mode. Capacities scale
+    ``round(density·N)`` units on one hub in centralised mode. Capacities scale
     from each bus's local p_ref via the per-type ``*_p_share`` and a global
     ``cp_size_multiplier``.
+
+    For a fixed ``seed`` and base grid the fleets are strictly nested along a
+    density sweep: the selection uniform and the unit type are drawn per
+    *candidate* node in one fixed pass, so both are properties of
+    (seed, base grid, node) — raising ``density`` only adds units and never
+    re-rolls the type (or the node-local size) of a unit that already existed
+    at a lower density.
 
     ``replace_primary_generation=True`` (default False is additive) drains the
     matching primary fleet to keep total rated production per carrier invariant.
@@ -1363,12 +1370,25 @@ def create_coupling_points_for_mes(  # NOSONAR
     unknown = coupling_set - valid
     if unknown:
         raise ValueError(f"unknown coupling types: {sorted(unknown)}")
+    if not coupling_set:
+        raise ValueError("couplings must contain at least one coupling type")
 
     candidate_node_ids = [
         nid for nid in bus_to_gas_junc.keys() if nid in bus_to_heat_supply_junc
     ]
     if not candidate_node_ids:
         raise ValueError("no nodes are coupled to both gas and heat supply")
+
+    # Selection uniform AND unit type are drawn for every candidate in one
+    # fixed pass, so both are per-node properties of (seed, base grid, node).
+    # Drawing the type only for *selected* nodes would shift the stream
+    # whenever a new node enters at a higher density and re-roll the existing
+    # fleet.
+    type_choices = sorted(coupling_set)
+    node_draws = [
+        (nid, rng.random(), rng.choice(type_choices))  # NOSONAR
+        for nid in candidate_node_ids
+    ]
 
     if centralized:
         hub = (
@@ -1379,11 +1399,9 @@ def create_coupling_points_for_mes(  # NOSONAR
                 f"central_node_id={hub} is not in the gas/heat coupled set"
             )
         n_units = int(round(density * len(candidate_node_ids)))
-        target_nodes = [hub] * n_units
+        target_units = [(hub, t) for _, _, t in node_draws[:n_units]]
     else:
-        target_nodes = [
-            nid for nid in candidate_node_ids if rng.random() < density
-        ]  # NOSONAR
+        target_units = [(nid, t) for nid, u, t in node_draws if u < density]
 
     created = []
 
@@ -1400,7 +1418,7 @@ def create_coupling_points_for_mes(  # NOSONAR
     cp_power_out_mw = 0.0
     cp_gas_out_kgs = 0.0
     cp_heat_out_mw = 0.0
-    for power_node_id in target_nodes:
+    for power_node_id, unit_type in target_units:
         gas_junc = bus_to_gas_junc[power_node_id]
         heat_supply_junc = bus_to_heat_supply_junc[power_node_id]
 
@@ -1410,8 +1428,6 @@ def create_coupling_points_for_mes(  # NOSONAR
         )
         if p_ref_mw <= 0:
             continue
-
-        unit_type = rng.choice(sorted(coupling_set))  # NOSONAR
 
         if unit_type == "chp":
             chp_p_target_mw = chp_p_share * cp_size_multiplier * p_ref_mw

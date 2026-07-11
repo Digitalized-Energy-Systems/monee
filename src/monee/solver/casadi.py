@@ -312,13 +312,44 @@ _IPOPT_DEBUG_OPTS = {
     "ipopt.sb": "no",
 }
 
+# For solves whose x0 is a previous solution (see set_warm_start_hint). The
+# flat-start defaults are actively harmful there: the default initial barrier
+# (mu_init=0.1) pushes a near-optimal point far back into the interior and can
+# fail the step computation outright. Full warm-start mode keeps the point
+# (and its near-zero bound distances) as-is: the only tested set that never
+# failed nor drifted (<=1e-8 vs cold) from a near-solution start. Trade-off:
+# on LARGE smooth gas/heat NLPs (degenerate pos/neg flow bounds get near-zero
+# multipliers) it roughly doubles iterations vs a cold start - there, either
+# pass warm_start=False to the Stepper or override per instance with
+# solver_options={"ipopt.warm_start_init_point": "no", "ipopt.mu_init": 1e-5}
+# (~1.5x faster than cold, at the cost of occasional flat-start retries and
+# result staleness up to the warm constr_viol_tol).
+_IPOPT_WARM_OPTS = {
+    "ipopt.warm_start_init_point": "yes",
+    "ipopt.mu_init": 1e-6,
+    "ipopt.warm_start_bound_push": 1e-9,
+    "ipopt.warm_start_mult_bound_push": 1e-9,
+}
 
-def _merged_ipopt_opts(solver_options: dict | None, debug: bool = False) -> dict:
+
+def _merged_ipopt_opts(
+    solver_options: dict | None, debug: bool = False, warm: bool = False
+) -> dict:
     opts = dict(_IPOPT_OPTS)
+    if warm:
+        opts.update(_IPOPT_WARM_OPTS)
     if debug:
         opts.update(_IPOPT_DEBUG_OPTS)
     if solver_options:
         opts.update(solver_options)
+    if warm and "ipopt.constr_viol_tol" not in (solver_options or {}):
+        # A near-feasible start may be accepted after 0 iterations when the
+        # parameter change since the last solve is small; the default unscaled
+        # feasibility check (1e-4) would let per-constraint residuals 100x
+        # looser than ipopt.tol pass as converged. Cap it at the effective tol
+        # (staleness bound); slightly stricter than cold acceptance, and a warm
+        # solve that cannot reach it fails into the Stepper's flat-start retry.
+        opts["ipopt.constr_viol_tol"] = min(1e-6, opts.get("ipopt.tol", 1e-6))
     return opts
 
 
@@ -337,11 +368,20 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
 
         self._simulation: bool = False
         self._reg: list = []
+        self._warm_start_hint: bool = False
 
         self.last_build_s = None  # nlpsol construction: graph -> derivative fns
         self.last_solve_s = None  # the IPOPT solve() call
         self.last_engine_s = None  # build + solve (the GEKKO "engine" analogue)
         self.last_iters = None
+
+    def set_warm_start_hint(self, active: bool) -> None:
+        """Declare that the next solve's variable values are a previous
+        solution (e.g. the :class:`~monee.simulation.Stepper` persisted the
+        last step's result). That solve then runs IPOPT with warm-start
+        options (small initial barrier) instead of the flat-start defaults.
+        One-shot: consumed and reset by the next :meth:`solve`."""
+        self._warm_start_hint = bool(active)
 
     def _add_equations(self, m, eqs):
         m.Equations(eqs)
@@ -426,6 +466,8 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
     ) -> SolverResult:
         self._simulation = simulation
         self._reg = []
+        warm = self._warm_start_hint
+        self._warm_start_hint = False
         m = CasModel()
 
         # --- network prep (mirrors GEKKOSolver.solve) ---
@@ -517,7 +559,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             "monee_casadi",
             "ipopt",
             {"x": X, "f": f, "g": g},
-            _merged_ipopt_opts(self.solver_options, debug=draw_debug),
+            _merged_ipopt_opts(self.solver_options, debug=draw_debug, warm=warm),
         )
         self.last_build_s = time.perf_counter() - t0
 
