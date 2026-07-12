@@ -6,11 +6,13 @@ from geopy import distance
 import monee.express as mx
 import monee.model as mm
 import monee.model.phys.core.hydraulics as hyd
+from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 from monee.model.phys.nonlinear.gf import reference_gas_density
 
 REF_PA = 1000000
 REF_TEMP = 356
 DEFAULT_LENGTH = 100
+GAS_HHV_MJ_PER_KG = DEFAULT_GAS_HHV_MJ_PER_KG
 
 
 def _node_power_load_mw(power_net: mm.Network, node):
@@ -56,7 +58,7 @@ def _fallback_length(branch, node1, node2, default_length=DEFAULT_LENGTH):
     return float(default_length)
 
 
-def _get_length(
+def get_length(
     net: mm.Network, branch, node1_id, node2_id, default_length=DEFAULT_LENGTH
 ):
     return _fallback_length(
@@ -218,7 +220,7 @@ def create_heat_net_for_power(
                 default_diameter_m,
             ),
             length_m=_floor_length(
-                _get_length(
+                get_length(
                     target_net,
                     branch,
                     from_node_id,
@@ -281,7 +283,7 @@ def create_gas_net_for_power(
             to_node_id=to_node_id,
             diameter_m=default_diameter_m * scaling,
             length_m=_floor_length(
-                _get_length(
+                get_length(
                     target_net,
                     branch,
                     from_node_id,
@@ -716,7 +718,7 @@ def create_gas_tree_net_for_power(  # NOSONAR
             to_node_id=to_id,
             diameter_m=diameter_m,
             length_m=_floor_length(
-                _get_length(
+                get_length(
                     target_net,
                     branch,
                     from_id,
@@ -915,7 +917,7 @@ def create_heat_supply_return_net_for_power(  # NOSONAR
             to_node_id=to_id,
             diameter_m=default_diameter_m,
             length_m=_floor_length(
-                _get_length(
+                get_length(
                     target_net,
                     branch,
                     from_id,

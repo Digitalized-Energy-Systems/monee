@@ -220,6 +220,10 @@ def init_model(model_type, preprocessed_dict):
     return model
 
 
+def preprocess_dict(model_dict):
+    return _decode_values(model_dict)
+
+
 def native_dict_to_network(dict_struct) -> Network:
     network = Network(None)
 

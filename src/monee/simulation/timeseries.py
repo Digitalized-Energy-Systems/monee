@@ -127,6 +127,12 @@ class TimeseriesData:
         """Alias for :meth:`add_child_series`; signals the attribute feeds an objective."""
         self.add_child_series(child_id, attribute, series)
 
+    def add_objective_data_by_name(
+        self, child_name: str, attribute: str, series
+    ) -> None:
+        """Like :meth:`add_objective_data` but matches by component name."""
+        self.add_child_series_by_name(child_name, attribute, series)
+
     @classmethod
     def from_dataframe(
         cls,
@@ -265,6 +271,18 @@ class TimeseriesData:
         new_td.extend(self)
         new_td.extend(other)
         return new_td
+
+    @property
+    def child_id_data(self):
+        return self._child_id_to_series
+
+    @property
+    def branch_id_data(self):
+        return self._branch_id_to_series
+
+    @property
+    def compound_id_data(self):
+        return self._compound_id_to_series
 
     @property
     def child_name_data(self):

@@ -11,6 +11,16 @@ class PerformanceMetric(ABC):
         pass
 
 
+class ResilienceMetric(ABC):
+    @abstractmethod
+    def gather(self, network: md.Network, step, **kwargs):
+        pass
+
+    @abstractmethod
+    def calc(self):
+        pass
+
+
 def is_load(component):
     model = component.model
     grid = component.grid
@@ -44,7 +54,7 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
         ]
 
     def calc(  # NOSONAR
-        self, network, include_ext_grid=True, include_coupling_points=False
+        self, network, inv=False, include_ext_grid=True, include_coupling_points=False
     ):
         relevant_components = self.get_relevant_components(network)
         power_load_curtailed = 0
@@ -125,4 +135,7 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                 elif carrier == "gas":
                     gas_load_curtailed += loss
 
-        return (power_load_curtailed, heat_load_curtailed, gas_load_curtailed)
+        if inv:
+            return (-power_load_curtailed, -heat_load_curtailed, -gas_load_curtailed)
+        else:
+            return (power_load_curtailed, heat_load_curtailed, gas_load_curtailed)

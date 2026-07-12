@@ -718,6 +718,32 @@ class Network:
     def __str__(self):
         return self.as_dataframe_dict_str()
 
+    def has_any_child_of_type(self, branch, cls) -> bool:
+        childs = self.get_childs_by_type(branch, cls)
+        return len(childs) > 0
+
+    def get_childs_by_type(self, branch, cls) -> list[Child]:
+        return [
+            child
+            for child in self.childs_by_ids(branch.child_ids)
+            if isinstance(child.model, cls)
+        ]
+
+    def compound_of(self, subcomponent_component_id) -> Component | None:
+        compounds = [
+            compound
+            for compound in self.compounds
+            if subcomponent_component_id in [sc.id for sc in compound.subcomponents]
+        ]
+        if len(compounds) == 0:
+            return None
+        return compounds[0]
+
+    def clear_childs(self):
+        self._child_dict = {}
+        for node in self.nodes:
+            node.child_ids = []
+
     def statistics(self):
         type_to_number = {}
         model_containers = self.nodes + self.childs + self.branches + self.compounds

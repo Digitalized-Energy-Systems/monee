@@ -251,6 +251,9 @@ class Constraints:
             lambda component: isinstance(component.model, model_cls_tuple)
         )
 
+    def select_grids(self, grid_cls_tuple) -> Constraint:
+        return self.select(lambda component: isinstance(component.grid, grid_cls_tuple))
+
     def with_models(self, models) -> Constraint:
         constraint = Constraint(models)
         self._constraints.append(constraint)
@@ -459,6 +462,13 @@ class OptimizationProblem:
 
         self._controllable_appliables.append(apply_controllable)
         return self
+
+    def controllable_all(self, attributes):
+        self.controllable(component_condition=lambda _: True, attributes=attributes)
+        return self
+
+    def controllables_link(self):
+        return lambda _: self._controllable_to_attr.keys()
 
     def controllable_demands(
         self, attributes: list[str | tuple[str, AttributeParameter]]

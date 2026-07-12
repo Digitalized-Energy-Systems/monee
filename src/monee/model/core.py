@@ -44,6 +44,15 @@ def is_plain_number(value) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def lower(var_or_const):
+    """Return the lower bound of a ``Var`` (or its value if unbounded); pass through otherwise."""
+    if isinstance(var_or_const, Var):
+        if var_or_const.min is None:
+            return var_or_const.value
+        return var_or_const.min
+    return var_or_const
+
+
 def value(var_or_const):
     """Extract ``.value`` from a ``Var``/``Const``/``Intermediate``/``PostProcess``; pass through plain scalars."""
     if isinstance(var_or_const, Const | Var | Intermediate | PostProcess):
@@ -184,6 +193,9 @@ class Var:
         new.name = self.name
         new.scale = self.scale
         return new
+
+
+tracked = Var
 
 
 class Const:

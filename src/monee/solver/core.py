@@ -241,6 +241,12 @@ class SolverResult:
         )
 
 
+class SinglePeriodSolverProtocol:
+    """Documents the contract a solver backend must expose to act as a delegate
+    inside :class:`GekkoMultiPeriodSolver` / :class:`PyomoMultiPeriodSolver`.
+    Not enforced at runtime."""
+
+
 class SolverInterface(ABC):
     """Abstract base class for solver backends (GEKKO, Pyomo, …)."""
 

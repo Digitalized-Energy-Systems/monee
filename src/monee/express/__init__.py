@@ -83,6 +83,26 @@ def create_junction(
     )
 
 
+def create_el_branch(
+    network: mm.Network,
+    from_node_id,
+    to_node_id,
+    model,
+    constraints=None,
+    grid=None,
+    name=None,
+):
+    """Add an electrical branch using *model*. Returns the branch id tuple."""
+    return network.branch(
+        model,
+        from_node_id=from_node_id,
+        to_node_id=to_node_id,
+        constraints=constraints,
+        grid=grid,
+        name=name,
+    )
+
+
 def create_line(
     network: mm.Network,
     from_node_id,
