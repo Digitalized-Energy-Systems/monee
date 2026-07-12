@@ -17,6 +17,7 @@ from pyomo.opt import SolverStatus, TerminationCondition
 
 import monee.solver.pyo as pyo_mod
 from monee.model.formulation import EL_MISOCP_FORMULATION
+from monee.model.grid import PowerGrid
 from monee.network import create_urban_district_net
 from monee.problem.min_load_shedding import create_min_load_shedding_problem
 from monee.solver import PyomoSolver
@@ -182,6 +183,9 @@ def test_bridge_writeback_matches_a_second_identical_solve(monkeypatch):
 
     def _solve():
         net = create_urban_district_net()
+        for grid in net.grids:
+            if isinstance(grid, PowerGrid):
+                grid.sn_mva = 100
         net.apply_formulation(EL_MISOCP_FORMULATION)
         return PyomoSolver("scip").solve(net, optimization_problem=_shedding_problem())
 
