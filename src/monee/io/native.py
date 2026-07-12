@@ -220,11 +220,6 @@ def init_model(model_type, preprocessed_dict):
     return model
 
 
-# Kept for backward compatibility (older callers/imports).
-def preprocess_dict(model_dict):
-    return _decode_values(model_dict)
-
-
 def native_dict_to_network(dict_struct) -> Network:
     network = Network(None)
 
@@ -318,9 +313,16 @@ def _resolve_branch_grid(branch_dict, grid_by_name):
 
 
 def load_to_network(file) -> Network:
+    """Load a native JSON *file* into a :class:`Network`.
+
+    Also available as :func:`load_network`.
+    """
     with open(file, encoding="utf-8") as read_fp:
         dict_struct = json.load(read_fp)
     return native_dict_to_network(dict_struct)
+
+
+load_network = load_to_network
 
 
 # --------------------------------------------------------------------------- #
@@ -474,8 +476,14 @@ def network_to_native_dict(network: Network) -> dict:
 
 
 def write_omef_network(file, network: Network):
+    """Write *network* to *file* in the native JSON format.
 
+    Also available as :func:`save_network`.
+    """
     to_serialize = network_to_native_dict(network)
 
     with open(file, "w", encoding="utf-8") as write_fp:
         json.dump(to_serialize, write_fp, indent=3, default=_json_default)
+
+
+save_network = write_omef_network

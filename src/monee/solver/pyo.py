@@ -26,17 +26,23 @@ from .core import (
     StepState,
     apply_child_overwrites,
     as_iter,
+    clamp_warm_start,
     filter_bool_eqs,
     filter_intermediate_eqs,
     finalize_failed_solution,
     finalize_solution,
+    fold_sum,
     ignore_branch,
     ignore_child,
     ignore_compound,
     ignore_node,
     inject_vars,
+    lex_cap_slack,
     mark_slacks_and_prescriptions,
     prepare_solve_network,
+    sanitize_component_name,
+    snap_to_bounds,
+    warn_false_equation,
     withdraw_vars,
 )
 
@@ -294,15 +300,8 @@ class PyomoSolver(SolverInterface):
         into ``[min, max]`` (suppresses W1002 when bounds tightened since last solve)."""
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
-                init = value.value
                 # NaN survives into Gurobi's warmstart file and crashes the solve.
-                if init is not None and isinstance(init, float) and math.isnan(init):
-                    init = None
-                if init is not None:
-                    if value.min is not None and init < value.min:
-                        init = value.min
-                    if value.max is not None and init > value.max:
-                        init = value.max
+                init = clamp_warm_start(value)
                 v = pyo.Var(
                     domain=pyo.Integers if value.integer else pyo.Reals,
                     bounds=(value.min, value.max),
@@ -331,11 +330,7 @@ class PyomoSolver(SolverInterface):
                 if is_integer:
                     val = int(round(val))
                 else:
-                    tol = PyomoSolver._BOUND_SNAP_TOL
-                    if lb is not None and lb - tol <= val < lb:
-                        val = lb
-                    if ub is not None and ub < val <= ub + tol:
-                        val = ub
+                    val = snap_to_bounds(val, lb, ub, PyomoSolver._BOUND_SNAP_TOL)
                 setattr(target, key, Var(value=val, min=lb, max=ub, integer=is_integer))
             elif isinstance(value, pyo.Expression):
                 expr_val = pyo.value(value, exception=False)
@@ -357,10 +352,8 @@ class PyomoSolver(SolverInterface):
         # than silently masked (mirrors the GEKKO backend via filter_bool_eqs).
         if isinstance(expr, bool):
             if expr is False:
-                _log.warning(
-                    "Dropping always-false (structurally infeasible) equation%s; "
-                    "this usually means a node/branch was over-deactivated.",
-                    f" ({name})" if name is not None else "",
+                warn_false_equation(
+                    f" ({name})" if name is not None else "", logger=_log
                 )
             return
         if name is not None:
@@ -368,12 +361,7 @@ class PyomoSolver(SolverInterface):
         else:
             pm.cons.add(expr)
 
-    @staticmethod
-    def _sanitize_name(name):
-        """Make a string safe for use as a Pyomo component name."""
-        return (
-            name.replace("(", "").replace(")", "").replace(", ", "_").replace(" ", "_")
-        )
+    _sanitize_name = staticmethod(sanitize_component_name)
 
     def _add_equations(self, pm, exprs, name_prefix=None):
         for i, e in enumerate(exprs):
@@ -551,10 +539,7 @@ class PyomoSolver(SolverInterface):
                 pm, solver, solver_name, solve_kwargs
             )
         else:
-            pm.obj = pyo.Objective(
-                expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
-                sense=pyo.minimize,
-            )
+            self._attach_combined_obj(pm)
             result = solver.solve(pm, **solve_kwargs)
             success, report, status_str, tc_str = _classify_solve_result(
                 result,
@@ -589,22 +574,27 @@ class PyomoSolver(SolverInterface):
             violations,
             solver_status=status_str,
             termination_condition=tc_str,
+            mode_used="optimization",
             infeasibility_report=report if not success else None,
             backend_used=self._backend_name,
             solver_used=solver_name,
         )
         return solver_result
 
-    # Slack added on top of solver MIPGap so the phase-2 cap never excludes
-    # a phase-1 incumbent the solver accepted within tolerance.
-    _LEX_REL_TOL = 1e-6
-    _LEX_ABS_TOL = 1e-9
+    @staticmethod
+    def _lex_cap_slack(s_star: float, solver_options: dict) -> float:
+        return lex_cap_slack(s_star, solver_options.get("MIPGap", 0.0))
 
-    @classmethod
-    def _lex_cap_slack(cls, s_star: float, solver_options: dict) -> float:
-        rel_gap = float(solver_options.get("MIPGap", 0.0) or 0.0)
-        rel = max(rel_gap, cls._LEX_REL_TOL)
-        return cls._LEX_ABS_TOL + rel * max(1.0, abs(s_star))
+    @staticmethod
+    def _attach_combined_obj(pm, active: bool = True):
+        """Combined ``pm.obj`` (kept deactivated in lex mode) for the
+        backwards-compatible ``pyo.value(pm.obj)`` read-out."""
+        pm.obj = pyo.Objective(
+            expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
+            sense=pyo.minimize,
+        )
+        if not active:
+            pm.obj.deactivate()
 
     def _solve_lexicographic(self, pm, solver, solver_name, solve_kwargs):
         """Two-phase lex: minimise ``Σ user`` then ``Σ aux`` under
@@ -623,11 +613,7 @@ class PyomoSolver(SolverInterface):
             phase_label="Lexicographic phase 1",
         )
         if not success:
-            pm.obj = pyo.Objective(
-                expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
-                sense=pyo.minimize,
-            )
-            pm.obj.deactivate()
+            self._attach_combined_obj(pm, active=False)
             return result, success, report, status_str, tc_str
 
         s_star = pyo.value(pm.obj_user, exception=False)
@@ -647,20 +633,14 @@ class PyomoSolver(SolverInterface):
             phase_label="Lexicographic phase 2",
         )
 
-        pm.obj = pyo.Objective(
-            expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
-            sense=pyo.minimize,
-        )
-        pm.obj.deactivate()
+        self._attach_combined_obj(pm, active=False)
         return result, success, report, status_str, tc_str
 
     def process_internal_oxf_components(self, pm, network):
         for constraint in network.constraints:
             self._add_equation(pm, constraint(network))
 
-        obj = None
-        for objective in network.objectives:
-            obj = objective(network) if obj is None else (obj + objective(network))
+        obj = fold_sum(objective(network) for objective in network.objectives)
         if obj is not None:
             pm.user_obj_exprs.append(obj)
 
@@ -681,13 +661,11 @@ class PyomoSolver(SolverInterface):
                 ),
             )
 
-        obj = None
-        for objective in (
+        obj = fold_sum(
             optimization_problem.objectives.all(network, period_index=period_index)
             if optimization_problem.objectives is not None
             else []
-        ):
-            obj = objective if obj is None else (obj + objective)
+        )
         if obj is not None:
             pm.user_obj_exprs.append(obj)
 

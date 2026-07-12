@@ -203,12 +203,6 @@ def resolve_solver(
 
         return CasADiSolver()
 
-    if solver is None and backend is None:
-        # Default solver is IPOPT -> CasADi when available, else GEKKO's IPOPT.
-        if _casadi_available():
-            return _casadi_factory()
-        return _gekko_factory(GEKKO_SOLVERS["ipopt"])
-
     return _dispatch_backend(
         solver,
         backend,
@@ -241,12 +235,6 @@ def resolve_multi_period_solver(
         from .casadi import CasADiMultiPeriodSolver
 
         return CasADiMultiPeriodSolver()
-
-    if solver is None and backend is None:
-        # Default solver is IPOPT -> CasADi when available, else GEKKO's IPOPT.
-        if _casadi_available():
-            return _casadi_mp_factory()
-        return GekkoMultiPeriodSolver(solver=GEKKO_SOLVERS["ipopt"])
 
     return _dispatch_backend(
         solver,

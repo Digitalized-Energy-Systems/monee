@@ -171,7 +171,7 @@ def _attach_sgens(monee_net, sgens, bus_to_node):
         monee_net.child_to(model, node_id=node.id, name=name)
 
 
-def _strip_transformer_vector_group_shifts(monee_net):
+def strip_transformer_vector_group_shifts(monee_net):
     # Vector-group shifts (multiples of 30 deg) collapse the CasADi flat start,
     # and monee has no per-unit rebasing use for them; genuine phase-shifter
     # angles (non-multiples of 30 deg) are kept.
@@ -199,6 +199,9 @@ def _strip_transformer_vector_group_shifts(monee_net):
             + ", ".join(f"branch {bid} ({deg} deg)" for bid, deg in stripped),
             stacklevel=3,
         )
+
+
+_strip_transformer_vector_group_shifts = strip_transformer_vector_group_shifts
 
 
 def _bus_position(net, pp_id):
@@ -255,7 +258,7 @@ def from_pandapower_net(net):  # NOSONAR
             if bid in overrides:
                 branch.model.max_i_ka = overrides[bid]
 
-    _strip_transformer_vector_group_shifts(monee_net)
+    strip_transformer_vector_group_shifts(monee_net)
 
     if hasattr(net, "load") and len(net.load):
         for pp_bus, group in net.load.groupby("bus", sort=False):

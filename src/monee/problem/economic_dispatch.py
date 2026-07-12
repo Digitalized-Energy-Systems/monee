@@ -8,6 +8,12 @@ from monee.problem.core import (
 from monee.problem.utils import line_loading_limit, make_vm_bounds_hook
 
 
+def _cost_or(model, default):
+    if not hasattr(model, "cost") or model.cost is None:
+        return default
+    return model.cost
+
+
 def create_economic_dispatch_problem(  # NOSONAR
     gen_cost_default=1.0,
     ext_grid_cost_default=None,
@@ -60,23 +66,15 @@ def create_economic_dispatch_problem(  # NOSONAR
 
     objectives = Objectives()
 
-    def _apply_default_cost(model):
-        if not hasattr(model, "cost") or model.cost is None:
-            return gen_cost_default
-        return model.cost
-
-    def _apply_ext_default_cost(model):
-        if not hasattr(model, "cost") or model.cost is None:
-            return ext_grid_cost_default
-        return model.cost
-
     objectives.select(lambda m: isinstance(m, PowerGenerator)).calculate(
-        lambda models: sum(_apply_default_cost(m) * (-m.p_mw) for m in models)
+        lambda models: sum(_cost_or(m, gen_cost_default) * (-m.p_mw) for m in models)
     )
 
     if include_ext_grid:
         objectives.select(lambda m: isinstance(m, ExtPowerGrid)).calculate(
-            lambda models: sum(_apply_ext_default_cost(m) * m.p_mw for m in models)
+            lambda models: sum(
+                _cost_or(m, ext_grid_cost_default) * m.p_mw for m in models
+            )
         )
 
     problem.objectives = objectives
@@ -117,26 +115,5 @@ def create_economic_dispatch_problem(  # NOSONAR
     return problem
 
 
-def create_multi_period_economic_dispatch_problem(
-    gen_cost_default=1.0,
-    ext_grid_cost_default=None,
-    bounds_vm=(0.9, 1.1),
-    bounds_lp=(0, 1.0),
-    ext_grid_bounds=None,
-    ramp_limit=None,
-    check_vm=True,
-    check_lp=True,
-    debug=False,
-):
-    """Alias for :func:`create_economic_dispatch_problem` (mirrors load_shedding naming)."""
-    return create_economic_dispatch_problem(
-        gen_cost_default=gen_cost_default,
-        ext_grid_cost_default=ext_grid_cost_default,
-        bounds_vm=bounds_vm,
-        bounds_lp=bounds_lp,
-        ext_grid_bounds=ext_grid_bounds,
-        ramp_limit=ramp_limit,
-        check_vm=check_vm,
-        check_lp=check_lp,
-        debug=debug,
-    )
+#: Alias for :func:`create_economic_dispatch_problem` (mirrors load_shedding naming).
+create_multi_period_economic_dispatch_problem = create_economic_dispatch_problem

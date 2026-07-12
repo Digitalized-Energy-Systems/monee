@@ -548,6 +548,19 @@ def test_ltc_timeseries_on_gurobi_backend_does_not_crash():
 
 
 @requires_gurobi
+def test_stepper_warm_start_defaults_off_on_gurobipy_backend():
+    """``warm_start=None`` follows ``benefits_from_warm_start``: off for
+    gurobipy (Var.Start seeding measured neutral), explicit True wins."""
+    from monee.simulation import Stepper
+
+    assert Stepper(_build_misocp_net(), backend="gurobipy")._warm_start is False
+    assert (
+        Stepper(_build_misocp_net(), backend="gurobipy", warm_start=True)._warm_start
+        is True
+    )
+
+
+@requires_gurobi
 def test_stepper_warm_start_matches_cold_on_gurobipy_backend():
     """The Stepper's warm start (persisted values seed ``Var.Start``) must not
     change gurobipy results; the backend has no warm-start hint, so only the

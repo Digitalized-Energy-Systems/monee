@@ -133,15 +133,6 @@ class GasGrid(Grid):
             )
 
 
-@model
-@dataclass(unsafe_hash=True)
-class NoGrid(Grid):
-    """Marker for components not bound to any grid."""
-
-
-NO_GRID = NoGrid("None")
-
-
 def create_gas_grid(
     name, type="lgas", t_ref_k=None, pressure_ref_pa=None, pressure_ambient_pa=None
 ):

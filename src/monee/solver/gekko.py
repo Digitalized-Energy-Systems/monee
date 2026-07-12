@@ -305,9 +305,8 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
         for ext in network.extensions:
             m.Equations(ext.equations(network, ignored_nodes))
 
-        if objs_exprs:
-            for expr in objs_exprs:
-                m.Obj(expr)
+        for expr in objs_exprs:
+            m.Obj(expr)
 
         # IMODE=1 (square simulation) only applies to a plain flow: no objective
         # of any kind (else IMODE=1 silently ignores it). m._objectives covers

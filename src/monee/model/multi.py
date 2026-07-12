@@ -7,6 +7,7 @@ from .core import (
     Node,
     PostProcess,
     Var,
+    is_plain_number,
     model,
 )
 from .grid import KGPS_KWHPERKG_TO_MW, GasGrid, PowerGrid, WaterGrid
@@ -33,11 +34,11 @@ def _heat_flow_init_kgs(heat_mw) -> float:
 
 
 def _num_or(value, default: float) -> float:
-    return (
-        value
-        if isinstance(value, (int, float)) and not isinstance(value, bool)
-        else default
-    )
+    return value if is_plain_number(value) else default
+
+
+def _carries(grids, grid_cls) -> bool:
+    return type(grids) is grid_cls or (type(grids) is dict and grid_cls in grids)
 
 
 @model
@@ -60,16 +61,16 @@ class GenericTransferBranch(MultiGridBranchModel):
         return False
 
     def init(self, grids):
-        if type(grids) is WaterGrid or (type(grids) is dict and WaterGrid in grids):
+        if _carries(grids, WaterGrid):
             self.mass_flow_pos_kgs = self._mass_flow_pos
             self.mass_flow_neg_kgs = self._mass_flow_neg
             self.t_from_pu = self._t_from_pu
             self.t_to_pu = self._t_to_pu
-        if type(grids) is GasGrid or (type(grids) is dict and GasGrid in grids):
+        if _carries(grids, GasGrid):
             self.mass_flow_pos_kgs = self._mass_flow_pos
             self.mass_flow_neg_kgs = self._mass_flow_neg
             self.gas_mass_flow = self.mass_flow_pos_kgs
-        if type(grids) is PowerGrid or (type(grids) is dict and PowerGrid in grids):
+        if _carries(grids, PowerGrid):
             self.p_to_mw = self._p_mw
             self.p_from_mw = self._p_mw
             self.q_to_mvar = self._q_mvar
@@ -77,25 +78,75 @@ class GenericTransferBranch(MultiGridBranchModel):
 
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
         eqs = []
-        if type(grids) is WaterGrid or (type(grids) is dict and WaterGrid in grids):
+        if _carries(grids, WaterGrid):
             eqs += [self.t_from_pu == self.t_to_pu]
             eqs += [self.t_from_pu == from_node_model.t_pu]
             eqs += [to_node_model.t_pu == self.t_to_pu]
             eqs += [to_node_model.t_pu == from_node_model.t_pu]
             eqs += [from_node_model.pressure_pu == to_node_model.pressure_pu]
-        if type(grids) is GasGrid or (type(grids) is dict and GasGrid in grids):
-            pass  # NOSONAR
         return eqs
 
 
 def _is_zeroed(regulation):
     """True when ``ignore_compound``'s ``set_active(False)`` pinned the
     regulation to the plain number 0; a controllable-CP Var never counts."""
-    return (
-        isinstance(regulation, (int, float))
-        and not isinstance(regulation, bool)
-        and regulation == 0
-    )
+    return is_plain_number(regulation) and regulation == 0
+
+
+def _heat_branches(branch_models):
+    return [
+        branch
+        for branch in branch_models
+        if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
+    ]
+
+
+def _gas_branches(branch_models):
+    return [branch for branch in branch_models if "gas_mass_flow" in branch.vars]
+
+
+def _power_branches(branch_models, power_var):
+    return [branch for branch in branch_models if power_var in branch.vars]
+
+
+class _RegulatedCompound:
+    """set_active() for compounds steered by a control node's ``regulation``:
+    save/zero on deactivate, restore on activate."""
+
+    def set_active(self, activation_flag):
+        if activation_flag:
+            self._active = True
+            self._restore_controls()
+        else:
+            # A repeated deactivate must not clobber the saved regulation
+            # with the already-zeroed value.
+            if self._active:
+                self._old_regulation = self._control_node.regulation
+                self._active = False
+            self._zero_controls()
+
+    def _restore_controls(self):
+        # Don't overwrite when controllable_cps has promoted the attr to a
+        # Var - restore only the case where set_active(False) zeroed it.
+        if is_plain_number(self._control_node.regulation):
+            self._control_node.regulation = self._old_regulation
+
+    def _zero_controls(self):
+        self._control_node.regulation = 0
+
+
+class _GasRegulatedCompound(_RegulatedCompound):
+    """:class:`_RegulatedCompound` that additionally zeroes/restores the
+    control node's gas dispatch."""
+
+    def _restore_controls(self):
+        if is_plain_number(self._control_node.gas_mass_flow_kgs):
+            self._control_node.gas_mass_flow_kgs = self.mass_flow_setpoint_kgs
+        super()._restore_controls()
+
+    def _zero_controls(self):
+        self._control_node.gas_mass_flow_kgs = 0
+        super()._zero_controls()
 
 
 @model
@@ -126,19 +177,9 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
         self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
-        heat_to_branches = [
-            branch
-            for branch in to_branch_models
-            if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
-        ]
-        heat_from_branches = [
-            branch
-            for branch in from_branch_models
-            if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
-        ]
-        gas_to_branches = [
-            branch for branch in to_branch_models if "gas_mass_flow" in branch.vars
-        ]
+        heat_to_branches = _heat_branches(to_branch_models)
+        heat_from_branches = _heat_branches(from_branch_models)
+        gas_to_branches = _gas_branches(to_branch_models)
 
         sub_he = next((b for b in heat_from_branches if isinstance(b, SubHE)), None)
         if sub_he is None:
@@ -211,19 +252,9 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         self.pressure_pu = Var(1, min=0.5, max=3, name="pressure_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
-        heat_to_branches = [
-            branch
-            for branch in to_branch_models
-            if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
-        ]
-        heat_from_branches = [
-            branch
-            for branch in from_branch_models
-            if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
-        ]
-        power_to_branches = [
-            branch for branch in to_branch_models if "p_from_mw" in branch.vars
-        ]
+        heat_to_branches = _heat_branches(to_branch_models)
+        heat_from_branches = _heat_branches(from_branch_models)
+        power_to_branches = _power_branches(to_branch_models, "p_from_mw")
 
         sub_he = next((b for b in heat_to_branches if isinstance(b, SubHE)), None)
         if sub_he is None:
@@ -313,22 +344,10 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
-        heat_to_branches = [
-            branch
-            for branch in to_branch_models
-            if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
-        ]
-        heat_from_branches = [
-            branch
-            for branch in from_branch_models
-            if "t_from_pu" in branch.vars or isinstance(branch, SubHE)
-        ]
-        gas_to_branches = [
-            branch for branch in to_branch_models if "gas_mass_flow" in branch.vars
-        ]
-        power_from_branches = [
-            branch for branch in from_branch_models if "p_to_mw" in branch.vars
-        ]
+        heat_to_branches = _heat_branches(to_branch_models)
+        heat_from_branches = _heat_branches(from_branch_models)
+        gas_to_branches = _gas_branches(to_branch_models)
+        power_from_branches = _power_branches(from_branch_models, "p_to_mw")
 
         sub_he = next((b for b in heat_from_branches if isinstance(b, SubHE)), None)
         if sub_he is None:
@@ -393,7 +412,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
 
 
 @model
-class CHP(MultiGridCompoundModel):
+class CHP(_GasRegulatedCompound, MultiGridCompoundModel):
     def __init__(
         self,
         diameter_m: float,
@@ -414,28 +433,6 @@ class CHP(MultiGridCompoundModel):
         self.q_mvar = q_mvar_setpoint
         self._old_regulation = self.regulation
         self._active = True
-
-    def set_active(self, activation_flag):
-        if activation_flag:
-            self._active = True
-            # Don't overwrite when controllable_cps has promoted the attr to a
-            # Var - restore only the case where set_active(False) zeroed it.
-            if isinstance(
-                self._control_node.gas_mass_flow_kgs, (int, float)
-            ) and not isinstance(self._control_node.gas_mass_flow_kgs, bool):
-                self._control_node.gas_mass_flow_kgs = self.mass_flow_setpoint_kgs
-            if isinstance(
-                self._control_node.regulation, (int, float)
-            ) and not isinstance(self._control_node.regulation, bool):
-                self._control_node.regulation = self._old_regulation
-        else:
-            # A repeated deactivate must not clobber the saved regulation
-            # with the already-zeroed value.
-            if self._active:
-                self._old_regulation = self._control_node.regulation
-                self._active = False
-            self._control_node.gas_mass_flow_kgs = 0
-            self._control_node.regulation = 0
 
     def create(
         self,
@@ -493,7 +490,7 @@ class CHP(MultiGridCompoundModel):
 
 
 @model
-class GasToHeat(MultiGridCompoundModel):
+class GasToHeat(_RegulatedCompound, MultiGridCompoundModel):
     def __init__(
         self, heat_energy_mw, diameter_m, temperature_ext_k, efficiency, regulation=1
     ) -> None:
@@ -504,20 +501,6 @@ class GasToHeat(MultiGridCompoundModel):
         self.regulation = regulation
         self._old_regulation = self.regulation
         self._active = True
-
-    def set_active(self, activation_flag):
-        if activation_flag:
-            self._active = True
-            # See CHP.set_active - skip restore when attr is already an LP Var.
-            if isinstance(
-                self._control_node.regulation, (int, float)
-            ) and not isinstance(self._control_node.regulation, bool):
-                self._control_node.regulation = self._old_regulation
-        else:
-            if self._active:
-                self._old_regulation = self._control_node.regulation
-                self._active = False
-            self._control_node.regulation = 0
 
     def create(
         self,
@@ -564,7 +547,7 @@ class GasToHeat(MultiGridCompoundModel):
 
 
 @model
-class PowerToHeat(MultiGridCompoundModel):
+class PowerToHeat(_RegulatedCompound, MultiGridCompoundModel):
     def __init__(
         self,
         heat_energy_mw,
@@ -583,21 +566,6 @@ class PowerToHeat(MultiGridCompoundModel):
         self.regulation = regulation
         self._old_regulation = self.regulation
         self._active = True
-
-    def set_active(self, activation_flag):
-        if activation_flag:
-            self._active = True
-            # See ``CHP.set_active`` - skip restore when the attribute is
-            # already an LP variable.
-            if isinstance(
-                self._control_node.regulation, (int, float)
-            ) and not isinstance(self._control_node.regulation, bool):
-                self._control_node.regulation = self._old_regulation
-        else:
-            if self._active:
-                self._old_regulation = self._control_node.regulation
-                self._active = False
-            self._control_node.regulation = 0
 
     def create(
         self,
@@ -772,12 +740,8 @@ class CHPHGControlNode(MultiGridNodeModel, Junction, Bus):
         self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
-        gas_to_branches = [
-            branch for branch in to_branch_models if "gas_mass_flow" in branch.vars
-        ]
-        power_from_branches = [
-            branch for branch in from_branch_models if "p_to_mw" in branch.vars
-        ]
+        gas_to_branches = _gas_branches(to_branch_models)
+        power_from_branches = _power_branches(from_branch_models, "p_to_mw")
 
         power_eqs = self.calc_signed_power_values(
             power_from_branches, [], [PowerGenerator(self.el_mw, self.gen_q_mvar)]
@@ -808,7 +772,7 @@ class CHPHGControlNode(MultiGridNodeModel, Junction, Bus):
 
 
 @model
-class CHPHG(MultiGridCompoundModel):
+class CHPHG(_GasRegulatedCompound, MultiGridCompoundModel):
     """HeatGenerator-based :class:`CHP` variant: heat is injected via a
     :class:`SubHG` child at ``heat_node`` instead of via an HX branch. No
     ``heat_return_node`` / ``diameter_m`` required."""

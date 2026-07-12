@@ -3,20 +3,18 @@ import logging
 import simbench
 
 import monee.model as md
-from monee.io.from_pandapower import aggregated_pp_load_name, from_pandapower_net
+from monee.io.from_pandapower import (
+    _coerce_positive_float,
+    aggregated_pp_load_name,
+    from_pandapower_net,
+)
 from monee.simulation.timeseries import TimeseriesData
 
 logger = logging.getLogger(__name__)
 
 
 def _row_scaling(row) -> float:
-    try:
-        scaling = float(row.get("scaling", 1.0))
-    except (TypeError, ValueError):
-        return 1.0
-    if scaling != scaling or scaling < 0:  # NOSONAR NaN or invalid
-        return 1.0
-    return scaling
+    return _coerce_positive_float(row.get("scaling", 1.0), allow_zero=True)
 
 
 def obtain_simbench_profile_by_pp_net(pp_net) -> TimeseriesData:  # NOSONAR

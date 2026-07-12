@@ -6,10 +6,10 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC
 
 from monee.model.child import ExtHydrGrid, ExtPowerGrid, GridFormingMixin
-from monee.model.core import Var
+from monee.model.core import Intermediate, Var
 from monee.model.extension.core import NetworkAspect
 from monee.model.network import Network
 from monee.model.phys.islanding import (
@@ -279,9 +279,44 @@ class IslandingMode(NetworkAspect, ABC):
             for nid, child in gf_children:
                 child.model._gf_leading = nid == leader
 
-    @abstractmethod
     def prepare(self, network: Network) -> None:
-        """Add Var placeholders before solver variable injection."""
+        """Add Var placeholders before solver variable injection: an energisation
+        binary per carrier node, a super-source var on grid-forming nodes, and
+        forward/reverse connectivity-flow vars per carrier branch."""
+        self.prepare_common(network)
+        grid_type = self.carrier_grid_type
+        prefix = self.var_prefix
+        for node in network.nodes:
+            if not (isinstance(node.grid, grid_type) and node.active):
+                continue
+            self._prepare_node(node)
+            setattr(
+                node.model,
+                f"e_{prefix}",
+                Var(1, min=0, max=1, integer=True, name=f"e_{prefix}"),
+            )
+            is_gf = any(
+                self.is_grid_forming(c) for c in network.childs_by_ids(node.child_ids)
+            )
+            if is_gf:
+                setattr(
+                    node.model,
+                    f"c_src_{prefix}",
+                    Var(1, min=0, name=f"c_src_{prefix}"),
+                )
+        for branch in network.branches:
+            if not (isinstance(branch.grid, grid_type) and branch.active):
+                continue
+            setattr(
+                branch.model, f"c_{prefix}_fwd", Var(0, min=0, name=f"c_{prefix}_fwd")
+            )
+            setattr(
+                branch.model, f"c_{prefix}_rev", Var(0, min=0, name=f"c_{prefix}_rev")
+            )
+
+    def _prepare_node(self, node) -> None:
+        """Hook for extra per-node prepare steps (electricity claims bus-angle
+        management here); no-op by default."""
 
     def equations(self, network: Network, ignored_nodes: set) -> list:
         gf_nodes, regular_nodes, e_vars, c_fwd_vars, c_rev_vars, c_src_vars = (
@@ -311,6 +346,32 @@ class IslandingMode(NetworkAspect, ABC):
     def add_physical_constraints(self, *_) -> list:
         """Carrier-specific physics (override in subclasses). Empty by default."""
         return []
+
+
+class PressureGatedIslandingMode(IslandingMode):
+    r"""Shared base for the gas/water modes: connectivity flow plus
+    :math:`pressure_{pu} \le 2 \cdot e` on regular junctions (grid-forming
+    junctions already pin pressure via ``overwrite()``)."""
+
+    gated_child_attrs = ("mass_flow_kgs",)
+
+    def add_physical_constraints(
+        self, network, gf_nodes, regular_nodes, e_vars
+    ) -> list:
+        eqs = []
+        for node in regular_nodes:
+            e = e_vars[node.id]
+            # 2.0 is the existing model bound; non-binding when e=1. Gate in the
+            # squared domain when the model carries a squared-pressure Var
+            # (MIQCQP): p<=2e <=> p^2<=4e for binary e, and the squared form is
+            # linear (gas) or quadratic (water) instead. An Intermediate is not
+            # a solver variable yet, so fall back to pressure_pu there.
+            p2 = getattr(node.model, "pressure_squared_pu", None)
+            if p2 is not None and not isinstance(p2, Intermediate):
+                eqs.append(p2 <= 4.0 * e)
+            else:
+                eqs.append(node.model.pressure_pu <= 2.0 * e)
+        return eqs
 
 
 class NetworkIslandingConfig(NetworkAspect):

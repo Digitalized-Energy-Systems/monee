@@ -1,5 +1,7 @@
+import functools
 import logging
 import math
+import operator
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -139,12 +141,21 @@ class SolverResult:
                     return df[mask].iloc[0]
         raise KeyError(component_id)
 
+    def _objective_label(self) -> str:
+        if self.objective is not None and abs(self.objective) > 0.0:
+            return f"objective = {self.objective:.6g}"
+        return ""
+
+    def _title(self) -> str:
+        title = "SolverResult"
+        label = self._objective_label()
+        if label:
+            title += f"  ({label})"
+        return title
+
     def __repr__(self) -> str:
         SEP = "─" * 68
-        title = "SolverResult"
-        if self.objective is not None and abs(self.objective) > 0.0:
-            title += f"  (objective = {self.objective:.6g})"
-        lines = [title, SEP]
+        lines = [self._title(), SEP]
         for type_name, df in self.dataframes.items():
             n = len(df)
             vis = _display_df(df).drop(columns=["id", "node_id"], errors="ignore")
@@ -164,11 +175,8 @@ class SolverResult:
 
     def __str__(self) -> str:
         """Full per-type table dump (``print(result)``); ``repr`` gives the summary."""
-        title = "SolverResult"
-        if self.objective is not None and abs(self.objective) > 0.0:
-            title += f"  (objective = {self.objective:.6g})"
         SEP = "─" * 68
-        lines = [title]
+        lines = [self._title()]
         for type_name, df in self.dataframes.items():
             vis = _display_df(df)
             n = len(vis)
@@ -183,10 +191,10 @@ class SolverResult:
 
     def _repr_html_(self) -> str:
         obj_extra = ""
-        if self.objective is not None and abs(self.objective) > 0.0:
+        label = self._objective_label()
+        if label:
             obj_extra = (
-                f" &nbsp;<span style='color:#888;font-weight:normal'>"
-                f"objective = {self.objective:.6g}</span>"
+                f" &nbsp;<span style='color:#888;font-weight:normal'>{label}</span>"
             )
         sections = []
         for type_name, df in self.dataframes.items():
@@ -233,12 +241,6 @@ class SolverResult:
         )
 
 
-class SinglePeriodSolverProtocol:
-    """Documents the contract a solver backend must expose to act as a delegate
-    inside :class:`GekkoMultiPeriodSolver` / :class:`PyomoMultiPeriodSolver`.
-    Not enforced at runtime."""
-
-
 class SolverInterface(ABC):
     """Abstract base class for solver backends (GEKKO, Pyomo, …)."""
 
@@ -254,6 +256,11 @@ class SolverInterface(ABC):
         """Solver label recorded on :attr:`SolverResult.solver_used`.
         Concrete backends set ``_solver_name``; ``None`` when unknown."""
         return getattr(self, "_solver_name", None)
+
+    #: Whether seeding solves with the previous solution speeds this backend
+    #: up. Drivers use it as the default for their warm-start behavior (the
+    #: Stepper's ``warm_start=None``); an explicit user choice always wins.
+    benefits_from_warm_start: bool = True
 
     def set_warm_start_hint(self, active: bool) -> None:
         """Declare whether the next solve's variable values are a previous
@@ -306,7 +313,7 @@ class SolverInterface(ABC):
             branch.model.init(branch.grid)
 
     @staticmethod
-    def mark_temporal_components(network, ignored_nodes: set) -> None:  # NOSONAR
+    def mark_temporal_components(network, ignored_nodes: set) -> None:
         """Set ``_temporal_active`` on every model carrying a temporal method,
         so static-only constraints can be suppressed when coupling is active."""
         _temporal_methods = frozenset(
@@ -316,28 +323,27 @@ class SolverInterface(ABC):
                 "inter_period_equations",
             )
         )
-        for node in network.nodes:
-            if node.id in ignored_nodes or node.ignored:
-                continue
-            if any(hasattr(node.model, m) for m in _temporal_methods):
-                node.model._temporal_active = True
-            for child in network.childs_by_ids(node.child_ids):
-                if child.ignored:
-                    continue
-                if any(hasattr(child.model, m) for m in _temporal_methods):
-                    child.model._temporal_active = True
-        for branch in network.branches:
-            if branch.ignored:
-                continue
-            if any(hasattr(branch.model, m) for m in _temporal_methods):
-                branch.model._temporal_active = True
-        for compound in network.compounds:
-            if compound.ignored:
-                continue
-            if any(hasattr(compound.model, m) for m in _temporal_methods):
-                compound.model._temporal_active = True
 
-    def _collect_temporal_eqs(  # NOSONAR
+        def models():
+            for node in network.nodes:
+                if node.id in ignored_nodes or node.ignored:
+                    continue
+                yield node.model
+                for child in network.childs_by_ids(node.child_ids):
+                    if not child.ignored:
+                        yield child.model
+            for branch in network.branches:
+                if not branch.ignored:
+                    yield branch.model
+            for compound in network.compounds:
+                if not compound.ignored:
+                    yield compound.model
+
+        for model in models():
+            if any(hasattr(model, m) for m in _temporal_methods):
+                model._temporal_active = True
+
+    def _collect_temporal_eqs(
         self,
         solver_obj,
         network,
@@ -351,66 +357,35 @@ class SolverInterface(ABC):
         """Register ``inter_temporal_equations`` and *mode_method* for every
         model/formulation that implements them."""
         methods = ("inter_temporal_equations", mode_method)
+
+        def register(component):
+            for method in methods:
+                if hasattr(component.model, method):
+                    eqs = as_iter(getattr(component.model, method)(state, component.id))
+                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+                if component.formulation is not None and hasattr(
+                    component.formulation, method
+                ):
+                    eqs = as_iter(
+                        getattr(component.formulation, method)(
+                            component.model, state, component.id
+                        )
+                    )
+                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+
         for node in nodes:
             if ignore_node(node, network, ignored_nodes):
                 continue
-            for method in methods:
-                if hasattr(node.model, method):
-                    eqs = as_iter(getattr(node.model, method)(state, node.id))
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-                if node.formulation is not None and hasattr(node.formulation, method):
-                    eqs = as_iter(
-                        getattr(node.formulation, method)(node.model, state, node.id)
-                    )
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+            register(node)
             for child in network.childs_by_ids(node.child_ids):
-                if ignore_child(child, ignored_nodes):
-                    continue
-                for method in methods:
-                    if hasattr(child.model, method):
-                        eqs = as_iter(getattr(child.model, method)(state, child.id))
-                        self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-                    if child.formulation is not None and hasattr(
-                        child.formulation, method
-                    ):
-                        eqs = as_iter(
-                            getattr(child.formulation, method)(
-                                child.model, state, child.id
-                            )
-                        )
-                        self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+                if not ignore_child(child, ignored_nodes):
+                    register(child)
         for branch in branches:
-            if ignore_branch(branch, network, ignored_nodes):
-                continue
-            for method in methods:
-                if hasattr(branch.model, method):
-                    eqs = as_iter(getattr(branch.model, method)(state, branch.id))
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-                if branch.formulation is not None and hasattr(
-                    branch.formulation, method
-                ):
-                    eqs = as_iter(
-                        getattr(branch.formulation, method)(
-                            branch.model, state, branch.id
-                        )
-                    )
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+            if not ignore_branch(branch, network, ignored_nodes):
+                register(branch)
         for compound in compounds:
-            if ignore_compound(compound, ignored_nodes):
-                continue
-            for method in methods:
-                if hasattr(compound.model, method):
-                    eqs = as_iter(getattr(compound.model, method)(state, compound.id))
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-                if compound.formulation is not None and hasattr(
-                    compound.formulation, method
-                ):
-                    eqs = as_iter(
-                        getattr(compound.formulation, method)(
-                            compound.model, state, compound.id
-                        )
-                    )
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+            if not ignore_compound(compound, ignored_nodes):
+                register(compound)
 
     def process_inter_step_equations(
         self,
@@ -490,6 +465,87 @@ def as_iter(possible_iter):
     return possible_iter if hasattr(possible_iter, "__iter__") else [possible_iter]
 
 
+def fold_sum(exprs):
+    """Left-fold ``+`` over *exprs*; ``None`` when empty. Unlike ``sum()`` this
+    never prepends a ``0 +`` node to the backend expression tree."""
+    exprs = list(exprs)
+    return functools.reduce(operator.add, exprs) if exprs else None
+
+
+def warn_false_equation(context: str = "", logger=None):
+    """Emit the shared always-false-equation warning; *context* is a
+    pre-formatted label suffix, *logger* keeps the emitting module's name."""
+    (logger or _log).warning(
+        "Dropping always-false (structurally infeasible) equation%s; "
+        "this usually means a node/branch was over-deactivated.",
+        context,
+    )
+
+
+_LEX_REL_TOL = 1e-6
+_LEX_ABS_TOL = 1e-9
+
+
+def lex_cap_slack(s_star: float, mip_gap) -> float:
+    """Slack on the phase-2 lexicographic cap so it never excludes a phase-1
+    incumbent the solver accepted within its MIPGap tolerance."""
+    rel = max(float(mip_gap or 0.0), _LEX_REL_TOL)
+    return _LEX_ABS_TOL + rel * max(1.0, abs(s_star))
+
+
+def sanitize_component_name(name) -> str:
+    """Make a string safe for a solver component name (no spaces/brackets)."""
+    return (
+        str(name)
+        .replace("(", "")
+        .replace(")", "")
+        .replace(", ", "_")
+        .replace(" ", "_")
+        .replace("[", "")
+        .replace("]", "")
+    )
+
+
+def clamp_warm_start(value: Var):
+    """Stale start value scrubbed (NaN → ``None``) and clamped into the Var's
+    current bounds; ``None`` when unusable."""
+    init = value.value
+    if init is None or (isinstance(init, float) and math.isnan(init)):
+        return None
+    if value.min is not None and init < value.min:
+        init = value.min
+    if value.max is not None and init > value.max:
+        init = value.max
+    return init
+
+
+def snap_to_bounds(val, lb, ub, tol):
+    """Snap sub-*tol* bound noise in *val* onto the exact bound."""
+    if lb is not None and lb - tol <= val < lb:
+        val = lb
+    if ub is not None and ub < val <= ub + tol:
+        val = ub
+    return val
+
+
+def iter_active_models(network, nodes, branches, compounds, ignored_nodes):
+    """Yield the model of every active (non-ignored) component: branches, then
+    nodes with their children, then compounds."""
+    for branch in branches:
+        if not ignore_branch(branch, network, ignored_nodes):
+            yield branch.model
+    for node in nodes:
+        if ignore_node(node, network, ignored_nodes):
+            continue
+        yield node.model
+        for child in network.childs_by_ids(node.child_ids):
+            if not ignore_child(child, ignored_nodes):
+                yield child.model
+    for compound in compounds:
+        if not ignore_compound(compound, ignored_nodes):
+            yield compound.model
+
+
 def filter_intermediate_eqs(eqs):
     return [eq for eq in eqs if type(eq) is not IntermediateEq]
 
@@ -514,11 +570,7 @@ def filter_bool_eqs(eqs, context=None):
     for eq in eqs:
         if isinstance(eq, bool):
             if eq is False:
-                _log.warning(
-                    "Dropping always-false (structurally infeasible) equation%s; "
-                    "this usually means a node/branch was over-deactivated.",
-                    f" in {context}" if context is not None else "",
-                )
+                warn_false_equation(f" in {context}" if context is not None else "")
             continue
         kept.append(eq)
     return kept
@@ -566,12 +618,7 @@ class OperatorEquationAssembly:
             m.Equations(
                 filter_bool_eqs([constraint(network)], context="network constraint")
             )
-        obj = None
-        for objective in network.objectives:
-            if obj is not None:
-                obj = obj + objective(network)
-            else:
-                obj = objective(network)
+        obj = fold_sum(objective(network) for objective in network.objectives)
         if obj is not None:
             m.Obj(obj)
 
@@ -593,16 +640,11 @@ class OperatorEquationAssembly:
                     context="optimization problem constraint",
                 )
             )
-        obj = None
-        for objective in (
+        obj = fold_sum(
             optimization_problem.objectives.all(network, period_index=period_index)
             if optimization_problem.objectives is not None
             else []
-        ):
-            if obj is not None:
-                obj = obj + objective
-            else:
-                obj = objective
+        )
         if obj is not None:
             m.Obj(obj)
 
@@ -1074,14 +1116,7 @@ def apply_post_process(model: GenericModel) -> None:
 
 def apply_post_process_all(nodes, branches, compounds, network) -> None:
     """Run :func:`apply_post_process` over every solved component."""
-    for branch in branches:
-        apply_post_process(branch.model)
-    for node in nodes:
-        apply_post_process(node.model)
-        for child in network.childs_by_ids(node.child_ids):
-            apply_post_process(child.model)
-    for compound in compounds:
-        apply_post_process(compound.model)
+    withdraw_vars(apply_post_process, nodes, branches, compounds, network)
 
 
 def _is_nan_value(v) -> bool:

@@ -10,13 +10,24 @@ from monee.model import Network
 from monee.model.core import Branch, Child, Compound, Node, Var
 from monee.simulation.core import solve
 from monee.simulation.result_utils import (
+    build_attribute_frame as _build_attribute_frame,
+)
+from monee.simulation.result_utils import (
+    build_component_frame as _build_component_frame,
+)
+from monee.simulation.result_utils import (
+    build_id_series as _build_id_series,
+)
+from monee.simulation.result_utils import (
     build_type_stats_html as _build_type_stats_html,
+)
+from monee.simulation.result_utils import (
+    wrap_result_html as _wrap_result_html,
 )
 from monee.simulation.step_state import StepState
 
 # Shared result-rendering helpers, imported from the solver's public reporting
 # surface (the simulation layer renders the same kind of result tables).
-from monee.solver.core import TABLE_CSS as _TABLE_CSS
 from monee.solver.core import col_summary as _col_summary
 from monee.solver.core import display_df as _display_df
 from monee.solver.dispatch import resolve_solver
@@ -24,6 +35,16 @@ from monee.solver.dispatch import resolve_solver
 _log = logging.getLogger(__name__)
 
 _STEP_FAILED_MSG = "Step %d failed: %s"
+
+_SERIES_ATTRS = (
+    "_node_id_to_series",
+    "_child_id_to_series",
+    "_child_name_to_series",
+    "_branch_id_to_series",
+    "_branch_name_to_series",
+    "_compound_id_to_series",
+    "_compound_name_to_series",
+)
 
 
 def _unsuccessful_solve_error(step: int, result) -> RuntimeError:
@@ -106,12 +127,6 @@ class TimeseriesData:
         """Alias for :meth:`add_child_series`; signals the attribute feeds an objective."""
         self.add_child_series(child_id, attribute, series)
 
-    def add_objective_data_by_name(
-        self, child_name: str, attribute: str, series
-    ) -> None:
-        """Like :meth:`add_objective_data` but matches by component name."""
-        self.add_child_series_by_name(child_name, attribute, series)
-
     @classmethod
     def from_dataframe(
         cls,
@@ -169,38 +184,38 @@ class TimeseriesData:
         else:
             setattr(model, attr, value)
 
+    def _apply_series(self, comp, timestep: int, id_dict, name_dict=None) -> None:
+        if comp.id in id_dict:
+            for attr, series in id_dict[comp.id].items():
+                self._set_model_attr(comp.model, attr, series[timestep])
+        if name_dict is not None and comp.name in name_dict:
+            for attr, series in name_dict[comp.name].items():
+                self._set_model_attr(comp.model, attr, series[timestep])
+
     def apply_to_node(self, node, timestep: int) -> None:
         """Apply registered series values for *node* at *timestep*."""
-        if node.id in self._node_id_to_series:
-            for attr, series in self._node_id_to_series[node.id].items():
-                self._set_model_attr(node.model, attr, series[timestep])
+        self._apply_series(node, timestep, self._node_id_to_series)
 
     def apply_to_child(self, child, timestep: int) -> None:
         """Apply registered series values for *child* at *timestep*."""
-        if child.id in self._child_id_to_series:
-            for attr, series in self._child_id_to_series[child.id].items():
-                self._set_model_attr(child.model, attr, series[timestep])
-        if child.name in self._child_name_to_series:
-            for attr, series in self._child_name_to_series[child.name].items():
-                self._set_model_attr(child.model, attr, series[timestep])
+        self._apply_series(
+            child, timestep, self._child_id_to_series, self._child_name_to_series
+        )
 
     def apply_to_branch(self, branch, timestep: int) -> None:
         """Apply registered series values for *branch* at *timestep*."""
-        if branch.id in self._branch_id_to_series:
-            for attr, series in self._branch_id_to_series[branch.id].items():
-                self._set_model_attr(branch.model, attr, series[timestep])
-        if branch.name in self._branch_name_to_series:
-            for attr, series in self._branch_name_to_series[branch.name].items():
-                self._set_model_attr(branch.model, attr, series[timestep])
+        self._apply_series(
+            branch, timestep, self._branch_id_to_series, self._branch_name_to_series
+        )
 
     def apply_to_compound(self, compound, timestep: int) -> None:
         """Apply registered series values for *compound* at *timestep*."""
-        if compound.id in self._compound_id_to_series:
-            for attr, series in self._compound_id_to_series[compound.id].items():
-                self._set_model_attr(compound.model, attr, series[timestep])
-        if compound.name in self._compound_name_to_series:
-            for attr, series in self._compound_name_to_series[compound.name].items():
-                self._set_model_attr(compound.model, attr, series[timestep])
+        self._apply_series(
+            compound,
+            timestep,
+            self._compound_id_to_series,
+            self._compound_name_to_series,
+        )
 
     _dispatch = {
         Node: apply_to_node,
@@ -236,27 +251,12 @@ class TimeseriesData:
                 f"Cannot extend: incoming TimeseriesData has length {td._length} "
                 f"but this object has length {self._length}."
             )
-        self._node_id_to_series = self._merge_component_data(
-            self._node_id_to_series, td._node_id_to_series
-        )
-        self._child_id_to_series = self._merge_component_data(
-            self._child_id_to_series, td._child_id_to_series
-        )
-        self._child_name_to_series = self._merge_component_data(
-            self._child_name_to_series, td._child_name_to_series
-        )
-        self._branch_id_to_series = self._merge_component_data(
-            self._branch_id_to_series, td._branch_id_to_series
-        )
-        self._branch_name_to_series = self._merge_component_data(
-            self._branch_name_to_series, td._branch_name_to_series
-        )
-        self._compound_id_to_series = self._merge_component_data(
-            self._compound_id_to_series, td._compound_id_to_series
-        )
-        self._compound_name_to_series = self._merge_component_data(
-            self._compound_name_to_series, td._compound_name_to_series
-        )
+        for attr in _SERIES_ATTRS:
+            setattr(
+                self,
+                attr,
+                self._merge_component_data(getattr(self, attr), getattr(td, attr)),
+            )
         if self._length is None:
             self._length = td._length
 
@@ -267,20 +267,8 @@ class TimeseriesData:
         return new_td
 
     @property
-    def child_id_data(self):
-        return self._child_id_to_series
-
-    @property
     def child_name_data(self):
         return self._child_name_to_series
-
-    @property
-    def branch_id_data(self):
-        return self._branch_id_to_series
-
-    @property
-    def compound_id_data(self):
-        return self._compound_id_to_series
 
 
 @dataclass
@@ -338,73 +326,28 @@ class TimeseriesResult:
         # after skipped/failed steps or bounded history.
         return pandas.Index(step_indices)
 
-    def _create_result_for(self, model_type, attribute: str) -> pandas.DataFrame:
-        rows = []
-        step_indices = []
-        for sr in self._successful():
-            raw_df = sr.result.dataframes[model_type.__name__]
-            # Column labels are component ids so callers can do df[bus_id].
-            if "id" in raw_df.columns:
-                row = dict(zip(raw_df["id"], raw_df[attribute]))
-            else:
-                row = raw_df[attribute].to_dict()
-            rows.append(row)
-            step_indices.append(sr.step)
-        df = pandas.DataFrame(rows, index=self._make_index(step_indices))
-        self._cache[model_type, attribute] = df
-        return df
+    def _frames(self) -> list[tuple[int, dict]]:
+        return [(sr.step, sr.result.dataframes) for sr in self._successful()]
 
     def get_result_for(self, model_type, attribute: str) -> pandas.DataFrame:
         """DataFrame of *attribute* values: rows=steps, cols=component ids."""
         if (model_type, attribute) in self._cache:
             return self._cache[model_type, attribute]
-        return self._create_result_for(model_type, attribute)
+        df = _build_attribute_frame(
+            self._frames(), model_type, attribute, self._make_index
+        )
+        self._cache[model_type, attribute] = df
+        return df
 
     def __getitem__(self, component_id) -> pandas.DataFrame:
         """All result attributes for *component_id* across every successful step."""
-        rows: list[dict] = []
-        step_indices: list[int] = []
-        for sr in self._successful():
-            for df in sr.result.dataframes.values():
-                if "id" not in df.columns:
-                    continue
-                mask = df["id"] == component_id
-                if not mask.any():
-                    continue
-                row = _display_df(df[mask].iloc[0].to_frame().T).iloc[0]
-                rows.append({k: v for k, v in row.items() if k != "id"})
-                step_indices.append(sr.step)
-                break
-        if not rows:
-            raise KeyError(component_id)
-        return pandas.DataFrame(rows, index=self._make_index(step_indices))
-
-    @staticmethod
-    def _find_attr_value(dataframes, component_id, attribute: str):
-        for df in dataframes:
-            if "id" in df.columns and attribute in df.columns:
-                try:
-                    mask = df["id"] == component_id
-                except (ValueError, TypeError):
-                    mask = df["id"].apply(lambda x: x == component_id)
-                row = df[mask]
-                if not row.empty:
-                    return True, row.iloc[0][attribute]
-        return False, None
+        return _build_component_frame(self._frames(), component_id, self._make_index)
 
     def get_result_for_id(self, component_id, attribute: str) -> pandas.Series:
         """Series of *attribute* for *component_id* across successful steps.
         Yields ``None`` where the component is absent (e.g. islanded out)."""
-        values = []
-        step_indices = []
-        for sr in self._successful():
-            found, value = self._find_attr_value(
-                sr.result.dataframes.values(), component_id, attribute
-            )
-            values.append(value if found else None)
-            step_indices.append(sr.step)
-        return pandas.Series(
-            values, index=self._make_index(step_indices), name=attribute
+        return _build_id_series(
+            self._frames(), component_id, attribute, self._make_index
         )
 
     def summary(self):
@@ -513,17 +456,11 @@ class TimeseriesResult:
 
             sections = _build_type_stats_html(type_dfs, "step")
 
-        header = (
-            f"<div style='font-weight:bold;font-size:1.05em;padding:4px 0 8px'>"
-            f"TimeseriesResult &nbsp;"
+        return _wrap_result_html(
+            "TimeseriesResult",
             f"<span style='font-weight:normal;color:#555'>{step_info}</span>"
-            + (f" &nbsp;·&nbsp; {status_html}" if status_html else "")
-            + "</div>"
-        )
-        return (
-            f"{_TABLE_CSS}"
-            f"<div class='monee-result'>"
-            f"{header}" + "\n".join(sections) + "</div>"
+            + (f" &nbsp;·&nbsp; {status_html}" if status_html else ""),
+            sections,
         )
 
 
@@ -613,6 +550,38 @@ def _dt_h_at_step(datetime_index, step: int) -> float | None:
     return delta.total_seconds() / 3600.0
 
 
+def _td_has_name_or_compound_series(td: TimeseriesData) -> bool:
+    """True if *td* carries series the build-once reuse drivers do not wire
+    (only id-addressed child/node/branch series are declared as parameters)."""
+    return bool(
+        td._child_name_to_series
+        or td._branch_name_to_series
+        or td._compound_id_to_series
+        or td._compound_name_to_series
+    )
+
+
+def _only_reuse_kwargs(solver_kwargs) -> bool:
+    """True if only kwargs the reuse drivers understand are present."""
+    return not (set(solver_kwargs) - {"simulation", "formulation"})
+
+
+def _reuse_step_loop(ts, steps, on_step_error, progress_callback) -> list["StepResult"]:
+    step_results: list[StepResult] = []
+    for step in range(steps):
+        try:
+            sr = StepResult(step=step, result=ts.step_result(step))
+        except Exception as exc:
+            if on_step_error == "raise":
+                raise
+            _log.warning(_STEP_FAILED_MSG, step, exc)
+            sr = StepResult(step=step, result=None, failed=True, error=exc)
+        step_results.append(sr)
+        if progress_callback is not None:
+            progress_callback(step, steps)
+    return step_results
+
+
 def _casadi_reuse_eligible(
     net, solver, optimization_problem, step_hooks, timeseries_data, solver_kwargs
 ) -> bool:
@@ -633,20 +602,9 @@ def _casadi_reuse_eligible(
     # (storage/linepack/LTC) must go through the per-step loop instead.
     if _network_has_temporal_coupling(net):
         return False
-    # CasADiTimeseries declares only id-addressed child/node/branch series as
-    # parameters; name-addressed and compound series are not wired.
-    td = timeseries_data
-    if (
-        td._child_name_to_series
-        or td._branch_name_to_series
-        or td._compound_id_to_series
-        or td._compound_name_to_series
-    ):
+    if _td_has_name_or_compound_series(timeseries_data):
         return False
-    # Only kwargs the reuse driver understands may be present.
-    if set(solver_kwargs) - {"simulation", "formulation"}:
-        return False
-    return True
+    return _only_reuse_kwargs(solver_kwargs)
 
 
 def _run_casadi_reuse(
@@ -672,18 +630,7 @@ def _run_casadi_reuse(
         steps=steps,
         solver_options=solver.solver_options,
     )
-    step_results: list[StepResult] = []
-    for step in range(steps):
-        try:
-            sr = StepResult(step=step, result=ts.step_result(step))
-        except Exception as exc:
-            if on_step_error == "raise":
-                raise
-            _log.warning(_STEP_FAILED_MSG, step, exc)
-            sr = StepResult(step=step, result=None, failed=True, error=exc)
-        step_results.append(sr)
-        if progress_callback is not None:
-            progress_callback(step, steps)
+    step_results = _reuse_step_loop(ts, steps, on_step_error, progress_callback)
     return TimeseriesResult(
         step_results,
         datetime_index=datetime_index,
@@ -723,6 +670,7 @@ def _gurobipy_reuse_eligible(
     timeseries_data,
     solver_kwargs,
     datetime_index,
+    dt_h=None,
 ) -> bool:
     """Whether the build-once / re-bound-per-step gurobipy model-reuse path can
     replace the per-step rebuild loop and produce identical results.
@@ -733,31 +681,23 @@ def _gurobipy_reuse_eligible(
     the cases it does not reproduce identically: an optimisation problem, step
     hooks observing temporal state, name-addressed or compound series (only
     id-addressed child/node/branch series are declared as parameters), solver
-    kwargs it cannot honour, and a custom ``datetime_index`` (the persistent
-    model bakes ``dt_h`` in at build time, so non-default/variable step spacing
-    is left to the rebuild loop).
+    kwargs it cannot honour, and an explicit ``dt_h`` or a custom
+    ``datetime_index`` (the persistent model bakes ``dt_h`` in at build time, so
+    non-default/variable step spacing is left to the rebuild loop).
     """
     if not _is_gurobipy_solver(solver):
         return False
     if optimization_problem is not None or step_hooks:
         return False
-    if datetime_index is not None:
+    if datetime_index is not None or dt_h is not None:
         return False
     # Build-once param model can't reproduce an extension's step-0 structural
     # switch (e.g. LTC first_step_steady_state); leave those to the rebuild loop.
     if _extension_needs_step0_structure_switch(net):
         return False
-    td = timeseries_data
-    if (
-        td._child_name_to_series
-        or td._branch_name_to_series
-        or td._compound_id_to_series
-        or td._compound_name_to_series
-    ):
+    if _td_has_name_or_compound_series(timeseries_data):
         return False
-    if set(solver_kwargs) - {"simulation", "formulation"}:
-        return False
-    return True
+    return _only_reuse_kwargs(solver_kwargs)
 
 
 def _run_gurobipy_reuse(
@@ -794,19 +734,8 @@ def _run_gurobipy_reuse(
             exc,
         )
         return None
-    step_results: list[StepResult] = []
     try:
-        for step in range(steps):
-            try:
-                sr = StepResult(step=step, result=ts.step_result(step))
-            except Exception as exc:
-                if on_step_error == "raise":
-                    raise
-                _log.warning(_STEP_FAILED_MSG, step, exc)
-                sr = StepResult(step=step, result=None, failed=True, error=exc)
-            step_results.append(sr)
-            if progress_callback is not None:
-                progress_callback(step, steps)
+        step_results = _reuse_step_loop(ts, steps, on_step_error, progress_callback)
     finally:
         ts.dispose()
     return TimeseriesResult(
@@ -815,6 +744,25 @@ def _run_gurobipy_reuse(
         backend_used="gurobipy",
         solver_used="gurobi",
     )
+
+
+def _resolve_steps(steps: int | None, timeseries_data: TimeseriesData | None) -> int:
+    """Return *steps*; infer from ``timeseries_data.length`` when omitted.
+    Shared by the sequential timeseries loop and the multi-period engine."""
+    length = None if timeseries_data is None else timeseries_data.length
+    if steps is None:
+        if length is None:
+            raise ValueError(
+                "Cannot infer step count: no series registered and 'steps' "
+                "not provided."
+            )
+        return length
+    if length is not None and length < steps:
+        raise ValueError(
+            f"'steps' ({steps}) exceeds the length of the registered series "
+            f"({length}).  Either register longer series or reduce 'steps'."
+        )
+    return steps
 
 
 def run(  # NOSONAR
@@ -848,24 +796,9 @@ def run(  # NOSONAR
     ``pre_run`` and ``post_run``) or plain callables, which only receive the
     post-run call ``hook(net_copy, step, step_state, step_result, base_net)``.
     """
-    if steps is None and timeseries_data is None:
-        raise ValueError(
-            "Without timeseries data, the number of steps *steps* needs to be provided."
-        )
-    if steps is None:
-        steps = timeseries_data.length
-        if steps is None:
-            raise ValueError(
-                "Cannot infer step count: no series registered and 'steps' not provided."
-            )
+    steps = _resolve_steps(steps, timeseries_data)
     if timeseries_data is None:
         timeseries_data = TimeseriesData()
-    if timeseries_data.length is not None and steps > timeseries_data.length:
-        raise ValueError(
-            f"'steps' ({steps}) exceeds the length of the registered series "
-            f"({timeseries_data.length}).  Either register longer series or "
-            f"reduce 'steps'."
-        )
     if step_hooks is None:
         step_hooks = []
     if on_step_error not in ("raise", "skip"):
@@ -917,20 +850,15 @@ def run(  # NOSONAR
     # the time-varying inputs (and carried inter-step state) per step instead of
     # reconstructing the whole model every step. Gated to the cases that produce
     # identical results (see :func:`_gurobipy_reuse_eligible`).
-    # The persistent gurobipy model bakes dt_h in at build time, so an explicit
-    # dt_h (like a datetime_index) must go through the rebuild loop.
-    if (
-        solve_flag
-        and dt_h is None
-        and _gurobipy_reuse_eligible(
-            net,
-            resolved_solver,
-            optimization_problem,
-            step_hooks,
-            timeseries_data,
-            solver_kwargs,
-            datetime_index,
-        )
+    if solve_flag and _gurobipy_reuse_eligible(
+        net,
+        resolved_solver,
+        optimization_problem,
+        step_hooks,
+        timeseries_data,
+        solver_kwargs,
+        datetime_index,
+        dt_h,
     ):
         _log.debug("run_timeseries: using gurobipy build-once model-reuse fast path")
         reuse_result = _run_gurobipy_reuse(

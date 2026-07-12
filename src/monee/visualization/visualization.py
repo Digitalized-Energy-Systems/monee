@@ -233,7 +233,7 @@ def plot_network(  # NOSONAR
         A :class:`plotly.graph_objects.Figure`.
     """
     graph: nx.Graph = network._network_internal
-    pos = _compute_layout(graph, network, use_monee_positions)
+    pos = _compute_layout(graph, use_monee_positions)
     marker_px = _adaptive_marker_px(graph, pos)
 
     # Node data – collected per grid type

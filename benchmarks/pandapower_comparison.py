@@ -57,7 +57,6 @@ import numpy as np
 import pandapower as pp
 import pandapower.networks as ppn
 import pandas as pd
-import scipy.io
 
 # Reuse the shared builders/timing from the sibling benchmark (same directory is
 # on sys.path when this script is run directly).
@@ -70,7 +69,7 @@ from backend_comparison import (
 )
 
 from monee import run_energy_flow, run_energy_flow_optimization
-from monee.io.matpower import _mpc_from_mat, build_matpower_opf
+from monee.io.matpower import build_matpower_opf, read_mpc
 from monee.solver.casadi import CasADiSolver
 
 _SQRT_3 = float(np.sqrt(3))
@@ -82,7 +81,7 @@ CASADI = "monee · CasADi"
 def _matpower_opf(pp_net, max_loading=None, max_i_ka=None):
     tmp = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}.mat")
     to_mpc(pp_net, init="flat", filename=tmp)
-    mpc = _mpc_from_mat(scipy.io.loadmat(tmp))
+    mpc = read_mpc(tmp)
     os.remove(tmp)
     if max_i_ka is not None:
         bus_kv = {int(row[0]): row[9] for row in mpc["bus"]}
