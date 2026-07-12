@@ -18,10 +18,6 @@ def pipe_insulation_ua(branch):
     )
 
 
-def darcy_friction(reynolds_var):
-    return 64 / (reynolds_var + 1)
-
-
 def darcy_weisbach_equation(
     p_i,
     p_j,

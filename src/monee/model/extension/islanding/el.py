@@ -5,7 +5,6 @@ from __future__ import annotations
 from monee.model.child import NoVarChildModel
 from monee.model.core import Const, Var, model
 from monee.model.grid import PowerGrid
-from monee.model.network import Network
 from monee.model.phys.islanding import (
     angle_lower_bound_energized,
     angle_upper_bound_energized,
@@ -54,25 +53,11 @@ class ElectricityIslandingMode(IslandingMode):
         self.angle_bound = angle_bound
         self.big_m_conn = big_m_conn
 
-    def prepare(self, network: Network) -> None:
-        self.prepare_common(network)
-        for node in network.nodes:
-            if isinstance(node.grid, PowerGrid) and node.active:
-                # Claim bus-angle management: this mode pins \theta=0 at GF buses and
-                # applies energisation-gated bounds elsewhere, so the grid-former
-                # must NOT statically pin va_radians in its overwrite().
-                node.model._islanding_angle_managed = True
-                node.model.e_el = Var(1, min=0, max=1, integer=True, name="e_el")
-                is_gf = any(
-                    self.is_grid_forming(c)
-                    for c in network.childs_by_ids(node.child_ids)
-                )
-                if is_gf:
-                    node.model.c_src_el = Var(1, min=0, name="c_src_el")
-        for branch in network.branches:
-            if isinstance(branch.grid, PowerGrid) and branch.active:
-                branch.model.c_el_fwd = Var(0, min=0, name="c_el_fwd")
-                branch.model.c_el_rev = Var(0, min=0, name="c_el_rev")
+    def _prepare_node(self, node) -> None:
+        # Claim bus-angle management: this mode pins \theta=0 at GF buses and
+        # applies energisation-gated bounds elsewhere, so the grid-former must
+        # NOT statically pin va_radians in its overwrite().
+        node.model._islanding_angle_managed = True
 
     def add_physical_constraints(
         self, network, gf_nodes, regular_nodes, e_vars

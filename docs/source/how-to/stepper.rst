@@ -141,15 +141,21 @@ The Stepper never mutates the base network: every step works on a fresh
 the persistent ``StepState``, which is how storage, linepack, and LTC state
 carry across calls.
 
-With the default ``warm_start=True`` each successful step's solved values
-are also carried into the Stepper's working copy, so the next solve starts
-from the previous solution instead of the base network's initial values. On
-the CasADi backend such solves additionally run with IPOPT warm start
-options (a small initial barrier), which typically cuts the iteration count
-by half or more on repeated, similar steps. Islanded components keep their
-last solved values, so a component that rejoins later starts from a sane
-point. Pass ``warm_start=False`` to solve every step from the base
-network's initial values instead.
+By default each successful step's solved values are also carried into the
+Stepper's working copy, so the next solve starts from the previous solution
+instead of the base network's initial values. On the CasADi backend such
+solves additionally run with IPOPT warm start options (a small initial
+barrier), which typically cuts the iteration count by half or more on
+repeated, similar steps. Islanded components keep their last solved values,
+so a component that rejoins later starts from a sane point. Pass
+``warm_start=False`` to solve every step from the base network's initial
+values instead.
+
+The default follows the backend: warm starting is on for CasADi, GEKKO and
+Pyomo, but off for the gurobipy backend, where seeding ``Var.Start`` from
+the previous solution measured neutral (Gurobi's per step cost is presolve
+and branching, which a start vector does not touch). Pass
+``warm_start=True`` explicitly to enable it there anyway.
 
 Note that with ``copy_base=False`` the working copy is the caller's live
 network, so the default warm start writes solved values into it after every

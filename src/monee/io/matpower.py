@@ -59,17 +59,31 @@ def _mpc_from_mat(mat_data):
     return ir
 
 
-def _build_network(mpc):
-
-    grid_dict_list = {
-        "power": {
-            "model_type": "PowerGrid",
-            # Per-unit branch parameters stay on the file's baseMVA; the AC flow
-            # equations scale per-unit power to MW by sn_mva, so injections are
-            # kept in MW (MATPOWER's native unit) without rebasing.
-            "values": {"name": "power", "sn_mva": mpc["baseMVA"]},
+def _assemble_network(
+    mpc, node_dict_list, child_dict_list, branch_dict_list, no_slack_message
+):
+    if not any(child["model_type"] == "ExtPowerGrid" for child in child_dict_list):
+        raise ValueError(no_slack_message)
+    return native_dict_to_network(
+        {
+            "grids": {
+                "power": {
+                    "model_type": "PowerGrid",
+                    # Per-unit branch parameters stay on the file's baseMVA; the
+                    # AC flow equations scale per-unit power to MW by sn_mva, so
+                    # injections are kept in MW (MATPOWER's native unit) without
+                    # rebasing.
+                    "values": {"name": "power", "sn_mva": mpc["baseMVA"]},
+                }
+            },
+            "nodes": node_dict_list,
+            "childs": child_dict_list,
+            "branches": branch_dict_list,
         }
-    }
+    )
+
+
+def _build_network(mpc):
     node_dict_list = []
     branch_dict_list = []
     child_dict_list = []
@@ -88,20 +102,15 @@ def _build_network(mpc):
         mpc["gen"], node_dict_list, child_dict_list, bus_type_by_id, isolated_bus_ids
     )
     fill_branch_dict(mpc["branch"], base_kv_by_id, branch_dict_list, isolated_bus_ids)
-    if not any(child["model_type"] == "ExtPowerGrid" for child in child_dict_list):
-        raise ValueError(
-            "MATPOWER case has no usable slack: no in-service generator sits at a "
-            "reference (BUS_TYPE==3) bus, so the network has no voltage/angle "
-            "reference and cannot be solved. Mark the reference bus as type 3 and "
-            "give it an in-service generator."
-        )
-    return native_dict_to_network(
-        {
-            "grids": grid_dict_list,
-            "nodes": node_dict_list,
-            "childs": child_dict_list,
-            "branches": branch_dict_list,
-        }
+    return _assemble_network(
+        mpc,
+        node_dict_list,
+        child_dict_list,
+        branch_dict_list,
+        "MATPOWER case has no usable slack: no in-service generator sits at a "
+        "reference (BUS_TYPE==3) bus, so the network has no voltage/angle "
+        "reference and cannot be solved. Mark the reference bus as type 3 and "
+        "give it an in-service generator.",
     )
 
 
@@ -154,6 +163,7 @@ def fill_child_dict(
 ):
     ref_assigned = set()  # reference buses already given an ExtPowerGrid slack
     pv_controlled = set()  # PV buses whose voltage a generator already holds
+    node_by_id = {node_dict["id"]: node_dict for node_dict in node_dict_list}
 
     for i in range(len(gen_mat)):
         child_dict = {}
@@ -193,9 +203,9 @@ def fill_child_dict(
             if not in_service:
                 child_dict["values"]["regulation"] = 0
 
-        for node_dict in node_dict_list:
-            if node_dict["id"] == gen_row[0]:
-                node_dict["child_ids"].append(child_dict["id"])
+        node_dict = node_by_id.get(bus_id)
+        if node_dict is not None:
+            node_dict["child_ids"].append(child_dict["id"])
 
         child_dict_list.append(child_dict)
 
@@ -321,13 +331,16 @@ def _mpc_from_m_text(text):
     return mpc
 
 
-def read_matpower_case(file):
-
+def read_mpc(file):
+    """Read a MATPOWER ``.m``/``.mat`` case file into the ``mpc`` IR dict."""
     if str(file).lower().endswith(".m"):
         with open(file, encoding="utf-8") as case_fp:
-            return _build_network(_mpc_from_m_text(case_fp.read()))
+            return _mpc_from_m_text(case_fp.read())
+    return _mpc_from_mat(scipy.io.loadmat(file))
 
-    return read_matpower_data(scipy.io.loadmat(file))
+
+def read_matpower_case(file):
+    return _build_network(read_mpc(file))
 
 
 # MATPOWER gencost columns: MODEL, STARTUP, SHUTDOWN, NCOST, then the cost data.
@@ -383,6 +396,7 @@ def fill_opf_child_dict(
     """
     ref_assigned = set()
     costless_pwl_gens = []
+    node_by_id = {node_dict["id"]: node_dict for node_dict in node_dict_list}
     for i in range(len(gen_mat)):
         gen_row = gen_mat[i]
         bus_id = int(gen_row[0])
@@ -433,9 +447,9 @@ def fill_opf_child_dict(
             else:
                 child_dict["model_type"] = "PowerGenerator"
 
-        for node_dict in node_dict_list:
-            if node_dict["id"] == gen_row[0]:
-                node_dict["child_ids"].append(child_dict["id"])
+        node_dict = node_by_id.get(bus_id)
+        if node_dict is not None:
+            node_dict["child_ids"].append(child_dict["id"])
         child_dict_list.append(child_dict)
 
     if costless_pwl_gens:
@@ -496,23 +510,12 @@ def build_matpower_opf(mpc, max_loading=1.0, limit_basis="mva"):
     )
     fill_branch_dict(mpc["branch"], base_kv_by_id, branch_dict_list, isolated_bus_ids)
 
-    if not any(child["model_type"] == "ExtPowerGrid" for child in child_dict_list):
-        raise ValueError(
-            "MATPOWER OPF case has no usable slack at a reference (BUS_TYPE==3) bus."
-        )
-
-    network = native_dict_to_network(
-        {
-            "grids": {
-                "power": {
-                    "model_type": "PowerGrid",
-                    "values": {"name": "power", "sn_mva": mpc["baseMVA"]},
-                }
-            },
-            "nodes": node_dict_list,
-            "childs": child_dict_list,
-            "branches": branch_dict_list,
-        }
+    network = _assemble_network(
+        mpc,
+        node_dict_list,
+        child_dict_list,
+        branch_dict_list,
+        "MATPOWER OPF case has no usable slack at a reference (BUS_TYPE==3) bus.",
     )
 
     network.apply_formulation(EL_NLP_FORMULATION)
@@ -556,9 +559,6 @@ def read_matpower_opf_case(file, max_loading=1.0, limit_basis="mva"):
 
     The file must carry a ``gencost`` matrix. See :func:`build_matpower_opf`.
     """
-    if str(file).lower().endswith(".m"):
-        with open(file, encoding="utf-8") as case_fp:
-            mpc = _mpc_from_m_text(case_fp.read())
-    else:
-        mpc = _mpc_from_mat(scipy.io.loadmat(file))
-    return build_matpower_opf(mpc, max_loading=max_loading, limit_basis=limit_basis)
+    return build_matpower_opf(
+        read_mpc(file), max_loading=max_loading, limit_basis=limit_basis
+    )

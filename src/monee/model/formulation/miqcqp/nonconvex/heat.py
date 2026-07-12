@@ -22,6 +22,53 @@ def _pin_friction_const(model):
     model.reynolds_scaled = Const(0.0)
 
 
+def _hydraulic_epigraph_eqs(
+    branch, grid, from_node_model, to_node_model, f_max_local, **kwargs
+):
+    return [
+        # Epigraph relaxation kept tight by the \varepsilon term in minimize().
+        branch.mass_flow_pos_kgs * branch.mass_flow_pos_kgs
+        <= branch.mass_flow_pos_kgs_squared,
+        branch.mass_flow_neg_kgs * branch.mass_flow_neg_kgs
+        <= branch.mass_flow_neg_kgs_squared,
+        branch.mass_flow_pos_kgs <= f_max_local * branch.direction,
+        branch.mass_flow_neg_kgs <= f_max_local * (1 - branch.direction),
+        branch.mass_flow_pos_kgs <= f_max_local * branch.on_off,
+        branch.mass_flow_neg_kgs <= f_max_local * branch.on_off,
+        branch.mass_flow_mag_kgs <= f_max_local,
+        branch.mass_flow_pos_kgs_squared <= f_max_local**2 * branch.on_off,
+        branch.mass_flow_neg_kgs_squared <= f_max_local**2 * branch.on_off,
+        # density is not modelled as temperature-dependent
+        owfmodel.darcy_weisbach_equation(
+            from_node_model.vars["pressure_pu"],
+            to_node_model.vars["pressure_pu"],
+            branch.mass_flow_pos_kgs_squared,
+            branch.mass_flow_neg_kgs_squared,
+            branch.length_m,
+            branch.diameter_m,
+            grid.fluid_density_kg_per_m3,
+            on_off=branch.on_off,
+            friction=branch.friction / grid.pressure_ref_pa,
+            **kwargs,
+        ),
+        branch.mass_flow_mag_kgs == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs,
+    ]
+
+
+def _direction_temp_mix_eqs(branch, from_node_model, to_node_model):
+    return [
+        branch.t_in_pu
+        == branch.direction * to_node_model.vars["t_pu"]
+        + (1 - branch.direction) * from_node_model.vars["t_pu"],
+        branch.t_to_pu
+        == branch.direction * to_node_model.vars["t_pu"]
+        + (1 - branch.direction) * branch.t_out_pu,
+        branch.t_from_pu
+        == branch.direction * branch.t_out_pu
+        + (1 - branch.direction) * from_node_model.vars["t_pu"],
+    ]
+
+
 class BilinearDarcyWeisbachBranchFormulation(BranchFormulation):
     # See RelaxedWeymouthBranchFormulation for rationale.
     EPIGRAPH_TIGHTENING_EPS = 1e-5
@@ -52,49 +99,20 @@ class BilinearDarcyWeisbachBranchFormulation(BranchFormulation):
         )
 
         # Unidirectional pipes pin direction=0 below, eliminating that binary.
-        eqs = [
-            # Epigraph relaxation kept tight by the \varepsilon term in minimize().
-            branch.mass_flow_pos_kgs * branch.mass_flow_pos_kgs
-            <= branch.mass_flow_pos_kgs_squared,
-            branch.mass_flow_neg_kgs * branch.mass_flow_neg_kgs
-            <= branch.mass_flow_neg_kgs_squared,
-            branch.mass_flow_pos_kgs <= f_max_local * branch.direction,
-            branch.mass_flow_neg_kgs <= f_max_local * (1 - branch.direction),
-            branch.mass_flow_pos_kgs <= f_max_local * branch.on_off,
-            branch.mass_flow_neg_kgs <= f_max_local * branch.on_off,
-            branch.mass_flow_mag_kgs <= f_max_local,
-            branch.mass_flow_pos_kgs_squared <= f_max_local**2 * branch.on_off,
-            branch.mass_flow_neg_kgs_squared <= f_max_local**2 * branch.on_off,
-            # density is not modelled as temperature-dependent
-            owfmodel.darcy_weisbach_equation(
-                from_node_model.vars["pressure_pu"],
-                to_node_model.vars["pressure_pu"],
-                branch.mass_flow_pos_kgs_squared,
-                branch.mass_flow_neg_kgs_squared,
-                branch.length_m,
-                branch.diameter_m,
-                grid.fluid_density_kg_per_m3,
-                on_off=branch.on_off,
-                friction=branch.friction / grid.pressure_ref_pa,
-                **kwargs,
-            ),
-            branch.mass_flow_mag_kgs
-            == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs,
-            branch.alpha * (branch.mass_flow_mag_kgs + UA_C)
-            == branch.mass_flow_mag_kgs,
-            branch.t_out_pu
-            == branch.temperature_ext_k / grid.t_ref_k
-            + branch.alpha * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref_k),
-            branch.t_in_pu
-            == branch.direction * to_node_model.vars["t_pu"]
-            + (1 - branch.direction) * from_node_model.vars["t_pu"],
-            branch.t_to_pu
-            == branch.direction * to_node_model.vars["t_pu"]
-            + (1 - branch.direction) * branch.t_out_pu,
-            branch.t_from_pu
-            == branch.direction * branch.t_out_pu
-            + (1 - branch.direction) * from_node_model.vars["t_pu"],
-        ]
+        eqs = (
+            _hydraulic_epigraph_eqs(
+                branch, grid, from_node_model, to_node_model, f_max_local, **kwargs
+            )
+            + [
+                branch.alpha * (branch.mass_flow_mag_kgs + UA_C)
+                == branch.mass_flow_mag_kgs,
+                branch.t_out_pu
+                == branch.temperature_ext_k / grid.t_ref_k
+                + branch.alpha
+                * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref_k),
+            ]
+            + _direction_temp_mix_eqs(branch, from_node_model, to_node_model)
+        )
         if getattr(branch, "unidirectional", False):
             eqs.append(branch.direction == 0)
             eqs.append(branch.mass_flow_pos_kgs == 0)
@@ -198,16 +216,7 @@ class PwlDarcyWeisbachBranchFormulation(BranchFormulation):
             branch.t_out_pu
             == branch.temperature_ext_k / grid.t_ref_k
             + branch.alpha * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref_k),
-            branch.t_in_pu
-            == branch.direction * to_node_model.vars["t_pu"]
-            + (1 - branch.direction) * from_node_model.vars["t_pu"],
-            branch.t_to_pu
-            == branch.direction * to_node_model.vars["t_pu"]
-            + (1 - branch.direction) * branch.t_out_pu,
-            branch.t_from_pu
-            == branch.direction * branch.t_out_pu
-            + (1 - branch.direction) * from_node_model.vars["t_pu"],
-        ]
+        ] + _direction_temp_mix_eqs(branch, from_node_model, to_node_model)
 
 
 class BilinearPassiveHeatExchangerFormulation(BilinearDarcyWeisbachBranchFormulation):
@@ -230,43 +239,16 @@ class BilinearPassiveHeatExchangerFormulation(BilinearDarcyWeisbachBranchFormula
             grid, branch, grid.fluid_density_kg_per_m3, grid.v_max_mps
         )
 
-        return [
-            # Epigraph relaxation kept tight by the \varepsilon term in minimize().
-            branch.mass_flow_pos_kgs * branch.mass_flow_pos_kgs
-            <= branch.mass_flow_pos_kgs_squared,
-            branch.mass_flow_neg_kgs * branch.mass_flow_neg_kgs
-            <= branch.mass_flow_neg_kgs_squared,
-            branch.mass_flow_pos_kgs <= f_max_local * branch.direction,
-            branch.mass_flow_neg_kgs <= f_max_local * (1 - branch.direction),
-            branch.mass_flow_pos_kgs <= f_max_local * branch.on_off,
-            branch.mass_flow_neg_kgs <= f_max_local * branch.on_off,
-            branch.mass_flow_mag_kgs <= f_max_local,
-            branch.mass_flow_pos_kgs_squared <= f_max_local**2 * branch.on_off,
-            branch.mass_flow_neg_kgs_squared <= f_max_local**2 * branch.on_off,
-            owfmodel.darcy_weisbach_equation(
-                from_node_model.vars["pressure_pu"],
-                to_node_model.vars["pressure_pu"],
-                branch.mass_flow_pos_kgs_squared,
-                branch.mass_flow_neg_kgs_squared,
-                branch.length_m,
-                branch.diameter_m,
-                grid.fluid_density_kg_per_m3,
-                on_off=branch.on_off,
-                friction=branch.friction / grid.pressure_ref_pa,
-                **kwargs,
-            ),
-            branch.mass_flow_mag_kgs
-            == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs,
-            branch.mass_flow_mag_kgs * branch.t_inc_pu  # NOSONAR
-            == -branch.q_mw * 1e6 / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * grid.t_ref_k),
-            branch.t_out_pu == branch.t_in_pu + branch.t_inc_pu,
-            branch.t_in_pu
-            == branch.direction * to_node_model.vars["t_pu"]
-            + (1 - branch.direction) * from_node_model.vars["t_pu"],
-            branch.t_to_pu
-            == branch.direction * to_node_model.vars["t_pu"]
-            + (1 - branch.direction) * branch.t_out_pu,
-            branch.t_from_pu
-            == branch.direction * branch.t_out_pu
-            + (1 - branch.direction) * from_node_model.vars["t_pu"],
-        ]
+        return (
+            _hydraulic_epigraph_eqs(
+                branch, grid, from_node_model, to_node_model, f_max_local, **kwargs
+            )
+            + [
+                branch.mass_flow_mag_kgs * branch.t_inc_pu  # NOSONAR
+                == -branch.q_mw
+                * 1e6
+                / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * grid.t_ref_k),
+                branch.t_out_pu == branch.t_in_pu + branch.t_inc_pu,
+            ]
+            + _direction_temp_mix_eqs(branch, from_node_model, to_node_model)
+        )

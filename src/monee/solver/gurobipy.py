@@ -45,6 +45,7 @@ from monee.model import (
 from monee.problem.core import OptimizationProblem
 
 from .core import (
+    _LEX_ABS_TOL,
     InterStepState,
     SolverInterface,
     SolverResult,
@@ -52,6 +53,7 @@ from .core import (
     apply_child_overwrites,
     apply_post_process_all,
     as_iter,
+    clamp_warm_start,
     compute_bound_violations,
     filter_bool_eqs,
     filter_intermediate_eqs,
@@ -62,6 +64,7 @@ from .core import (
     ignore_compound,
     ignore_node,
     inject_vars,
+    lex_cap_slack,
     mark_slacks_and_prescriptions,
     prepare_solve_network,
     withdraw_vars,
@@ -188,10 +191,13 @@ class GurobipySolver(SolverInterface):
 
     _BOUND_SNAP_TOL = 1e-9
 
-    _LEX_REL_TOL = 1e-6
-    _LEX_ABS_TOL = 1e-9
-
     _LEX_AUX_MIPGAP = 1e-2
+
+    # ``Var.Start`` only accelerates incumbent finding; per-step cost on this
+    # backend is presolve/branching-dominated, so previous-solution seeding
+    # measured neutral (0.94x to 1.06x) from small MISOCP nets up to the
+    # simbench MES.
+    benefits_from_warm_start = False
 
     def __init__(self, params: dict | None = None):
         self._backend_name = "gurobipy"
@@ -222,14 +228,8 @@ class GurobipySolver(SolverInterface):
                     vtype=GRB.INTEGER if value.integer else GRB.CONTINUOUS,
                     name=self._sanitize_name(f"{prefix}__{key}"),
                 )
-                init = value.value
-                if init is not None and isinstance(init, float) and math.isnan(init):
-                    init = None
+                init = clamp_warm_start(value)
                 if init is not None:
-                    if value.min is not None and init < value.min:
-                        init = value.min
-                    if value.max is not None and init > value.max:
-                        init = value.max
                     v.Start = init
                 setattr(target, key, v)
             elif type(value) is Const:
@@ -482,10 +482,9 @@ class GurobipySolver(SolverInterface):
             return e
         return self._free_aux(gm, eq=e)
 
-    @classmethod
-    def _lex_cap_slack(cls, s_star: float, mip_gap: float) -> float:
-        rel = max(float(mip_gap or 0.0), cls._LEX_REL_TOL)
-        return cls._LEX_ABS_TOL + rel * max(1.0, abs(s_star))
+    @staticmethod
+    def _lex_cap_slack(s_star: float, mip_gap: float) -> float:
+        return lex_cap_slack(s_star, mip_gap)
 
     # --------- result classification ---------
 
@@ -756,7 +755,7 @@ class GurobipySolver(SolverInterface):
             index=0,
             priority=2,
             reltol=0.0,
-            abstol=self._LEX_ABS_TOL,
+            abstol=_LEX_ABS_TOL,
             name="user",
         )
         gm.setObjectiveN(

@@ -324,8 +324,9 @@ repeated what-if studies considerably. The Pyomo back-end additionally passes
 gurobipy back-end seeds ``Var.Start`` from the persisted values directly.
 
 The :class:`~monee.simulation.Stepper` carries each successful step's
-solution into its working network the same way (``warm_start=True``, the
-default), so externally paced loops warm-start step over step. For IPOPT a
+solution into its working network the same way (``warm_start``, on by
+default for every backend except gurobipy, whose ``Var.Start`` seeding
+measured neutral), so externally paced loops warm-start step over step. For IPOPT a
 near-optimal starting point under the flat-start defaults can even hurt:
 the default initial barrier pushes the point back into the interior and
 occasionally fails the step computation. The Stepper therefore hints the

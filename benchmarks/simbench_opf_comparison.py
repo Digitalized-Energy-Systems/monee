@@ -69,15 +69,14 @@ import uuid
 import numpy as np
 import pandapower as pp
 import pandas as pd
-import scipy.io
 
 # Reuse the shared results dir and the MATPOWER exporter resolved in the sibling
 # benchmark (the benchmarks/ directory is on sys.path when run directly).
 from backend_comparison import RESULTS, to_mpc
 
 from monee import run_energy_flow_optimization
-from monee.io.from_pandapower import _strip_transformer_vector_group_shifts
-from monee.io.matpower import _mpc_from_mat, build_matpower_opf
+from monee.io.from_pandapower import strip_transformer_vector_group_shifts
+from monee.io.matpower import build_matpower_opf, read_mpc
 from monee.solver.casadi import CasADiSolver
 
 PANDAPOWER = "pandapower"
@@ -231,7 +230,7 @@ def _build_monee_opf(net):
     tmp = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}.mat")
     to_mpc(net, init="flat", filename=tmp)
     try:
-        mpc = _mpc_from_mat(scipy.io.loadmat(tmp))
+        mpc = read_mpc(tmp)
         # Line limits are relaxed on the pandapower side too, so the monee OPF is
         # the matching dispatch-plus-voltage problem (no line-loading constraint).
         network, problem = build_matpower_opf(mpc, max_loading=None)
@@ -241,7 +240,7 @@ def _build_monee_opf(net):
         # spurious low-voltage root that IPOPT then reports as infeasible; the
         # sibling benchmarks strip these on the monee side too (see
         # from_pandapower_net / backend_comparison._mnet).
-        _strip_transformer_vector_group_shifts(network)
+        strip_transformer_vector_group_shifts(network)
         return network, problem
     finally:
         os.remove(tmp)

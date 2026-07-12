@@ -89,11 +89,19 @@ class DhsSegment:
         return list(self.supply.children) + list(self.return_.children)
 
 
+def _as_segment(star: StarSegment) -> Segment:
+    return Segment(nodes=star.nodes, branches=star.branches, children=star.children)
+
+
 class _Structure:
     """Shared shape logic for single-carrier structures."""
 
     def __init__(self, network):
         self._net = network
+
+    @property
+    def _grid_kwargs(self):
+        return {"grid": self._grid} if self._grid is not None else {}
 
     # --- carrier hooks: override these ---
 
@@ -166,8 +174,7 @@ class GasStructure(_Structure):
         self._grid = grid
 
     def _create_node(self):
-        kwargs = {"grid": self._grid} if self._grid is not None else {}
-        return _mx.create_gas_junction(self._net, **kwargs)
+        return _mx.create_gas_junction(self._net, **self._grid_kwargs)
 
     def _create_branch(self, from_id, to_id):
         return _mx.create_gas_pipe(
@@ -226,8 +233,7 @@ class WaterStructure(_Structure):
         self._grid = grid
 
     def _create_node(self):
-        kwargs = {"grid": self._grid} if self._grid is not None else {}
-        return _mx.create_water_junction(self._net, **kwargs)
+        return _mx.create_water_junction(self._net, **self._grid_kwargs)
 
     def _create_branch(self, from_id, to_id):
         return _mx.create_water_pipe(
@@ -295,10 +301,7 @@ class ElStructure(_Structure):
         self._grid = grid
 
     def _create_node(self):
-        kwargs = {"base_kv": self._base_kv}
-        if self._grid is not None:
-            kwargs["grid"] = self._grid
-        return _mx.create_bus(self._net, **kwargs)
+        return _mx.create_bus(self._net, base_kv=self._base_kv, **self._grid_kwargs)
 
     def _create_branch(self, from_id, to_id):
         return _mx.create_line(
@@ -444,16 +447,8 @@ class DhsStructure:
         return_star = self.return_.star(
             arms=arms, start_from=start_from_return, **kwargs
         )
-        supply_seg = Segment(
-            nodes=supply_star.nodes,
-            branches=supply_star.branches,
-            children=supply_star.children,
-        )
-        return_seg = Segment(
-            nodes=return_star.nodes,
-            branches=return_star.branches,
-            children=return_star.children,
-        )
+        supply_seg = _as_segment(supply_star)
+        return_seg = _as_segment(return_star)
         hxs = self._bridge(supply_seg.nodes, return_seg.nodes, heat_exchanger_q_mw)
         return DhsSegment(supply=supply_seg, return_=return_seg, heat_exchangers=hxs)
 

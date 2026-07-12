@@ -4,6 +4,16 @@ from .core import ChildModel, Const, Var, model
 from .grid import PowerGrid
 
 
+def _require_positive(cls_name, magnitude, param_name, value):
+    # Compound/internal callers pass solver Vars - only validate plain numerics.
+    if isinstance(value, (int, float)) and value < 0:
+        raise ValueError(
+            f"{cls_name} expects a positive {magnitude}; "
+            f"got {param_name}={value}.  Pass the absolute value - the "
+            f"sign is handled internally (load convention)."
+        )
+
+
 class GridFormingMixin:
     """
     Marker: this child can serve as the slack/reference for an islanded sub-network.
@@ -25,13 +35,7 @@ class PowerGenerator(NoVarChildModel):
     """Fixed-setpoint active/reactive generator. Constructor takes positive magnitudes; sign is internal."""
 
     def __init__(self, p_mw, q_mvar, **kwargs) -> None:
-        # Compound models pass solver Vars for p_mw - only validate plain numerics.
-        if isinstance(p_mw, (int, float)) and p_mw < 0:
-            raise ValueError(
-                f"PowerGenerator expects a positive generation magnitude; "
-                f"got p_mw={p_mw}.  Pass the absolute value - the sign is "
-                f"handled internally (load convention)."
-            )
+        _require_positive("PowerGenerator", "generation magnitude", "p_mw", p_mw)
         super().__init__(**kwargs)
         self.p_mw = -p_mw
         self.q_mvar = -q_mvar
@@ -58,12 +62,9 @@ class VoltageControlledGenerator(ChildModel):
     """
 
     def __init__(self, p_mw, vm_pu=1.0, q_mvar=0.0, **kwargs) -> None:
-        if isinstance(p_mw, (int, float)) and p_mw < 0:
-            raise ValueError(
-                f"VoltageControlledGenerator expects a positive generation "
-                f"magnitude; got p_mw={p_mw}.  Pass the absolute value - the "
-                f"sign is handled internally (load convention)."
-            )
+        _require_positive(
+            "VoltageControlledGenerator", "generation magnitude", "p_mw", p_mw
+        )
         super().__init__(**kwargs)
         self.p_mw = -p_mw
         self.q_mvar = Var(-q_mvar, name="gen_pv_q_mvar")
@@ -204,13 +205,9 @@ class Source(NoVarChildModel):
     """
 
     def __init__(self, mass_flow_kgs, t_k=None, **kwargs) -> None:
-        # Internal callers may pass solver Vars - only validate plain numerics.
-        if isinstance(mass_flow_kgs, (int, float)) and mass_flow_kgs < 0:
-            raise ValueError(
-                f"Source expects a positive injection magnitude; "
-                f"got mass_flow_kgs={mass_flow_kgs}.  Pass the absolute value - the "
-                f"sign is handled internally (load convention)."
-            )
+        _require_positive(
+            "Source", "injection magnitude", "mass_flow_kgs", mass_flow_kgs
+        )
         super().__init__(**kwargs)
 
         self.mass_flow_kgs = -mass_flow_kgs
@@ -303,12 +300,7 @@ class HeatGenerator(NoVarChildModel):
     """Node-based heat injection (``H_G,i``). Takes positive magnitude; sign is internal."""
 
     def __init__(self, q_mw, **kwargs) -> None:
-        if isinstance(q_mw, (int, float)) and q_mw < 0:
-            raise ValueError(
-                f"HeatGenerator expects a positive heat-generation magnitude; "
-                f"got q_mw={q_mw}.  Pass the absolute value - the sign is "
-                f"handled internally (load convention)."
-            )
+        _require_positive("HeatGenerator", "heat-generation magnitude", "q_mw", q_mw)
         super().__init__(**kwargs)
         self.q_mw_heat = -q_mw
 

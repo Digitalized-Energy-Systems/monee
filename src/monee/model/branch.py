@@ -73,12 +73,6 @@ class PowerBranch(GenericPowerBranch, ABC):
         super().__init__(
             tap, shift, 0, 0, 0, 0, 0, 0, backup=backup, on_off=on_off, **kwargs
         )
-        self.tap = tap
-        self.shift = shift
-        self.p_from_mw = Var(1, name="p_from_mw")
-        self.q_from_mvar = Var(1, name="q_from_mvar")
-        self.p_to_mw = Var(1, name="p_to_mw")
-        self.q_to_mvar = Var(1, name="q_to_mvar")
 
     @abstractmethod
     def calc_r_x(self, grid, from_node_model, to_node_model):
@@ -142,8 +136,31 @@ class Trafo(PowerBranch):
         return (r_sc, x_sc)
 
 
-def sign(v):
-    return 1 if v >= 0 else -1
+def _init_flow_vars(
+    model, flow_seed, direction_seed, velocity_bound_mps, direction_name=None
+):
+    model.mass_flow_kgs = Intermediate(0.1)
+    model.mass_flow_pos_kgs = Var(flow_seed, min=0, name="mass_flow_pos_kgs")
+    model.mass_flow_neg_kgs = Var(flow_seed, min=0, name="mass_flow_neg_kgs")
+    model.mass_flow_pos_kgs_squared = Var(0, min=0, name="mass_flow_pos_kgs_squared")
+    model.mass_flow_neg_kgs_squared = Var(0, min=0, name="mass_flow_neg_kgs_squared")
+    model.direction = Var(
+        direction_seed, integer=True, min=0, max=1, name=direction_name
+    )
+    model.velocity_mps = Var(
+        1, min=-velocity_bound_mps, max=velocity_bound_mps, name="velocity_mps"
+    )
+
+
+def _friction_var(friction, seed):
+    # Upper bound 7 covers the PWL leftmost breakpoint (Re=10, 64/10).
+    return Var(seed, min=0, max=7, name="friction") if friction is None else friction
+
+
+def _mass_flow_intermediate_eq(model):
+    return IntermediateEq(
+        "mass_flow_kgs", model.mass_flow_pos_kgs - model.mass_flow_neg_kgs
+    )
 
 
 @model
@@ -169,22 +186,19 @@ class WaterPipe(BranchModel):
         self.insulation_thickness_m = insulation_thickness_m
         self.on_off = on_off
         self.unidirectional = unidirectional
-        self.mass_flow_kgs = Intermediate(0.1)
-        self.mass_flow_pos_kgs = Var(0.1, min=0, name="mass_flow_pos_kgs")
-        self.mass_flow_neg_kgs = Var(0.1, min=0, name="mass_flow_neg_kgs")
-        self.mass_flow_pos_kgs_squared = Var(0, min=0, name="mass_flow_pos_kgs_squared")
-        self.mass_flow_neg_kgs_squared = Var(0, min=0, name="mass_flow_neg_kgs_squared")
-        self.direction = Var(1, integer=True, min=0, max=1, name="direction")
-        self.velocity_mps = Var(1, min=-50, max=50, name="velocity_mps")
+        _init_flow_vars(
+            self,
+            flow_seed=0.1,
+            direction_seed=1,
+            velocity_bound_mps=50,
+            direction_name="direction",
+        )
         self.q_mw = Var(1e-6, name="q_mw")
         # reynolds_scaled is stored as Re/1e6 (see REYNOLDS_SCALE); 1e-3 \approx laminar floor.
         self.reynolds_scaled = Var(1e-3, min=0, max=10, name="reynolds_scaled")
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
-        # friction upper bound 7 covers the PWL leftmost breakpoint (Re=10, 64/10).
-        self.friction = (
-            Var(0.02, min=0, max=7, name="friction") if friction is None else friction
-        )
+        self.friction = _friction_var(friction, 0.02)
 
     def loss_percent(self, grid: WaterGrid | None = None):
         mass_flow_kgs = abs(self.mass_flow_kgs.value)
@@ -203,11 +217,7 @@ class WaterPipe(BranchModel):
         )
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
-        return [
-            IntermediateEq(
-                "mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs
-            )
-        ]
+        return [_mass_flow_intermediate_eq(self)]
 
 
 def _normalize_he_q_mw(q_mw, *, load: bool):

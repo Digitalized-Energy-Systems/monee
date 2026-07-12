@@ -646,6 +646,183 @@ def test_generate_mes_replace_primary_generation_invariant():
 
 
 @pytest.mark.pptest
+def test_generate_mes_decoupled_generation_mirror():
+
+    # GIVEN
+    import simbench
+
+    from monee.io.from_pandapower import from_pandapower_net
+
+    net = simbench.get_simbench_net("1-LV-rural3--1-no_sw")
+    mn = from_pandapower_net(net)
+    common = dict(
+        coupling_density=0.5,
+        centralized=False,
+        couplings=("chp", "p2g", "p2h"),
+        heat_kwargs={"node_based_heat_loads": True},
+    )
+
+    # WHEN
+    mes_rep = generate_supply_return_mes_based_on_power_net(
+        mn,
+        coupling_kwargs={
+            "seed": 1,
+            "use_hg_variants": True,
+            "replace_primary_generation": True,
+        },
+        **common,
+    )
+    mes_dec = generate_supply_return_mes_based_on_power_net(
+        mn,
+        coupling_kwargs={
+            "seed": 1,
+            "use_hg_variants": True,
+            "replace_primary_generation": True,
+            "decoupled_generation": True,
+        },
+        **common,
+    )
+
+    # THEN
+    # No coupling constraint remains: neither CP compounds nor CP branches.
+    assert not [c for c in mes_dec.compounds if "CHP" in type(c.model).__name__]
+    assert not [
+        b
+        for b in mes_dec.branches
+        if type(b.model).__name__ in ("PowerToGas", "PowerToHeatHG")
+    ]
+
+    def _mirrors(mes, prefix):
+        return [
+            c
+            for c in mes.childs
+            if str(getattr(c, "name", "") or "").startswith(prefix)
+        ]
+
+    chp_el = _mirrors(mes_dec, "mirror_cp_chp_el")
+    p2g_gas = _mirrors(mes_dec, "mirror_cp_p2g_gas")
+    heat_mirrors = _mirrors(mes_dec, "mirror_cp_chp_heat") + _mirrors(
+        mes_dec, "mirror_cp_p2h_heat"
+    )
+    assert chp_el and p2g_gas and heat_mirrors
+    assert all(c.independent for c in chp_el + p2g_gas + heat_mirrors), (
+        "mirrors must be independent children so they enter failure registries"
+    )
+
+    # Unit-for-unit rating match with the coupled fleet (same seed → same
+    # sites/types/sizes; multiset equality over rated outputs).
+    chp_rated = sorted(
+        float(c.model.mass_flow_setpoint_kgs)
+        * GAS_HHV_MJ_PER_KG
+        * float(c.model.efficiency_power)
+        for c in mes_rep.compounds
+        if "CHP" in type(c.model).__name__
+    )
+    assert sorted(abs(float(c.model.p_mw)) for c in chp_el) == pytest.approx(
+        chp_rated, rel=1e-9
+    )
+    p2g_rated = sorted(
+        abs(float(b.model.gas_mass_flow_kgs))
+        for b in mes_rep.branches
+        if "PowerToGas" in type(b.model).__name__
+    )
+    assert sorted(abs(float(c.model.mass_flow_kgs)) for c in p2g_gas) == pytest.approx(
+        p2g_rated, rel=1e-9
+    )
+
+    # Placement is pinned per unit, not just as site/rating multisets: each
+    # mirror carries its coupled counterpart's rating at the same node, so a
+    # cross-site swap of two same-type units fails here. Node ids are
+    # deterministic across builds — the layers are generated before the CP
+    # pass.
+    def _pair_match(mirror_pairs, coupled_pairs):
+        mirror_pairs, coupled_pairs = sorted(mirror_pairs), sorted(coupled_pairs)
+        assert [n for n, _ in mirror_pairs] == [n for n, _ in coupled_pairs]
+        assert [v for _, v in mirror_pairs] == pytest.approx(
+            [v for _, v in coupled_pairs], rel=1e-9
+        )
+
+    chp_rep = [c for c in mes_rep.compounds if "CHP" in type(c.model).__name__]
+    _pair_match(
+        [(c.node_id, abs(float(c.model.p_mw))) for c in chp_el],
+        [
+            (
+                c.connected_to["power_node_id"],
+                float(c.model.mass_flow_setpoint_kgs)
+                * GAS_HHV_MJ_PER_KG
+                * float(c.model.efficiency_power),
+            )
+            for c in chp_rep
+        ],
+    )
+    _pair_match(
+        [
+            (c.node_id, abs(float(c.model.q_mw_heat)))
+            for c in _mirrors(mes_dec, "mirror_cp_chp_heat")
+        ],
+        [
+            (
+                c.connected_to["heat_node_id"],
+                float(c.model.mass_flow_setpoint_kgs)
+                * GAS_HHV_MJ_PER_KG
+                * float(c.model.efficiency_heat),
+            )
+            for c in chp_rep
+        ],
+    )
+    _pair_match(
+        [(c.node_id, abs(float(c.model.mass_flow_kgs))) for c in p2g_gas],
+        [
+            (b.to_node_id, abs(float(b.model.gas_mass_flow_kgs)))
+            for b in mes_rep.branches
+            if "PowerToGas" in type(b.model).__name__
+        ],
+    )
+    _pair_match(
+        [
+            (c.node_id, abs(float(c.model.q_mw_heat)))
+            for c in _mirrors(mes_dec, "mirror_cp_p2h_heat")
+        ],
+        [
+            (b.to_node_id, abs(float(b.model.heat_energy_mw)))
+            for b in mes_rep.branches
+            if type(b.model).__name__ == "PowerToHeatHG"
+        ],
+    )
+
+    # Carrier totals: the mirror fleet exactly refills what the drain removed,
+    # so total rated capacity matches the coupled build per carrier.
+    chp_p, p2g_kgs, _ = _cp_totals(mes_rep)
+    assert _primary_power_mw(mes_dec) == pytest.approx(
+        _primary_power_mw(mes_rep) + chp_p, rel=1e-9
+    )
+    assert _primary_gas_kgs(mes_dec) == pytest.approx(
+        _primary_gas_kgs(mes_rep) + p2g_kgs, rel=1e-9
+    )
+    heat_total_rep = sum(
+        abs(float(c.model.q_mw_heat))
+        for c in mes_rep.childs
+        if isinstance(c.model, mm.HeatGenerator)
+    )
+    heat_total_dec = sum(
+        abs(float(c.model.q_mw_heat))
+        for c in mes_dec.childs
+        if isinstance(c.model, mm.HeatGenerator)
+    )
+    assert heat_total_dec == pytest.approx(
+        heat_total_rep + _cp_heat_out_mw(mes_rep), rel=1e-9
+    )
+
+    # The non-mirror primary pool is drained identically to the coupled build.
+    assert sum(
+        abs(float(c.model.p_mw))
+        for c in mes_dec.childs
+        if isinstance(c.model, mm.PowerGenerator)
+        and not str(getattr(c, "name", "") or "").startswith("mirror_cp_")
+    ) == pytest.approx(_primary_power_mw(mes_rep), rel=1e-9)
+
+
+@pytest.mark.pptest
 def test_generate_mes_node_heat_gen_share_and_replacement():
 
     # GIVEN

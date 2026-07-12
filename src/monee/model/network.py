@@ -103,11 +103,9 @@ class Network:
         """The network-level formulation for *model* (and *grid*) accumulated
         from ``apply_formulation`` calls, or None. Last matching registration
         wins, mirroring :meth:`NetworkFormulation.lookup`."""
-        found = None
-        for (tc, tg), formulation in self.__default_formulation.items():
-            if isinstance(model, tc) and (tg is None or type(grid) is tg):
-                found = formulation
-        return found
+        from .formulation.core import lookup_type_match
+
+        return lookup_type_match(self.__default_formulation.items(), model, grid)
 
     def set_default_grid(self, key, grid):
         self._default_grid_models[key] = grid
@@ -184,13 +182,9 @@ class Network:
         yield from self.compounds
 
     def all_models_with_grid(self):
-        model_container_list = self.childs + self.compounds + self.branches + self.nodes
         return [
-            (
-                model_container.model,
-                model_container.grid if hasattr(model_container, "grid") else None,
-            )
-            for model_container in model_container_list
+            (model_container.model, model_container.grid)
+            for model_container in self.all_components()
         ]
 
     @property
@@ -330,17 +324,6 @@ class Network:
     def childs_by_ids(self, child_ids) -> list[Child]:
         return [self.child_by_id(child_id) for child_id in child_ids]
 
-    def has_any_child_of_type(self, branch, cls) -> bool:
-        childs = self.get_childs_by_type(branch, cls)
-        return len(childs) > 0
-
-    def get_childs_by_type(self, branch, cls) -> list[Child]:
-        return [
-            child
-            for child in self.childs_by_ids(branch.child_ids)
-            if isinstance(child.model, cls)
-        ]
-
     def branches_by_ids(self, branch_ids) -> list[Branch]:
         return [self.branch_by_id(branch_id) for branch_id in branch_ids]
 
@@ -371,16 +354,6 @@ class Network:
             for compound in self.compounds
             if node_id in compound.connected_to.values()
         ]
-
-    def compound_of(self, subcomponent_component_id) -> Component | None:
-        compounds = [
-            compound
-            for compound in self.compounds
-            if subcomponent_component_id in [sc.id for sc in compound.subcomponents]
-        ]
-        if len(compounds) == 0:
-            return None
-        return compounds[0]
 
     def components_connected_to(self, node_id) -> list[Component]:
         node = self.node_by_id(node_id)
@@ -471,12 +444,10 @@ class Network:
             name=name,
             independent=not self.__collection_stack,
         )
-        child.formulation_pinned = formulation is not None
         self.__insert_to_blacklist_if_forced(child)
         self.__insert_to_container_if_collect_toggled(child)
         self._child_dict[child_id] = child
         if attach_to_node_id is not None:
-            child.node_id = attach_to_node_id
             attaching_node = self.node_by_id_or_create(
                 attach_to_node_id, auto_node_creator, auto_grid_key
             )
@@ -565,7 +536,6 @@ class Network:
             position=position,
             independent=not self.__collection_stack,
         )
-        node.formulation_pinned = formulation is not None
         if child_ids is not None:
             for child_id in child_ids:
                 child = self.child_by_id(child_id)
@@ -618,7 +588,6 @@ class Network:
             independent=not self.__collection_stack,
             **kwargs,
         )
-        branch.formulation_pinned = formulation is not None
         self.__insert_to_blacklist_if_forced(branch)
         self.__insert_to_container_if_collect_toggled(branch)
         branch_id = (
@@ -670,7 +639,6 @@ class Network:
             connected_to=connected_node_ids,
             subcomponents=subcomponents,
         )
-        compound.formulation_pinned = formulation is not None
         self._compound_dict[compound_id] = compound
         # A nested compound is a subcomponent of the enclosing one and, like
         # any compound-internal component, excluded from native save.
@@ -685,113 +653,70 @@ class Network:
         self._objectives.append(objective_function)
 
     @staticmethod
-    def _model_dict_to_input(container):
-        model_dict = container.model.vars
-        input_dict = {
-            "active": container.active,
-            "id": container.id,
-            "independent": container.independent,
-            "ignored": container.ignored,
-        }
-        for k, v in model_dict.items():
-            input_value = v
-            if isinstance(v, Var):
-                input_value = "$VAR"
-            if isinstance(v, Intermediate):
-                input_value = "$INT"
-            if isinstance(v, Const):
-                input_value = v.value
-            input_dict[k] = input_value
-        return input_dict
-
-    def as_dataframe_dict(self):
-        input_dict_list_dict = {}
-        model_containers = self.nodes + self.childs + self.branches
-        for container in model_containers:
-            model_type_name = type(container.model).__name__
-            if model_type_name not in input_dict_list_dict:
-                input_dict_list_dict[model_type_name] = []
-            input_dict = Network._model_dict_to_input(container)
-            if isinstance(container, Child):
-                input_dict["node_id"] = container.node_id
-            input_dict_list_dict[model_type_name].append(input_dict)
-        dataframe_dict = {}
-        for result_type, dict_list in input_dict_list_dict.items():
-            dataframe_dict[result_type] = pandas.DataFrame(dict_list)
-        return dataframe_dict
+    def _input_value(v):
+        if isinstance(v, Var):
+            return "$VAR"
+        if isinstance(v, Intermediate):
+            return "$INT"
+        if isinstance(v, Const):
+            return v.value
+        # PostProcess deliberately passes through unchanged in the input view.
+        return v
 
     @staticmethod
-    def _model_dict_to_results(container):
-        model_dict = container.model.vars
-        result_dict = {
-            "active": container.active,
-            "id": container.id,
-            "independent": container.independent,
-            "ignored": container.ignored,
-        }
-        for k, v in model_dict.items():
-            result_value = v
-            if isinstance(v, Var | Const | Intermediate | PostProcess):
-                result_value = v.value
-            result_dict[k] = result_value
-        return result_dict
+    def _result_value(v):
+        if isinstance(v, Var | Const | Intermediate | PostProcess):
+            return v.value
+        return v
 
-    def as_result_dataframe_dict(self):
-        result_dict_list_dict = {}
+    def _as_dataframe_dict(self, value_fn):
+        dict_list_dict = {}
         model_containers = self.nodes + self.childs + self.branches
         for container in model_containers:
-            model_type_name = type(container.model).__name__
-            if model_type_name not in result_dict_list_dict:
-                result_dict_list_dict[model_type_name] = []
-            result_dict = Network._model_dict_to_results(container)
+            row = {
+                "active": container.active,
+                "id": container.id,
+                "independent": container.independent,
+                "ignored": container.ignored,
+            }
+            for k, v in container.model.vars.items():
+                row[k] = value_fn(v)
             if isinstance(container, Child):
-                result_dict["node_id"] = container.node_id
-            result_dict_list_dict[model_type_name].append(result_dict)
-        dataframe_dict = {}
-        for result_type, dict_list in result_dict_list_dict.items():
-            dataframe_dict[result_type] = pandas.DataFrame(dict_list)
-        return dataframe_dict
+                row["node_id"] = container.node_id
+            dict_list_dict.setdefault(type(container.model).__name__, []).append(row)
+        return {
+            result_type: pandas.DataFrame(dict_list)
+            for result_type, dict_list in dict_list_dict.items()
+        }
+
+    def as_dataframe_dict(self):
+        return self._as_dataframe_dict(Network._input_value)
+
+    def as_result_dataframe_dict(self):
+        return self._as_dataframe_dict(Network._result_value)
+
+    @staticmethod
+    def _dataframe_dict_str(dataframes):
+        result_str = ""
+        for cls_str, dataframe in dataframes.items():
+            result_str += cls_str
+            result_str += "\n"
+            result_str += dataframe.to_string()
+            result_str += "\n"
+            result_str += "\n"
+        return result_str
 
     def as_result_dataframe_dict_str(self):
-        dataframes = self.as_result_dataframe_dict()
-        result_str = ""
-        for cls_str, dataframe in dataframes.items():
-            result_str += cls_str
-            result_str += "\n"
-            result_str += dataframe.to_string()
-            result_str += "\n"
-            result_str += "\n"
-        return result_str
+        return Network._dataframe_dict_str(self.as_result_dataframe_dict())
 
     def as_dataframe_dict_str(self):
-        dataframes = self.as_dataframe_dict()
-        result_str = ""
-        for cls_str, dataframe in dataframes.items():
-            result_str += cls_str
-            result_str += "\n"
-            result_str += dataframe.to_string()
-            result_str += "\n"
-            result_str += "\n"
-        return result_str
+        return Network._dataframe_dict_str(self.as_dataframe_dict())
 
     def __repr__(self):
         return self.as_dataframe_dict_str()
 
     def __str__(self):
         return self.as_dataframe_dict_str()
-
-    def statistics(self):
-        type_to_number = {}
-        model_containers = self.nodes + self.childs + self.branches + self.compounds
-        for container in model_containers:
-            if not container.independent:
-                continue
-            model_type = type(container.model)
-            if model_type in type_to_number:
-                type_to_number[model_type] += 1
-            else:
-                type_to_number[model_type] = 1
-        return type_to_number
 
     def copy(self):
         return copy.deepcopy(self)
@@ -836,11 +761,6 @@ class Network:
             g.add_edge(u, v, key=key, **new_data)
 
         return new
-
-    def clear_childs(self):
-        self._child_dict = {}
-        for node in self.nodes:
-            node.child_ids = []
 
 
 def _clean_up_compound(network: Network, compound):
@@ -994,30 +914,27 @@ def transform_network(network: Network, graph_transform):
     return network
 
 
-def _add_tuple(a, b):
-    return [a[i] + b[i] for i in range(len(a))]
-
-
-def _div_tuple(a, div):
-    return tuple(a[i] / div for i in range(len(a)))
+def _mean_position(positions):
+    return tuple(sum(xs) / len(positions) for xs in zip(*positions))
 
 
 def calc_coordinates(network: Network, component: Component):
     if type(component) is Node:
         return component.position
     elif type(component) is Branch:
-        node_start = network.node_by_id(component.from_node_id)
-        node_end = network.node_by_id(component.to_node_id)
-        return tuple(
-            (node_start.position[i] + node_end.position[i]) / 2
-            for i in range(len(node_start.position))
+        return _mean_position(
+            [
+                network.node_by_id(component.from_node_id).position,
+                network.node_by_id(component.to_node_id).position,
+            ]
         )
     elif type(component) is Child:
         return network.node_by_id(component.node_id).position
     elif type(component) is Compound:
-        position = (0, 0)
-        for connected_node_id in component.connected_to.values():
-            node = network.node_by_id(connected_node_id)
-            position = _add_tuple(position, node.position)
-        return _div_tuple(position, len(component.connected_to))
+        return _mean_position(
+            [
+                network.node_by_id(connected_node_id).position
+                for connected_node_id in component.connected_to.values()
+            ]
+        )
     raise ValueError(f"This should not happen! The component {component} is unknown.")

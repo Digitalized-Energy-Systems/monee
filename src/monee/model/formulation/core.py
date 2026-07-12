@@ -71,6 +71,21 @@ def _or_dict(d: dict):
     return {} if d is None else d
 
 
+def lookup_type_match(pairs, model, grid):
+    """Last formulation in *pairs* whose ``model_type | (model_type, grid_type)``
+    key matches (``isinstance`` on the model type, exact type match on the
+    grid), or None."""
+    found = None
+    for type_or_tuple, formulation in pairs:
+        if isinstance(type_or_tuple, tuple):
+            tc, tg = type_or_tuple
+        else:
+            tc, tg = type_or_tuple, None
+        if isinstance(model, tc) and (tg is None or type(grid) is tg):
+            found = formulation
+    return found
+
+
 class NetworkFormulation:
     branch_type_to_formulations: dict[tuple[type, type], BranchFormulation]
     node_type_to_formulations: dict[tuple[type, type], NodeFormulation]
@@ -106,12 +121,4 @@ class NetworkFormulation:
         key is a ``(model_type, grid_type)`` tuple; on multiple matches the
         last registration wins.
         """
-        found = None
-        for type_or_tuple, formulation in self.items():
-            if isinstance(type_or_tuple, tuple):
-                tc, tg = type_or_tuple
-            else:
-                tc, tg = type_or_tuple, None
-            if isinstance(model, tc) and (tg is None or type(grid) is tg):
-                found = formulation
-        return found
+        return lookup_type_match(self.items(), model, grid)

@@ -196,16 +196,19 @@ class Stepper:
     retained window. ``max_changes`` likewise caps the recorded
     :class:`NetworkChange` list (oldest events dropped first).
 
-    ``warm_start`` (default on) carries each successful step's solved values
-    into the working net, so the next solve starts from the previous solution
-    instead of the base network's initial values; backends that support it
+    ``warm_start`` carries each successful step's solved values into the
+    working net, so the next solve starts from the previous solution instead
+    of the base network's initial values; backends that support it
     (CasADi/IPOPT) are additionally hinted to run with warm-start solver
-    options on those solves. Failed steps leave the working net untouched and
-    drop the hint for the next attempt, so a failure caused by the warm-start
-    options self-heals with a flat-start retry. With ``copy_base=False`` the
-    working net is the caller's live network, so warm starting writes solved
-    values into it; pass ``warm_start=False`` to keep it strictly
-    caller-owned."""
+    options on those solves. The default (``None``) follows the backend's
+    ``benefits_from_warm_start`` declaration: on for CasADi/GEKKO/Pyomo, off
+    for gurobipy (``Var.Start`` seeding measured neutral there); an explicit
+    ``True``/``False`` always wins. Failed steps leave the working net
+    untouched and drop the hint for the next attempt, so a failure caused by
+    the warm-start options self-heals with a flat-start retry. With
+    ``copy_base=False`` the working net is the caller's live network, so warm
+    starting writes solved values into it; pass ``warm_start=False`` to keep
+    it strictly caller-owned."""
 
     __slots__ = (
         "_base_net",
@@ -248,7 +251,7 @@ class Stepper:
         record_changes: bool = True,
         max_changes: int | None = None,
         copy_base: bool = True,
-        warm_start: bool = True,
+        warm_start: bool | None = None,
         **solver_kwargs: Any,
     ) -> None:
         if on_step_error not in ("raise", "skip"):
@@ -267,10 +270,14 @@ class Stepper:
         # each step still solves on a per-step copy, but reset() loses its
         # pristine baseline and is disabled.
         self._copy_base = copy_base
-        self._warm_start = warm_start
         self._warm_values = False
         self._work_net = net.copy() if copy_base else net
         self._solver = resolve_solver(solver, backend=backend)
+        self._warm_start = (
+            getattr(self._solver, "benefits_from_warm_start", True)
+            if warm_start is None
+            else warm_start
+        )
         self._optimization_problem = optimization_problem
         self._timeseries_data = timeseries_data
         self._initial_state: dict = dict(initial_state) if initial_state else {}

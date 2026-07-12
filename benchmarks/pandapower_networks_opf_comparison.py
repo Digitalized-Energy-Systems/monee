@@ -62,7 +62,6 @@ import time
 import uuid
 
 import pandas as pd
-import scipy.io
 
 # Reuse the shared results dir, the MATPOWER exporter, and every piece of the
 # SimBench OPF benchmark that is network-source agnostic: the economic-dispatch
@@ -79,8 +78,8 @@ from simbench_opf_comparison import (
 )
 
 from monee import run_energy_flow_optimization
-from monee.io.from_pandapower import _strip_transformer_vector_group_shifts
-from monee.io.matpower import _mpc_from_mat, build_matpower_opf
+from monee.io.from_pandapower import strip_transformer_vector_group_shifts
+from monee.io.matpower import build_matpower_opf, read_mpc
 from monee.solver.casadi import CasADiSolver
 
 PANDAPOWER = "pandapower"
@@ -167,11 +166,11 @@ def _build_monee_opf(net, max_loading):
     tmp = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}.mat")
     to_mpc(net, init="flat", filename=tmp)
     try:
-        mpc = _mpc_from_mat(scipy.io.loadmat(tmp))
+        mpc = read_mpc(tmp)
         network, problem = build_matpower_opf(mpc, max_loading=max_loading)
         # Normalise transformer vector-group phase shifts (see the SimBench
         # benchmark / from_pandapower) so the flat-start AC NLP does not collapse.
-        _strip_transformer_vector_group_shifts(network)
+        strip_transformer_vector_group_shifts(network)
         return network, problem
     finally:
         os.remove(tmp)
