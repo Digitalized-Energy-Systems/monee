@@ -96,13 +96,9 @@ class Objective:
             return [0]
         selected_models = self._selected_models_link(network)
         if self._data_attacher is not None:
-<<<<<<< HEAD
             return [
                 self._calculator(_attach_data(self._data_attacher, selected_models))
             ]
-=======
-            return [self._calculator(_attach_data(self._data_attacher, selected_models))]
->>>>>>> e73c921ac18221e04197a438c7f0bddbd4f80afd
         return [self._calculator(selected_models)]
 
 
