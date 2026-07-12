@@ -794,3 +794,19 @@ def test_dt_h_invalid_raises():
     # WHEN / THEN
     with pytest.raises(ValueError, match="dt_h must be positive"):
         run(net, td, dt_h=0.0)
+
+
+def test_add_objective_data_by_name():
+    td = TimeseriesData()
+    td.add_objective_data_by_name("load1", "p_mw", [1, 2, 3])
+    assert td.child_name_data["load1"]["p_mw"] == [1, 2, 3]
+
+
+def test_id_data_properties():
+    td = TimeseriesData()
+    td.add_child_series("c1", "p_mw", [1, 2])
+    td.add_branch_series("b1", "on_off", [1, 0])
+    td.add_compound_series("cmp1", "x", [3, 4])
+    assert td.child_id_data["c1"]["p_mw"] == [1, 2]
+    assert td.branch_id_data["b1"]["on_off"] == [1, 0]
+    assert td.compound_id_data["cmp1"]["x"] == [3, 4]

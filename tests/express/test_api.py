@@ -204,3 +204,19 @@ def test_water_source_auto_node():
     assert result.success
 
     assert result is not None
+
+
+def test_create_el_branch():
+    net = mm.Network(mm.PowerGrid(name="power", sn_mva=1))
+    b0 = mx.create_bus(net, base_kv=20)
+    b1 = mx.create_bus(net, base_kv=20)
+    bid = mx.create_el_branch(
+        net,
+        b0,
+        b1,
+        mm.PowerLine(
+            length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1, max_i_ka=0.3
+        ),
+    )
+    assert bid is not None
+    assert net.branch_by_id(bid) is not None

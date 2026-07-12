@@ -8,7 +8,7 @@ import monee.model as mm
 from monee.model.core import Intermediate, Var
 from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.model.formulation.registry import attach_formulations
-from monee.problem.core import REGULATION_ATTR, OptimizationProblem
+from monee.problem.core import REGULATION_ATTR, Constraints, OptimizationProblem
 from monee.problem.economic_dispatch import create_economic_dispatch_problem
 from monee.problem.min_load_shedding import create_min_load_shedding_problem
 
@@ -121,3 +121,17 @@ def test_check_vm_bounds_vm_pu_under_nlp():
 def test_economic_dispatch_rejects_nonzero_min_line_loading():
     with pytest.raises(ValueError, match="bounds_lp"):
         create_economic_dispatch_problem(bounds_lp=(0.1, 1.0))
+
+
+def test_select_grids_returns_constraint():
+    constraint = Constraints().select_grids((mm.PowerGrid,))
+    assert constraint is not None
+
+
+def test_controllable_all_returns_self():
+    problem = OptimizationProblem()
+    assert problem.controllable_all(["p_mw"]) is problem
+
+
+def test_controllables_link_returns_callable():
+    assert callable(OptimizationProblem().controllables_link())

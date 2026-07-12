@@ -7,6 +7,7 @@ import monee.solver as ms
 from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.network.mes import create_monee_benchmark_net
 from monee.solver import PyomoSolver
+from monee.solver.core import SinglePeriodSolverProtocol
 
 BOUND_EL = ("vm_pu", 1, 0.5)
 BOUND_GAS = ("pressure_pu", 1, 0.5)
@@ -212,3 +213,7 @@ def test_monee_visu():
 
     assert isinstance(fig, go.Figure)
     assert len(fig.data) > 0
+
+
+def test_single_period_solver_protocol_importable():
+    assert isinstance(SinglePeriodSolverProtocol, type)

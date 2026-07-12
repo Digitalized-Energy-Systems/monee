@@ -1,4 +1,15 @@
+import monee.model as mm
 from monee.model.core import GenericModel, Node, component_list, model
+
+
+def test_tracked_is_var_alias():
+    assert mm.tracked is mm.Var
+
+
+def test_lower_returns_bound_value_or_passthrough():
+    assert mm.lower(mm.Var(5.0, min=2.0)) == 2.0
+    assert mm.lower(mm.Var(5.0)) == 5.0  # unbounded -> value
+    assert mm.lower(3.0) == 3.0  # plain number passes through
 
 
 def test_model_decorator():

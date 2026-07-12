@@ -235,3 +235,43 @@ def test_parallel_branches_have_distinct_tids():
     first_branch = net.get_branch_between(n0, n1, bid=0)
     second_branch = net.branch_by_id(second)
     assert first_branch.tid != second_branch.tid
+
+
+def _el_net_with_load(p_mw=5.0, q_mvar=1.0):
+    net = mm.Network(mm.PowerGrid(name="power", sn_mva=1))
+    net.node(
+        mm.Bus(base_kv=1),
+        child_ids=[net.child(mm.PowerLoad(p_mw, q_mvar))],
+        grid=mm.EL,
+    )
+    return net
+
+
+def test_child_type_queries():
+    net = _el_net_with_load()
+    node = net.nodes[0]
+    assert net.has_any_child_of_type(node, mm.PowerLoad) is True
+    assert net.has_any_child_of_type(node, mm.PowerGenerator) is False
+    childs = net.get_childs_by_type(node, mm.PowerLoad)
+    assert len(childs) == 1
+    assert isinstance(childs[0].model, mm.PowerLoad)
+
+
+def test_compound_of_returns_none_without_compounds():
+    net = _el_net_with_load()
+    assert net.compound_of(net.childs[0].id) is None
+
+
+def test_clear_childs():
+    net = _el_net_with_load()
+    assert len(net.childs) == 1
+    net.clear_childs()
+    assert len(net.childs) == 0
+    assert net.nodes[0].child_ids == []
+
+
+def test_statistics_counts_independent_models():
+    net = _el_net_with_load()
+    stats = net.statistics()
+    assert isinstance(stats, dict)
+    assert stats.get(mm.PowerLoad, 0) >= 1

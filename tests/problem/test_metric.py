@@ -4,7 +4,7 @@ import pytest
 
 import monee.express as mx
 import monee.model as mm
-from monee.problem.metric import GeneralResiliencePerformanceMetric
+from monee.problem.metric import GeneralResiliencePerformanceMetric, ResilienceMetric
 
 Q_SET_MW = 0.2
 
@@ -100,3 +100,29 @@ def test_bare_consuming_passive_hx_destroyed_counts_setpoint():
     )
     branch.ignored = True
     assert _heat_curtailed(net) == pytest.approx(Q_SET_MW)
+
+
+def test_resilience_metric_is_abstract():
+    with pytest.raises(TypeError):
+        ResilienceMetric()
+
+    class _Metric(ResilienceMetric):
+        def gather(self, network, step, **kwargs):
+            return step
+
+        def calc(self):
+            return 42
+
+    m = _Metric()
+    assert m.gather(None, 3) == 3
+    assert m.calc() == 42
+
+
+def test_calc_inv_negates_the_curtailment_tuple():
+    net, branch = _hx_net(Q_SET_MW)
+    branch.ignored = True  # curtailed heat load registers a non-zero metric
+    metric = GeneralResiliencePerformanceMetric()
+    normal = metric.calc(net, inv=False)
+    inverted = metric.calc(net, inv=True)
+    assert inverted == tuple(-x for x in normal)
+    assert normal[1] > 0  # (power, heat, gas) -> heat curtailment registered

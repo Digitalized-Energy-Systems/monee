@@ -1,7 +1,10 @@
+import types
+
 import networkx as nx
 import pytest
 
 import monee
+import monee.express as mx
 import monee.model as mm
 from monee import run_energy_flow, run_timeseries
 from monee.model import GasLinepack, LumpedThermalCapacitance
@@ -14,6 +17,7 @@ from monee.model.formulation import (
 )
 from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 from monee.network import generate_supply_return_mes_based_on_power_net
+from monee.network.mes import get_length
 from monee.problem.min_load_shedding import create_min_load_shedding_problem
 from monee.simulation.timeseries import TimeseriesData
 from monee.solver import GEKKOSolver
@@ -1018,3 +1022,22 @@ def test_generate_mes_storage_capabilities_timeseries():
             f"junction {jid} t_pu exceeded envelope: max={s.max():.4f}"
         )
     assert saw_junction_series, "no junction t_pu series recovered from result"
+
+
+def test_gas_hhv_constant():
+    from monee.network.mes import GAS_HHV_MJ_PER_KG as mes_gas_hhv
+
+    assert mes_gas_hhv == DEFAULT_GAS_HHV_MJ_PER_KG
+
+
+def test_get_length_fallbacks():
+    net = mm.Network(mm.PowerGrid(name="power", sn_mva=1))
+    b0 = mx.create_bus(net, base_kv=20, position=(53.0, 8.0))
+    b1 = mx.create_bus(net, base_kv=20, position=(53.1, 8.0))
+    b2 = mx.create_bus(net, base_kv=20)  # no position
+    b3 = mx.create_bus(net, base_kv=20)
+    no_len = types.SimpleNamespace(model=types.SimpleNamespace(length_m=None))
+    with_len = types.SimpleNamespace(model=types.SimpleNamespace(length_m=300))
+    assert get_length(net, no_len, b0, b1) > 0  # geodesic between positions
+    assert get_length(net, with_len, b0, b1) == 300.0  # explicit length wins
+    assert get_length(net, no_len, b2, b3, default_length=123) == 123.0  # no pos

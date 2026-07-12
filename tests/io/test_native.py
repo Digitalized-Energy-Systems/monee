@@ -6,9 +6,11 @@ import monee.model as mm
 from monee.io.native import (
     FORMAT_VERSION,
     PersistenceException,
+    _decode_values,
     load_to_network,
     native_dict_to_network,
     network_to_native_dict,
+    preprocess_dict,
     write_omef_network,
 )
 
@@ -620,3 +622,8 @@ def test_unserializable_public_attribute_raises():
     # WHEN / THEN
     with pytest.raises(PersistenceException):
         network_to_native_dict(pn)
+
+
+def test_preprocess_dict_delegates_to_decode():
+    sample = {"a": 1, "b": "x"}
+    assert preprocess_dict(sample) == _decode_values(sample)
