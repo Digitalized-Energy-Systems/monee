@@ -648,13 +648,8 @@ class PyomoMultiPeriodSolver:
             terminal_state,
             formulation,
             inject=_inject,
-<<<<<<< HEAD
             process_branches=lambda net_t, ignored_t: (
                 _single.process_equations_branches(pm, net_t, net_t.branches, ignored_t)
-=======
-            process_branches=lambda net_t, ignored_t: _single.process_equations_branches(
-                pm, net_t, net_t.branches, ignored_t
->>>>>>> e73c921ac18221e04197a438c7f0bddbd4f80afd
             ),
             sink_objective=lambda _ctx: None,
             add_equations=lambda eqs: _single._add_equations(pm, eqs),
