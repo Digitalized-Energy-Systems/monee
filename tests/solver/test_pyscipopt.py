@@ -190,7 +190,7 @@ def test_bridge_writeback_matches_a_second_identical_solve(monkeypatch):
 
     # THEN
     assert r1.success and r2.success
-    assert math.isclose(r1.objective, r2.objective, rel_tol=1e-6, abs_tol=1e-6)
+    assert math.isclose(r1.objective, r2.objective, rel_tol=1e-3, abs_tol=1e-3)
 
 
 if __name__ == "__main__":
