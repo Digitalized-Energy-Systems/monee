@@ -1,6 +1,7 @@
 """Multi-period optimization: build a single problem spanning T periods and
 solve in one shot. :class:`PeriodState` exposes live solver variables behind
-the same API as :class:`StepState`, so ``inter_step_equations`` works unchanged."""
+the same API as :class:`StepState`, so ``inter_temporal_equations`` (the hook
+that runs in both timeseries and multi-period) works unchanged."""
 
 from __future__ import annotations
 
@@ -39,6 +40,7 @@ from monee.simulation.timeseries import (
 # surface (the simulation layer renders the same kind of result tables).
 from monee.solver.core import (
     SolverResult,
+    _find_model,
     apply_child_overwrites,
     find_ignored_nodes,
     inject_vars,
@@ -104,11 +106,14 @@ def _prepare_period(
 
 
 def _find_component_var(net_t: Network, comp_id, attr: str):
-    """Return ``comp.model.attr`` for *comp_id* in *net_t*, or None."""
-    for comp in net_t.iter_all_components():
-        if comp.id == comp_id:
-            return getattr(comp.model, attr, None)
-    return None
+    """Return ``comp.model.attr`` for *comp_id* in *net_t*, or None. Resolves the
+    id through :func:`_find_model` so node/child id collisions pick the component
+    that actually carries *attr* - the same disambiguation the cross-period
+    coupling uses via :class:`PeriodState`."""
+    model = _find_model(net_t, comp_id, attr)
+    if model is None:
+        return None
+    return getattr(model, attr, None)
 
 
 def _extract_terminal_state(net_t: Network) -> dict:
@@ -435,7 +440,18 @@ def _assemble_two_pass(
         if terminal_state and t == steps - 1:
             for (comp_id, attr), target in terminal_state.items():
                 var = _find_component_var(net_t, comp_id, attr)
-                if var is not None:
+                if isinstance(var, (int, float)):
+                    # A plain constant would make ``var == target`` a Python bool
+                    # (a cryptic backend error or a silent tautology); only a
+                    # solver variable / expression can be pinned.
+                    _log.warning(
+                        "terminal_state target (%r, %r) is a constant, not a "
+                        "solver variable; the terminal constraint was skipped. "
+                        "Make the attribute controllable to pin it.",
+                        comp_id,
+                        attr,
+                    )
+                elif var is not None:
                     add_terminal(var, target)
 
     return net_copies
@@ -447,7 +463,8 @@ def _assemble_two_pass(
 class GekkoMultiPeriodSolver:
     """Multi-period optimizer on GEKKO/IPOPT. Two-pass: inject vars for all T
     periods, then assemble equations with a :class:`PeriodState` that sees all
-    periods so ``inter_step_equations`` can couple them freely."""
+    periods so ``inter_temporal_equations`` / ``inter_period_equations`` can
+    couple them freely."""
 
     def __init__(self, solver: int = 1):
         self._solver_int = solver
@@ -796,9 +813,10 @@ def run_multi_period(
     formulation=None,
 ) -> MultiPeriodResult:
     """Run a single-shot multi-period optimisation. Cross-period coupling goes
-    through the standard ``inter_step_equations`` protocol; ``TimeseriesData``
-    is applied per-period before equations are assembled. ``dt_h`` defaults to
-    1.0 hour when omitted; ``datetime_index`` overrides it."""
+    through the ``inter_temporal_equations`` and ``inter_period_equations``
+    protocols; ``TimeseriesData`` is applied per-period before equations are
+    assembled. ``dt_h`` defaults to 1.0 hour when omitted; ``datetime_index``
+    overrides it (a warning is logged if both are given)."""
     solver = resolve_multi_period_solver(solver, backend=backend)
 
     _validate_state_keys(initial_state, network, "initial_state")

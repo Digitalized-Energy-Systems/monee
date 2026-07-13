@@ -886,7 +886,7 @@ class CasADiMultiPeriodSolver:
         timeseries_data=None,
         steps: int = None,
         optimization_problem=None,
-        dt_h=1.0,
+        dt_h=None,
         datetime_index=None,
         initial_state: dict = None,
         terminal_state: dict = None,
@@ -972,7 +972,17 @@ class CasADiMultiPeriodSolver:
             if terminal_state and t == steps - 1:
                 for (comp_id, attr), target in terminal_state.items():
                     var = _find_component_var(net_t, comp_id, attr)
-                    if var is not None:
+                    if isinstance(var, (int, float)):
+                        # A plain constant would make ``var == target`` a Python
+                        # bool; only a solver variable / expression can be pinned.
+                        _log.warning(
+                            "terminal_state target (%r, %r) is a constant, not "
+                            "a solver variable; the terminal constraint was "
+                            "skipped. Make the attribute controllable to pin it.",
+                            comp_id,
+                            attr,
+                        )
+                    elif var is not None:
                         m.Equation(var == target)
 
         # Assemble and solve the whole horizon as one NLP.

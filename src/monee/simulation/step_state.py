@@ -1,6 +1,8 @@
 """State carriers for timeseries (StepState - floats) and multi-period
 (PeriodState - live solver vars). Both expose the same ``get(comp_id, attr)`` /
-``dt_h`` API so ``inter_step_equations`` works in both modes unchanged.
+``dt_h`` API so ``inter_temporal_equations`` works in both modes unchanged
+(``inter_step_equations`` is timeseries-only; ``inter_period_equations`` is
+multi-period-only).
 
 The implementations now live in :mod:`monee.solver.core` (the low-level layer
 both solver backends and the simulation engine depend on) to keep the

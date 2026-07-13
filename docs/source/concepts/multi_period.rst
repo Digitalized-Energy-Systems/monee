@@ -183,7 +183,7 @@ containing one solved network copy per period.
          import pandas as pd
 
          idx = pd.date_range("2024-06-01 00:00", periods=6, freq="h")
-         result = run_multi_period(net, td, dt_h=1.0, datetime_index=idx)
+         result = run_multi_period(net, td, datetime_index=idx)
 
          soc = result.get_result_for_id(bat, "e_mwh")
          print(soc.index)   # DatetimeIndex
@@ -227,7 +227,9 @@ Variable step sizes
 ====================
 
 Steps do not need to be uniform.  Pass a list or derive durations from a
-``DatetimeIndex``:
+``DatetimeIndex``. ``dt_h`` is always in hours. When both ``dt_h`` and
+``datetime_index`` are supplied, the durations come from ``datetime_index`` and
+``dt_h`` is ignored (a warning is logged):
 
 .. code-block:: python
 
@@ -280,14 +282,41 @@ the first few steps before re-solving with an updated forecast:
 terminal state of each window automatically becomes the ``initial_state`` of
 the next, ensuring SoC continuity across window boundaries.
 
+.. note::
+
+   The ``objective`` returned by ``run_mpc`` is a sum over the rolling windows
+   and overcounts when ``execution_steps`` is less than ``horizon``, so it is
+   not directly comparable to a full-horizon objective. A ``terminal_state``
+   passed to ``run_mpc`` anchors only the final window (the global horizon end);
+   intermediate windows are left free at their end so they are not
+   over-constrained.
+
 ----
 
 Solver backends
 ===============
 
+The default backend is CasADi when the ``casadi`` package is installed. It
+builds the continuous NLP in process and falls back to GEKKO automatically when
+casadi is absent, so an explicit ``solver=`` is only needed to override that
+choice (for example to force Pyomo for an integer problem).
+
 .. tab-set::
 
-   .. tab-item:: GEKKO
+   .. tab-item:: CasADi (default)
+
+      .. code-block:: python
+
+         from monee.simulation import run_multi_period
+
+         # CasADi is selected automatically when installed; force it with backend=
+         result = run_multi_period(net, td, backend="casadi")
+
+      In-process IPOPT for smooth NLP problems. Selected automatically when
+      casadi is installed, so passing ``backend`` explicitly is rarely
+      necessary.
+
+   .. tab-item:: GEKKO (fallback)
 
       .. code-block:: python
 
@@ -295,8 +324,8 @@ Solver backends
 
          result = run_multi_period(net, td, solver=GekkoMultiPeriodSolver())
 
-      Best for smooth NLP problems without integer variables.  Ships with
-      its own IPOPT binaries, no extra installation needed.
+      Smooth NLP problems without integer variables. Ships with its own IPOPT
+      binaries and is the automatic fallback when casadi is not installed.
 
    .. tab-item:: Pyomo
 
@@ -306,17 +335,17 @@ Solver backends
 
          result = run_multi_period(net, td, solver=PyomoMultiPeriodSolver())
 
-      Required for MILP / MIQCP problems: on/off switching, islanding, or
-      networks with binary variables.  Requires an external solver such as
-      SCIP, Gurobi, or CBC.
+      Required for MILP or MIQCP problems: on/off switching, islanding, or
+      networks with binary variables. Requires an external solver such as SCIP
+      (open source) or Gurobi (commercial).
 
 ----
 
 Two-pass assembly
 =================
 
-Both GEKKO and Pyomo multi-period solvers use a two-pass approach to build
-the joint problem efficiently:
+All three multi-period solvers (CasADi, GEKKO, and Pyomo) use a two-pass
+approach to build the joint problem efficiently:
 
 .. code-block:: text
 

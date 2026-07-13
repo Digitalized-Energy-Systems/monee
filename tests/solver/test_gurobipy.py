@@ -343,6 +343,69 @@ def test_misocp_optimization_matches_pyomo_gurobi():
 
 
 @requires_gurobi
+def test_chphg_islanded_heat_side_degrades_without_leaking_model_var(monkeypatch):
+    """Regression: when a CHPHG's heat unit (its ``SubHG`` child) is deactivated
+    or its heat node islanded, the solver NaN-injects the SubHG, leaving
+    ``sub_hg.q_mw_heat`` a placeholder model ``Var`` rather than a live backend
+    variable. ``CHPHGControlNode`` reaches that child through a captured
+    reference (not the ignore-filtered branch inputs the sibling P2H/G2H control
+    nodes use), so it used to splice the model ``Var`` straight into a gurobipy
+    constraint and crash the build with ``unsupported operand type(s) for -:
+    'LinExpr' and 'Var'``. It must instead degrade to zero heat output."""
+    import monee
+    from monee.model.core import Var
+    from monee.model.multi import CHPHG, CHPHGControlNode, SubHG
+    from monee.network import create_restoration_benchmark
+    from monee.problem.min_load_shedding import create_min_load_shedding_problem
+    from monee.solver.gurobipy import GurobipySolver
+
+    # GIVEN a benchmark with CHPHG units, one of them with its heat unit cut.
+    net = create_restoration_benchmark(misocp=True)
+    chp = next(c for c in net.compounds if isinstance(c.model, CHPHG))
+    sub = next(sc for sc in chp.subcomponents if isinstance(sc.model, SubHG))
+
+    seen = {"degraded": 0}
+    orig_eqs = CHPHGControlNode.equations
+
+    def spy(self, *args, **kwargs):
+        # A model Var here means the SubHG was NaN-injected (heat side gone).
+        if isinstance(self._sub_hg.q_mw_heat, Var):
+            seen["degraded"] += 1
+        return orig_eqs(self, *args, **kwargs)
+
+    monkeypatch.setattr(CHPHGControlNode, "equations", spy)
+
+    problem = create_min_load_shedding_problem(
+        bounds_vm=(0.5, 1.5),
+        bounds_pressure=(0.5, 1.5),
+        bounds_t=(0.5, 1.5),
+        include_ext_grids=True,
+        include_storages=False,
+        lex_objectives=True,
+    )
+    work = net.copy()
+    work.deactivate(next(c for c in work.all_components() if c.id == sub.id))
+
+    # WHEN the model is built (equations run during build, before optimize).
+    try:
+        monee.run_energy_flow_optimization(
+            work,
+            optimization_problem=problem,
+            solver=GurobipySolver(params={"MIPGap": 1e-4, "TimeLimit": 10}),
+        )
+    except TypeError as exc:  # the exact pre-fix failure
+        pytest.fail(f"CHPHG heat-side islanding leaked a model Var into the build: {exc}")
+    except Exception:
+        # Size-limited licence / infeasibility are unrelated to this regression;
+        # the build (where the leak lived) already ran the control-node equations.
+        pass
+
+    # THEN the islanded unit took the degraded (heat-free) path — i.e. the build
+    # reached the previously-crashing code with a NaN-injected SubHG and survived.
+    assert seen["degraded"] >= 1
+
+
+@requires_gurobi
 def test_nonconvex_miqcqp_solves():
     from monee.solver.gurobipy import GurobipySolver
 

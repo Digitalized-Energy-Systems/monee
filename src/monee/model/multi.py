@@ -753,22 +753,38 @@ class CHPHGControlNode(MultiGridNodeModel, Junction, Bus):
         self.pressure_pa = PostProcess(
             lambda v, ref=gas_grid.pressure_ref_pa: v.pressure_pu * ref
         )
-        return [
+        eqs = [
             junction_mass_flow_balance(gas_eqs),
             power_balance_equation(power_eqs[0]),
             power_balance_equation(power_eqs[1]),
-            self._sub_hg.q_mw_heat
-            == -self.efficiency_heat
-            * self.gas_mass_flow_kgs
-            * self.regulation
-            * (KGPS_KWHPERKG_TO_MW * self._hhv),
             self.el_mw
             == -self.efficiency_power
             * self.gas_mass_flow_kgs
             * self.regulation
             * (KGPS_KWHPERKG_TO_MW * self._hhv),
-            self.heat_mw == self._sub_hg.q_mw_heat,
         ]
+        # The heat side lives on a *separate* heat node reached through the
+        # captured ``self._sub_hg`` reference, not the ignore-filtered branch
+        # inputs the power/gas rows use. If that node is islanded, the solver
+        # NaN-injects the SubHG, leaving ``q_mw_heat`` a placeholder model
+        # ``Var`` rather than a live backend variable; splicing it into a
+        # constraint mixes an un-injected model Var with backend expressions and
+        # the solve crashes. Mirror Gas/PowerToHeatControlNode: when the heat
+        # unit is gone, drop the coupling rows and emit zero heat output.
+        if isinstance(self._sub_hg.q_mw_heat, Var):
+            eqs.append(self.heat_mw == 0)
+        else:
+            eqs.extend(
+                [
+                    self._sub_hg.q_mw_heat
+                    == -self.efficiency_heat
+                    * self.gas_mass_flow_kgs
+                    * self.regulation
+                    * (KGPS_KWHPERKG_TO_MW * self._hhv),
+                    self.heat_mw == self._sub_hg.q_mw_heat,
+                ]
+            )
+        return eqs
 
 
 @model

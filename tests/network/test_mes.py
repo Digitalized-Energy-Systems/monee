@@ -17,6 +17,7 @@ from monee.model.formulation import (
 )
 from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 from monee.network import generate_supply_return_mes_based_on_power_net
+from monee.network.mes import GAS_HHV_MJ_PER_KG as mes_gas_hhv
 from monee.network.mes import get_length
 from monee.problem.min_load_shedding import create_min_load_shedding_problem
 from monee.simulation.timeseries import TimeseriesData
@@ -1025,8 +1026,6 @@ def test_generate_mes_storage_capabilities_timeseries():
 
 
 def test_gas_hhv_constant():
-    from monee.network.mes import GAS_HHV_MJ_PER_KG as mes_gas_hhv
-
     assert mes_gas_hhv == DEFAULT_GAS_HHV_MJ_PER_KG
 
 
