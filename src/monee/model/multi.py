@@ -115,8 +115,10 @@ class _RegulatedCompound:
 
     def set_active(self, activation_flag):
         if activation_flag:
-            self._active = True
-            self._restore_controls()
+
+            if not self._active:
+                self._active = True
+                self._restore_controls()
         else:
             # A repeated deactivate must not clobber the saved regulation
             # with the already-zeroed value.
