@@ -63,6 +63,7 @@ from .quadratic_convex.cq_with_switch import (
     QCElectricityBranchFormulation,
     QCElectricityNodeFormulation,
 )
+from .quadratic_convex.qc_mixed_int import (MIQCBranchFormulation, MIQCNodeFormulation)
 
 def combine(*network_formulations: NetworkFormulation) -> NetworkFormulation:
     """Merge per-sector :class:`NetworkFormulation` objects into one apply.
@@ -113,6 +114,13 @@ EL_QC_FORMULATION = NetworkFormulation(
         GenericPowerBranch: QCElectricityBranchFormulation()
     },
     node_type_to_formulations={Bus: QCElectricityNodeFormulation()},
+)
+
+EL_MIQC_FORMULATION = NetworkFormulation(
+    branch_type_to_formulations={
+        GenericPowerBranch: MIQCBranchFormulation()
+    },
+    node_type_to_formulations={Bus: MIQCNodeFormulation()},
 )
 # ---------------------------------------------------------------------------
 # Gas

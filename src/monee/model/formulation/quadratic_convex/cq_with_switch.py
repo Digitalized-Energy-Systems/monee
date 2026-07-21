@@ -147,7 +147,7 @@ class QCElectricityBranchFormulation(BranchFormulation):
                 b_branch=b,
                 tap=branch.tap,
                 shift=branch.shift,
-                g_to=branch.g_fr_pu, #todo: ist das wirklich so richtig? in branch attributen aber kein to wert aktuell?
+                g_to=branch.g_to_pu, #todo: ist das wirklich so richtig? in branch attributen aber kein to wert aktuell?
                 on_off=branch.on_off,
             ),
             opfmodel.int_flow_to_q(
@@ -159,7 +159,7 @@ class QCElectricityBranchFormulation(BranchFormulation):
                 b_branch=b,
                 tap=branch.tap,
                 shift=branch.shift,
-                b_to=branch.b_fr_pu,#todo ist das wirklich richtig?
+                b_to=branch.b_to_pu,#todo ist das wirklich richtig?
                 on_off=branch.on_off,
             ),
             opfmodel.current_flow_equation(

@@ -1,6 +1,7 @@
 import pandapower as pp
 import pandas as pd
 import numpy as np
+import math
 from monee import mx, run_energy_flow, run_energy_flow_optimization
 import monee.model as mm
 #from monee.problem import create_load_shedding_optimization_problem
@@ -18,8 +19,9 @@ from monee import run_energy_flow, run_timeseries
 from monee.model import GasLinepack, LumpedThermalCapacitance
 from monee.model.core import value as mvalue
 from monee.model.formulation import (
-    EL_MISOCP_FORMULATION,
+    EL_NLP_FORMULATION,
     EL_QC_FORMULATION,
+    EL_MIQC_FORMULATION,
 
 )
 from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
@@ -344,7 +346,6 @@ def pp_create_66bus_high_meshed():
     return net
 
 def monee_create_66bus_high_meshed():
-
     net = mx.create_multi_energy_network()
     buses = [mx.create_bus(net) for _ in range(66)]
     mx.create_ext_power_grid(net, buses[0])
@@ -664,7 +665,7 @@ def boxplot_comparison(lines1_mismatches, lines2_mismatches):
     plt.ylim(-100, 100)
     plt.show()
 
-def run_result_comparison(ac_result,qc_result,component_name, id_col="id", label_ac="AC",label_qc="QC",tol=None, exclude_cols=None,):
+def run_column_comparison(ac_result,qc_result,component_name, id_col="id", label_ac="NLP_AC",label_qc="QC",tol=None, exclude_cols=None,):
     if exclude_cols is None:
         exclude_cols = [
             "active",
@@ -675,11 +676,11 @@ def run_result_comparison(ac_result,qc_result,component_name, id_col="id", label
         ]
 
     ac_tables = solver_result_to_tables(ac_result)
-    print(f"AC tables for {component_name}: \n {ac_tables[component_name]}")
+    print(f"NLP_AC tables for {component_name}: \n {ac_tables[component_name]}")
     qc_tables = solver_result_to_tables(qc_result)
     print(f"QC tables for {component_name}: \n {qc_tables[component_name]}")
     if component_name not in ac_tables:
-        raise KeyError(f"{component_name} not found in AC result. Available: {list(ac_tables)}")
+        raise KeyError(f"{component_name} not found in NLP_AC result. Available: {list(ac_tables)}")
 
     if component_name not in qc_tables:
         raise KeyError(f"{component_name} not found in QC result. Available: {list(qc_tables)}")
@@ -725,6 +726,69 @@ def run_result_comparison(ac_result,qc_result,component_name, id_col="id", label
         plt.grid(True)
         plt.tight_layout()
         plt.show()
+
+def run_result_comparison(ac_result, qc_result, component_name, id_col="id",
+                          label_ac="NLP_AC", label_qc="QC", tol=None,
+                          exclude_cols=None, add_voltage_diagnostics=True):
+    exclude_cols = exclude_cols or ["active", "independent", "ignored", "backup", "on_off", "x_ohm_per_m", "r_ohm_per_m", "length_m", "max_i_ka", "shift", "tab", "base_kv", "node_id"  ]
+    tables = [solver_result_to_tables(r) for r in (ac_result, qc_result)]
+
+    for label, t in zip((label_ac, label_qc), tables):
+        if component_name not in t:
+            raise KeyError(f"{component_name} not found in {label}. Available: {list(t)}")
+
+    ac, qc = [t[component_name].copy() for t in tables]
+    print(f"{label_ac} tables for {component_name}:\n{ac}")
+    print(f"{label_qc} tables for {component_name}:\n{qc}")
+
+    if id_col in ac and id_col in qc:
+        ac, qc = ac.set_index(id_col), qc.set_index(id_col)
+    ac, qc = ac.align(qc, join="inner", axis=0)
+    gap = None
+
+    if add_voltage_diagnostics:
+        if "vm_pu" in ac:
+            ac["vm_pu_squared_exact"] = ac["vm_pu"] ** 2
+        if "vm_pu" in qc:
+            qc["vm_pu_squared_exact"] = qc["vm_pu"] ** 2
+        if "vm_pu" in ac and "vm_pu_squared" in qc:
+            ac["vm_pu_squared_comparison"] = ac["vm_pu"] ** 2
+            qc["vm_pu_squared_comparison"] = qc["vm_pu_squared"]
+        if {"vm_pu", "vm_pu_squared"} <= set(qc):
+            gap = qc["vm_pu_squared"] - qc["vm_pu"] ** 2
+            print(f"\nQC voltage-square gap:\n{gap}")
+            print("Maximum absolute gap:", gap.abs().max())
+            print("Minimum gap:", gap.min())
+
+    cols = [c for c in ac.columns.intersection(qc.columns)
+            if c not in exclude_cols
+            and pd.api.types.is_numeric_dtype(ac[c])
+            and pd.api.types.is_numeric_dtype(qc[c])]
+    if tol is not None:
+        cols = [c for c in cols if ((ac[c] - qc[c]).abs() > tol).any()]
+    if not cols:
+        print(f"No numeric columns to plot for {component_name}.")
+        return
+
+    x = range(len(ac))
+    for c in cols:
+        d = qc[c] - ac[c]
+        print(f"\n{component_name} — {c}: max={d.abs().max()}, mean={d.abs().mean()}")
+        plt.figure(figsize=(10, 5))
+        plt.scatter(x, ac[c], label=label_ac, marker="o")
+        plt.scatter(x, qc[c], label=label_qc, marker="x")
+        plt.title(f"{component_name} — {c}: {label_ac} vs {label_qc}")
+        plt.xlabel(component_name); plt.ylabel(c)
+        plt.xticks(x, ac.index, rotation=45)
+        plt.legend(); plt.grid(); plt.tight_layout(); plt.show()
+
+    if gap is not None:
+        plt.figure(figsize=(10, 5))
+        plt.scatter(x, gap); plt.axhline(0, linestyle="--")
+        plt.title(f"{component_name} — QC voltage-square gap")
+        plt.xlabel(component_name); plt.ylabel("vm_pu_squared - vm_pu**2")
+        plt.xticks(x, gap.index, rotation=45)
+        plt.grid(); plt.tight_layout(); plt.show()
 def solver_result_to_tables(result):
     tables = {}
 
@@ -788,8 +852,8 @@ def find_columns_more_than_percent_different(table1, table2, tol=0.05, id_col="i
     return different_cols
 
 
-def compare_extracted_tables_more_than_percent( AC_result,QC_result,tol=0.05,id_col="id"):
-    ac_tables = solver_result_to_tables(AC_result)
+def compare_extracted_tables_more_than_percent( MISCOP_result,QC_result,tol=0.05,id_col="id"):
+    ac_tables = solver_result_to_tables(MISCOP_result)
     qc_tables = solver_result_to_tables(QC_result)
     comparison = {}
     common_table_names = ac_tables.keys() & qc_tables.keys()
@@ -825,25 +889,25 @@ def compare_extracted_tables_more_than_percent( AC_result,QC_result,tol=0.05,id_
 
     return comparison
 #PP_net = PP_create_two_line_power_example()
-print("--------------Pandapower AC--------------------------")
-PP_net = pp_create_66bus_high_meshed()
-PP_results = PP_test_power_network(PP_net, AC = True, show_results = False)
+#print("--------------Pandapower AC--------------------------")
+#PP_net = pp_create_66bus_high_meshed()
+#PP_results = PP_test_power_network(PP_net, AC = True, show_results = False)
 print("--------------Monee AC--------------------------")
-monee_net_MISOCP = monee_create_three_string_network()
-monee_net_MISOCP.apply_formulation(EL_MISOCP_FORMULATION)
-monee_result_MISOCP = monee_test_power_network(monee_net_MISOCP, show_results = False)
+monee_net_NLP_AC = monee_create_11bus_low_meshed()
+monee_net_NLP_AC.apply_formulation(EL_NLP_FORMULATION)
+monee_result_NLP_AC = monee_test_power_network(monee_net_NLP_AC, show_results = False)
 #For result table comparison
 
 print("--------------Monee QC--------------------------")
-monee_net_QC = monee_create_three_string_network()
+monee_net_QC = monee_create_11bus_low_meshed()
 monee_net_QC.apply_formulation(EL_QC_FORMULATION)
 monee_result_QC = monee_test_power_network(monee_net_QC, show_results = False)
 #For result table comparison
 
-run_result_comparison(monee_result_MISOCP, monee_result_QC, "Bus")
-run_result_comparison(monee_result_MISOCP, monee_result_QC, "PowerLine")
-run_result_comparison(monee_result_MISOCP, monee_result_QC, "PowerLoad")
-run_result_comparison(monee_result_MISOCP, monee_result_QC, "PowerGenerator")
+run_result_comparison(monee_result_NLP_AC, monee_result_QC, "Bus")
+run_result_comparison(monee_result_NLP_AC, monee_result_QC, "PowerLine")
+run_result_comparison(monee_result_NLP_AC, monee_result_QC, "PowerLoad")
+run_result_comparison(monee_result_NLP_AC, monee_result_QC, "PowerGenerator")
 #column_comparison = compare_extracted_tables_more_than_percent(monee_result_AC, monee_result_QC)
 #print(column_comparison)
 '''
@@ -874,12 +938,4 @@ lines1_mismatches , lines2_mismatches = compare_monee_results(monee_opf_result_Q
 plot_column_compare(lines1_mismatches, lines2_mismatches)
 boxplot_comparison(lines1_mismatches, lines2_mismatches)
 '''
-#todo plot voltages against each other
-#todo look at current calculation (nur untere bound definiert, ist nur untere bound im paper oder fehlt da was?) -> im paper nur untere bound
-# ggf pyomo mit gurobi statt gekko
-# Frage: branch.i_from_ka und to_ka in Ac, fehlt da nicht eine Wurzel für tatsächliche Crrent?
-# todo voltage fehlt da ein faktor? je kleiner desto näher ist QC an AC
-# in AC wird nicht mit squared gerechnet, gleich in
-# mit development mergen (da ist wurzel in current eingefügut )
 
-# Frage: in CQ with swithc line 150 und 162, g_to und b_to mit g_fr_pu ersetzt?
