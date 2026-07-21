@@ -110,6 +110,7 @@ Constructing a Stepper
        initial_state=None,           # {(component_id, attr): float}
        on_step_error="raise",        # or "skip"
        max_history=None,             # retain only the last N steps
+       warm_start=True,              # previous solution seeds each solve
        **solver_kwargs,              # forwarded to every solver.solve(...)
    )
 
@@ -139,6 +140,50 @@ The Stepper never mutates the base network: every step works on a fresh
 ``net.copy()``. After a successful solve the result network is pushed into
 the persistent ``StepState``, which is how storage, linepack, and LTC state
 carry across calls.
+
+By default each successful step's solved values are also carried into the
+Stepper's working copy, so the next solve starts from the previous solution
+instead of the base network's initial values. On the CasADi backend such
+solves additionally run with IPOPT warm start options (a small initial
+barrier), which typically cuts the iteration count by half or more on
+repeated, similar steps. Islanded components keep their last solved values,
+so a component that rejoins later starts from a sane point. Pass
+``warm_start=False`` to solve every step from the base network's initial
+values instead.
+
+The default follows the backend: warm starting is on for CasADi, GEKKO and
+Pyomo, but off for the gurobipy backend, where seeding ``Var.Start`` from
+the previous solution measured neutral (Gurobi's per step cost is presolve
+and branching, which a start vector does not touch). Pass
+``warm_start=True`` explicitly to enable it there anyway.
+
+Note that with ``copy_base=False`` the working copy is the caller's live
+network, so the default warm start writes solved values into it after every
+successful step; pass ``warm_start=False`` there if the network must stay
+strictly caller-owned.
+
+On large networks using the smooth gas and heat NLP formulations (several
+hundred nodes, such as the simbench based MES from the test suite) the
+default IPOPT warm start options can backfire: iteration counts roughly
+double compared to cold starts, because the previous solution sits on the
+degenerate bounds of the pos/neg flow splits. For such networks either pass
+``warm_start=False``, or keep the value carry-over but soften the warm
+options per solver instance:
+
+.. code-block:: python
+
+   from monee.solver import CasADiSolver
+
+   solver = CasADiSolver(solver_options={
+       "ipopt.warm_start_init_point": "no",
+       "ipopt.mu_init": 1e-5,
+   })
+   c = Stepper(net, solver=solver)
+
+This measured about 1.4x faster than cold starts on the simbench MES, at
+the cost of occasional failed steps (each self-heals with a flat start
+retry) and warm results only being feasible to the warm tolerance rather
+than converging as tightly as cold ones.
 
 ----
 

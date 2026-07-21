@@ -78,9 +78,14 @@ def _lazy_esdl():
 
 
 def _walk_assets(area):
-    """Yield every asset in *area* and its nested sub-areas, depth-first."""
+    """Yield every asset in *area* and its nested sub-areas, depth-first.
+
+    Container assets (e.g. AbstractBuilding) can hold assets themselves, so
+    each yielded asset is also recursed into.
+    """
     for asset in _get(area, "asset", []) or []:
-        yield from asset
+        yield asset
+        yield from _walk_assets(asset)
     for sub_area in _get(area, "area", []) or []:
         yield from _walk_assets(sub_area)
 
@@ -185,6 +190,20 @@ _HEAT_PRODUCER = {"ResidualHeatSource", "GeothermalSource", "HeatProducer"}
 _GAS_DEMAND = {"GasDemand"}
 _GAS_PRODUCER = {"GasProducer"}
 _CONVERSION = {"CHP", "HeatPump", "PowerToGas", "Electrolyzer", "GasHeater"}
+_CHILD_CLASSES = (
+    _EL_DEMAND
+    | _EL_PRODUCER
+    | _HEAT_DEMAND
+    | _HEAT_PRODUCER
+    | _GAS_DEMAND
+    | _GAS_PRODUCER
+)
+
+# kind -> (pipe model, grid, report counter attribute)
+_PIPE_BY_KIND = {
+    GAS: (GasPipe, mm.GAS, "gas_pipes"),
+    HEAT: (WaterPipe, mm.WATER, "heat_pipes"),
+}
 
 
 def _power_mw(asset) -> float:
@@ -221,28 +240,19 @@ def _add_transport(asset, kind, net, dsu, node_of_group, report):
             name=name,
         )
         report.el_branches += 1
-    elif kind == GAS:
+    elif kind in _PIPE_BY_KIND:
+        pipe_cls, grid, counter = _PIPE_BY_KIND[kind]
         diameter = _num(_get(asset, "innerDiameter"), _DEFAULT_PIPE_DIAMETER_M)
         net.branch(
-            GasPipe(diameter_m=diameter or _DEFAULT_PIPE_DIAMETER_M, length_m=length_m),
-            from_node_id=a,
-            to_node_id=b,
-            grid=mm.GAS,
-            name=name,
-        )
-        report.gas_pipes += 1
-    elif kind == HEAT:
-        diameter = _num(_get(asset, "innerDiameter"), _DEFAULT_PIPE_DIAMETER_M)
-        net.branch(
-            WaterPipe(
+            pipe_cls(
                 diameter_m=diameter or _DEFAULT_PIPE_DIAMETER_M, length_m=length_m
             ),
             from_node_id=a,
             to_node_id=b,
-            grid=mm.WATER,
+            grid=grid,
             name=name,
         )
-        report.heat_pipes += 1
+        setattr(report, counter, getattr(report, counter) + 1)
 
 
 def _add_child(asset, cls, net, dsu, node_of_group, report):
@@ -315,14 +325,7 @@ def esdl_system_to_network(es):
         elif cls in _CONVERSION:
             # Multi-carrier coupling -> monee compound (CHP/PowerToHeat/...).
             report.skip(f"{cls} conversion asset (coupling TODO)")
-        elif (
-            cls in _EL_DEMAND
-            or cls in _EL_PRODUCER
-            or cls in _HEAT_DEMAND
-            or cls in _HEAT_PRODUCER
-            or cls in _GAS_DEMAND
-            or cls in _GAS_PRODUCER
-        ):
+        elif cls in _CHILD_CLASSES:
             _add_child(asset, cls, net, dsu, node_of_group, report)
         else:
             report.skip(f"{cls} (unmapped asset type)")

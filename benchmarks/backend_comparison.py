@@ -74,6 +74,7 @@ from monee import (
     run_energy_flow_optimization,
     run_timeseries,
 )
+from monee.io.from_pandapower import strip_transformer_vector_group_shifts
 from monee.io.matpower import read_matpower_case
 from monee.model import Network, Var
 from monee.model.branch import GenericPowerBranch
@@ -128,6 +129,12 @@ def _mnet(loader):
     to_mpc(net, init="flat", filename=tmp)
     m = read_matpower_case(tmp)
     os.remove(tmp)
+    # Normalise transformer vector-group phase shifts that to_mpc exports
+    # (e.g. mv_oberrhein's 150 degree shift): a lone shift across one branch
+    # collapses the flat-start AC NLP onto the spurious low-voltage root, which
+    # both backends then fail to recover from. from_pandapower_net strips these;
+    # the matpower bridge does too here.
+    strip_transformer_vector_group_shifts(m)
     return m
 
 

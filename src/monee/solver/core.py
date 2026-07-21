@@ -1,5 +1,7 @@
+import functools
 import logging
 import math
+import operator
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from types import SimpleNamespace
@@ -139,12 +141,21 @@ class SolverResult:
                     return df[mask].iloc[0]
         raise KeyError(component_id)
 
+    def _objective_label(self) -> str:
+        if self.objective is not None and abs(self.objective) > 0.0:
+            return f"objective = {self.objective:.6g}"
+        return ""
+
+    def _title(self) -> str:
+        title = "SolverResult"
+        label = self._objective_label()
+        if label:
+            title += f"  ({label})"
+        return title
+
     def __repr__(self) -> str:
         SEP = "─" * 68
-        title = "SolverResult"
-        if self.objective is not None and abs(self.objective) > 0.0:
-            title += f"  (objective = {self.objective:.6g})"
-        lines = [title, SEP]
+        lines = [self._title(), SEP]
         for type_name, df in self.dataframes.items():
             n = len(df)
             vis = _display_df(df).drop(columns=["id", "node_id"], errors="ignore")
@@ -164,11 +175,8 @@ class SolverResult:
 
     def __str__(self) -> str:
         """Full per-type table dump (``print(result)``); ``repr`` gives the summary."""
-        title = "SolverResult"
-        if self.objective is not None and abs(self.objective) > 0.0:
-            title += f"  (objective = {self.objective:.6g})"
         SEP = "─" * 68
-        lines = [title]
+        lines = [self._title()]
         for type_name, df in self.dataframes.items():
             vis = _display_df(df)
             n = len(vis)
@@ -183,10 +191,10 @@ class SolverResult:
 
     def _repr_html_(self) -> str:
         obj_extra = ""
-        if self.objective is not None and abs(self.objective) > 0.0:
+        label = self._objective_label()
+        if label:
             obj_extra = (
-                f" &nbsp;<span style='color:#888;font-weight:normal'>"
-                f"objective = {self.objective:.6g}</span>"
+                f" &nbsp;<span style='color:#888;font-weight:normal'>{label}</span>"
             )
         sections = []
         for type_name, df in self.dataframes.items():
@@ -255,6 +263,17 @@ class SolverInterface(ABC):
         Concrete backends set ``_solver_name``; ``None`` when unknown."""
         return getattr(self, "_solver_name", None)
 
+    #: Whether seeding solves with the previous solution speeds this backend
+    #: up. Drivers use it as the default for their warm-start behavior (the
+    #: Stepper's ``warm_start=None``); an explicit user choice always wins.
+    benefits_from_warm_start: bool = True
+
+    def set_warm_start_hint(self, active: bool) -> None:
+        """Declare whether the next solve's variable values are a previous
+        solution (set by drivers like the Stepper before each solve). Default
+        no-op; backends that tune their solver for a warm start override it
+        (CasADi switches IPOPT to warm-start options)."""
+
     @abstractmethod
     def solve(
         self,
@@ -300,7 +319,7 @@ class SolverInterface(ABC):
             branch.model.init(branch.grid)
 
     @staticmethod
-    def mark_temporal_components(network, ignored_nodes: set) -> None:  # NOSONAR
+    def mark_temporal_components(network, ignored_nodes: set) -> None:
         """Set ``_temporal_active`` on every model carrying a temporal method,
         so static-only constraints can be suppressed when coupling is active."""
         _temporal_methods = frozenset(
@@ -310,28 +329,27 @@ class SolverInterface(ABC):
                 "inter_period_equations",
             )
         )
-        for node in network.nodes:
-            if node.id in ignored_nodes or node.ignored:
-                continue
-            if any(hasattr(node.model, m) for m in _temporal_methods):
-                node.model._temporal_active = True
-            for child in network.childs_by_ids(node.child_ids):
-                if child.ignored:
-                    continue
-                if any(hasattr(child.model, m) for m in _temporal_methods):
-                    child.model._temporal_active = True
-        for branch in network.branches:
-            if branch.ignored:
-                continue
-            if any(hasattr(branch.model, m) for m in _temporal_methods):
-                branch.model._temporal_active = True
-        for compound in network.compounds:
-            if compound.ignored:
-                continue
-            if any(hasattr(compound.model, m) for m in _temporal_methods):
-                compound.model._temporal_active = True
 
-    def _collect_temporal_eqs(  # NOSONAR
+        def models():
+            for node in network.nodes:
+                if node.id in ignored_nodes or node.ignored:
+                    continue
+                yield node.model
+                for child in network.childs_by_ids(node.child_ids):
+                    if not child.ignored:
+                        yield child.model
+            for branch in network.branches:
+                if not branch.ignored:
+                    yield branch.model
+            for compound in network.compounds:
+                if not compound.ignored:
+                    yield compound.model
+
+        for model in models():
+            if any(hasattr(model, m) for m in _temporal_methods):
+                model._temporal_active = True
+
+    def _collect_temporal_eqs(
         self,
         solver_obj,
         network,
@@ -345,66 +363,35 @@ class SolverInterface(ABC):
         """Register ``inter_temporal_equations`` and *mode_method* for every
         model/formulation that implements them."""
         methods = ("inter_temporal_equations", mode_method)
+
+        def register(component):
+            for method in methods:
+                if hasattr(component.model, method):
+                    eqs = as_iter(getattr(component.model, method)(state, component.id))
+                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+                if component.formulation is not None and hasattr(
+                    component.formulation, method
+                ):
+                    eqs = as_iter(
+                        getattr(component.formulation, method)(
+                            component.model, state, component.id
+                        )
+                    )
+                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+
         for node in nodes:
             if ignore_node(node, network, ignored_nodes):
                 continue
-            for method in methods:
-                if hasattr(node.model, method):
-                    eqs = as_iter(getattr(node.model, method)(state, node.id))
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-                if node.formulation is not None and hasattr(node.formulation, method):
-                    eqs = as_iter(
-                        getattr(node.formulation, method)(node.model, state, node.id)
-                    )
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+            register(node)
             for child in network.childs_by_ids(node.child_ids):
-                if ignore_child(child, ignored_nodes):
-                    continue
-                for method in methods:
-                    if hasattr(child.model, method):
-                        eqs = as_iter(getattr(child.model, method)(state, child.id))
-                        self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-                    if child.formulation is not None and hasattr(
-                        child.formulation, method
-                    ):
-                        eqs = as_iter(
-                            getattr(child.formulation, method)(
-                                child.model, state, child.id
-                            )
-                        )
-                        self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+                if not ignore_child(child, ignored_nodes):
+                    register(child)
         for branch in branches:
-            if ignore_branch(branch, network, ignored_nodes):
-                continue
-            for method in methods:
-                if hasattr(branch.model, method):
-                    eqs = as_iter(getattr(branch.model, method)(state, branch.id))
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-                if branch.formulation is not None and hasattr(
-                    branch.formulation, method
-                ):
-                    eqs = as_iter(
-                        getattr(branch.formulation, method)(
-                            branch.model, state, branch.id
-                        )
-                    )
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+            if not ignore_branch(branch, network, ignored_nodes):
+                register(branch)
         for compound in compounds:
-            if ignore_compound(compound, ignored_nodes):
-                continue
-            for method in methods:
-                if hasattr(compound.model, method):
-                    eqs = as_iter(getattr(compound.model, method)(state, compound.id))
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-                if compound.formulation is not None and hasattr(
-                    compound.formulation, method
-                ):
-                    eqs = as_iter(
-                        getattr(compound.formulation, method)(
-                            compound.model, state, compound.id
-                        )
-                    )
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+            if not ignore_compound(compound, ignored_nodes):
+                register(compound)
 
     def process_inter_step_equations(
         self,
@@ -484,6 +471,87 @@ def as_iter(possible_iter):
     return possible_iter if hasattr(possible_iter, "__iter__") else [possible_iter]
 
 
+def fold_sum(exprs):
+    """Left-fold ``+`` over *exprs*; ``None`` when empty. Unlike ``sum()`` this
+    never prepends a ``0 +`` node to the backend expression tree."""
+    exprs = list(exprs)
+    return functools.reduce(operator.add, exprs) if exprs else None
+
+
+def warn_false_equation(context: str = "", logger=None):
+    """Emit the shared always-false-equation warning; *context* is a
+    pre-formatted label suffix, *logger* keeps the emitting module's name."""
+    (logger or _log).warning(
+        "Dropping always-false (structurally infeasible) equation%s; "
+        "this usually means a node/branch was over-deactivated.",
+        context,
+    )
+
+
+_LEX_REL_TOL = 1e-6
+_LEX_ABS_TOL = 1e-9
+
+
+def lex_cap_slack(s_star: float, mip_gap) -> float:
+    """Slack on the phase-2 lexicographic cap so it never excludes a phase-1
+    incumbent the solver accepted within its MIPGap tolerance."""
+    rel = max(float(mip_gap or 0.0), _LEX_REL_TOL)
+    return _LEX_ABS_TOL + rel * max(1.0, abs(s_star))
+
+
+def sanitize_component_name(name) -> str:
+    """Make a string safe for a solver component name (no spaces/brackets)."""
+    return (
+        str(name)
+        .replace("(", "")
+        .replace(")", "")
+        .replace(", ", "_")
+        .replace(" ", "_")
+        .replace("[", "")
+        .replace("]", "")
+    )
+
+
+def clamp_warm_start(value: Var):
+    """Stale start value scrubbed (NaN → ``None``) and clamped into the Var's
+    current bounds; ``None`` when unusable."""
+    init = value.value
+    if init is None or (isinstance(init, float) and math.isnan(init)):
+        return None
+    if value.min is not None and init < value.min:
+        init = value.min
+    if value.max is not None and init > value.max:
+        init = value.max
+    return init
+
+
+def snap_to_bounds(val, lb, ub, tol):
+    """Snap sub-*tol* bound noise in *val* onto the exact bound."""
+    if lb is not None and lb - tol <= val < lb:
+        val = lb
+    if ub is not None and ub < val <= ub + tol:
+        val = ub
+    return val
+
+
+def iter_active_models(network, nodes, branches, compounds, ignored_nodes):
+    """Yield the model of every active (non-ignored) component: branches, then
+    nodes with their children, then compounds."""
+    for branch in branches:
+        if not ignore_branch(branch, network, ignored_nodes):
+            yield branch.model
+    for node in nodes:
+        if ignore_node(node, network, ignored_nodes):
+            continue
+        yield node.model
+        for child in network.childs_by_ids(node.child_ids):
+            if not ignore_child(child, ignored_nodes):
+                yield child.model
+    for compound in compounds:
+        if not ignore_compound(compound, ignored_nodes):
+            yield compound.model
+
+
 def filter_intermediate_eqs(eqs):
     return [eq for eq in eqs if type(eq) is not IntermediateEq]
 
@@ -508,11 +576,7 @@ def filter_bool_eqs(eqs, context=None):
     for eq in eqs:
         if isinstance(eq, bool):
             if eq is False:
-                _log.warning(
-                    "Dropping always-false (structurally infeasible) equation%s; "
-                    "this usually means a node/branch was over-deactivated.",
-                    f" in {context}" if context is not None else "",
-                )
+                warn_false_equation(f" in {context}" if context is not None else "")
             continue
         kept.append(eq)
     return kept
@@ -560,12 +624,7 @@ class OperatorEquationAssembly:
             m.Equations(
                 filter_bool_eqs([constraint(network)], context="network constraint")
             )
-        obj = None
-        for objective in network.objectives:
-            if obj is not None:
-                obj = obj + objective(network)
-            else:
-                obj = objective(network)
+        obj = fold_sum(objective(network) for objective in network.objectives)
         if obj is not None:
             m.Obj(obj)
 
@@ -587,16 +646,11 @@ class OperatorEquationAssembly:
                     context="optimization problem constraint",
                 )
             )
-        obj = None
-        for objective in (
+        obj = fold_sum(
             optimization_problem.objectives.all(network, period_index=period_index)
             if optimization_problem.objectives is not None
             else []
-        ):
-            if obj is not None:
-                obj = obj + objective
-            else:
-                obj = objective
+        )
         if obj is not None:
             m.Obj(obj)
 
@@ -673,11 +727,11 @@ class OperatorEquationAssembly:
                 if ignore_child(child, ignored_nodes):
                     continue
                 child_eqs = filter_bool_eqs(
-                    as_iter(child.equations(grid, node)),
+                    as_iter(child.equations(grid, node.model)),
                     context=f"child_{child.id}",
                 )
 
-                for expr in child.minimize(grid, node, sqrt_impl=m.sqrt):
+                for expr in child.minimize(grid, node.model, sqrt_impl=m.sqrt):
                     m.Obj(expr)
 
                 _process_intermediate_eqs(m, child.model, child_eqs)
@@ -936,6 +990,10 @@ def prepare_solve_network(  # NOSONAR
     from monee.model.formulation.registry import attach_formulations
 
     network = input_network.copy()
+    # Read by the islanding extension: injection gating / the energisation
+    # objective only apply to plain flow solves - an optimization problem
+    # brings its own shedding vars and runs _apply after prepare.
+    network._solve_has_optimization_problem = optimization_problem is not None
     for ext in network.extensions:
         ext.prepare(network)
     attach_formulations(network, formulation, simulation=simulation)
@@ -979,6 +1037,20 @@ def finalize_solution(
     *input_network* (warm start) and return the bound-violation report."""
     apply_post_process_all(nodes, branches, compounds, network)
     persist_solution(network, input_network)
+    return compute_bound_violations(nodes, branches, compounds, network)
+
+
+def finalize_failed_solution(
+    nodes, branches, compounds, network: Network, input_network: Network
+) -> dict[str, float]:
+    """Post-solve trio for a solve without a usable solution: the withdrawn
+    values are meaningless (zeros / scrubbed initialisations), so copy the
+    pre-solve values back from the untouched *input_network* instead of
+    persisting them (which would clobber warm starts and carried storage
+    state), then evaluate post-processes and return the bound-violation
+    report."""
+    persist_solution(input_network, network)
+    apply_post_process_all(nodes, branches, compounds, network)
     return compute_bound_violations(nodes, branches, compounds, network)
 
 
@@ -1050,28 +1122,31 @@ def apply_post_process(model: GenericModel) -> None:
 
 def apply_post_process_all(nodes, branches, compounds, network) -> None:
     """Run :func:`apply_post_process` over every solved component."""
-    for branch in branches:
-        apply_post_process(branch.model)
-    for node in nodes:
-        apply_post_process(node.model)
-        for child in network.childs_by_ids(node.child_ids):
-            apply_post_process(child.model)
-    for compound in compounds:
-        apply_post_process(compound.model)
+    withdraw_vars(apply_post_process, nodes, branches, compounds, network)
+
+
+def _is_nan_value(v) -> bool:
+    return v is None or (isinstance(v, float) and math.isnan(v))
 
 
 def _copy_var_values(src, dst) -> None:
     """Copy ``.value`` for Var/Intermediate from *src* to *dst*. Intermediates
-    must be propagated so e.g. derived ``vm_pu`` isn't silently lost."""
+    must be propagated so e.g. derived ``vm_pu`` isn't silently lost. NaN/None
+    sources keep the destination's value: a persisted NaN is never a usable
+    warm start (injection scrubs it to 0), while the kept value lets e.g. a
+    rejoining islanded component restart from its last solved point."""
     for key, val in src.__dict__.items():
         if isinstance(val, (Var, Intermediate)):
             dst_attr = dst.__dict__.get(key)
             if isinstance(dst_attr, (Var, Intermediate)):
+                if _is_nan_value(val.value):
+                    continue
                 dst_attr.value = val.value
 
 
 def persist_solution(solved_copy: Network, original: Network) -> None:
-    """Propagate solved values back so the next ``inject_vars`` warm-starts."""
+    """Propagate solved values back so the next ``inject_vars`` warm-starts
+    (NaN/None values are skipped, see :func:`_copy_var_values`)."""
     for src_node, dst_node in zip(solved_copy.nodes, original.nodes):
         _copy_var_values(src_node.model, dst_node.model)
         for src_child, dst_child in zip(
@@ -1096,7 +1171,7 @@ def compute_bound_violations(  # NOSONAR
             if not isinstance(val, Var):
                 continue
             v = val.value
-            if v is None or (isinstance(v, float) and math.isnan(v)):
+            if _is_nan_value(v):
                 continue
             if val.min is not None and v < val.min - tol:
                 violations[f"{label}.{key}"] = val.min - v
@@ -1199,19 +1274,22 @@ def remove_cps(network: Network):
 def find_ignored_nodes(network: Network, islanding_config=None):  # NOSONAR
     """Return node IDs to exclude from the solve.
 
-    Default: active topology, only ExtPowerGrid/ExtHydrGrid children are
-    "leading". With *islanding_config*: full topology (backup lines included)
-    and any :class:`GridFormingMixin` child counts as leading for an
-    islanding-enabled carrier.
+    Default: only ExtPowerGrid/ExtHydrGrid children are "leading". With
+    *islanding_config*: any :class:`GridFormingMixin` child also counts as
+    leading for an islanding-enabled carrier.
+
+    Both cases use the real topology (active branches, on_off not fixed to 0;
+    switchable on_off Vars stay connected). A component with no leading child
+    can never be energised - the connectivity arcs over its severed branches
+    are capped at zero - so keeping it in the solve only leaves unservable
+    loads (e.g. an optimization problem's priority floor) that render the
+    model infeasible.
     """
     ignored_nodes = set()
     without_cps = network.copy()
     remove_cps(without_cps)
 
-    if islanding_config is not None:
-        topology = without_cps._network_internal.copy()
-    else:
-        topology = generate_real_topology(without_cps._network_internal)
+    topology = generate_real_topology(without_cps._network_internal)
 
     components = nx.connected_components(topology)
     for component in components:
@@ -1254,82 +1332,84 @@ def find_ignored_nodes(network: Network, islanding_config=None):  # NOSONAR
 
     # Leaf-stub pruning: a node with no active children and degree ≤ 1 in the
     # remaining active topology is a dead-end pump-target (infeasible LP).
-    # Iterate to fixed point. Skipped under islanding (topology there includes
-    # inactive backup branches, so degree overstates connectivity).
-    if islanding_config is None:
-        # Compound port children (e.g. SubHG on a CHPHG heat node) carry no
-        # demand of their own; they must not keep an otherwise-isolated
-        # junction alive.
-        compound_port_child_ids = {
-            sub.id
-            for compound in network.compounds
-            for sub in compound.subcomponents
-            if isinstance(sub, Child)
-        }
+    # Iterate to fixed point. Runs under islanding too: e-variables gate
+    # loads and angles/pressures, not the mixing/balance equations that make
+    # a childless dead-end junction infeasible, and the topology is the real
+    # one in both cases.
 
-        # Attachment ports of active multi-grid compounds: remove_cps strips
-        # the compound's transfer branches from the pruning copy, so these
-        # nodes look like childless dead-ends here - but in the real solve the
-        # compound re-attaches and carries flow through them. Ports whose grid
-        # connection is genuinely gone are still caught by the
-        # connected-component check above.
-        compound_attachment_node_ids = {
-            node_id
-            for compound in network.compounds
-            if compound.active and isinstance(compound.model, MultiGridCompoundModel)
-            for node_id in compound.connected_to.values()
-        }
+    # Compound port children (e.g. SubHG on a CHPHG heat node) carry no
+    # demand of their own; they must not keep an otherwise-isolated
+    # junction alive.
+    compound_port_child_ids = {
+        sub.id
+        for compound in network.compounds
+        for sub in compound.subcomponents
+        if isinstance(sub, Child)
+    }
 
-        def _has_real_active_child(int_node):
-            for cid in int_node.child_ids:
-                if cid in compound_port_child_ids:
-                    continue
-                if without_cps.child_by_id(cid).active:
-                    return True
-            return False
+    # Attachment ports of active multi-grid compounds: remove_cps strips
+    # the compound's transfer branches from the pruning copy, so these
+    # nodes look like childless dead-ends here - but in the real solve the
+    # compound re-attaches and carries flow through them. Ports whose grid
+    # connection is genuinely gone are still caught by the
+    # connected-component check above.
+    compound_attachment_node_ids = {
+        node_id
+        for compound in network.compounds
+        if compound.active and isinstance(compound.model, MultiGridCompoundModel)
+        for node_id in compound.connected_to.values()
+    }
 
-        def _has_mass_flow_anchor(int_node):
-            """A Junction at degree ≤ 1 needs a mass-flow-contributing child
-            (Sink / Source / ExtHydrGrid) to anchor mass conservation.
-            Heat-only children (HeatLoad / HeatGenerator) don't qualify -
-            with no outgoing pipe their heat_mw term has no enthalpy
-            stream to balance against and the junction becomes infeasible."""
-            for cid in int_node.child_ids:
-                if cid in compound_port_child_ids:
-                    continue
-                child = without_cps.child_by_id(cid)
-                if not child.active:
-                    continue
-                if "mass_flow_kgs" in getattr(child.model, "vars", {}):
-                    return True
-            return False
+    def _has_real_active_child(int_node):
+        for cid in int_node.child_ids:
+            if cid in compound_port_child_ids:
+                continue
+            if without_cps.child_by_id(cid).active:
+                return True
+        return False
 
-        while True:
-            new_stubs = set()
-            for node_id in topology.nodes:
-                if node_id in ignored_nodes:
-                    continue
-                if node_id in compound_attachment_node_ids:
-                    continue
-                int_node: Node = topology.nodes[node_id]["internal_node"]
-                active_degree = sum(
-                    1 for nb in topology.neighbors(node_id) if nb not in ignored_nodes
-                )
-                if active_degree > 1:
-                    continue
-                # Classical leaf stub: no real active children at all.
-                if not _has_real_active_child(int_node):
-                    new_stubs.add(node_id)
-                    continue
-                # Mass-balance dead-end: Junction at degree ≤ 1 whose only
-                # children are heat-only (heat_mw) - see _has_mass_flow_anchor.
-                if isinstance(int_node.model, Junction) and not _has_mass_flow_anchor(
-                    int_node
-                ):
-                    new_stubs.add(node_id)
-            if not new_stubs:
-                break
-            ignored_nodes.update(new_stubs)
+    def _has_mass_flow_anchor(int_node):
+        """A Junction at degree ≤ 1 needs a mass-flow-contributing child
+        (Sink / Source / ExtHydrGrid) to anchor mass conservation.
+        Heat-only children (HeatLoad / HeatGenerator) don't qualify -
+        with no outgoing pipe their heat_mw term has no enthalpy
+        stream to balance against and the junction becomes infeasible."""
+        for cid in int_node.child_ids:
+            if cid in compound_port_child_ids:
+                continue
+            child = without_cps.child_by_id(cid)
+            if not child.active:
+                continue
+            if "mass_flow_kgs" in getattr(child.model, "vars", {}):
+                return True
+        return False
+
+    while True:
+        new_stubs = set()
+        for node_id in topology.nodes:
+            if node_id in ignored_nodes:
+                continue
+            if node_id in compound_attachment_node_ids:
+                continue
+            int_node: Node = topology.nodes[node_id]["internal_node"]
+            active_degree = sum(
+                1 for nb in topology.neighbors(node_id) if nb not in ignored_nodes
+            )
+            if active_degree > 1:
+                continue
+            # Classical leaf stub: no real active children at all.
+            if not _has_real_active_child(int_node):
+                new_stubs.add(node_id)
+                continue
+            # Mass-balance dead-end: Junction at degree ≤ 1 whose only
+            # children are heat-only (heat_mw) - see _has_mass_flow_anchor.
+            if isinstance(int_node.model, Junction) and not _has_mass_flow_anchor(
+                int_node
+            ):
+                new_stubs.add(node_id)
+        if not new_stubs:
+            break
+        ignored_nodes.update(new_stubs)
 
     return ignored_nodes
 
@@ -1408,9 +1488,11 @@ class StepState(InterStepState):
     ``max_steps`` caps how many solved networks are retained (``None`` =
     unlimited): each network is a full copy, so an open-ended run (e.g. a
     :class:`~monee.simulation.Stepper` paced by a co-simulation framework)
-    would otherwise grow memory without bound. Absolute ``step`` indices keep
-    their meaning when old networks are dropped; reading a dropped step falls
-    back to ``initial_state``."""
+    would otherwise grow memory without bound. Each push may carry an explicit
+    step number (so drivers that skip failed steps keep absolute indices
+    aligned with their own step numbering); absolute ``step`` indices keep
+    their meaning when old networks are dropped. Reading a dropped or
+    never-solved step falls back to ``initial_state``."""
 
     def __init__(
         self, initial_state: dict | None = None, max_steps: int | None = None
@@ -1418,25 +1500,50 @@ class StepState(InterStepState):
         if max_steps is not None and max_steps < 1:
             raise ValueError(f"max_steps must be >= 1 or None, got {max_steps}")
         self._networks: list = []
+        self._step_numbers: list[int] = []
+        # step number -> absolute position (self._dropped + list index) of its
+        # first occurrence, for O(1) absolute lookups.
+        self._pos_by_step: dict[int, int] = {}
         self._dropped: int = 0
         self._max_steps = max_steps
         self.dt_h: float = 1.0
         self._initial_state: dict = dict(initial_state) if initial_state else {}
 
-    def push(self, net) -> None:
+    def push(self, net, step: int | None = None) -> None:
+        """Append a solved network; ``step`` records the caller's step number
+        for absolute lookups (defaults to the push count)."""
+        pos = self._dropped + len(self._networks)
+        if step is None:
+            step = pos
         self._networks.append(net)
+        self._step_numbers.append(step)
+        self._pos_by_step.setdefault(step, pos)
         if self._max_steps is not None and len(self._networks) > self._max_steps:
+            dropped_step = self._step_numbers[0]
             del self._networks[0]
+            del self._step_numbers[0]
             self._dropped += 1
+            if self._pos_by_step.get(dropped_step) == self._dropped - 1:
+                del self._pos_by_step[dropped_step]
+                # Re-point a duplicate step number to its next occurrence so
+                # first-occurrence lookup semantics survive the drop.
+                try:
+                    i = self._step_numbers.index(dropped_step)
+                except ValueError:
+                    pass
+                else:
+                    self._pos_by_step[dropped_step] = self._dropped + i
 
     def _network_for_step(self, step: int):
         if not self._networks:
             return None
         if step < 0:
             return self._networks[step] if -step <= len(self._networks) else None
-        # Absolute index: shift by dropped prefix; dropped → fallback.
-        idx = step - self._dropped
-        return self._networks[idx] if 0 <= idx < len(self._networks) else None
+        # Absolute lookup by recorded step number; dropped/missing → fallback.
+        pos = self._pos_by_step.get(step)
+        if pos is None:
+            return None
+        return self._networks[pos - self._dropped]
 
     def get(self, component_id, attr: str, step: int = -1):
         net = self._network_for_step(step)

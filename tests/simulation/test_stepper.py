@@ -8,13 +8,20 @@ handling, parity with :func:`run_timeseries`, and the StepState extension.
 
 from __future__ import annotations
 
+import dataclasses
 import math
 
 import pytest
 
 import monee.express as mx
 import monee.model as mm
-from monee.simulation import Stepper, StepState, TimeseriesData, run_timeseries
+from monee.simulation import (
+    NetworkChange,
+    Stepper,
+    StepState,
+    TimeseriesData,
+    run_timeseries,
+)
 from tests.util import child_id_by_type
 
 
@@ -334,3 +341,743 @@ def test_stepper_get_returns_latest_solved_value():
     assert math.isclose(stepper.get(load_id, "p_mw"), 1.2, rel_tol=1e-9)
     # absolute lookback to the first step
     assert math.isclose(stepper.get(load_id, "p_mw", step=0), 0.4, rel_tol=1e-9)
+
+
+# --- network change recording -------------------------------------------------
+
+
+def _line_id(net):
+    return net.branches[0].id
+
+
+def _kinds(changes, kind):
+    return [c for c in changes if c.kind == kind]
+
+
+def test_Stepper_deactivate_records_and_persists():
+    """deactivate() records one 'deactivated' change (source mutation) and the
+    component stays off across later steps without re-recording."""
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net)
+
+    stepper.deactivate(load_id, mm.PowerLoad)
+    stepper.step(dt_h=1.0)
+    stepper.step(dt_h=1.0)
+
+    deact = _kinds(stepper.changes, "deactivated")
+    assert len(deact) == 1
+    change = deact[0]
+    assert change.step == 0
+    assert change.component_type == "Child"
+    assert change.component_id == load_id
+    assert change.source == "mutation"
+    # base net untouched: the user's load is still active.
+    assert net.child_by_id(load_id).active is True
+
+
+def test_Stepper_ambiguous_bare_id_raises():
+    """A bare id shared by a node and a child must be disambiguated."""
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net)
+    with pytest.raises(ValueError, match="ambiguous"):
+        stepper.deactivate(load_id)
+
+
+def test_Stepper_activate_flips_back():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net)
+
+    stepper.deactivate(load_id, mm.PowerLoad)
+    stepper.step(dt_h=1.0)
+    stepper.activate(load_id, mm.PowerLoad)
+    stepper.step(dt_h=1.0)
+
+    assert len(_kinds(stepper.changes, "deactivated")) == 1
+    react = _kinds(stepper.changes, "activated")
+    assert len(react) == 1
+    assert react[0].step == 1
+
+
+def test_Stepper_fail_and_restore_labels():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net)
+
+    stepper.fail(load_id, mm.PowerLoad)
+    stepper.step(dt_h=1.0)
+    stepper.restore(load_id, mm.PowerLoad)
+    stepper.step(dt_h=1.0)
+
+    mutated = [c for c in stepper.changes if c.source == "mutation"]
+    assert [c.kind for c in mutated] == ["failed", "restored"]
+    assert all(c.component_id == load_id for c in mutated)
+
+
+def test_Stepper_remove_branch_records_and_drops_component():
+    net = _power_net()
+    line_id = _line_id(net)
+    stepper = Stepper(net, on_step_error="skip")
+
+    stepper.step(dt_h=1.0)  # line present
+    stepper.remove_branch(line_id)
+    sr = stepper.step(dt_h=1.0)
+
+    removed = _kinds(stepper.changes, "removed")
+    assert [c.component_id for c in removed] == [line_id]
+    assert removed[0].component_type == "Branch"
+    assert removed[0].source == "mutation"
+    if not sr.failed:
+        assert sr.result.get(mm.PowerLine).empty
+
+
+def test_Stepper_remove_node_cascade_is_detected():
+    """Removing the load bus cascades: the bus is a mutation, the incident line
+    and the orphaned load are detected removals."""
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    line_id = _line_id(net)
+    load_bus_id = net.child_by_id(load_id).node_id
+    stepper = Stepper(net, on_step_error="skip")
+
+    stepper.remove_node(load_bus_id)
+    stepper.step(dt_h=1.0)
+
+    # Node and child ids collide, so key removals by (type, id).
+    removed = {
+        (c.component_type, c.component_id): c
+        for c in _kinds(stepper.changes, "removed")
+    }
+    assert removed[("Node", load_bus_id)].source == "mutation"
+    assert removed[("Branch", line_id)].source == "detected"
+    assert removed[("Child", load_id)].source == "detected"
+
+
+def test_Stepper_islanding_recorded_as_solver_source():
+    """Deactivating the only line islands the load bus; the solver-side drop is
+    recorded with source 'solver'."""
+    net = _power_net()
+    line_id = _line_id(net)
+    stepper = Stepper(net)
+
+    stepper.deactivate(line_id)
+    stepper.step(dt_h=1.0)
+
+    islanded = _kinds(stepper.changes, "islanded")
+    assert islanded, "expected at least one islanded component"
+    assert all(c.source == "solver" for c in islanded)
+    assert all(c.step == 0 for c in islanded)
+
+
+def test_Stepper_record_changes_disabled():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net, record_changes=False)
+
+    stepper.deactivate(load_id, mm.PowerLoad)
+    stepper.step(dt_h=1.0)
+
+    assert stepper.changes == []
+    assert stepper.changes_df().empty
+
+
+def test_Stepper_changes_df_columns():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net)
+    stepper.fail(load_id, mm.PowerLoad)
+    stepper.step(dt_h=1.0)
+
+    df = stepper.changes_df()
+    assert list(df.columns) == [
+        "step",
+        "t_h",
+        "kind",
+        "component_type",
+        "component_id",
+        "name",
+        "source",
+    ]
+    assert (df["kind"] == "failed").any()
+
+
+def test_Stepper_reset_clears_changes_and_reverts_mutations():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net)
+
+    stepper.deactivate(load_id, mm.PowerLoad)
+    stepper.step(dt_h=1.0)
+    assert stepper.changes
+
+    stepper.reset()
+    assert stepper.changes == []
+
+    # Mutation reverted: stepping again records no deactivation.
+    stepper.step(dt_h=1.0)
+    assert _kinds(stepper.changes, "deactivated") == []
+
+
+def test_Stepper_changes_not_capped_by_max_history():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net, max_history=1)
+
+    # Toggle the load every step; each flip is recorded at the following step.
+    for i in range(6):
+        if i % 2 == 0:
+            stepper.deactivate(load_id, mm.PowerLoad)
+        else:
+            stepper.activate(load_id, mm.PowerLoad)
+        stepper.step(dt_h=1.0)
+
+    assert len(stepper.history) == 1  # results capped
+    # Every flip retained even though history is capped at 1.
+    flips = _kinds(stepper.changes, "deactivated") + _kinds(
+        stepper.changes, "activated"
+    )
+    assert len(flips) == 6
+
+
+def test_Stepper_unknown_mutation_id_raises():
+    stepper = Stepper(_power_net())
+    with pytest.raises(KeyError, match="not found in network"):
+        stepper.deactivate(99999)
+
+
+def test_NetworkChange_is_importable_and_frozen():
+    change = NetworkChange(0, 0.0, "failed", "Child", 3, None, "mutation")
+    assert change.kind == "failed"
+    with pytest.raises(dataclasses.FrozenInstanceError):
+        change.kind = "x"
+
+
+def _raising_solve(*_a, **_kw):
+    raise RuntimeError("boom")
+
+
+class _UnsuccessfulResult:
+    success = False
+    network = None
+    solver_status = "aborted"
+    termination_condition = "infeasible"
+
+
+def _p2h_net():
+    """Two-grid (power + heat/water) network with one P2H compound."""
+    net = mm.Network(mm.create_water_grid("heat"))
+    w0 = net.node(mm.Junction(), child_ids=[net.child(mm.ConsumeHydrGrid(0.1))])
+    w1 = net.node(mm.Junction())
+    w2 = net.node(mm.Junction())
+    w3 = net.node(mm.Junction(), child_ids=[net.child(mm.ExtHydrGrid(t_k=356))])
+    net.branch(mm.WaterPipe(diameter_m=0.15, length_m=100), w1, w0)
+    net.branch(mm.WaterPipe(diameter_m=0.15, length_m=200), w2, w3)
+
+    power_grid = mm.create_power_grid("power")
+    p0 = net.node(
+        mm.Bus(base_kv=1),
+        grid=power_grid,
+        child_ids=[
+            net.child(mm.ExtPowerGrid(p_mw=0.1, q_mvar=0, vm_pu=1, va_degree=0))
+        ],
+    )
+    p1 = net.node(
+        mm.Bus(base_kv=1),
+        grid=power_grid,
+        child_ids=[net.child(mm.PowerLoad(p_mw=0.5, q_mvar=0))],
+    )
+    net.branch(
+        mm.PowerLine(length_m=1000, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, parallel=1),
+        p0,
+        p1,
+    )
+    compound_id = net.compound(
+        mm.PowerToHeat(0.02, 0.15, 300, 1.0),
+        power_node_id=p1,
+        heat_node_id=w2,
+        heat_return_node_id=w1,
+    )
+    return net, compound_id
+
+
+def test_Stepper_remove_auto_dispatches_by_type():
+    net = _power_net()
+    line_id = _line_id(net)
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net, on_step_error="skip")
+
+    stepper.remove(line_id)  # branch ids are unambiguous
+    stepper.remove(load_id, mm.PowerLoad)  # typed dispatch to remove_child
+    stepper.step(dt_h=1.0)
+
+    removed = {
+        (c.component_type, c.component_id): c
+        for c in _kinds(stepper.changes, "removed")
+    }
+    assert removed[("Branch", line_id)].source == "mutation"
+    assert removed[("Child", load_id)].source == "mutation"
+
+
+def test_Stepper_remove_child_records_and_drops_component():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net, on_step_error="skip")
+
+    stepper.remove_child(load_id)
+    sr = stepper.step(dt_h=1.0)
+
+    removed = _kinds(stepper.changes, "removed")
+    assert [(c.component_type, c.component_id) for c in removed] == [("Child", load_id)]
+    assert removed[0].source == "mutation"
+    if not sr.failed:
+        assert sr.result.get(mm.PowerLoad).empty
+
+
+def test_Stepper_remove_compound_records_mutation_and_cascade():
+    net, compound_id = _p2h_net()
+    stepper = Stepper(net, on_step_error="skip")
+
+    stepper.remove_compound(compound_id)
+    stepper.step(dt_h=1.0)
+
+    removed = {
+        (c.component_type, c.component_id): c
+        for c in _kinds(stepper.changes, "removed")
+    }
+    assert removed[("Compound", compound_id)].source == "mutation"
+    # internal subcomponents disappear as detected cascade removals
+    cascade = [c for key, c in removed.items() if key != ("Compound", compound_id)]
+    assert cascade
+    assert all(c.source == "detected" for c in cascade)
+
+
+def test_Stepper_rejoined_and_no_echo_for_explicit_toggle():
+    """Reactivating a previously islanded line yields 'rejoined' events for the
+    dependents; the explicitly toggled line itself is not double-reported as a
+    solver islanded/rejoined echo."""
+    net = _power_net()
+    line_id = _line_id(net)
+    stepper = Stepper(net)
+
+    stepper.deactivate(line_id)
+    stepper.step(dt_h=1.0)
+    stepper.activate(line_id)
+    stepper.step(dt_h=1.0)
+
+    islanded_keys = {
+        (c.component_type, c.component_id) for c in _kinds(stepper.changes, "islanded")
+    }
+    rejoined = _kinds(stepper.changes, "rejoined")
+    rejoined_keys = {(c.component_type, c.component_id) for c in rejoined}
+
+    assert islanded_keys, "dependents should be reported islanded"
+    assert rejoined_keys == islanded_keys
+    assert ("Branch", line_id) not in islanded_keys
+    assert ("Branch", line_id) not in rejoined_keys
+    assert all(c.source == "solver" and c.step == 1 for c in rejoined)
+
+
+def test_Stepper_added_component_detected():
+    net = _power_net()
+    stepper = Stepper(net)
+    stepper.step(dt_h=1.0)
+
+    bus2 = stepper._work_net.nodes[1].id
+    new_load = mx.create_power_load(stepper._work_net, bus2, p_mw=0.1, q_mvar=0.0)
+    stepper.step(dt_h=1.0)
+
+    added = _kinds(stepper.changes, "added")
+    assert [(c.component_type, c.component_id) for c in added] == [("Child", new_load)]
+    assert added[0].step == 1
+    assert added[0].source == "detected"
+
+
+def test_Stepper_added_inactive_component_not_double_reported():
+    """A component added already-inactive records one 'added' event; the
+    solver ignoring the inactive child is an echo, not 'islanded'."""
+    net = _power_net()
+    stepper = Stepper(net)
+    stepper.step(dt_h=1.0)
+
+    bus2 = stepper._work_net.nodes[1].id
+    new_load = mx.create_power_load(stepper._work_net, bus2, p_mw=0.1, q_mvar=0.0)
+    stepper._work_net.deactivate_by_id(mm.Child, new_load)
+    stepper.step(dt_h=1.0)
+
+    added = _kinds(stepper.changes, "added")
+    assert [(c.component_type, c.component_id) for c in added] == [("Child", new_load)]
+    assert _kinds(stepper.changes, "islanded") == []
+
+
+def test_Stepper_added_disconnected_component_still_reports_islanded():
+    """An active but disconnected addition is a genuine solver decision and
+    must keep its 'islanded' event alongside 'added'."""
+    net = _power_net()
+    stepper = Stepper(net)
+    stepper.step(dt_h=1.0)
+
+    new_bus = mx.create_bus(stepper._work_net, base_kv=20.0)
+    stepper.step(dt_h=1.0)
+
+    added_keys = {
+        (c.component_type, c.component_id) for c in _kinds(stepper.changes, "added")
+    }
+    islanded_keys = {
+        (c.component_type, c.component_id) for c in _kinds(stepper.changes, "islanded")
+    }
+    assert ("Node", new_bus) in added_keys
+    assert ("Node", new_bus) in islanded_keys
+
+
+def test_Stepper_typed_removers_missing_id_friendly_error():
+    stepper = Stepper(_power_net())
+    for remover in (
+        stepper.remove_branch,
+        stepper.remove_node,
+        stepper.remove_child,
+        stepper.remove_compound,
+    ):
+        with pytest.raises(KeyError, match="not found in network"):
+            remover(99999)
+
+
+def test_Stepper_rollback_truncates_after_max_changes_trim():
+    """Rollback of a raising step must undo the entries it appended even when
+    a max_changes trim dropped older entries from the front during that step."""
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    # second load keeps the bus live, so a toggle records exactly one change
+    mx.create_power_load(net, net.nodes[1].id, p_mw=0.1, q_mvar=0.0)
+    stepper = Stepper(net, on_step_error="raise", max_changes=2)
+
+    stepper.deactivate(load_id, mm.PowerLoad)
+    stepper.step(dt_h=1.0)
+    stepper.activate(load_id, mm.PowerLoad)
+    stepper.step(dt_h=1.0)
+    assert [c.kind for c in stepper.changes] == ["deactivated", "activated"]
+
+    real_solve = stepper._solver.solve
+    stepper._solver.solve = _raising_solve
+    stepper.deactivate(load_id, mm.PowerLoad)
+    with pytest.raises(RuntimeError, match="boom"):
+        stepper.step(dt_h=1.0)
+
+    # the trim during the failed step dropped the oldest entry for good; the
+    # entry appended by the failed step itself is rolled back
+    assert [c.kind for c in stepper.changes] == ["activated"]
+
+    stepper._solver.solve = real_solve
+    stepper.step(dt_h=1.0)
+    assert [c.kind for c in stepper.changes] == ["activated", "deactivated"]
+    assert stepper.changes[-1].step == 2
+    assert stepper.changes[-1].source == "mutation"
+
+
+def test_Stepper_changes_attributed_to_skipped_failed_step():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net, on_step_error="skip")
+    real_solve = stepper._solver.solve
+    stepper._solver.solve = _raising_solve
+
+    stepper.deactivate(load_id, mm.PowerLoad)
+    sr = stepper.step(dt_h=1.0)
+    assert sr.failed
+
+    deact = _kinds(stepper.changes, "deactivated")
+    assert len(deact) == 1
+    assert deact[0].step == 0
+    assert deact[0].source == "mutation"
+
+    stepper._solver.solve = real_solve
+    stepper.step(dt_h=1.0)
+    # not re-recorded at the next (successful) step
+    assert len(_kinds(stepper.changes, "deactivated")) == 1
+
+
+def test_Stepper_changes_rolled_back_when_step_raises():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net, on_step_error="raise")
+    real_solve = stepper._solver.solve
+    stepper._solver.solve = _raising_solve
+
+    stepper.deactivate(load_id, mm.PowerLoad)
+    with pytest.raises(RuntimeError, match="boom"):
+        stepper.step(dt_h=1.0)
+
+    # the step never happened: no change events, mutation stays pending
+    assert stepper.changes == []
+    assert stepper.step_count == 0
+
+    stepper._solver.solve = real_solve
+    stepper.step(dt_h=1.0)
+    deact = _kinds(stepper.changes, "deactivated")
+    assert len(deact) == 1
+    assert deact[0].step == 0
+    assert deact[0].source == "mutation"
+
+
+def test_Stepper_noop_mutation_leaves_no_stale_annotation():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net)
+
+    stepper.deactivate(load_id, mm.PowerLoad)
+    stepper.step(dt_h=1.0)
+    # no-op: already inactive relative to the recorded snapshot
+    stepper.deactivate(load_id, mm.PowerLoad)
+    assert stepper._pending_annotations == {}
+
+    # a later non-mutation reactivation must be detected, not mislabeled by a
+    # stale 'deactivated'/'mutation' annotation
+    stepper._work_net.activate_by_id(mm.Child, load_id)
+    stepper.step(dt_h=1.0)
+    react = _kinds(stepper.changes, "activated")
+    assert len(react) == 1
+    assert react[0].source == "detected"
+
+
+def test_Stepper_mutation_pair_cancels_cleanly():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net)
+
+    stepper.deactivate(load_id, mm.PowerLoad)
+    stepper.activate(load_id, mm.PowerLoad)
+    assert stepper._pending_annotations == {}
+    stepper.step(dt_h=1.0)
+
+    assert [c for c in stepper.changes if c.source == "mutation"] == []
+
+
+def test_Stepper_success_false_result_is_step_failure_skip():
+    stepper = Stepper(_power_net(), on_step_error="skip")
+    stepper._solver.solve = lambda *a, **kw: _UnsuccessfulResult()
+
+    sr = stepper.step(dt_h=1.0)
+
+    assert sr.failed
+    assert sr.result is None
+    assert "success=False" in str(sr.error)
+    assert "solver_status=aborted" in str(sr.error)
+    assert len(stepper.state) == 0  # nothing pushed
+
+
+def test_Stepper_success_false_result_is_step_failure_raise():
+    stepper = Stepper(_power_net(), on_step_error="raise")
+    stepper._solver.solve = lambda *a, **kw: _UnsuccessfulResult()
+
+    with pytest.raises(RuntimeError, match="success=False"):
+        stepper.step(dt_h=1.0)
+    assert stepper.step_count == 0
+
+
+def test_Stepper_skipped_failure_dt_carried_into_next_solve():
+    stepper = Stepper(_power_net(), on_step_error="skip")
+    stepper.step(dt_h=1.0)
+
+    real_solve = stepper._solver.solve
+    stepper._solver.solve = _raising_solve
+    stepper.step(dt_h=2.0)  # fails: the 2 h interval must not vanish
+    stepper._solver.solve = real_solve
+
+    stepper.step(dt_h=1.0)
+    assert math.isclose(stepper.state.dt_h, 3.0)  # 2 h backlog + 1 h
+    stepper.step(dt_h=1.0)
+    assert math.isclose(stepper.state.dt_h, 1.0)  # backlog consumed
+    assert math.isclose(stepper.t_h, 5.0)  # wall clock unaffected
+
+
+def test_Stepper_get_absolute_step_aligns_after_skipped_failure():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net, on_step_error="skip")
+
+    stepper.step(dt_h=1.0, data_overrides={(load_id, "p_mw"): 0.4})
+    real_solve = stepper._solver.solve
+    stepper._solver.solve = _raising_solve
+    stepper.step(dt_h=1.0)  # step 1 fails
+    stepper._solver.solve = real_solve
+    sr = stepper.step(dt_h=1.0, data_overrides={(load_id, "p_mw"): 1.2})
+
+    assert sr.step == 2
+    assert math.isclose(stepper.get(load_id, "p_mw", step=2), 1.2, rel_tol=1e-9)
+    assert math.isclose(stepper.get(load_id, "p_mw", step=0), 0.4, rel_tol=1e-9)
+    assert stepper.get(load_id, "p_mw", step=1) is None  # failed step: no entry
+
+
+def test_Stepper_max_changes_caps_recorded_changes():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net, max_changes=3)
+
+    for i in range(6):
+        if i % 2 == 0:
+            stepper.deactivate(load_id, mm.PowerLoad)
+        else:
+            stepper.activate(load_id, mm.PowerLoad)
+        stepper.step(dt_h=1.0)
+
+    assert len(stepper.changes) == 3
+    assert stepper.changes[-1].step == 5  # oldest dropped first
+
+
+def test_Stepper_max_changes_invalid():
+    with pytest.raises(ValueError, match="max_changes must be"):
+        Stepper(_power_net(), max_changes=0)
+
+
+def test_Stepper_typed_tuple_id_disambiguates_mutation():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net)
+
+    stepper.deactivate((mm.PowerLoad, load_id))
+    stepper.step(dt_h=1.0)
+
+    deact = _kinds(stepper.changes, "deactivated")
+    assert [c.component_id for c in deact] == [load_id]
+    assert deact[0].component_type == "Child"
+
+
+def test_Stepper_overrides_ambiguous_raises_and_typed_key_resolves():
+    net = _power_net()
+    ext_id = child_id_by_type(net, mm.ExtPowerGrid)
+    stepper = Stepper(net)
+
+    # bare ext_id collides with a bus id; both carry a settable vm_pu
+    with pytest.raises(ValueError, match="ambiguous"):
+        stepper.step(dt_h=1.0, data_overrides={(ext_id, "vm_pu"): 1.05})
+
+    sr = stepper.step(
+        dt_h=1.0,
+        data_overrides={((mm.ExtPowerGrid, ext_id), "vm_pu"): 1.05},
+    )
+    vm_slack = sr.result.get(mm.Bus)["vm_pu"].iloc[0]
+    assert math.isclose(vm_slack, 1.05, rel_tol=1e-3)
+
+
+def _load_bus_vm(stepper):
+    load_id = child_id_by_type(stepper._work_net, mm.PowerLoad)
+    load_bus_id = stepper._work_net.child_by_id(load_id).node_id
+    return stepper._work_net.node_by_id(load_bus_id).model.vm_pu.value
+
+
+def test_Stepper_warm_start_persists_solution_into_working_net():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    load_bus_id = net.child_by_id(load_id).node_id
+    stepper = Stepper(net)
+
+    sr = stepper.step(dt_h=1.0)
+
+    solved_vm = sr.result.network.node_by_id(load_bus_id).model.vm_pu.value
+    work_vm = _load_bus_vm(stepper)
+    assert math.isclose(work_vm, solved_vm, rel_tol=1e-12)
+    assert abs(work_vm - 1.0) > 1e-6  # moved off the base initial value
+
+
+def test_Stepper_warm_start_false_leaves_working_net_values():
+    stepper = Stepper(_power_net(), warm_start=False)
+    stepper.step(dt_h=1.0)
+    assert _load_bus_vm(stepper) == 1.0
+
+
+def test_Stepper_warm_start_skipped_on_failed_step():
+    stepper = Stepper(_power_net(), on_step_error="skip")
+    stepper._solver.solve = _raising_solve
+
+    sr = stepper.step(dt_h=1.0)
+
+    assert sr.failed
+    assert _load_bus_vm(stepper) == 1.0
+
+
+def test_Stepper_warm_start_islanded_values_not_poisoned():
+    """Islanding writes NaN into the solved copy; the working net must keep the
+    last finite values so a rejoining component warm-starts sanely."""
+    net = _power_net()
+    line_id = _line_id(net)
+    stepper = Stepper(net)
+
+    stepper.step(dt_h=1.0)
+    vm_solved = _load_bus_vm(stepper)
+
+    stepper.deactivate(line_id)
+    stepper.step(dt_h=1.0)  # load bus islanded -> NaN in the solved copy
+    vm_islanded = _load_bus_vm(stepper)
+    assert not math.isnan(vm_islanded)
+    assert vm_islanded == vm_solved
+
+    stepper.activate(line_id)
+    sr = stepper.step(dt_h=1.0)
+    assert sr.result.success
+    assert math.isclose(_load_bus_vm(stepper), vm_solved, rel_tol=1e-6)
+
+
+def test_Stepper_reset_restores_base_initial_values():
+    stepper = Stepper(_power_net())
+    stepper.step(dt_h=1.0)
+    assert _load_bus_vm(stepper) != 1.0
+    stepper.reset()
+    assert _load_bus_vm(stepper) == 1.0
+
+
+def _spy_hint_at_solve(stepper):
+    """Record the backend's armed warm-start hint at each solve entry."""
+    if not hasattr(stepper._solver, "_warm_start_hint"):
+        pytest.skip("backend has no warm-start hint state")
+    seen = []
+    orig_solve = stepper._solver.solve
+
+    def solve(*args, **kwargs):
+        seen.append(stepper._solver._warm_start_hint)
+        return orig_solve(*args, **kwargs)
+
+    stepper._solver.solve = solve
+    return seen
+
+
+def test_Stepper_hints_solver_warm_only_after_first_success():
+    stepper = Stepper(_power_net())
+    seen = _spy_hint_at_solve(stepper)
+
+    stepper.step(dt_h=1.0)
+    stepper.step(dt_h=1.0)
+    stepper.reset()
+    stepper.step(dt_h=1.0)
+
+    assert seen == [False, True, False]
+
+
+def test_Stepper_warm_start_false_never_hints_warm():
+    stepper = Stepper(_power_net(), warm_start=False)
+    seen = _spy_hint_at_solve(stepper)
+
+    stepper.step(dt_h=1.0)
+    stepper.step(dt_h=1.0)
+
+    assert seen == [False, False]
+
+
+def test_Stepper_failed_step_drops_hint_for_retry():
+    stepper = Stepper(_power_net(), on_step_error="skip")
+    seen = _spy_hint_at_solve(stepper)
+    good_solve = stepper._solver.solve
+
+    def failing(*args, **kwargs):
+        seen.append(stepper._solver._warm_start_hint)
+        raise RuntimeError("boom")
+
+    stepper.step(dt_h=1.0)  # cold, succeeds -> warm values
+    stepper._solver.solve = failing
+    stepper.step(dt_h=1.0)  # warm-hinted, fails without consuming the hint
+    stepper._solver.solve = good_solve
+    stepper.step(dt_h=1.0)  # retry runs unhinted
+    stepper.step(dt_h=1.0)  # back to warm after the success
+
+    assert seen == [False, True, False, True]
+    assert stepper._solver._warm_start_hint is False  # never left armed

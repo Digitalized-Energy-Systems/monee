@@ -2,7 +2,8 @@
 Import MATPOWER case files
 ==========================
 
-monee reads MATPOWER ``.mat`` case files and converts them into a
+monee reads MATPOWER case files, both the ``.m`` text format that ``savecase``
+writes and the binary ``.mat`` format, and converts them into a
 :class:`~monee.model.Network`. Use this to load standard IEEE test cases
 (case9, case30, case118) or any network exported from MATPOWER or MATLAB.
 
@@ -21,7 +22,12 @@ Reading a MATPOWER file
 
     from monee.io.matpower import read_matpower_case
 
-    net = read_matpower_case("case9.mat")
+    net = read_matpower_case("case9.m")    # or "case9.mat"
+
+The reader dispatches on the file extension: ``.m`` is parsed as MATPOWER text,
+anything else is loaded as a binary ``.mat`` struct. The ``.m`` parser reads the
+literal numeric matrices that ``savecase`` emits; it does not evaluate MATLAB
+expressions inside a matrix (something ``savecase`` never produces).
 
 The returned :class:`~monee.model.Network` is ready for simulation:
 
@@ -49,21 +55,33 @@ Know these conventions before you optimise:
        ``va_radians`` decision :class:`~monee.model.core.Var` (bounded
        :math:`\pm\pi`). ``va_degree`` is not set from the case; it is a
        derived report value (:class:`~monee.model.core.PostProcess`) computed
-       from ``va_radians`` after each solve.
+       from ``va_radians`` after each solve. Isolated buses (``BUS_TYPE == 4``)
+       are dropped, together with their generators and incident branches.
    * - ``bus`` demand (``Pd``/``Qd``)
      - A :class:`~monee.model.child.PowerLoad` child at the bus, or a
        :class:`~monee.model.child.PowerGenerator` when ``Pd < 0`` (negative
        demand encodes generation).
+   * - ``bus`` shunt (``Gs``/``Bs``)
+     - A :class:`~monee.model.child.PowerShunt` child whose draw scales with
+       voltage (``p = Gs * vm^2``, ``q = -Bs * vm^2``), so ``Bs > 0`` injects
+       reactive power like a capacitor. Omitted when both are zero.
    * - ``gen`` rows
-     - An :class:`~monee.model.child.ExtPowerGrid` (slack) when ``Pg == 0`` and
-       ``Pg != Pmax``. Then ``p_mw`` and ``q_mvar`` become free variables and
-       ``vm_pu`` is pinned to the generator voltage setpoint. All other rows
-       become fixed :class:`~monee.model.child.PowerGenerator` children.
+     - Routed by the host bus ``BUS_TYPE``. The first in-service generator at a
+       reference bus (``BUS_TYPE == 3``) becomes the
+       :class:`~monee.model.child.ExtPowerGrid` slack (free ``p_mw``/``q_mvar``,
+       pinned ``vm_pu`` and angle). The first in-service generator at a PV bus
+       (``BUS_TYPE == 2``) becomes a
+       :class:`~monee.model.child.VoltageControlledGenerator` (fixed ``P``,
+       ``vm_pu`` held at ``Vg``, free ``Q``). Every other generator becomes a
+       fixed :class:`~monee.model.child.PowerGenerator`. Out-of-service
+       generators (``GEN_STATUS <= 0``) are kept but made inert
+       (``regulation = 0``). Import raises if no reference bus yields a slack.
    * - ``branch`` rows
      - A :class:`~monee.model.branch.GenericPowerBranch` with the pi-model
        parameters of the row: charging susceptance split evenly between both
        ends, ``tap = 1`` when the MATPOWER tap is ``0``, and the phase shift
-       converted to radians.
+       converted to radians. ``BR_STATUS == 0`` imports the branch with
+       ``on_off = 0`` (de-energised but retained).
 
 .. note::
 

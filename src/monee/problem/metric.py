@@ -27,7 +27,10 @@ def is_load(component):
     return (
         isinstance(model, (md.PowerLoad, md.HeatLoad))
         or (isinstance(model, md.Sink) and isinstance(grid, md.GasGrid))
-        or isinstance(model, (md.HeatExchangerLoad, md.PassiveHeatExchangerLoad))
+        # Sign-based, not subclass-based: a bare (Passive)HeatExchanger with a
+        # consuming setpoint is sheddable (see controllable_demands) and must
+        # count here too.
+        or md.hx_is_consuming(model)
         or isinstance(model, md.ExtPowerGrid)
         or (isinstance(model, md.ExtHydrGrid) and isinstance(grid, md.GasGrid))
     )
@@ -68,10 +71,11 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                         * KGPS_KWHPERKG_TO_MW
                         * component.grid.higher_heating_value_kwh_per_kg
                     )
-                if isinstance(
-                    model, (md.HeatExchangerLoad, md.PassiveHeatExchangerLoad)
-                ):
-                    heat_load_curtailed += md.upper(model.q_mw)
+                if md.hx_is_consuming(model):
+                    # q_mw itself is a max-less Var, so md.upper would fall
+                    # back to its (post-solve) value and misreport curtailment;
+                    # use the numeric setpoint instead.
+                    heat_load_curtailed += model.q_mw_set
                 if isinstance(model, md.HeatLoad):
                     heat_load_curtailed += md.upper(model.q_mw_heat)
                 continue
@@ -99,10 +103,10 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                     * KGPS_KWHPERKG_TO_MW
                     * component.grid.higher_heating_value_kwh_per_kg
                 )
-            if isinstance(model, (md.HeatExchangerLoad, md.PassiveHeatExchangerLoad)):
-                heat_load_curtailed += md.upper(model.q_mw) - md.value(
-                    model.q_mw
-                ) * md.value(model.regulation)
+            if md.hx_is_consuming(model):
+                # q_mw solves to q_mw_set * regulation, so the shed is the gap
+                # to the setpoint (no extra regulation factor).
+                heat_load_curtailed += model.q_mw_set - md.value(model.q_mw)
             if isinstance(model, md.HeatLoad):
                 heat_load_curtailed += md.upper(model.q_mw_heat) - md.value(
                     model.q_mw_heat

@@ -1,10 +1,11 @@
 import math
 
-# Legacy fallback specific gas constant R/M [J/(kg*K)] for methane (M=0.0165
-# kg/mol, i.e. 8.314/0.0165 ~ 504.5 - NOT the lgas default M=0.0181). Callers
-# should pass the grid-derived ``r_specific`` (= universal_gas_constant /
-# molar_mass) so the gas's actual molar mass is honoured; this module-level
-# default only keeps direct/legacy calls working.
+# Legacy fallback specific gas constant [J/(kg*K)]. 504.5 corresponds to
+# M ~ 0.01648 kg/mol (8.314/504.5) - close to, but not exactly, the historical
+# methane default M=0.0165 (503.9), and not real methane (518.3) or the lgas
+# default M=0.0181 (459.0). Callers should pass the grid-derived ``r_specific``
+# (= universal_gas_constant / molar_mass) so the gas's actual molar mass is
+# honoured; this module-level default only keeps direct/legacy calls working.
 R_specific = 504.5
 
 
@@ -49,11 +50,6 @@ def abs_psq_pu(psq_pu, p_pu, pressure_ambient_pa, pressure_ref_pa):
     if pressure_ambient_pa == 0.0:  # NOSONAR
         return psq_pu
     return psq_pu + 2.0 * (pressure_ambient_pa / pressure_ref_pa) * p_pu
-
-
-def abs_pressure_pu(pressure_pu, pressure_ambient_pa, pressure_ref_pa):
-    """Absolute pressure (per-unit of ``pressure_ref_pa``) from a gauge ``pressure_pu``."""
-    return pressure_pu + pressure_ambient_pa / pressure_ref_pa
 
 
 def reference_gas_density(grid):

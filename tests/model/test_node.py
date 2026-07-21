@@ -52,6 +52,24 @@ def test_bus_eq_with_child():
     assert rp == [2, 12]
 
 
+def test_junction_has_generic_model_state():
+    # Junction deliberately skips super().__init__() (control-node MRO), but
+    # must still carry the essential GenericModel state.
+    junction = Junction()
+    assert junction._ext_data == {}
+    assert "t_pu" in junction.vars
+
+
+def test_control_node_construction_keeps_generic_model_state():
+    from monee.model.multi import PowerToHeatControlNode
+
+    control_node = PowerToHeatControlNode(
+        load_p_mw=1.0, load_q_mvar=0.0, efficiency=0.9
+    )
+    assert control_node._ext_data == {}
+    assert "heat_mw" in control_node.vars
+
+
 def test_junction_mass_flow():
     # GIVEN
     junction = Junction()

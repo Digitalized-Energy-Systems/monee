@@ -29,10 +29,10 @@ Purely linear/quadratic relationals are passed to ``addConstr`` untouched so the
 QCP/SOCP machinery still recognises the cones.
 """
 
+import functools
 import logging
 import math
 import time
-import types
 
 from monee.model import (
     Const,
@@ -45,6 +45,7 @@ from monee.model import (
 from monee.problem.core import OptimizationProblem
 
 from .core import (
+    _LEX_ABS_TOL,
     InterStepState,
     SolverInterface,
     SolverResult,
@@ -52,15 +53,18 @@ from .core import (
     apply_child_overwrites,
     apply_post_process_all,
     as_iter,
+    clamp_warm_start,
     compute_bound_violations,
     filter_bool_eqs,
     filter_intermediate_eqs,
+    finalize_failed_solution,
     finalize_solution,
     ignore_branch,
     ignore_child,
     ignore_compound,
     ignore_node,
     inject_vars,
+    lex_cap_slack,
     mark_slacks_and_prescriptions,
     prepare_solve_network,
     withdraw_vars,
@@ -68,10 +72,51 @@ from .core import (
 
 _log = logging.getLogger(__name__)
 
+
+class GurobipySolveError(RuntimeError):
+    """Raised by the gurobipy timeseries driver when a step has no usable
+    solution (mirrors the CasADi/GEKKO per-step failure contract)."""
+
+
+# GRB status name -> (solver_status, termination_condition) strings, mirroring
+# the Pyomo SolverStatus/TerminationCondition vocabulary documented on
+# :class:`SolverResult` so consumers can drop e.g. time-limit witnesses.
+_GRB_STATUS_TO_STRINGS: dict[str, tuple[str, str]] = {
+    "OPTIMAL": ("ok", "optimal"),
+    "SUBOPTIMAL": ("warning", "feasible"),
+    "INFEASIBLE": ("warning", "infeasible"),
+    "INF_OR_UNBD": ("warning", "infeasibleOrUnbounded"),
+    "UNBOUNDED": ("warning", "unbounded"),
+    "CUTOFF": ("aborted", "minFunctionValue"),
+    "ITERATION_LIMIT": ("aborted", "maxIterations"),
+    "NODE_LIMIT": ("aborted", "maxEvaluations"),
+    "TIME_LIMIT": ("aborted", "maxTimeLimit"),
+    "SOLUTION_LIMIT": ("aborted", "other"),
+    "INTERRUPTED": ("aborted", "userInterrupt"),
+    "NUMERIC": ("error", "solverFailure"),
+    "USER_OBJ_LIMIT": ("aborted", "other"),
+    "WORK_LIMIT": ("aborted", "other"),
+    "MEM_LIMIT": ("aborted", "other"),
+}
+
+
+@functools.cache
+def _grb_status_map(GRB) -> dict[int, tuple[str, str]]:
+    """``{GRB status code: (solver_status, termination_condition)}`` for the
+    bound GRB namespace (cached; codes are stable per gurobipy install)."""
+    out: dict[int, tuple[str, str]] = {}
+    for name, strings in _GRB_STATUS_TO_STRINGS.items():
+        code = getattr(GRB, name, None)
+        if code is not None:
+            out[code] = strings
+    return out
+
+
 DEFAULT_GUROBI_PARAMS: dict = {
     "MIPGap": 1e-3,
     "TimeLimit": 300,
 }
+
 
 def _require_gurobipy():
     """Import gurobipy lazily so a missing install doesn't break other backends."""
@@ -146,10 +191,13 @@ class GurobipySolver(SolverInterface):
 
     _BOUND_SNAP_TOL = 1e-9
 
-    _LEX_REL_TOL = 1e-6
-    _LEX_ABS_TOL = 1e-9
-
     _LEX_AUX_MIPGAP = 1e-2
+
+    # ``Var.Start`` only accelerates incumbent finding; per-step cost on this
+    # backend is presolve/branching-dominated, so previous-solution seeding
+    # measured neutral (0.94x to 1.06x) from small MISOCP nets up to the
+    # simbench MES.
+    benefits_from_warm_start = False
 
     def __init__(self, params: dict | None = None):
         self._backend_name = "gurobipy"
@@ -180,14 +228,8 @@ class GurobipySolver(SolverInterface):
                     vtype=GRB.INTEGER if value.integer else GRB.CONTINUOUS,
                     name=self._sanitize_name(f"{prefix}__{key}"),
                 )
-                init = value.value
-                if init is not None and isinstance(init, float) and math.isnan(init):
-                    init = None
+                init = clamp_warm_start(value)
                 if init is not None:
-                    if value.min is not None and init < value.min:
-                        init = value.min
-                    if value.max is not None and init > value.max:
-                        init = value.max
                     v.Start = init
                 setattr(target, key, v)
             elif type(value) is Const:
@@ -396,11 +438,10 @@ class GurobipySolver(SolverInterface):
             attr_val = getattr(model_obj, intermediate_eq.attr)
             if type(attr_val) is not Intermediate:
                 continue
-            eq = (
-                intermediate_eq.eq()
-                if isinstance(intermediate_eq.eq, types.FunctionType)
-                else intermediate_eq.eq
-            )
+            # callable() semantics as in core._process_intermediate_eqs
+            # (gurobipy Var/LinExpr/QuadExpr/NLExpr are not callable).
+            raw = intermediate_eq.eq
+            eq = raw() if callable(raw) else raw
             setattr(model_obj, intermediate_eq.attr, eq)
 
     # --------- objective ---------
@@ -441,21 +482,38 @@ class GurobipySolver(SolverInterface):
             return e
         return self._free_aux(gm, eq=e)
 
-    @classmethod
-    def _lex_cap_slack(cls, s_star: float, mip_gap: float) -> float:
-        rel = max(float(mip_gap or 0.0), cls._LEX_REL_TOL)
-        return cls._LEX_ABS_TOL + rel * max(1.0, abs(s_star))
+    @staticmethod
+    def _lex_cap_slack(s_star: float, mip_gap: float) -> float:
+        return lex_cap_slack(s_star, mip_gap)
 
     # --------- result classification ---------
 
+    def _status_strings(self, status) -> tuple[str, str]:
+        """``(solver_status, termination_condition)`` strings for a GRB status."""
+        return _grb_status_map(self._GRB).get(status, ("unknown", "unknown"))
+
     def _classify(self, gm, *, phase_label: str):
-        """Map a Gurobi status to ``(success, report)``.  OPTIMAL -> silent
-        success; INFEASIBLE -> IIS report + error; a limit hit with a feasible
-        incumbent -> warning, treated as success."""
+        """Map a Gurobi status to ``(success, report, solver_status,
+        termination_condition)``.  OPTIMAL -> silent success; INFEASIBLE -> IIS
+        report + error; a limit hit with a feasible incumbent -> warning,
+        treated as success (the termination strings expose the abort)."""
         GRB = self._GRB
         status = gm.Status
+        if status == GRB.INF_OR_UNBD:
+            # Default dual reductions collapse infeasible and unbounded into
+            # one inconclusive status with no diagnostic; one re-solve without
+            # them disambiguates (and enables the IIS when infeasible).
+            _log.info(
+                "%s returned INF_OR_UNBD; re-solving with DualReductions=0 "
+                "to disambiguate.",
+                phase_label,
+            )
+            gm.setParam("DualReductions", 0)
+            gm.optimize()
+            status = gm.Status
+        solver_status, tc = self._status_strings(status)
         if status == GRB.OPTIMAL:
-            return True, None
+            return True, None, solver_status, tc
         if status == GRB.INFEASIBLE:
             report = self._compute_iis(gm)
             _log.error(
@@ -464,18 +522,18 @@ class GurobipySolver(SolverInterface):
                 status,
                 report.summary(max_items=50),
             )
-            return False, report
+            return False, report, solver_status, tc
         if gm.SolCount > 0:
             _log.warning(
                 "%s returned non-optimal status %s; using witness solution.",
                 phase_label,
                 status,
             )
-            return True, None
+            return True, None, solver_status, tc
         _log.error(
             "%s failed without a usable solution (status=%s).", phase_label, status
         )
-        return False, None
+        return False, None, solver_status, tc
 
     def _compute_iis(self, gm) -> GurobiIISReport:
         constraints: list[str] = []
@@ -517,6 +575,32 @@ class GurobipySolver(SolverInterface):
         self._simulation = simulation
 
         gm = gp.Model("monee")
+        try:
+            return self._solve_on_model(
+                gm,
+                input_network,
+                optimization_problem=optimization_problem,
+                debug=debug,
+                exclude_unconnected_nodes=exclude_unconnected_nodes,
+                step_state=step_state,
+                simulation=simulation,
+                formulation=formulation,
+            )
+        finally:
+            gm.dispose()
+
+    def _solve_on_model(  # NOSONAR
+        self,
+        gm,
+        input_network: Network,
+        *,
+        optimization_problem,
+        debug,
+        exclude_unconnected_nodes,
+        step_state,
+        simulation,
+        formulation,
+    ):
         gm.setParam("OutputFlag", 1 if debug else 0)
         for key, val in self._params.items():
             gm.setParam(key, val)
@@ -609,22 +693,29 @@ class GurobipySolver(SolverInterface):
         )
 
         if lex_objectives:
-            success, report = self._solve_lexicographic(
+            success, report, status_str, tc_str = self._solve_lexicographic(
                 gm, user_obj_exprs, aux_obj_exprs
             )
         else:
             self._set_objective(gm, user_obj_exprs + aux_obj_exprs)
             gm.optimize()
-            success, report = self._classify(gm, phase_label="Gurobi solve")
+            success, report, status_str, tc_str = self._classify(
+                gm, phase_label="Gurobi solve"
+            )
 
         all_obj_exprs = user_obj_exprs + aux_obj_exprs
 
         withdraw_vars(
             self.withdraw_gurobi_vars_attr, nodes, branches, compounds, network
         )
-        violations = finalize_solution(
-            nodes, branches, compounds, network, input_network
-        )
+        if success:
+            violations = finalize_solution(
+                nodes, branches, compounds, network, input_network
+            )
+        else:
+            violations = finalize_failed_solution(
+                nodes, branches, compounds, network, input_network
+            )
 
         obj_val = self._obj_value(gm, all_obj_exprs) if success else float("nan")
 
@@ -634,6 +725,8 @@ class GurobipySolver(SolverInterface):
             obj_val,
             success,
             violations,
+            solver_status=status_str,
+            termination_condition=tc_str,
             infeasibility_report=report if not success else None,
             backend_used=self.backend_name,
             solver_used=self.solver_name,
@@ -649,7 +742,9 @@ class GurobipySolver(SolverInterface):
         if self._is_nonlinear(sum(user_obj_exprs)) or self._is_nonlinear(
             sum(aux_obj_exprs)
         ):
-            return self._solve_lexicographic_two_phase(gm, user_obj_exprs, aux_obj_exprs)
+            return self._solve_lexicographic_two_phase(
+                gm, user_obj_exprs, aux_obj_exprs
+            )
         return self._solve_lexicographic_native(gm, user_obj_exprs, aux_obj_exprs)
 
     def _solve_lexicographic_native(self, gm, user_obj_exprs, aux_obj_exprs):
@@ -660,7 +755,7 @@ class GurobipySolver(SolverInterface):
             index=0,
             priority=2,
             reltol=0.0,
-            abstol=self._LEX_ABS_TOL,
+            abstol=_LEX_ABS_TOL,
             name="user",
         )
         gm.setObjectiveN(
@@ -691,9 +786,11 @@ class GurobipySolver(SolverInterface):
         # Phase 1: user objective only - solved to the model's (tight) MIPGap.
         self._set_objective(gm, user_obj_exprs)
         gm.optimize()
-        success, report = self._classify(gm, phase_label="Lexicographic phase 1")
+        success, report, status_str, tc_str = self._classify(
+            gm, phase_label="Lexicographic phase 1"
+        )
         if not success:
-            return success, report
+            return success, report, status_str, tc_str
 
         s_star = gm.ObjVal
         slack = self._lex_cap_slack(s_star, self._params.get("MIPGap", 0.0))
@@ -826,10 +923,11 @@ class GurobipySolver(SolverInterface):
             for child in node_childs:
                 if ignore_child(child, ignored_nodes):
                     continue
-                for expr in child.minimize(grid, node, sqrt_impl=nf.sqrt):
+                for expr in child.minimize(grid, node.model, sqrt_impl=nf.sqrt):
                     aux_obj_exprs.append(expr)
                 child_eqs = filter_bool_eqs(
-                    as_iter(child.equations(grid, node)), context=f"child_{child.id}"
+                    as_iter(child.equations(grid, node.model)),
+                    context=f"child_{child.id}",
                 )
                 self._process_intermediate_eqs(child.model, child_eqs)
                 self._add_equations(
@@ -929,9 +1027,18 @@ class _ParamStepState(InterStepState):
         self.params: dict = {}  # {(component_id, attr): gurobi Var}
 
     def get(self, component_id, attr: str, step: int = -1):
+        if step != -1:
+            raise NotImplementedError(
+                "The gurobipy build-once timeseries driver carries only the "
+                f"previous step's state (step=-1); got step={step!r}. Deeper or "
+                "absolute lookbacks need the per-step rebuild loop."
+            )
         key = (component_id, attr)
         if key not in self.params:
-            init = float(self._initial.get(key, 0.0))
+            init = self._initial.get(key)
+            if init is None or (isinstance(init, float) and math.isnan(init)):
+                init = 0.0
+            init = float(init)
             self.params[key] = self._gm.addVar(
                 lb=init, ub=init, name=f"prev__{component_id}__{attr}"
             )
@@ -1114,8 +1221,18 @@ class GurobipyTimeseries:
         if self._param_state is not None:
             for (cid, attr), pvar in self._param_state.params.items():
                 model = self._model_by_id(network, cid, attr)
-                if model is not None:
-                    self._carried.append((pvar, model.__dict__[attr]))
+                if model is None:
+                    # An unlinked carried-state parameter (e.g. compound
+                    # temporal state) would silently stay frozen at its initial
+                    # value for every step - fail loudly instead.
+                    raise ValueError(
+                        "GurobipyTimeseries cannot carry the temporal state "
+                        f"({cid!r}, {attr!r}) forward (no child/node/branch "
+                        "variable with that id/attr; compound temporal state is "
+                        "unsupported). Use the standard monee.run_timeseries "
+                        "per-step loop instead."
+                    )
+                self._carried.append((pvar, model.__dict__[attr]))
 
         self._network, self._nodes = network, nodes
         self._branches, self._compounds, self._ignored = branches, compounds, ignored
@@ -1148,6 +1265,7 @@ class GurobipyTimeseries:
         self.steps = steps if steps is not None else length
         # Per-step / cumulative state.
         self._prev_int = None
+        self._carried_vals = None
         self._last_objective = None
         self.objectives: list = []
         self.last_solve_total_s = None
@@ -1155,6 +1273,13 @@ class GurobipyTimeseries:
         self.last_step_success = None
 
     # ------------------------------------------------------------------ #
+    def dispose(self):
+        """Release the persistent Gurobi model (idempotent). The driver keeps
+        one model alive across all steps by design; call this when done."""
+        if self._gm is not None:
+            self._gm.dispose()
+            self._gm = None
+
     def _cap_initials(self, comp_id, model):
         for key, val in model.__dict__.items():
             if isinstance(val, (Var, Const, Intermediate)):
@@ -1192,6 +1317,27 @@ class GurobipyTimeseries:
 
     # ------------------------------------------------------------------ #
     def _declare_param_targets(self, network, td):
+        # Only id-addressed child/node/branch series are wired as re-boundable
+        # parameters; silently ignoring the rest would freeze those inputs at
+        # their static values across all steps.
+        unsupported = []
+        if getattr(td, "_child_name_to_series", None):
+            unsupported.append("name-addressed child series")
+        if getattr(td, "_branch_name_to_series", None):
+            unsupported.append("name-addressed branch series")
+        if getattr(td, "_node_name_to_series", None):
+            unsupported.append("name-addressed node series")
+        if getattr(td, "_compound_id_to_series", None) or getattr(
+            td, "_compound_name_to_series", None
+        ):
+            unsupported.append("compound series")
+        if unsupported:
+            raise ValueError(
+                "GurobipyTimeseries supports only id-addressed child/node/"
+                f"branch series; got {', '.join(unsupported)}. Use the standard "
+                "monee.run_timeseries per-step loop for these."
+            )
+
         def add(model, attr):
             cur = getattr(model, attr)
             cur = (
@@ -1235,17 +1381,20 @@ class GurobipyTimeseries:
     def _solve_step(self, t: int) -> bool:  # NOSONAR
         """Re-bound the time-varying inputs (and carried state) for step *t*,
         re-solve the persistent model (warm-started), and scatter the solution
-        into the network models. Returns whether the solve succeeded."""
+        into the network models. Returns whether the solve succeeded; on
+        failure nothing is scattered and the carried state stays at the last
+        successful step's values (matching the rebuild loop, whose StepState
+        is only pushed on success)."""
         gs, gm = self._gs, self._gm
         for gvar, series in self._params:
             v = float(series[t])
             gvar.LB = v
             gvar.UB = v
-        # carry state forward: set prev-state parameters from the last step's
-        # solved values (step 0 keeps the captured initial state).
-        if t > 0:
-            for pvar, cur in self._carried:
-                val = gs._var_value(cur)
+        # carry state forward: set prev-state parameters from the last
+        # successful step's solved values (until then, keep the captured
+        # initial state).
+        if self._carried_vals is not None:
+            for (pvar, _cur), val in zip(self._carried, self._carried_vals):
                 pvar.LB = val
                 pvar.UB = val
         if self.carry_mip_start and self._prev_int is not None:
@@ -1257,6 +1406,8 @@ class GurobipyTimeseries:
         self._last_objective = (
             self._gs._obj_value(gm, self._obj_exprs) if ok else float("nan")
         )
+        if not ok:
+            return False
 
         # extract solution for results (reads live Gurobi objects, then
         # overwrites the model attrs with plain monee values)
@@ -1274,15 +1425,22 @@ class GurobipyTimeseries:
         apply_post_process_all(
             self._nodes, self._branches, self._compounds, self._network
         )
-        if ok:
-            self._prev_int = [gs._var_value(v) for v in self._int_vars]
-        return ok
+        self._prev_int = [gs._var_value(v) for v in self._int_vars]
+        self._carried_vals = [gs._var_value(cur) for _pvar, cur in self._carried]
+        return True
 
     def step_result(self, t: int) -> SolverResult:
         """Solve step *t* and return a :class:`SolverResult` for the network at
-        that step (used by the :func:`monee.run_timeseries` reuse fast path)."""
+        that step (used by the :func:`monee.run_timeseries` reuse fast path).
+        A step without a usable solution raises :class:`GurobipySolveError`
+        (same failure contract as :meth:`run` and the CasADi driver)."""
         ok = self._solve_step(t)
         self.last_step_success = ok
+        if not ok:
+            raise GurobipySolveError(
+                f"Gurobi timeseries step {t} has no usable solution "
+                f"(status={self._gm.Status})."
+            )
         violations = compute_bound_violations(
             self._nodes, self._branches, self._compounds, self._network
         )
@@ -1300,16 +1458,26 @@ class GurobipyTimeseries:
     def run(self):
         """Solve every timestep, reusing the persistent model. Returns a list of
         per-step ``{type_name: DataFrame}`` dicts (like
-        :attr:`SolverResult.dataframes`)."""
-        results, solve_total, ok_all = [], 0.0, True
+        :attr:`SolverResult.dataframes`). A step without a usable solution
+        raises :class:`GurobipySolveError` (matching the per-step failure
+        contract of the other timeseries drivers) instead of silently appending
+        a zeroed frame."""
+        results, solve_total = [], 0.0
         self.objectives = []
         for t in range(self.steps):
             t0 = time.perf_counter()
             ok = self._solve_step(t)
             solve_total += time.perf_counter() - t0
-            ok_all = ok_all and ok
+            self.last_step_success = ok
+            if not ok:
+                self.last_solve_total_s = solve_total
+                self.last_status_ok = False
+                raise GurobipySolveError(
+                    f"Gurobi timeseries step {t} has no usable solution "
+                    f"(status={self._gm.Status})."
+                )
             self.objectives.append(self._last_objective)
             results.append(self._network.as_result_dataframe_dict())
         self.last_solve_total_s = solve_total
-        self.last_status_ok = ok_all
+        self.last_status_ok = True
         return results

@@ -12,10 +12,6 @@ from monee.model.phys.nonlinear.gf import reference_gas_density
 REF_PA = 1000000
 REF_TEMP = 356
 DEFAULT_LENGTH = 100
-
-# Gas HHV [MJ/kg] for sizing gas demands from power magnitudes. Sourced from the
-# lgas grid definition so the sizing uses the SAME heating value as the coupling
-# physics (see monee.model.grid.DEFAULT_GAS_HHV_MJ_PER_KG).
 GAS_HHV_MJ_PER_KG = DEFAULT_GAS_HHV_MJ_PER_KG
 
 
@@ -40,18 +36,96 @@ def _node_power_gen_mw(power_net: mm.Network, node):
     return p_mw
 
 
+# Bus couplers / transformer stubs have zero-length power branches (and
+# co-located endpoints, so the geodesic fallback is ~0 too). A pipe derived
+# from them would divide by zero in the Weymouth denominator (Δp² ∝ L·ṁ²/D⁵);
+# floor every builder-derived FINAL pipe length (after length_scale) to 1 m.
+MIN_PIPE_LENGTH_M = 1.0
+
+
+def _floor_length(length_m: float) -> float:
+    return max(MIN_PIPE_LENGTH_M, float(length_m))
+
+
+def _fallback_length(branch, node1, node2, default_length=DEFAULT_LENGTH):
+    """Branch length [m]: ``length_m`` if set, else geodesic distance between
+    the endpoint positions, else the default length."""
+    length = getattr(branch.model, "length_m", None)
+    if length is not None:
+        return float(length)
+    if node1.position is not None and node2.position is not None:
+        return distance.distance(node1.position, node2.position).m
+    return float(default_length)
+
+
 def get_length(
     net: mm.Network, branch, node1_id, node2_id, default_length=DEFAULT_LENGTH
 ):
-    if hasattr(branch.model, "length_m"):
-        return branch.model.length_m
-    node1 = net.node_by_id(node1_id)
-    node2 = net.node_by_id(node2_id)
+    return _fallback_length(
+        branch, net.node_by_id(node1_id), net.node_by_id(node2_id), default_length
+    )
 
-    if node1.position is None or node2.position is None:
-        return default_length
 
-    return distance.distance(node1.position, node2.position).m
+def _length_weight(branch, node_from, node_to):
+    return _fallback_length(branch, node_from, node_to)
+
+
+def _resolve_backbone_weight(weight):
+    return _length_weight if weight == "length" else weight
+
+
+def _bfs_parents_and_order(graph, root):
+    """BFS parent map of ``graph`` rooted at ``root`` plus the node order for
+    leaf-to-root subtree accumulation (reversed topological order)."""
+    undirected = nx.Graph(graph)
+    parent = {root: None}
+    for p, c in nx.bfs_edges(undirected, source=root):
+        parent[c] = p
+    order = list(reversed(list(nx.topological_sort(nx.bfs_tree(undirected, root)))))
+    return parent, order
+
+
+def _downstream_node(parent, branch):
+    """The branch endpoint whose tree-parent is the other endpoint."""
+    if parent.get(branch.to_node_id) == branch.from_node_id:
+        return branch.to_node_id
+    return branch.from_node_id
+
+
+def _capacity_diameter(mass_flow_kgs, headroom, density_kg_per_m3, v_mps, floor_m):
+    """Smallest pipe diameter [m] carrying ``mass_flow_kgs`` (with headroom)
+    at the design velocity, floored at ``floor_m``."""
+    d = hyd.calc_min_diameter_for_mass_flow(
+        mass_flow_kgs * headroom, density_kg_per_m3, v_mps
+    )
+    return max(d, floor_m)
+
+
+def _demand_supply_terminals(power_net, slack_node_id):
+    """Buses a Steiner backbone must connect: the slack plus every bus that
+    carries electrical load or generation."""
+    terminals = {slack_node_id}
+    for node in power_net.nodes:
+        if (
+            _node_power_load_mw(power_net, node) > 0
+            or _node_power_gen_mw(power_net, node) > 0
+        ):
+            terminals.add(node.id)
+    return terminals
+
+
+def _make_backbone(power_net, slack_node_id, method, weight):
+    """Spanning-tree (default) or Steiner backbone of ``power_net`` used as the
+    shared gas/heat layout skeleton."""
+    weight_fn = _resolve_backbone_weight(weight)
+    if method == "steiner":
+        return mm.to_backbone(
+            power_net,
+            method="steiner",
+            weight=weight_fn,
+            terminals=_demand_supply_terminals(power_net, slack_node_id),
+        )
+    return mm.to_backbone(power_net, method="span", weight=weight_fn)
 
 
 def create_heat_net_for_power(
@@ -66,7 +140,9 @@ def create_heat_net_for_power(
     design_flow_headroom=1.5,
     seed=None,
 ):
-    rng = random.Random(seed) if seed is not None else random
+    """Legacy randomized heat layer; prefer
+    :func:`create_heat_supply_return_net_for_power` for new networks."""
+    rng = random.Random(seed)
     heat_grid = mm.create_water_grid("water", t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA)
     target_net.set_default_grid("water", heat_grid)
 
@@ -75,18 +151,24 @@ def create_heat_net_for_power(
     bus_index_to_end_junction_index = {}
     node_demand_kgs = {}
 
-    for node in power_net_as_st.nodes:
-        junc_id = mx.create_junction(target_net, position=node.position, grid=heat_grid)
-        sink_mass_flow = mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10
-        node_demand_kgs[node.id] = sink_mass_flow
+    def _create_random_sink(node_id, junc_id):
+        sink_mass_flow = (
+            mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10  # NOSONAR
+        )
+        node_demand_kgs[node_id] += sink_mass_flow
         mx.create_sink(
             target_net,
             junc_id,
             mass_flow_kgs=sink_mass_flow,
         )
+
+    for node in power_net_as_st.nodes:
+        junc_id = mx.create_junction(target_net, position=node.position, grid=heat_grid)
+        node_demand_kgs[node.id] = 0.0
+        _create_random_sink(node.id, junc_id)
         bus_index_to_junction_index[node.id] = junc_id
         bus_index_to_end_junction_index[node.id] = junc_id
-        deployment_c_value = rng.random()
+        deployment_c_value = rng.random()  # NOSONAR
         if deployment_c_value < heat_deployment_rate:
             bus_index_to_end_junction_index[node.id] = mx.create_junction(
                 target_net, position=node.position, grid=heat_grid
@@ -94,25 +176,19 @@ def create_heat_net_for_power(
             # Passive: an in-line device on the distribution run - the tree
             # flow is already fixed by the downstream sinks, so a design-flow
             # prescribing HeatExchanger would over-determine the hydraulics.
+            # ~80 % of deployed heat components are loads (q_mw > 0), 20 %
+            # generators - matching the heat_deployment_rate intent.
             mx.create_passive_heat_exchanger(
                 target_net,
                 from_node_id=bus_index_to_junction_index[node.id],
                 to_node_id=bus_index_to_end_junction_index[node.id],
-                q_mw=(-1 if rng.random() > 0.8 else 1)
-                * -0.1
-                * rng.random()
+                q_mw=(-1 if rng.random() > 0.8 else 1)  # NOSONAR
+                * 0.1
+                * rng.random()  # NOSONAR
                 * power_scale,
                 diameter_m=default_diameter_m,
             )
-            end_sink_mass_flow = (
-                mass_flow_rate_kgs + rng.random() * mass_flow_rate_kgs / 10
-            )
-            node_demand_kgs[node.id] += end_sink_mass_flow
-            mx.create_sink(
-                target_net,
-                bus_index_to_end_junction_index[node.id],
-                mass_flow_kgs=end_sink_mass_flow,
-            )
+            _create_random_sink(node.id, bus_index_to_end_junction_index[node.id])
 
     # Capacity-based trunk sizing (same design as the auto_diameter mode of
     # create_heat_supply_return_net_for_power): every tree pipe must carry the
@@ -122,44 +198,37 @@ def create_heat_net_for_power(
     # max_mass_flow_kgs) caps the slack trunk below total demand and the net is infeasible
     # by construction.
     root = power_net_as_st.first_node()
-    parent = {root: None}
-    undirected = nx.Graph(power_net_as_st.graph)
-    for p, c in nx.bfs_edges(undirected, source=root):
-        parent[c] = p
+    parent, order = _bfs_parents_and_order(power_net_as_st.graph, root)
     subtree_kgs = dict(node_demand_kgs)
-    for c in reversed(list(nx.topological_sort(nx.bfs_tree(undirected, root)))):
+    for c in order:
         if parent.get(c) is not None:
             subtree_kgs[parent[c]] += subtree_kgs[c]
 
-    def _trunk_diameter(downstream_kgs):
-        d = hyd.calc_min_diameter_for_mass_flow(
-            downstream_kgs * design_flow_headroom,
-            heat_grid.fluid_density_kg_per_m3,
-            heat_grid.v_max_mps,
-        )
-        return max(d, default_diameter_m)
-
     for branch in power_net_as_st.branches:
-        # The endpoint whose tree-parent is the other endpoint sits downstream.
-        if parent.get(branch.to_node_id) == branch.from_node_id:
-            downstream = subtree_kgs[branch.to_node_id]
-        else:
-            downstream = subtree_kgs[branch.from_node_id]
+        downstream = subtree_kgs[_downstream_node(parent, branch)]
         from_node_id = bus_index_to_end_junction_index[branch.from_node_id]
         to_node_id = bus_index_to_junction_index[branch.to_node_id]
         mx.create_water_pipe(
             target_net,
             from_node_id=from_node_id,
             to_node_id=to_node_id,
-            diameter_m=_trunk_diameter(downstream),
-            length_m=get_length(
-                target_net,
-                branch,
-                from_node_id,
-                to_node_id,
-                default_length=default_length,
-            )
-            * length_scale,
+            diameter_m=_capacity_diameter(
+                downstream,
+                design_flow_headroom,
+                heat_grid.fluid_density_kg_per_m3,
+                heat_grid.v_max_mps,
+                default_diameter_m,
+            ),
+            length_m=_floor_length(
+                get_length(
+                    target_net,
+                    branch,
+                    from_node_id,
+                    to_node_id,
+                    default_length=default_length,
+                )
+                * length_scale
+            ),
             temperature_ext_k=296.15,
             roughness_m=0.001,
             grid=heat_grid,
@@ -187,11 +256,13 @@ def create_gas_net_for_power(
     source_scaling=1,
     default_diameter_m=0.3,
     length_scale=1,
-    default_length=100,
+    default_length=DEFAULT_LENGTH,
     seed=None,
     gas_type="lgas",
 ):
-    rng = random.Random(seed) if seed is not None else random
+    """Legacy randomized gas layer; prefer :func:`create_gas_tree_net_for_power`
+    for new networks."""
+    rng = random.Random(seed)
     gas_grid = mm.create_gas_grid(
         "gas", type=gas_type, t_ref_k=REF_TEMP, pressure_ref_pa=REF_PA
     )
@@ -211,23 +282,25 @@ def create_gas_net_for_power(
             from_node_id=from_node_id,
             to_node_id=to_node_id,
             diameter_m=default_diameter_m * scaling,
-            length_m=get_length(
-                target_net,
-                branch,
-                from_node_id,
-                to_node_id,
-                default_length=default_length,
-            )
-            * length_scale,
+            length_m=_floor_length(
+                get_length(
+                    target_net,
+                    branch,
+                    from_node_id,
+                    to_node_id,
+                    default_length=default_length,
+                )
+                * length_scale
+            ),
             grid=gas_grid,
         )
     for node in power_net_as_st.nodes:
-        deployment_c_value = rng.random()
+        deployment_c_value = rng.random()  # NOSONAR
         if deployment_c_value <= gas_deployment_rate:
             mx.create_sink(
                 target_net,
                 bus_index_to_junction_index[node.id],
-                mass_flow_kgs=round(0.1 + 0.5 * rng.random() * scaling, 2),
+                mass_flow_kgs=round((0.1 + 0.5 * rng.random()) * scaling, 2),  # NOSONAR
             )
     mx.create_source(
         target_net,
@@ -244,167 +317,81 @@ def create_gas_net_for_power(
 
 
 def create_monee_benchmark_net():
-    random.seed(9002)
+    seed = 9002
     pn = mm.Network(el_model=mm.PowerGrid(name="power", sn_mva=100))
 
-    node_0 = pn.node(
-        mm.Bus(base_kv=120),
-        mm.EL,
-        child_ids=[pn.child(mm.PowerGenerator(p_mw=10, q_mvar=0, regulation=0.5))],
-    )
-    node_1 = pn.node(
-        mm.Bus(base_kv=120),
-        mm.EL,
-        child_ids=[pn.child(mm.ExtPowerGrid(p_mw=10, q_mvar=0, vm_pu=1, va_radians=0))],
-    )
-    node_2 = pn.node(
-        mm.Bus(base_kv=120),
-        mm.EL,
-        child_ids=[pn.child(mm.PowerLoad(p_mw=10, q_mvar=0))],
-    )
-    node_3 = pn.node(
-        mm.Bus(base_kv=120),
-        mm.EL,
-        child_ids=[pn.child(mm.PowerLoad(p_mw=20, q_mvar=0))],
-    )
-    node_4 = pn.node(
-        mm.Bus(base_kv=120),
-        mm.EL,
-        child_ids=[pn.child(mm.PowerLoad(p_mw=20, q_mvar=0))],
-    )
-    node_5 = pn.node(
-        mm.Bus(base_kv=120),
-        mm.EL,
-        child_ids=[pn.child(mm.PowerGenerator(p_mw=30, q_mvar=0, regulation=0.5))],
-    )
-    node_6 = pn.node(
-        mm.Bus(base_kv=120),
-        mm.EL,
-        child_ids=[pn.child(mm.GridFormingGenerator(p_mw_max=50, q_mvar_max=50))],
-    )
-    max_i_ka = 319
-    pn.branch(
-        mm.PowerLine(
-            length_m=100,
-            r_ohm_per_m=0.00007,
-            x_ohm_per_m=0.00007,
-            max_i_ka=max_i_ka,
-            parallel=1,
-        ),
-        node_0,
-        node_1,
-    )
-    pn.branch(
-        mm.PowerLine(
-            length_m=100,
-            r_ohm_per_m=0.00007,
-            x_ohm_per_m=0.00007,
-            max_i_ka=max_i_ka,
-            parallel=1,
-        ),
-        node_1,
-        node_2,
-    )
-    pn.branch(
-        mm.PowerLine(
-            length_m=100,
-            r_ohm_per_m=0.00007,
-            x_ohm_per_m=0.00007,
-            max_i_ka=max_i_ka,
-            parallel=1,
-        ),
-        node_1,
-        node_5,
-    )
-    pn.branch(
-        mm.PowerLine(
-            length_m=100,
-            r_ohm_per_m=0.00007,
-            x_ohm_per_m=0.00007,
-            max_i_ka=max_i_ka,
-            parallel=1,
-        ),
-        node_2,
-        node_3,
-    )
-    pn.branch(
-        mm.PowerLine(
-            length_m=100,
-            r_ohm_per_m=0.00007,
-            x_ohm_per_m=0.00007,
-            max_i_ka=max_i_ka,
-            parallel=1,
-        ),
-        node_3,
-        node_4,
-    )
-    pn.branch(
-        mm.PowerLine(
-            length_m=100,
-            r_ohm_per_m=0.00007,
-            x_ohm_per_m=0.00007,
-            max_i_ka=max_i_ka,
-            parallel=1,
-        ),
-        node_3,
-        node_6,
-    )
+    child_models = [
+        mm.PowerGenerator(p_mw=10, q_mvar=0, regulation=0.5),
+        mm.ExtPowerGrid(p_mw=10, q_mvar=0, vm_pu=1, va_degree=0),
+        mm.PowerLoad(p_mw=10, q_mvar=0),
+        mm.PowerLoad(p_mw=20, q_mvar=0),
+        mm.PowerLoad(p_mw=20, q_mvar=0),
+        mm.PowerGenerator(p_mw=30, q_mvar=0, regulation=0.5),
+        mm.GridFormingGenerator(p_mw_max=50, q_mvar_max=50),
+    ]
+    nodes = [
+        pn.node(mm.Bus(base_kv=120), mm.EL, child_ids=[pn.child(model)])
+        for model in child_models
+    ]
+    # 0.319 kA \approx pandapower's NA2XS2Y 1x240 cable rating.
+    max_i_ka = 0.319
+    for a, b in [(0, 1), (1, 2), (1, 5), (2, 3), (3, 4), (3, 6)]:
+        pn.branch(
+            mm.PowerLine(
+                length_m=100,
+                r_ohm_per_m=0.00007,
+                x_ohm_per_m=0.00007,
+                max_i_ka=max_i_ka,
+                parallel=1,
+            ),
+            nodes[a],
+            nodes[b],
+        )
 
     new_mes = pn.copy()
 
     # gas
-    bus_to_gas_junc = create_gas_net_for_power(pn, new_mes, 1, scaling=1)
+    bus_to_gas_junc = create_gas_net_for_power(pn, new_mes, 1, scaling=1, seed=seed)
 
     # # # heat
     bus_index_to_junction_index, _ = create_heat_net_for_power(
-        pn, new_mes, 1, mass_flow_rate_kgs=1, default_diameter_m=0.16
+        pn, new_mes, 1, mass_flow_rate_kgs=1, default_diameter_m=0.16, seed=seed + 1
     )
-    new_water_junc = mx.create_water_junction(new_mes)
-    mx.create_sink(
-        new_mes,
-        new_water_junc,
-        mass_flow_kgs=0.05,
-    )
-    new_water_junc_2 = mx.create_water_junction(new_mes)
-    mx.create_sink(
-        new_mes,
-        new_water_junc_2,
-        mass_flow_kgs=0.05,
-    )
-    mx.create_passive_heat_exchanger(
-        new_mes,
-        from_node_id=new_water_junc,
-        to_node_id=new_water_junc_2,
-        q_mw=0.03,
-        diameter_m=0.16,
-    )
-    new_water_junc_3 = mx.create_water_junction(new_mes)
-    mx.create_sink(
-        new_mes,
-        new_water_junc_3,
-        mass_flow_kgs=0.06,
-    )
-    mx.create_passive_heat_exchanger(
-        new_mes,
-        from_node_id=new_water_junc_2,
-        to_node_id=new_water_junc_3,
-        q_mw=0.03,
-        diameter_m=0.16,
-    )
+    water_juncs = []
+    for sink_kgs in (0.05, 0.05, 0.06):
+        junc = mx.create_water_junction(new_mes)
+        mx.create_sink(
+            new_mes,
+            junc,
+            mass_flow_kgs=sink_kgs,
+        )
+        if water_juncs:
+            mx.create_passive_heat_exchanger(
+                new_mes,
+                from_node_id=water_juncs[-1],
+                to_node_id=junc,
+                q_mw=0.03,
+                diameter_m=0.16,
+            )
+        water_juncs.append(junc)
     mx.create_p2g(
         new_mes,
-        from_node_id=node_4,
-        to_node_id=bus_to_gas_junc[node_4],
+        from_node_id=nodes[4],
+        to_node_id=bus_to_gas_junc[nodes[4]],
         efficiency=0.7,
         mass_flow_setpoint_kgs=1,
         regulation=0,
     )
+    # CHP compounds discharge the heated water at heat_return_node_id. Here the
+    # sink-only side chain (water_juncs) has no water source of its own,
+    # so it must sit on the discharge side: the CHP draws from the main heat
+    # net and feeds the chain's sinks/exchangers.
     mx.create_chp(
         new_mes,
-        power_node_id=node_1,
-        heat_node_id=bus_index_to_junction_index[node_0],
-        heat_return_node_id=new_water_junc,
-        gas_node_id=bus_to_gas_junc[node_3],
+        power_node_id=nodes[1],
+        heat_node_id=bus_index_to_junction_index[nodes[0]],
+        heat_return_node_id=water_juncs[0],
+        gas_node_id=bus_to_gas_junc[nodes[3]],
         mass_flow_setpoint_kgs=0.005,
         diameter_m=0.1,
         efficiency_power=0.5,
@@ -413,46 +400,34 @@ def create_monee_benchmark_net():
     )
     mx.create_g2p(
         new_mes,
-        from_node_id=bus_to_gas_junc[node_1],
-        to_node_id=node_1,
+        from_node_id=bus_to_gas_junc[nodes[1]],
+        to_node_id=nodes[1],
         efficiency=0.9,
         p_mw_setpoint=2,
         regulation=0,
     )
     mx.create_g2p(
         new_mes,
-        from_node_id=bus_to_gas_junc[node_6],
-        to_node_id=node_6,
+        from_node_id=bus_to_gas_junc[nodes[6]],
+        to_node_id=nodes[6],
         efficiency=0.9,
         p_mw_setpoint=1,
         regulation=0,
     )
-    new_mes.branch(
-        mm.PowerLine(
-            length_m=100,
-            r_ohm_per_m=0.00007,
-            x_ohm_per_m=0.00007,
-            parallel=1,
-            backup=True,
-            on_off=0,
-            max_i_ka=max_i_ka,
-        ),
-        node_4,
-        node_0,
-    )
-    new_mes.branch(
-        mm.PowerLine(
-            length_m=100,
-            r_ohm_per_m=0.00007,
-            x_ohm_per_m=0.00007,
-            parallel=1,
-            backup=True,
-            on_off=0,
-            max_i_ka=max_i_ka,
-        ),
-        node_5,
-        node_2,
-    )
+    for a, b in [(4, 0), (5, 2)]:
+        new_mes.branch(
+            mm.PowerLine(
+                length_m=100,
+                r_ohm_per_m=0.00007,
+                x_ohm_per_m=0.00007,
+                parallel=1,
+                backup=True,
+                on_off=0,
+                max_i_ka=max_i_ka,
+            ),
+            nodes[a],
+            nodes[b],
+        )
     return new_mes
 
 
@@ -461,7 +436,7 @@ def create_mv_multi_cigre():
 
     from monee.io.from_pandapower import from_pandapower_net
 
-    random.seed(9004)
+    seed = 9004
     pnet = pn.create_cigre_network_mv(with_der="pv_wind")
 
     monee_net = from_pandapower_net(pnet)
@@ -477,6 +452,7 @@ def create_mv_multi_cigre():
         # This reference grid was tuned for the pre-2026 methane-like gas; keep
         # it on that gas so the bench net stays feasible under realistic lgas.
         gas_type="methane",
+        seed=seed,
     )
     create_heat_net_for_power(
         monee_net,
@@ -487,6 +463,7 @@ def create_mv_multi_cigre():
         power_scale=100,
         length_scale=0.001,
         default_length=100000,
+        seed=seed + 1,
     )
 
     mx.create_power_generator(new_mes, 5, 2, 1)
@@ -522,12 +499,32 @@ def create_mv_multi_cigre():
             parallel=1,
             backup=True,
             on_off=0,
-            max_i_ka=319,
+            max_i_ka=0.319,
         ),
         5,
         2,
     )
+    _bound_el_branch_powers(new_mes, s_bound_mva=100.0)
     return new_mes
+
+
+def _bound_el_branch_powers(net: mm.Network, s_bound_mva: float):
+    """Give every unbounded electrical branch power Var finite, system-scale
+    bounds. The branch p/q Vars default to (-inf, inf); SCIP then runs spatial
+    branch-and-bound on unbounded variables ("cannot guarantee finite
+    termination") and may never find an incumbent on the nonconvex AC/coupling
+    core - the CIGRE bench net went from a 300 s timeout without any feasible
+    solution to solving in seconds once these domains are finite. The bound just
+    needs to dominate any physical flow (~2x the total system demand)."""
+    for branch in net.branches:
+        model = branch.model
+        for attr in ("p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar"):
+            var = getattr(model, attr, None)
+            if var is not None and hasattr(var, "min"):
+                if var.min is None:
+                    var.min = -s_bound_mva
+                if var.max is None:
+                    var.max = s_bound_mva
 
 
 def _add_gas_mesh_pipes(
@@ -547,7 +544,7 @@ def _add_gas_mesh_pipes(
     # The point is to give every junction more than one path to the
     # slack so single pipe failures don't isolate large subtrees - the
     # main reason additive CPs underperform on a tree layout.
-    rng = random.Random(mesh_seed) if mesh_seed is not None else random
+    rng = random.Random(mesh_seed)
     junctions = list(bus_index_to_junction_index.values())
     existing_pairs = set()
     for branch in target_net.branches:
@@ -560,14 +557,14 @@ def _add_gas_mesh_pipes(
         for j2 in junctions[i + 1 :]
         if frozenset((j1, j2)) not in existing_pairs
     ]
-    rng.shuffle(candidates)
+    rng.shuffle(candidates)  # NOSONAR
     for j1, j2 in candidates[:extra_mesh_pipes]:
         mx.create_gas_pipe(
             target_net,
             from_node_id=j1,
             to_node_id=j2,
             diameter_m=default_diameter_m * mesh_diameter_factor,
-            length_m=default_length * mesh_length_factor * length_scale,
+            length_m=_floor_length(default_length * mesh_length_factor * length_scale),
             grid=gas_grid,
         )
 
@@ -594,6 +591,8 @@ def create_gas_tree_net_for_power(  # NOSONAR
     pressure_ref_pa=REF_PA,
     pressure_ambient_pa=0.0,
     diameter_tiers=None,
+    backbone_method="span",
+    backbone_weight=None,
 ):
     """Build a gas grid on the spanning tree of ``power_net``.
 
@@ -642,9 +641,9 @@ def create_gas_tree_net_for_power(  # NOSONAR
     # HHV [MJ/kg] of this grid's gas fluid (sizing matches the gas physics).
     gas_hhv_mj = gas_grid.higher_heating_value_kwh_per_kg * 3.6
 
-    power_net_as_st = mm.to_spanning_tree(power_net)
-    slack_node = (
-        slack_node_id if slack_node_id is not None else power_net_as_st.first_node()
+    slack_node = slack_node_id if slack_node_id is not None else power_net.first_node()
+    power_net_as_st = _make_backbone(
+        power_net, slack_node, backbone_method, backbone_weight
     )
 
     bus_index_to_junction_index = {}
@@ -671,11 +670,7 @@ def create_gas_tree_net_for_power(  # NOSONAR
     subtree_kgs: dict = {}
     subtree_consumers: dict = {}
     if auto_diameter or diameter_tiers:
-        undirected = nx.Graph(power_net_as_st.graph)
-        parent = {slack_node: None}
-        for p, c in nx.bfs_edges(undirected, source=slack_node):
-            parent[c] = p
-        order = list(reversed(list(nx.topological_sort(nx.bfs_tree(undirected, slack_node)))))
+        parent, order = _bfs_parents_and_order(power_net_as_st.graph, slack_node)
         subtree_kgs = {nid: bus_sink_kgs.get(nid, 0.0) for nid in parent}
         subtree_consumers = {nid: (1 if nid in bus_sink_kgs else 0) for nid in parent}
         for c in order:
@@ -701,26 +696,20 @@ def create_gas_tree_net_for_power(  # NOSONAR
         )
         gas_density = reference_gas_density(gas_grid)
 
-        def _gas_diameter(downstream_kgs):
-            """Smallest gas-pipe diameter [m] carrying ``downstream_kgs`` at the
-            design velocity (with headroom), floored at ``auto_min_diameter_m``."""
-            d = hyd.calc_min_diameter_for_mass_flow(
-                downstream_kgs * auto_diameter_headroom, gas_density, design_v
-            )
-            return max(d, auto_min_diameter_m)
-
     for branch in power_net_as_st.branches:
         from_id = bus_index_to_junction_index[branch.from_node_id]
         to_id = bus_index_to_junction_index[branch.to_node_id]
-        # Downstream endpoint = the one whose tree-parent is the other.
-        if parent.get(branch.to_node_id) == branch.from_node_id:
-            downstream_node = branch.to_node_id
-        else:
-            downstream_node = branch.from_node_id
+        downstream_node = _downstream_node(parent, branch)
         if diameter_tiers:
             diameter_m = _tier_diameter(subtree_consumers[downstream_node])
         elif auto_diameter:
-            diameter_m = _gas_diameter(subtree_kgs[downstream_node])
+            diameter_m = _capacity_diameter(
+                subtree_kgs[downstream_node],
+                auto_diameter_headroom,
+                gas_density,
+                design_v,
+                auto_min_diameter_m,
+            )
         else:
             diameter_m = default_diameter_m
         mx.create_gas_pipe(
@@ -728,14 +717,16 @@ def create_gas_tree_net_for_power(  # NOSONAR
             from_node_id=from_id,
             to_node_id=to_id,
             diameter_m=diameter_m,
-            length_m=get_length(
-                target_net,
-                branch,
-                from_id,
-                to_id,
-                default_length=default_length,
-            )
-            * length_scale,
+            length_m=_floor_length(
+                get_length(
+                    target_net,
+                    branch,
+                    from_id,
+                    to_id,
+                    default_length=default_length,
+                )
+                * length_scale
+            ),
             grid=gas_grid,
         )
 
@@ -804,6 +795,8 @@ def create_heat_supply_return_net_for_power(  # NOSONAR
     auto_diameter_v_mps=None,
     auto_diameter_headroom=1.5,
     auto_min_diameter_m=None,
+    backbone_method="span",
+    backbone_weight=None,
 ):
     """Build a supply/return DHS grid on the spanning tree of ``power_net``.
 
@@ -856,20 +849,19 @@ def create_heat_supply_return_net_for_power(  # NOSONAR
     )
 
     def _auto_diameter(mass_flow_kgs):
-        """Capacity-sized diameter [m] for ``mass_flow_kgs``, floored."""
-        d = hyd.calc_min_diameter_for_mass_flow(
-            mass_flow_kgs * auto_diameter_headroom,
+        return _capacity_diameter(
+            mass_flow_kgs,
+            auto_diameter_headroom,
             heat_grid.fluid_density_kg_per_m3,
             auto_v,
+            auto_floor_m,
         )
-        return max(d, auto_floor_m)
-
-    power_net_as_st = mm.to_spanning_tree(power_net)
 
     # Orient supply pipes outward from the slack via BFS so every supply
     # junction has an incoming pipe (McCormick-DHS pins direction).
-    slack_root = (
-        slack_node_id if slack_node_id is not None else power_net_as_st.first_node()
+    slack_root = slack_node_id if slack_node_id is not None else power_net.first_node()
+    power_net_as_st = _make_backbone(
+        power_net, slack_root, backbone_method, backbone_weight
     )
     undirected = nx.Graph(power_net_as_st.graph)
     branch_lookup = {}
@@ -924,14 +916,16 @@ def create_heat_supply_return_net_for_power(  # NOSONAR
             from_node_id=from_id,
             to_node_id=to_id,
             diameter_m=default_diameter_m,
-            length_m=get_length(
-                target_net,
-                branch,
-                from_id,
-                to_id,
-                default_length=default_length,
-            )
-            * length_scale,
+            length_m=_floor_length(
+                get_length(
+                    target_net,
+                    branch,
+                    from_id,
+                    to_id,
+                    default_length=default_length,
+                )
+                * length_scale
+            ),
             temperature_ext_k=296.15,
             roughness_m=0.001,
             grid=heat_grid,
@@ -1084,9 +1078,11 @@ def create_heat_supply_return_net_for_power(  # NOSONAR
             from_node_id=return_junction,
             to_node_id=slack_supply_junction,
             diameter_m=closing_diameter_m,
-            length_m=return_length_m
-            if return_length_m is not None
-            else default_length * length_scale,
+            length_m=_floor_length(
+                return_length_m
+                if return_length_m is not None
+                else default_length * length_scale
+            ),
             temperature_ext_k=296.15,
             roughness_m=0.001,
             grid=heat_grid,
@@ -1191,20 +1187,29 @@ def _drain_heat_gen_capacity(net: mm.Network, total_mw: float) -> float:
     if remaining <= 1e-12:
         return remaining
 
+    # HX generators carry q_mw_set < 0 (loads are > 0); drain their magnitude.
     return _drain_proportionally(
-        [
-            b
-            for b in net.branches
-            if isinstance(b.model, mm.HeatExchanger)
-            and float(getattr(b.model, "q_mw_set", 0.0) or 0.0) > 0
-        ],
-        get_mag=lambda b: float(getattr(b.model, "q_mw_set", 0.0) or 0.0),
-        set_mag=lambda b, v: setattr(b.model, "q_mw_set", v),
+        [b for b in net.branches if mm.hx_is_generating(b.model)],
+        get_mag=lambda b: abs(float(getattr(b.model, "q_mw_set", 0.0) or 0.0)),
+        set_mag=lambda b, v: setattr(b.model, "q_mw_set", -v),
         remove=lambda b: net.remove_branch_between(
             b.from_node_id, b.to_node_id, b.id[2]
         ),
         total=remaining,
     )
+
+
+_MIRROR_CREATORS = {
+    "el": lambda net, node_id, rated, name: mx.create_power_generator(
+        net, node_id, p_mw=rated, q_mvar=0.0, name=name
+    ),
+    "gas": lambda net, node_id, rated, name: mx.create_source(
+        net, node_id, mass_flow_kgs=rated, name=name
+    ),
+    "heat": lambda net, node_id, rated, name: mx.create_heat_generator(
+        net, node_id, q_mw=rated, name=name
+    ),
+}
 
 
 def create_coupling_points_for_mes(  # NOSONAR
@@ -1230,18 +1235,46 @@ def create_coupling_points_for_mes(  # NOSONAR
     use_hg_variants=False,
     seed=None,
     replace_primary_generation=False,
+    decoupled_generation=False,
 ):
     """Add CHP / P2G / P2H coupling points to an MES network.
 
     ``density`` ∈ [0,1] is per-node Bernoulli in decentralised mode and
-    ``ceil(density·N)`` units on one hub in centralised mode. Capacities scale
+    ``round(density·N)`` units on one hub in centralised mode. Capacities scale
     from each bus's local p_ref via the per-type ``*_p_share`` and a global
     ``cp_size_multiplier``.
+
+    For a fixed ``seed`` and base grid the fleets are strictly nested along a
+    density sweep: the selection uniform and the unit type are drawn per
+    *candidate* node in one fixed pass, so both are properties of
+    (seed, base grid, node) — raising ``density`` only adds units and never
+    re-rolls the type (or the node-local size) of a unit that already existed
+    at a lower density.
 
     ``replace_primary_generation=True`` (default False is additive) drains the
     matching primary fleet to keep total rated production per carrier invariant.
     In node-based heat mode, heat-side replacement drains :class:`HeatGenerator`
     children (no slack fallback).
+
+    ``decoupled_generation=True`` builds the decoupled mirror of the fleet:
+    the same seeded selection pass picks the same (node, type, size) units,
+    but each unit is realised as plain single-carrier generation children on
+    its OUTPUT carrier(s) — CHP → :class:`PowerGenerator` + heat generation,
+    P2G → gas :class:`Source`, P2H → heat generation — with the CP's rated
+    output and no input-carrier draw. Children are named ``mirror_cp_*`` so
+    callers can identify them. Combined with
+    ``replace_primary_generation=True`` this isolates the cross-carrier
+    dependency at fleet level: siting and rated outputs match the coupled
+    fleet unit for unit. System-level *input*-carrier balances intentionally
+    differ — the mirrors draw nothing, so the input carriers carry less
+    demand than under the coupled fleet; that is part of removing the
+    coupling, not an accident. Mirrors are built at full rated output
+    (``regulation`` < 1 is not mirrored), and a CHP mirror is two separate
+    children (el + heat) where the coupled CHP is one compound — failure
+    granularity differs for consumers that fail components. The mirrors are
+    created *after* the primary drain so the drain cannot absorb them
+    (coupled CPs escape the drain by not being generator children; the
+    mirrors must too).
 
     Returns ``list[{"type", "node", "id"}]``.
     """
@@ -1259,19 +1292,32 @@ def create_coupling_points_for_mes(  # NOSONAR
         if share < 0:
             raise ValueError(f"{share_name} must be >= 0")
 
-    rng = random.Random(seed) if seed is not None else random
+    rng = random.Random(seed)
 
     coupling_set = {c.lower() for c in couplings}
     valid = {"chp", "p2g", "p2h"}
     unknown = coupling_set - valid
     if unknown:
         raise ValueError(f"unknown coupling types: {sorted(unknown)}")
+    if not coupling_set:
+        raise ValueError("couplings must contain at least one coupling type")
 
     candidate_node_ids = [
         nid for nid in bus_to_gas_junc.keys() if nid in bus_to_heat_supply_junc
     ]
     if not candidate_node_ids:
         raise ValueError("no nodes are coupled to both gas and heat supply")
+
+    # Selection uniform AND unit type are drawn for every candidate in one
+    # fixed pass, so both are per-node properties of (seed, base grid, node).
+    # Drawing the type only for *selected* nodes would shift the stream
+    # whenever a new node enters at a higher density and re-roll the existing
+    # fleet.
+    type_choices = sorted(coupling_set)
+    node_draws = [
+        (nid, rng.random(), rng.choice(type_choices))  # NOSONAR
+        for nid in candidate_node_ids
+    ]
 
     if centralized:
         hub = (
@@ -1282,9 +1328,9 @@ def create_coupling_points_for_mes(  # NOSONAR
                 f"central_node_id={hub} is not in the gas/heat coupled set"
             )
         n_units = int(round(density * len(candidate_node_ids)))
-        target_nodes = [hub] * n_units
+        target_units = [(hub, t) for _, _, t in node_draws[:n_units]]
     else:
-        target_nodes = [nid for nid in candidate_node_ids if rng.random() < density]
+        target_units = [(nid, t) for nid, u, t in node_draws if u < density]
 
     created = []
 
@@ -1301,7 +1347,10 @@ def create_coupling_points_for_mes(  # NOSONAR
     cp_power_out_mw = 0.0
     cp_gas_out_kgs = 0.0
     cp_heat_out_mw = 0.0
-    for power_node_id in target_nodes:
+    # (unit_type, power_node_id, {carrier: (attach_node_id, rated_output)}).
+    # Creation is deferred until after the primary drain — see docstring.
+    mirror_specs = []
+    for power_node_id, unit_type in target_units:
         gas_junc = bus_to_gas_junc[power_node_id]
         heat_supply_junc = bus_to_heat_supply_junc[power_node_id]
 
@@ -1312,8 +1361,6 @@ def create_coupling_points_for_mes(  # NOSONAR
         if p_ref_mw <= 0:
             continue
 
-        unit_type = rng.choice(sorted(coupling_set))
-
         if unit_type == "chp":
             chp_p_target_mw = chp_p_share * cp_size_multiplier * p_ref_mw
             mass_flow_kgs = round(
@@ -1322,6 +1369,24 @@ def create_coupling_points_for_mes(  # NOSONAR
             )
             cp_power_out_mw += mass_flow_kgs * gas_hhv_mj * chp_efficiency_power
             cp_heat_out_mw += mass_flow_kgs * gas_hhv_mj * chp_efficiency_heat
+            if decoupled_generation:
+                mirror_specs.append(
+                    (
+                        "chp",
+                        power_node_id,
+                        {
+                            "el": (
+                                power_node_id,
+                                mass_flow_kgs * gas_hhv_mj * chp_efficiency_power,
+                            ),
+                            "heat": (
+                                heat_supply_junc,
+                                mass_flow_kgs * gas_hhv_mj * chp_efficiency_heat,
+                            ),
+                        },
+                    )
+                )
+                continue
             if use_hg_variants:
                 uid = mx.create_chp_hg(
                     mes_net,
@@ -1334,11 +1399,15 @@ def create_coupling_points_for_mes(  # NOSONAR
                     regulation=regulation,
                 )
             else:
+                # Compounds discharge the heated water at heat_return_node_id
+                # (see res.py), so the supply junction goes there and the
+                # shared return junction feeds the intake - the same side the
+                # HG variants inject at (heat_node_id = supply).
                 uid = mx.create_chp(
                     mes_net,
                     power_node_id=power_node_id,
-                    heat_node_id=heat_supply_junc,
-                    heat_return_node_id=heat_return_junc,
+                    heat_node_id=heat_return_junc,
+                    heat_return_node_id=heat_supply_junc,
                     gas_node_id=gas_junc,
                     mass_flow_setpoint_kgs=mass_flow_kgs,
                     diameter_m=chp_diameter_m,
@@ -1352,6 +1421,15 @@ def create_coupling_points_for_mes(  # NOSONAR
             p2g_p_in_mw = p2g_p_share * cp_size_multiplier * p_ref_mw
             mass_flow_kgs = round(p2g_efficiency * p2g_p_in_mw / gas_hhv_mj, 6)
             cp_gas_out_kgs += mass_flow_kgs
+            if decoupled_generation:
+                mirror_specs.append(
+                    (
+                        "p2g",
+                        power_node_id,
+                        {"gas": (gas_junc, mass_flow_kgs)},
+                    )
+                )
+                continue
             bid = mx.create_p2g(
                 mes_net,
                 from_node_id=power_node_id,
@@ -1366,6 +1444,15 @@ def create_coupling_points_for_mes(  # NOSONAR
             p2h_p_in_mw = p2h_p_share * cp_size_multiplier * p_ref_mw
             heat_mw = round(p2h_p_in_mw * p2h_efficiency, 6)
             cp_heat_out_mw += heat_mw
+            if decoupled_generation:
+                mirror_specs.append(
+                    (
+                        "p2h",
+                        power_node_id,
+                        {"heat": (heat_supply_junc, heat_mw)},
+                    )
+                )
+                continue
             if use_hg_variants:
                 bid = mx.create_p2h_hg(
                     mes_net,
@@ -1373,14 +1460,17 @@ def create_coupling_points_for_mes(  # NOSONAR
                     heat_node_id=heat_supply_junc,
                     heat_energy_mw=heat_mw,
                     efficiency=p2h_efficiency,
+                    regulation=regulation,
                 )
                 created.append({"type": "p2h", "node": power_node_id, "id": bid})
             else:
+                # Same orientation as the CHP compound above: heated water is
+                # discharged at heat_return_node_id = supply junction.
                 uid = mx.create_p2h(
                     mes_net,
                     power_node_id=power_node_id,
-                    heat_node_id=heat_supply_junc,
-                    heat_return_node_id=heat_return_junc,
+                    heat_node_id=heat_return_junc,
+                    heat_return_node_id=heat_supply_junc,
                     heat_energy_mw=heat_mw,
                     diameter_m=p2h_diameter_m,
                     efficiency=p2h_efficiency,
@@ -1423,6 +1513,22 @@ def create_coupling_points_for_mes(  # NOSONAR
                     f"size (or raise the primary generation share)."
                 )
 
+    for unit_type, power_node_id, outputs in mirror_specs:
+        for carrier in ("el", "gas", "heat"):
+            if carrier not in outputs:
+                continue
+            node_id, rated = outputs[carrier]
+            cid = _MIRROR_CREATORS[carrier](
+                mes_net, node_id, rated, f"mirror_cp_{unit_type}_{carrier}"
+            )
+            created.append(
+                {
+                    "type": f"{unit_type}_mirror_{carrier}",
+                    "node": power_node_id,
+                    "id": cid,
+                }
+            )
+
     return created
 
 
@@ -1433,19 +1539,31 @@ def generate_supply_return_mes_based_on_power_net(
     centralized=False,
     central_node_id=None,
     couplings=("chp", "p2g", "p2h"),
+    backbone_method="span",
+    backbone_weight=None,
     heat_kwargs=None,
     gas_kwargs=None,
     coupling_kwargs=None,
 ):
     """Wrap :func:`create_gas_tree_net_for_power` + :func:`create_heat_supply_return_net_for_power`
     + :func:`create_coupling_points_for_mes` into one call. ``gas_kwargs`` /
-    ``heat_kwargs`` / ``coupling_kwargs`` forward to those builders."""
+    ``heat_kwargs`` / ``coupling_kwargs`` forward to those builders.
+
+    ``backbone_method`` (``"span"`` default, or ``"steiner"``) and
+    ``backbone_weight`` (``None`` for unit weights, ``"length"``, or a callable)
+    set the shared gas/heat layout skeleton; both are forwarded to the layer
+    builders unless already overridden in ``gas_kwargs`` / ``heat_kwargs``."""
+    gas_kwargs = dict(gas_kwargs or {})
+    heat_kwargs = dict(heat_kwargs or {})
+    for kw in (gas_kwargs, heat_kwargs):
+        kw.setdefault("backbone_method", backbone_method)
+        kw.setdefault("backbone_weight", backbone_weight)
     new_mes_net = net_power.copy()
     bus_to_gas_junc = create_gas_tree_net_for_power(
-        net_power, new_mes_net, **(gas_kwargs or {})
+        net_power, new_mes_net, **gas_kwargs
     )
     bus_to_heat_supply, heat_return = create_heat_supply_return_net_for_power(
-        net_power, new_mes_net, **(heat_kwargs or {})
+        net_power, new_mes_net, **heat_kwargs
     )
     create_coupling_points_for_mes(
         new_mes_net,
@@ -1459,3 +1577,8 @@ def generate_supply_return_mes_based_on_power_net(
         **(coupling_kwargs or {}),
     )
     return new_mes_net
+
+
+create_supply_return_mes_based_on_power_net = (
+    generate_supply_return_mes_based_on_power_net
+)

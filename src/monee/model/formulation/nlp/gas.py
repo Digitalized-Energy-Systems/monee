@@ -5,6 +5,7 @@ import monee.model.phys.nonlinear.gf as ogfmodel
 import monee.model.phys.nonlinear.smooth as smoothmodel
 from monee.model.core import Const, Var
 
+from ..common import ensure_velocity_report
 from ..core import BranchFormulation
 
 FRICTION_MODELS = ("constant", "pwl", "nonlinear", "hybrid")
@@ -75,12 +76,10 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         self,
         friction_model="constant",
         smoothing_eps=1e-3,
-        n_breakpoints=12,
     ):
         assert friction_model in FRICTION_MODELS, friction_model
         self.friction_model = friction_model
         self.smoothing_eps = smoothing_eps
-        self.n_breakpoints = n_breakpoints
 
     def ensure_var(self, model, simulation=False, grid=None):
         # mass_flow_kgs is already the signed flow (model defines it as pos − neg);
@@ -95,8 +94,7 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         model.direction = Const(1)
         model.mass_flow_pos_kgs_squared = Const(0.0)
         model.mass_flow_neg_kgs_squared = Const(0.0)
-        if simulation:
-            _pin(model, "velocity_mps")
+        ensure_velocity_report(model, grid)
         _ensure_friction_vars(model, self.friction_model)
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):

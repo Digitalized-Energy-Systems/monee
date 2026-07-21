@@ -1,4 +1,3 @@
-import functools
 import logging
 import math
 from collections.abc import Callable
@@ -14,13 +13,11 @@ from monee.model import (
     GasToHeatHG,
     GasToPower,
     GenericModel,
-    HeatExchanger,
     HeatExchangerGenerator,
     HeatExchangerLoad,
     HeatGenerator,
     HeatLoad,
     Network,
-    PassiveHeatExchanger,
     PassiveHeatExchangerGenerator,
     PassiveHeatExchangerLoad,
     PowerGenerator,
@@ -31,6 +28,8 @@ from monee.model import (
     Sink,
     Source,
     Var,
+    hx_is_consuming,
+    hx_is_generating,
 )
 from monee.model.storage import ElectricStorage, GasStorage, ThermalStorage
 
@@ -52,6 +51,25 @@ def nan_to_zero(v):
     return v
 
 
+def _normalize_period_filter(period_filter):
+    if callable(period_filter):
+        return period_filter
+    allowed = set(period_filter)
+    return lambda t: t in allowed
+
+
+def _period_inactive(period_filter, period_index) -> bool:
+    return (
+        period_filter is not None
+        and period_index is not None
+        and not period_filter(period_index)
+    )
+
+
+def _attach_data(data_attacher, models) -> dict:
+    return {model: data_attacher(model) for model in models}
+
+
 class Objective:
     def __init__(self, selected_models_link) -> None:
         self._selected_models_link = selected_models_link
@@ -70,28 +88,18 @@ class Objective:
     def when_period(self, period_filter):
         """Only activate for periods where *period_filter* is truthy. Accepts a
         callable ``(t: int) -> bool`` or a collection of indices."""
-        if callable(period_filter):
-            self._period_filter = period_filter
-        else:
-            allowed = set(period_filter)
-            self._period_filter = lambda t: t in allowed
+        self._period_filter = _normalize_period_filter(period_filter)
         return self
 
     def _eval(self, network, period_index=None):
-        if self._period_filter is not None and period_index is not None:
-            if not self._period_filter(period_index):
-                return [0]
-        model_objectives = []
+        if _period_inactive(self._period_filter, period_index):
+            return [0]
+        selected_models = self._selected_models_link(network)
         if self._data_attacher is not None:
-            model_to_data = {}
-            for model in self._selected_models_link(network):
-                model_to_data[model] = self._data_attacher(model)
-            model_objectives.append(self._calculator(model_to_data))
-        else:
-            model_objectives.append(
-                self._calculator(self._selected_models_link(network))
-            )
-        return model_objectives
+            return [
+                self._calculator(_attach_data(self._data_attacher, selected_models))
+            ]
+        return [self._calculator(selected_models)]
 
 
 class Objectives:
@@ -99,11 +107,18 @@ class Objectives:
         self._objectives = []
 
     def select(self, model_selection_function) -> Objective:
+        def _filter(component):
+            return (
+                model_selection_function(component.model)
+                and component.active
+                and (not component.ignored)
+            )
+
         objective = Objective(
             lambda network: [
-                model
-                for model in network.all_models()
-                if model_selection_function(model)
+                component.model
+                for component in network.all_components()
+                if _filter(component)
             ]
         )
         self._objectives.append(objective)
@@ -115,15 +130,11 @@ class Objectives:
         return objective
 
     def all(self, network, period_index=None):
-        if self._objectives:
-            return functools.reduce(
-                lambda a, b: a + b,
-                [
-                    objective._eval(network, period_index)
-                    for objective in self._objectives
-                ],
-            )
-        return []
+        return [
+            expr
+            for objective in self._objectives
+            for expr in objective._eval(network, period_index)
+        ]
 
 
 class Constraint:
@@ -160,35 +171,28 @@ class Constraint:
     def when_period(self, period_filter):
         """Only activate for periods where *period_filter* is truthy. Accepts a
         callable ``(t: int) -> bool`` or a collection of indices."""
-        if callable(period_filter):
-            self._period_filter = period_filter
-        else:
-            allowed = set(period_filter)
-            self._period_filter = lambda t: t in allowed
+        self._period_filter = _normalize_period_filter(period_filter)
         return self
 
-    def _eval(self, network, period_index=None):  # NOSONAR
-        if self._period_filter is not None and period_index is not None:
-            if not self._period_filter(period_index):
-                return []
+    def _eval(self, network, period_index=None):
+        if _period_inactive(self._period_filter, period_index):
+            return []
         model_equations = []
         selected_models = self._selected_models_link(network)
+        # The attacher is re-run per equation so its call counts stay identical
+        # to the historical behavior (attachers may be stateful).
         for equation in self._equations:
             if self._data_attacher is not None:
-                model_to_data = {}
-                for model in selected_models:
-                    model_to_data[model] = self._data_attacher(model)
-                for item in model_to_data.items():
+                for item in _attach_data(self._data_attacher, selected_models).items():
                     model_equations.append(equation(item))
             else:
                 for model in selected_models:
                     model_equations.append(equation(model))
         for comp_equation in self._comp_equations:
             if self._data_attacher is not None:
-                model_to_data = {}
-                for model in selected_models:
-                    model_to_data[model] = self._data_attacher(model)
-                model_equations.append(comp_equation(model_to_data))
+                model_equations.append(
+                    comp_equation(_attach_data(self._data_attacher, selected_models))
+                )
             else:
                 model_equations.append(comp_equation(selected_models))
         return model_equations
@@ -200,9 +204,8 @@ class Constraint:
     def _eval_temporal(self, network, temporal_state, period_index=None):
         if not self._temporal_equations:
             return []
-        if self._period_filter is not None and period_index is not None:
-            if not self._period_filter(period_index):
-                return []
+        if _period_inactive(self._period_filter, period_index):
+            return []
         if self._selected_models_with_ids_link is None:
             return []
         model_equations = []
@@ -257,15 +260,11 @@ class Constraints:
         return constraint
 
     def all(self, network, period_index=None):
-        if self._constraints:
-            return functools.reduce(
-                lambda a, b: a + b,
-                [
-                    constraint._eval(network, period_index)
-                    for constraint in self._constraints
-                ],
-            )
-        return []
+        return [
+            eq
+            for constraint in self._constraints
+            for eq in constraint._eval(network, period_index)
+        ]
 
     def all_temporal(self, network, temporal_state, period_index=None):
         results = []
@@ -358,70 +357,74 @@ class OptimizationProblem:
     def lex_objectives(self) -> bool:
         return self._lex_objectives
 
-    def _apply(self, network: Network):  # NOSONAR
+    @staticmethod
+    def _promote_to_var(model, attribute: str, val, param: AttributeParameter | None):
+        if param is not None:
+            return Var(
+                param.val(attribute, val),
+                param.max(attribute, val),
+                param.min(attribute, val),
+                param.integer,
+                name=attribute,
+            )
+        if val == 0.0:  # NOSONAR
+            logger.warning(
+                "Attribute '%s' on %s has value 0.0 and no "
+                "explicit bounds - inferred bounds [0, 0] "
+                "will lock this variable. Use an "
+                "AttributeParameter or prob.bounds() to "
+                "set meaningful bounds.",
+                attribute,
+                type(model).__name__,
+            )
+        return Var(
+            val,
+            max=0 if val <= 0 else val,
+            min=0 if val > 0 else val,
+            name=attribute,
+        )
+
+    def _apply(self, network: Network):
         self._controllable_to_attr.clear()
         for appliable in self._controllable_appliables:
             appliable(network)
         for model, attributes in self._controllable_to_attr.items():
             for attribute_param in attributes:
-                attribute = attribute_param
-                param = None
-                if type(attribute_param) is tuple:
-                    attribute = attribute_param[0]
-                    param: AttributeParameter = attribute_param[1]
-                if hasattr(model, attribute):
-                    val = getattr(model, attribute)
-                    if type(val) is not Var:
-                        if param is None:
-                            if val == 0.0:  # NOSONAR
-                                logger.warning(
-                                    "Attribute '%s' on %s has value 0.0 and no "
-                                    "explicit bounds - inferred bounds [0, 0] "
-                                    "will lock this variable. Use an "
-                                    "AttributeParameter or prob.bounds() to "
-                                    "set meaningful bounds.",
-                                    attribute,
-                                    type(model).__name__,
-                                )
-                            variable = Var(
-                                val,
-                                max=0 if val <= 0 else val,
-                                min=0 if val > 0 else val,
-                                name=attribute,
-                            )
-                        else:
-                            variable = Var(
-                                param.val(attribute, val),
-                                param.max(attribute, val),
-                                param.min(attribute, val),
-                                param.integer,
-                                name=attribute,
-                            )
-                        setattr(model, attribute, variable)
-                        if self._debug:
-                            logger.warning("From the model %s", model)
-                            logger.warning(
-                                "The attribute %s has been replaced", attribute
-                            )
+                attribute, param = (
+                    attribute_param
+                    if isinstance(attribute_param, tuple)
+                    else (attribute_param, None)
+                )
+                if not hasattr(model, attribute):
+                    continue
+                val = getattr(model, attribute)
+                if type(val) is Var:
+                    continue
+                setattr(
+                    model, attribute, self._promote_to_var(model, attribute, val, param)
+                )
+                if self._debug:
+                    logger.warning("From the model %s", model)
+                    logger.warning("The attribute %s has been replaced", attribute)
         for (
             min_value,
             max_value,
             component_condition,
             attributes,
         ) in self._bounds_for_controllables:
-            component_list = network.all_components()
-            for component in component_list:
-                if (
+            for component in network.all_components():
+                if not (
                     component_condition(component.model, component.grid)
                     and component.independent
                 ):
-                    if self._debug:
-                        logger.info("From the model %s", component.model)
-                        logger.info("The attributes %s are bounded", attributes)
-                    for attribute in attributes:
-                        var = getattr(component.model, attribute)
-                        var.max = max_value
-                        var.min = min_value
+                    continue
+                if self._debug:
+                    logger.info("From the model %s", component.model)
+                    logger.info("The attributes %s are bounded", attributes)
+                for attribute in attributes:
+                    var = getattr(component.model, attribute)
+                    var.max = max_value
+                    var.min = min_value
 
     def add_to_controllable(
         self, model, attributes: list[str | tuple[str, AttributeParameter]]
@@ -433,6 +436,11 @@ class OptimizationProblem:
     def bounds(self, minmax, component_condition=lambda _m, _g: True, attributes=None):
         """Override min/max for ``Var`` attributes on matching components.
         ``component_condition`` is ``(model, grid) -> bool``."""
+        if not attributes:
+            raise ValueError(
+                "bounds() requires a non-empty list of attribute names to bound, "
+                f"got {attributes!r}."
+            )
         self._bounds_for_controllables.append(
             (minmax[0], minmax[1], component_condition, attributes)
         )
@@ -459,6 +467,9 @@ class OptimizationProblem:
         self.controllable(component_condition=lambda _: True, attributes=attributes)
         return self
 
+    def controllables_link(self):
+        return lambda _: self._controllable_to_attr.keys()
+
     def controllable_demands(
         self, attributes: list[str | tuple[str, AttributeParameter]]
     ):
@@ -482,16 +493,7 @@ class OptimizationProblem:
                         type(component.model) is Sink
                         and type(component.grid) is GasGrid
                     )
-                    or (
-                        isinstance(
-                            component.model, HeatExchanger | PassiveHeatExchanger
-                        )
-                        # q_mw is always a Var on these models; the consuming
-                        # setpoint lives in q_mw_set (= -q_mw), so a positive
-                        # consuming q_mw maps to q_mw_set < 0.
-                        and isinstance(component.model.q_mw_set, (int, float))
-                        and (component.model.q_mw_set < 0)
-                    )
+                    or hx_is_consuming(component.model)
                 )
                 and component.active
                 and (not component.ignored)
@@ -502,17 +504,21 @@ class OptimizationProblem:
 
     def controllable_generators(self, attributes):
         """Make PowerGenerator/HeatGenerator/HeatExchangerGenerator/
-        PassiveHeatExchangerGenerator/Source controllable. See
+        PassiveHeatExchangerGenerator/Source and generating (bare)
+        HeatExchanger/PassiveHeatExchanger controllable. See
         :meth:`controllable_demands` for the 0.0-locks-to-[0,0] caveat."""
         self.controllable(
             component_condition=lambda component: (
-                isinstance(
-                    component.model,
-                    HeatExchangerGenerator
-                    | PassiveHeatExchangerGenerator
-                    | PowerGenerator
-                    | HeatGenerator
-                    | Source,
+                (
+                    isinstance(
+                        component.model,
+                        HeatExchangerGenerator
+                        | PassiveHeatExchangerGenerator
+                        | PowerGenerator
+                        | HeatGenerator
+                        | Source,
+                    )
+                    or hx_is_generating(component.model)
                 )
                 and component.active
                 and (not component.ignored)
@@ -520,6 +526,45 @@ class OptimizationProblem:
             attributes=attributes,
         )
         return self
+
+    def optimize_bus_voltages(self, vm_min=None, vm_max=None):
+        """Make the bus voltage magnitudes optimisation variables.
+
+        Bounds every bus voltage magnitude to ``[vm_min, vm_max]`` (when given)
+        and frees the slack: each :class:`ExtPowerGrid` stops pinning its bus
+        ``vm_pu``, so the reference voltage becomes a decision variable in the
+        same band and only the reference *angle* stays fixed - the optimal power
+        flow convention (MATPOWER/pandapower ``runopp`` optimise the slack
+        voltage within [VMIN, VMAX]).
+
+        Freeing the slack only makes sense when the buses carry a voltage band,
+        so the two go together. Pass no bounds to free the slack against limits
+        already on the buses (e.g. the per-bus VMIN/VMAX of a MATPOWER import).
+        """
+
+        def _apply_voltages(network: Network):
+            if vm_min is not None or vm_max is not None:
+                for node in network.nodes:
+                    self._bound_var(getattr(node.model, "vm_pu", None), vm_min, vm_max)
+                    self._bound_var(
+                        getattr(node.model, "vm_pu_squared", None),
+                        None if vm_min is None else vm_min * vm_min,
+                        None if vm_max is None else vm_max * vm_max,
+                    )
+            for child in network.childs:
+                if isinstance(child.model, ExtPowerGrid):
+                    child.model.regulate_vm = False
+
+        self._controllable_appliables.append(_apply_voltages)
+        return self
+
+    @staticmethod
+    def _bound_var(var, lo, hi):
+        if isinstance(var, Var):
+            if lo is not None:
+                var.min = lo
+            if hi is not None:
+                var.max = hi
 
     def controllable_ext(self):
         """Declare ExtPowerGrid / ExtHydrGrid connections controllable.
@@ -615,7 +660,3 @@ class OptimizationProblem:
     @objectives.setter
     def objectives(self, objectives):
         self._objectives = objectives
-
-    @property
-    def controllables_link(self):
-        return lambda _: self._controllable_to_attr.keys()

@@ -12,6 +12,7 @@ from monee.io._utils import (
     _resolve_two_endpoints,
 )
 from monee.model.branch import GenericPowerBranch
+from monee.model.child import PowerShunt
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +25,8 @@ _EXPERIMENTAL_NOTE = (
 _LOAD_CLASSES = {"EnergyConsumer", "ConformLoad", "NonConformLoad", "StationSupply"}
 # Default line current rating (kA) when no OperationalLimit is present.
 _UNBOUNDED_I_KA = 9999.0
+# Tolerance for treating physical parameters (impedance, admittance, sections) as zero.
+_ZERO_TOL = 1e-12
 
 
 @dataclass
@@ -36,6 +39,7 @@ class CimImportReport:
     loads: int = 0
     generators: int = 0
     ext_grids: int = 0
+    shunts: int = 0
     skipped: dict = field(default_factory=dict)
 
     def skip(self, reason: str) -> None:
@@ -44,13 +48,14 @@ class CimImportReport:
     def log(self) -> None:
         logger.info(
             "CIM import: %d buses, %d lines, %d trafos, %d loads, %d gens, "
-            "%d ext-grids",
+            "%d ext-grids, %d shunts",
             self.buses,
             self.lines,
             self.transformers,
             self.loads,
             self.generators,
             self.ext_grids,
+            self.shunts,
         )
         for reason, count in sorted(self.skipped.items()):
             logger.warning("CIM import: skipped %d x %s", count, reason)
@@ -69,11 +74,19 @@ def _topo_node(terminal):
     return _get(terminal, "TopologicalNode")
 
 
-def _base_kv(topo_node) -> float:
-    """Nominal voltage (kV) of a TopologicalNode via its BaseVoltage reference."""
+def _base_kv(topo_node, report=None) -> float:
+    """Nominal voltage (kV) of a TopologicalNode via its BaseVoltage reference.
+
+    Falls back to 1.0 kV when no usable BaseVoltage is present; with a *report*
+    the fallback is recorded so mis-scaled per-unit branches are not silent.
+    """
     base_voltage = _get(topo_node, "BaseVoltage")
     if base_voltage is not None:
-        return _num(_get(base_voltage, "nominalVoltage"), 1.0) or 1.0
+        nominal = _num(_get(base_voltage, "nominalVoltage"), 0.0)
+        if nominal > 0:
+            return nominal
+    if report is not None:
+        report.skip("TopologicalNode without usable BaseVoltage (base_kv -> 1.0)")
     return 1.0
 
 
@@ -88,7 +101,7 @@ def _build_buses(objects, net, report):
             continue
         node_id = mx.create_bus(
             net,
-            base_kv=_base_kv(obj),
+            base_kv=_base_kv(obj, report),
             grid=mm.EL,
             name=_get(obj, "name"),
         )
@@ -124,6 +137,10 @@ def _add_line(obj, net, tn_to_node, base_kv_of, report):
     x = _num(_get(obj, "x"))
     bch = _num(_get(obj, "bch"))  # total line charging susceptance [S]
     gch = _num(_get(obj, "gch"))
+
+    if abs(r) < _ZERO_TOL and abs(x) < _ZERO_TOL:
+        report.skip("ACLineSegment without impedance data (r=x=0, singular)")
+        return
 
     net.branch(
         GenericPowerBranch(
@@ -166,6 +183,10 @@ def _add_transformer(obj, ends, net, tn_to_node, base_kv_of, report):
         ratio_sq = (u_from / u_e) ** 2
         r_ohm += _num(_get(end, "r")) * ratio_sq
         x_ohm += _num(_get(end, "x")) * ratio_sq
+
+    if abs(r_ohm) < _ZERO_TOL and abs(x_ohm) < _ZERO_TOL:
+        report.skip("PowerTransformer without impedance data (r=x=0, singular)")
+        return
 
     base_z = base_kv_of(from_node) ** 2 / net_base_mva(net)
     net.branch(
@@ -227,12 +248,71 @@ def _add_generator(obj, net, tn_to_node, gen_sign, report):
     node = _single_node(obj, tn_to_node, report, "generator with unresolved bus")
     if node is None:
         return
-    # CGMES SSH uses load reference at the terminal; *gen_sign* flips it so the
-    # value handed to PowerGenerator is a positive generation magnitude.
+    # CGMES SSH uses load reference at the terminal; *gen_sign* flips it to
+    # generation convention (positive = injection). A machine that ends up
+    # consuming (p < 0 after the flip) must stay a consumer, so it maps to a
+    # PowerLoad (positive = consumption) instead of a generator.
     p = gen_sign * _num(_get(obj, "p"))
     q = gen_sign * _num(_get(obj, "q"))
-    mx.create_power_generator(net, node, p_mw=abs(p), q_mvar=abs(q))
+    if p < 0:
+        mx.create_power_load(net, node, p_mw=-p, q_mvar=-q)
+        report.loads += 1
+        return
+    mx.create_power_generator(net, node, p_mw=p, q_mvar=q)
     report.generators += 1
+
+
+def _add_equivalent_injection(obj, net, tn_to_node, report):
+    node = _single_node(
+        obj, tn_to_node, report, "EquivalentInjection with unresolved bus"
+    )
+    if node is None:
+        return
+    # SSH load reference: positive p = consumption.
+    p = _num(_get(obj, "p"))
+    q = _num(_get(obj, "q"))
+    if p < 0:
+        mx.create_power_generator(net, node, p_mw=-p, q_mvar=-q)
+        report.generators += 1
+        return
+    mx.create_power_load(net, node, p_mw=p, q_mvar=q)
+    report.loads += 1
+
+
+def _add_shunt(obj, net, tn_to_node, report):
+    node = _single_node(obj, tn_to_node, report, "ShuntCompensator with unresolved bus")
+    if node is None:
+        return
+    sections = _num(_get(obj, "sections"), 1.0)
+    if abs(sections) < _ZERO_TOL:
+        report.skip("ShuntCompensator switched out (sections=0)")
+        return
+    b_siemens = _num(_get(obj, "bPerSection")) * sections
+    g_siemens = _num(_get(obj, "gPerSection")) * sections
+    if abs(b_siemens) < _ZERO_TOL and abs(g_siemens) < _ZERO_TOL:
+        report.skip("ShuntCompensator without b/g data")
+        return
+    base_kv = mx_base_kv(net, node)
+    # Admittance [S] at nominal voltage -> MW/MVAr drawn/injected at v=1 p.u.
+    net.child_to(
+        PowerShunt(gs_mw=g_siemens * base_kv**2, bs_mvar=b_siemens * base_kv**2),
+        node_id=node,
+        name=_get(obj, "name"),
+    )
+    report.shunts += 1
+
+
+def _add_asynchronous_machine(obj, net, tn_to_node, report):
+    node = _single_node(
+        obj, tn_to_node, report, "AsynchronousMachine with unresolved bus"
+    )
+    if node is None:
+        return
+    # SSH load reference: an asynchronous machine (motor) consumes.
+    mx.create_power_load(
+        net, node, p_mw=_num(_get(obj, "p")), q_mvar=_num(_get(obj, "q"))
+    )
+    report.loads += 1
 
 
 def _add_ext_grid(obj, net, tn_to_node, report):
@@ -243,7 +323,8 @@ def _add_ext_grid(obj, net, tn_to_node, report):
         return
     # Voltage setpoint from the regulating control target, if present.
     control = _get(obj, "RegulatingControl")
-    base_kv = _base_kv(_topo_node(_terminals(obj)[0])) if _terminals(obj) else 1.0
+    terminals = _terminals(obj)
+    base_kv = _base_kv(_topo_node(terminals[0])) if terminals else 1.0
     target_v = _num(_get(control, "targetValue"), 0.0) if control else 0.0
     vm_pu = (target_v / base_kv) if (target_v and base_kv) else 1.0
     mx.create_ext_power_grid(net, node, vm_pu=vm_pu, va_degree=0.0)
@@ -288,6 +369,14 @@ def cim_objects_to_network(objects, gen_sign=-1.0):
             _add_generator(obj, net, tn_to_node, gen_sign, report)
         elif cls == "ExternalNetworkInjection":
             _add_ext_grid(obj, net, tn_to_node, report)
+        elif cls == "EquivalentInjection":
+            _add_equivalent_injection(obj, net, tn_to_node, report)
+        elif cls in ("LinearShuntCompensator", "ShuntCompensator"):
+            _add_shunt(obj, net, tn_to_node, report)
+        elif cls == "NonlinearShuntCompensator":
+            report.skip("NonlinearShuntCompensator (mapping not implemented)")
+        elif cls == "AsynchronousMachine":
+            _add_asynchronous_machine(obj, net, tn_to_node, report)
 
     if report.ext_grids == 0:
         logger.warning(

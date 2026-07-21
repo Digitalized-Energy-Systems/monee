@@ -140,7 +140,7 @@ def _dispatch_backend(
     the native Gurobi / CasADi solvers; pass ``None`` where those backends are
     unavailable (e.g. multi-period)."""
     name = (solver or "ipopt").lower() if isinstance(solver, str) else "ipopt"
-    
+
     chosen_backend = backend or _auto_backend(
         name, gurobipy_supported=gurobipy_factory is not None
     )
@@ -164,7 +164,8 @@ def _dispatch_backend(
         return _dispatch_gurobipy(solver, name, gurobipy_factory)
 
     raise ValueError(
-        f"Unknown backend {chosen_backend!r}; expected 'gekko', 'pyomo' or 'gurobipy'."
+        f"Unknown backend {chosen_backend!r}; expected 'gekko', 'pyomo', "
+        "'gurobipy' or 'casadi'."
     )
 
 
@@ -202,12 +203,6 @@ def resolve_solver(
 
         return CasADiSolver()
 
-    if solver is None and backend is None:
-        # Default solver is IPOPT -> CasADi when available, else GEKKO's IPOPT.
-        if _casadi_available():
-            return _casadi_factory()
-        return _gekko_factory(GEKKO_SOLVERS["ipopt"])
-
     return _dispatch_backend(
         solver,
         backend,
@@ -240,12 +235,6 @@ def resolve_multi_period_solver(
         from .casadi import CasADiMultiPeriodSolver
 
         return CasADiMultiPeriodSolver()
-
-    if solver is None and backend is None:
-        # Default solver is IPOPT -> CasADi when available, else GEKKO's IPOPT.
-        if _casadi_available():
-            return _casadi_mp_factory()
-        return GekkoMultiPeriodSolver(solver=GEKKO_SOLVERS["ipopt"])
 
     return _dispatch_backend(
         solver,

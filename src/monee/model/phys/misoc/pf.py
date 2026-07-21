@@ -44,8 +44,7 @@ def soc_rel(
     var_ell_pu,
     tap=1.0,
 ):
-    r"""Rotated SOC :math:`P^2 + Q^2 \le (W/tap^2) \cdot ell`. See :func:`soc_rel_lorentz`
-    for the Lorentz reformulation that survives non-convex MIQCP siblings."""
+    r"""Rotated SOC :math:`P^2 + Q^2 \le (W/tap^2) \cdot ell`."""
     return (
         var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2
         <= (var_w_pu_i / (tap * tap)) * var_ell_pu
@@ -65,36 +64,4 @@ def soc_eq(
     return (
         var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2
         == (var_w_pu_i / (tap * tap)) * var_ell_pu
-    )
-
-
-def soc_rel_lorentz(
-    var_w_pu_i,
-    var_active_power_ij_pu,
-    var_reactive_power_ij_pu,
-    var_ell_pu,
-    var_soc_sum,
-    var_soc_diff,
-    tap=1.0,
-):
-    r"""Lorentz form of :func:`soc_rel`: :math:`s = (W/tap^2+ell)/2`, :math:`d = (W/tap^2-ell)/2`,
-    :math:`P^2 + Q^2 + d^2 \le s^2` (since :math:`s^2 - d^2 = (W/tap^2) \cdot ell`)."""
-    w_p = var_w_pu_i / (tap * tap)
-    return [
-        var_soc_sum == 0.5 * (w_p + var_ell_pu),  # NOSONAR
-        var_soc_diff == 0.5 * (w_p - var_ell_pu),  # NOSONAR
-        var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2 + var_soc_diff**2
-        <= var_soc_sum**2,
-    ]
-
-
-def gap_expr(
-    var_w_pu_i,
-    var_active_power_ij_pu,
-    var_reactive_power_ij_pu,
-    var_ell_pu,
-    tap=1.0,
-):
-    return (var_w_pu_i / (tap * tap)) * var_ell_pu - (
-        var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2
     )

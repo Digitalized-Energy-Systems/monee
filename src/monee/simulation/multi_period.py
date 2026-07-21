@@ -1,6 +1,7 @@
 """Multi-period optimization: build a single problem spanning T periods and
 solve in one shot. :class:`PeriodState` exposes live solver variables behind
-the same API as :class:`StepState`, so ``inter_step_equations`` works unchanged."""
+the same API as :class:`StepState`, so ``inter_temporal_equations`` (the hook
+that runs in both timeseries and multi-period) works unchanged."""
 
 from __future__ import annotations
 
@@ -13,26 +14,43 @@ from monee.model.core import Var
 from monee.model.extension.islanding.core import NetworkIslandingConfig
 from monee.model.formulation.registry import attach_formulations
 from monee.simulation.result_utils import (
+    build_attribute_frame as _build_attribute_frame,
+)
+from monee.simulation.result_utils import (
+    build_component_frame as _build_component_frame,
+)
+from monee.simulation.result_utils import (
+    build_id_series as _build_id_series,
+)
+from monee.simulation.result_utils import (
     build_type_stats_html as _build_type_stats_html,
 )
+from monee.simulation.result_utils import (
+    wrap_result_html as _wrap_result_html,
+)
 from monee.simulation.step_state import PeriodState
-from monee.simulation.timeseries import TimeseriesData
+from monee.simulation.timeseries import (
+    _SERIES_ATTRS,
+    TimeseriesData,
+    _dt_h_at_step,
+    _resolve_steps,
+)
 
 # Shared result-rendering helpers, imported from the solver's public reporting
 # surface (the simulation layer renders the same kind of result tables).
-from monee.solver.core import TABLE_CSS as _TABLE_CSS
 from monee.solver.core import (
     SolverResult,
+    _find_model,
+    apply_child_overwrites,
     find_ignored_nodes,
-    ignore_node,
     inject_vars,
-    mark_he_flow_prescription,
     mark_ignored_components,
+    mark_slacks_and_prescriptions,
     withdraw_vars,
 )
 from monee.solver.core import col_summary as _col_summary
 from monee.solver.core import display_df as _display_df
-from monee.solver.dispatch import resolve_multi_period_solver
+from monee.solver.dispatch import GEKKO_SOLVERS, resolve_multi_period_solver
 
 _log = logging.getLogger(__name__)
 
@@ -51,6 +69,10 @@ def _prepare_period(
     if timeseries_data is not None:
         timeseries_data.apply_to_network(net_t, t)
 
+    # Same stamp prepare_solve_network sets: extension prepare() hooks gated
+    # on it (islanding injection gating / energisation objective) must not
+    # activate when the optimization problem brings its own shedding vars.
+    net_t._solve_has_optimization_problem = optimization_problem is not None
     for ext in net_t.extensions:
         ext.prepare(net_t)
 
@@ -72,27 +94,26 @@ def _prepare_period(
     if optimization_problem is not None:
         optimization_problem._apply(net_t)
 
-    for node in net_t.nodes:
-        if ignore_node(node, net_t, ignored_nodes):
-            continue
-        for child in net_t.childs_by_ids(node.child_ids):
-            if child.active:
-                child.model.overwrite(node.model, node.grid)
+    apply_child_overwrites(net_t, net_t.nodes, ignored_nodes)
 
-    # Decide per compound-internal SubHE whether the design flow prescribes
-    # the through-flow or yields to a network-determined flow (must run before
-    # var injection - the check relies on monee Var instances).
-    mark_he_flow_prescription(net_t, ignored_nodes)
+    # Same backend-agnostic marking trio as the single-period solvers (pin
+    # floating hydraulic gauges, mark heat-balance slacks, decide the dynamic
+    # HE flow prescription); must run before var injection - the checks rely
+    # on monee Var instances.
+    mark_slacks_and_prescriptions(net_t, ignored_nodes)
 
     return net_t, ignored_nodes
 
 
 def _find_component_var(net_t: Network, comp_id, attr: str):
-    """Return ``comp.model.attr`` for *comp_id* in *net_t*, or None."""
-    for comp in net_t.iter_all_components():
-        if comp.id == comp_id:
-            return getattr(comp.model, attr, None)
-    return None
+    """Return ``comp.model.attr`` for *comp_id* in *net_t*, or None. Resolves the
+    id through :func:`_find_model` so node/child id collisions pick the component
+    that actually carries *attr* - the same disambiguation the cross-period
+    coupling uses via :class:`PeriodState`."""
+    model = _find_model(net_t, comp_id, attr)
+    if model is None:
+        return None
+    return getattr(model, attr, None)
 
 
 def _extract_terminal_state(net_t: Network) -> dict:
@@ -141,13 +162,8 @@ def _slice_timeseries(td: TimeseriesData, start: int, length: int) -> Timeseries
         }
 
     new_td = TimeseriesData()
-    new_td._node_id_to_series = _slice_dict(td._node_id_to_series)
-    new_td._child_id_to_series = _slice_dict(td._child_id_to_series)
-    new_td._child_name_to_series = _slice_dict(td._child_name_to_series)
-    new_td._branch_id_to_series = _slice_dict(td._branch_id_to_series)
-    new_td._branch_name_to_series = _slice_dict(td._branch_name_to_series)
-    new_td._compound_id_to_series = _slice_dict(td._compound_id_to_series)
-    new_td._compound_name_to_series = _slice_dict(td._compound_name_to_series)
+    for attr in _SERIES_ATTRS:
+        setattr(new_td, attr, _slice_dict(getattr(td, attr)))
     new_td._length = length
     return new_td
 
@@ -190,57 +206,33 @@ class MultiPeriodResult:
     def T(self) -> int:  # NOSONAR
         return len(self._net_copies)
 
-    def _make_index(self) -> pandas.Index:
+    def _make_index(self, _labels=None) -> pandas.Index:
+        # The full-period index is used regardless of *_labels*: every period
+        # is expected to carry every component, so partial matches surface as a
+        # length mismatch rather than being silently reindexed.
         if self._datetime_index is not None:
             return self._datetime_index[: self.T]
         return pandas.RangeIndex(self.T)
 
+    def _frames(self) -> list[tuple[int, dict]]:
+        return list(enumerate(self._period_dfs))
+
     def get_result_for(self, model_type, attribute: str) -> pandas.DataFrame:
-        """DataFrame of *attribute*: rows=periods, cols=component ids."""
-        rows = []
-        for dfs in self._period_dfs:
-            df = dfs.get(model_type.__name__, pandas.DataFrame())
-            if attribute not in df.columns:
-                rows.append({})
-                continue
-            if "id" in df.columns:
-                rows.append(dict(zip(df["id"], df[attribute])))
-            else:
-                rows.append(df[attribute].to_dict())
-        return pandas.DataFrame(rows, index=self._make_index())
+        """DataFrame of *attribute*: rows=periods, cols=component ids.
+        Raises ``KeyError`` for an unknown model type or attribute."""
+        return _build_attribute_frame(
+            self._frames(), model_type, attribute, self._make_index
+        )
 
     def get_result_for_id(self, component_id, attribute: str) -> pandas.Series:
         """Series of *attribute* for *component_id* across all periods."""
-        values = []
-        for dfs in self._period_dfs:
-            found = False
-            for df in dfs.values():
-                if "id" in df.columns and attribute in df.columns:
-                    row = df[df["id"] == component_id]
-                    if not row.empty:
-                        values.append(row.iloc[0][attribute])
-                        found = True
-                        break
-            if not found:
-                values.append(None)
-        return pandas.Series(values, index=self._make_index(), name=attribute)
+        return _build_id_series(
+            self._frames(), component_id, attribute, self._make_index
+        )
 
     def __getitem__(self, component_id) -> pandas.DataFrame:
         """All result attributes for *component_id*, one row per period."""
-        rows: list[dict] = []
-        for dfs in self._period_dfs:
-            for df in dfs.values():
-                if "id" not in df.columns:
-                    continue
-                mask = df["id"] == component_id
-                if not mask.any():
-                    continue
-                row = _display_df(df[mask].iloc[0].to_frame().T).iloc[0]
-                rows.append({k: v for k, v in row.items() if k != "id"})
-                break
-        if not rows:
-            raise KeyError(component_id)
-        return pandas.DataFrame(rows, index=self._make_index())
+        return _build_component_frame(self._frames(), component_id, self._make_index)
 
     def get_period_result(self, t: int) -> SolverResult:
         """SolverResult for period *t* (``objective`` is None; only the global
@@ -348,18 +340,121 @@ class MultiPeriodResult:
         sections = []
         if self._period_dfs:
             sections = _build_type_stats_html(self._collect_type_dfs(), "period")
-        header = (
-            f"<div style='font-weight:bold;font-size:1.05em;padding:4px 0 8px'>"
-            f"MultiPeriodResult &nbsp;"
+        return _wrap_result_html(
+            "MultiPeriodResult",
             f"<span style='font-weight:normal;color:#555'>T={self.T} &nbsp;·&nbsp; "
             f"obj={self.objective:.4g} &nbsp;·&nbsp; "
-            f"<span style='color:{status_color}'>{status_text}</span></span></div>"
+            f"<span style='color:{status_color}'>{status_text}</span></span>",
+            sections,
         )
-        return (
-            f"{_TABLE_CSS}"
-            f"<div class='monee-result'>"
-            f"{header}" + "\n".join(sections) + "</div>"
+
+
+def _assemble_two_pass(
+    m,
+    single,
+    label: str,
+    network: Network,
+    timeseries_data: TimeseriesData | None,
+    steps: int,
+    optimization_problem,
+    dt_h_list: list[float],
+    initial_state: dict | None,
+    terminal_state: dict | None,
+    formulation,
+    inject,
+    process_branches,
+    sink_objective,
+    add_equations,
+    add_terminal,
+) -> list[Network]:
+    """Shared two-pass assembly for the multi-period backends: pass 1 prepares
+    per-period network copies and injects backend variables, pass 2 builds
+    equations with a :class:`PeriodState` spanning all periods. Backend
+    differences are confined to the callbacks: ``inject(net_t, ignored_t, t)``,
+    ``process_branches(net_t, ignored_t) -> ctx`` (may collect objective
+    expressions), ``sink_objective(ctx)`` (called between the OXF components and
+    the inter-period equations), ``add_equations(eqs)`` and
+    ``add_terminal(var, target)``."""
+    _log.info("Multi-period %s solve: T=%d periods", label, steps)
+
+    # Pass 1: prepare networks and inject variables for all periods.
+    net_copies: list[Network] = []
+    ignored_list: list[set] = []
+
+    for t in range(steps):
+        _log.debug("Preparing period %d/%d", t + 1, steps)
+        net_t, ignored_t = _prepare_period(
+            network, timeseries_data, t, optimization_problem, formulation
         )
+        inject(net_t, ignored_t, t)
+        for ext in net_t.extensions:
+            ext.activate_timeseries(net_t, ignored_t)
+        single.mark_temporal_components(net_t, ignored_t)
+        net_copies.append(net_t)
+        ignored_list.append(ignored_t)
+
+    # Pass 2: build per-period equations.
+    _log.debug("Assembling equations for %d periods", steps)
+    for t in range(steps):
+        net_t = net_copies[t]
+        ignored_t = ignored_list[t]
+
+        period_state = PeriodState(
+            net_copies,
+            current_t=t,
+            dt_h=dt_h_list[t],
+            initial_state=initial_state,
+        )
+
+        single.init_branches(net_t.branches)
+        single.process_equations_nodes_childs(m, net_t, net_t.nodes, ignored_t)
+        branch_ctx = process_branches(net_t, ignored_t)
+        single.process_equations_compounds(m, net_t, net_t.compounds, ignored_t)
+
+        if optimization_problem is not None:
+            single.process_oxf_components(
+                m, net_t, optimization_problem, period_index=t
+            )
+        else:
+            single.process_internal_oxf_components(m, net_t)
+
+        sink_objective(branch_ctx)
+
+        single.process_inter_period_equations(
+            m,
+            net_t,
+            net_t.nodes,
+            net_t.branches,
+            net_t.compounds,
+            ignored_t,
+            period_state,
+            optimization_problem=optimization_problem,
+            period_index=t,
+        )
+
+        for ext in net_t.extensions:
+            add_equations(ext.inter_period_equations(net_t, ignored_t, period_state))
+            add_equations(ext.inter_temporal_equations(net_t, ignored_t, period_state))
+            add_equations(ext.equations(net_t, ignored_t))
+
+        if terminal_state and t == steps - 1:
+            for (comp_id, attr), target in terminal_state.items():
+                var = _find_component_var(net_t, comp_id, attr)
+                if isinstance(var, (int, float)):
+                    # A plain constant would make ``var == target`` a Python bool
+                    # (a cryptic backend error or a silent tautology); only a
+                    # solver variable / expression can be pinned.
+                    _log.warning(
+                        "terminal_state target (%r, %r) is a constant, not a "
+                        "solver variable; the terminal constraint was skipped. "
+                        "Make the attribute controllable to pin it.",
+                        comp_id,
+                        attr,
+                    )
+                elif var is not None:
+                    add_terminal(var, target)
+
+    return net_copies
 
 
 # GEKKO multi-period solver
@@ -368,24 +463,23 @@ class MultiPeriodResult:
 class GekkoMultiPeriodSolver:
     """Multi-period optimizer on GEKKO/IPOPT. Two-pass: inject vars for all T
     periods, then assemble equations with a :class:`PeriodState` that sees all
-    periods so ``inter_step_equations`` can couple them freely."""
+    periods so ``inter_temporal_equations`` / ``inter_period_equations`` can
+    couple them freely."""
 
     def __init__(self, solver: int = 1):
         self._solver_int = solver
         self._backend_name = "gekko"
-        # Mirror of dispatch.GEKKO_SOLVERS (name -> code); inlined to avoid a
-        # module-level gekko import (the backend is imported lazily).
-        self._solver_name = {1: "apopt", 2: "bpopt", 3: "ipopt"}.get(
+        self._solver_name = {v: k for k, v in GEKKO_SOLVERS.items()}.get(
             solver, str(solver)
         )
 
-    def solve_multi_period(  # NOSONAR
+    def solve_multi_period(
         self,
         network: Network,
         timeseries_data: TimeseriesData | None = None,
         steps: int | None = None,
         optimization_problem=None,
-        dt_h: float | list[float] = 1.0,
+        dt_h: float | list[float] | None = None,
         datetime_index: pandas.DatetimeIndex | None = None,
         initial_state: dict | None = None,
         terminal_state: dict | None = None,
@@ -393,9 +487,10 @@ class GekkoMultiPeriodSolver:
     ) -> MultiPeriodResult:
         """Build and solve a multi-period optimization in one GEKKO model.
 
-        ``dt_h`` may be a list of length T (variable step size); ``datetime_index``
-        derives it from consecutive differences. ``initial_state`` /
-        ``terminal_state`` pin attributes at t<0 / t=T-1.
+        ``dt_h`` defaults to 1.0 hour when omitted and may be a list of length T
+        (variable step size); ``datetime_index`` derives it from consecutive
+        differences. ``initial_state`` / ``terminal_state`` pin attributes at
+        t<0 / t=T-1.
         """
         from gekko import GEKKO
 
@@ -411,23 +506,15 @@ class GekkoMultiPeriodSolver:
         m.solver_options = _solver_options(self._solver_int)
 
         _single = GEKKOSolver(solver=self._solver_int)
+        var_meta: dict[int, Var] = {}
 
-        _log.info("Multi-period GEKKO solve: T=%d periods", steps)
-
-        # Pass 1: prepare networks and inject variables for all periods.
-        net_copies: list[Network] = []
-        ignored_list: list[set] = []
-
-        for t in range(steps):
-            _log.debug("Preparing period %d/%d", t + 1, steps)
-            net_t, ignored_t = _prepare_period(
-                network, timeseries_data, t, optimization_problem, formulation
-            )
+        def _inject(net_t, ignored_t, t):
             inject_vars(
                 lambda model, comp, cat, _t=t: GEKKOSolver.inject_gekko_vars_attr(
                     m,
                     model,
                     f"{comp.nid if cat == 'branch' else comp.tid}_t{_t}",
+                    var_meta=var_meta,
                 ),
                 net_t.nodes,
                 net_t.branches,
@@ -435,68 +522,36 @@ class GekkoMultiPeriodSolver:
                 net_t,
                 ignored_t,
             )
-            for ext in net_t.extensions:
-                ext.activate_timeseries(net_t, ignored_t)
-            _single.mark_temporal_components(net_t, ignored_t)
-            net_copies.append(net_t)
-            ignored_list.append(ignored_t)
 
-        # Pass 2: build per-period equations.
-        _log.debug("Assembling equations for %d periods", steps)
-        for t in range(steps):
-            net_t = net_copies[t]
-            ignored_t = ignored_list[t]
-
-            period_state = PeriodState(
-                net_copies,
-                current_t=t,
-                dt_h=dt_h_list[t],
-                initial_state=initial_state,
-            )
-
-            _single.init_branches(net_t.branches)
-
+        def _process_branches(net_t, ignored_t):
             objs_exprs: list = []
-            _single.process_equations_nodes_childs(m, net_t, net_t.nodes, ignored_t)
             _single.process_equations_branches(
                 m, net_t, net_t.branches, ignored_t, objs_exprs
             )
-            _single.process_equations_compounds(m, net_t, net_t.compounds, ignored_t)
+            return objs_exprs
 
-            if optimization_problem is not None:
-                _single.process_oxf_components(
-                    m, net_t, optimization_problem, period_index=t
-                )
-            else:
-                _single.process_internal_oxf_components(m, net_t)
-
+        def _sink_objective(objs_exprs):
             if objs_exprs:
                 m.Obj(sum(objs_exprs))
 
-            _single.process_inter_period_equations(
-                m,
-                net_t,
-                net_t.nodes,
-                net_t.branches,
-                net_t.compounds,
-                ignored_t,
-                period_state,
-                optimization_problem=optimization_problem,
-                period_index=t,
-            )
-
-            for ext in net_t.extensions:
-                m.Equations(ext.inter_period_equations(net_t, ignored_t, period_state))
-                m.Equations(
-                    ext.inter_temporal_equations(net_t, ignored_t, period_state)
-                )
-                m.Equations(ext.equations(net_t, ignored_t))
-
-            if terminal_state and t == steps - 1:
-                for (comp_id, attr), target in terminal_state.items():
-                    var = _find_component_var(net_t, comp_id, attr)
-                    if var is not None:
-                        m.Equation(var == target)
+        net_copies = _assemble_two_pass(
+            m,
+            _single,
+            "GEKKO",
+            network,
+            timeseries_data,
+            steps,
+            optimization_problem,
+            dt_h_list,
+            initial_state,
+            terminal_state,
+            formulation,
+            inject=_inject,
+            process_branches=_process_branches,
+            sink_objective=_sink_objective,
+            add_equations=m.Equations,
+            add_terminal=lambda var, target: m.Equation(var == target),
+        )
 
         _log.info("Solving multi-period problem (T=%d) ...", steps)
         try:
@@ -523,7 +578,9 @@ class GekkoMultiPeriodSolver:
 
         for net_t in net_copies:
             withdraw_vars(
-                GEKKOSolver.withdraw_gekko_vars_attr,
+                lambda target: GEKKOSolver.withdraw_gekko_vars_attr(
+                    target, var_meta=var_meta
+                ),
                 net_t.nodes,
                 net_t.branches,
                 net_t.compounds,
@@ -551,13 +608,13 @@ class PyomoMultiPeriodSolver:
         self._solver_name = solver_name
         self._backend_name = "pyomo"
 
-    def solve_multi_period(  # NOSONAR
+    def solve_multi_period(
         self,
         network: Network,
         timeseries_data: TimeseriesData | None = None,
         steps: int | None = None,
         optimization_problem=None,
-        dt_h: float | list[float] = 1.0,
+        dt_h: float | list[float] | None = None,
         datetime_index: pandas.DatetimeIndex | None = None,
         initial_state: dict | None = None,
         terminal_state: dict | None = None,
@@ -581,17 +638,7 @@ class PyomoMultiPeriodSolver:
 
         _single = PyomoSolver()
 
-        _log.info("Multi-period Pyomo solve: T=%d periods", steps)
-
-        # Pass 1: prepare networks and inject variables for all periods.
-        net_copies: list[Network] = []
-        ignored_list: list[set] = []
-
-        for t in range(steps):
-            _log.debug("Preparing period %d/%d", t + 1, steps)
-            net_t, ignored_t = _prepare_period(
-                network, timeseries_data, t, optimization_problem, formulation
-            )
+        def _inject(net_t, ignored_t, t):
             inject_vars(
                 lambda model, comp, cat, _t=t: PyomoSolver.inject_pyomo_vars_attr(
                     pm,
@@ -604,63 +651,27 @@ class PyomoMultiPeriodSolver:
                 net_t,
                 ignored_t,
             )
-            for ext in net_t.extensions:
-                ext.activate_timeseries(net_t, ignored_t)
-            _single.mark_temporal_components(net_t, ignored_t)
-            net_copies.append(net_t)
-            ignored_list.append(ignored_t)
 
-        # Pass 2: build per-period equations.
-        _log.debug("Assembling equations for %d periods", steps)
-        for t in range(steps):
-            net_t = net_copies[t]
-            ignored_t = ignored_list[t]
-
-            period_state = PeriodState(
-                net_copies,
-                current_t=t,
-                dt_h=dt_h_list[t],
-                initial_state=initial_state,
-            )
-
-            _single.init_branches(net_t.branches)
-            _single.process_equations_nodes_childs(pm, net_t, net_t.nodes, ignored_t)
-            _single.process_equations_branches(pm, net_t, net_t.branches, ignored_t)
-            _single.process_equations_compounds(pm, net_t, net_t.compounds, ignored_t)
-
-            if optimization_problem is not None:
-                _single.process_oxf_components(
-                    pm, net_t, optimization_problem, period_index=t
-                )
-            else:
-                _single.process_internal_oxf_components(pm, net_t)
-
-            _single.process_inter_period_equations(
-                pm,
-                net_t,
-                net_t.nodes,
-                net_t.branches,
-                net_t.compounds,
-                ignored_t,
-                period_state,
-                optimization_problem=optimization_problem,
-                period_index=t,
-            )
-
-            for ext in net_t.extensions:
-                _single._add_equations(
-                    pm, ext.inter_period_equations(net_t, ignored_t, period_state)
-                )
-                _single._add_equations(
-                    pm, ext.inter_temporal_equations(net_t, ignored_t, period_state)
-                )
-                _single._add_equations(pm, ext.equations(net_t, ignored_t))
-
-            if terminal_state and t == steps - 1:
-                for (comp_id, attr), target in terminal_state.items():
-                    var = _find_component_var(net_t, comp_id, attr)
-                    if var is not None:
-                        pm.cons.add(var == target)
+        net_copies = _assemble_two_pass(
+            pm,
+            _single,
+            "Pyomo",
+            network,
+            timeseries_data,
+            steps,
+            optimization_problem,
+            dt_h_list,
+            initial_state,
+            terminal_state,
+            formulation,
+            inject=_inject,
+            process_branches=lambda net_t, ignored_t: (
+                _single.process_equations_branches(pm, net_t, net_t.branches, ignored_t)
+            ),
+            sink_objective=lambda _ctx: None,
+            add_equations=lambda eqs: _single._add_equations(pm, eqs),
+            add_terminal=lambda var, target: pm.cons.add(var == target),
+        )
 
         all_exprs = pm.user_obj_exprs + pm.aux_obj_exprs
         obj_expr = sum(all_exprs) if all_exprs else 0
@@ -735,33 +746,12 @@ class PyomoMultiPeriodSolver:
         )
 
 
-def _resolve_steps(steps: int | None, timeseries_data: TimeseriesData | None) -> int:
-    """Return *steps*; infer from ``timeseries_data.length`` when omitted."""
-    if steps is not None:
-        if (
-            timeseries_data is not None
-            and timeseries_data.length is not None
-            and timeseries_data.length < steps
-        ):
-            raise ValueError(
-                f"timeseries_data has {timeseries_data.length} step(s) but "
-                f"steps={steps} was requested.  Add more values to the series "
-                f"or reduce 'steps'."
-            )
-        return steps
-    if timeseries_data is not None and timeseries_data.length is not None:
-        return timeseries_data.length
-    raise ValueError(
-        "'steps' must be provided when timeseries_data has no registered series."
-    )
-
-
 def _dt_h_from_datetime_index(
-    dt_h: float | list[float],
+    dt_h: float | list[float] | None,
     datetime_index: pandas.DatetimeIndex,
     steps: int,
 ) -> list[float]:
-    if isinstance(dt_h, (list, tuple)) or dt_h != 1.0:  # NOSONAR
+    if dt_h is not None:
         _log.warning(
             "Both dt_h and datetime_index were provided; dt_h will be "
             "ignored and step durations will be derived from "
@@ -772,14 +762,8 @@ def _dt_h_from_datetime_index(
             f"datetime_index length ({len(datetime_index)}) is less than "
             f"steps ({steps})."
         )
-    diffs = [
-        (datetime_index[t] - datetime_index[t - 1]).total_seconds() / 3600.0
-        if t > 0
-        else (datetime_index[1] - datetime_index[0]).total_seconds() / 3600.0
-        if steps > 1
-        else 1.0
-        for t in range(steps)
-    ]
+    intervals = (_dt_h_at_step(datetime_index, t) for t in range(steps))
+    diffs = [1.0 if d is None else d for d in intervals]
     if any(d <= 0 for d in diffs):
         raise ValueError(
             "datetime_index must be strictly increasing; "
@@ -789,13 +773,16 @@ def _dt_h_from_datetime_index(
 
 
 def _resolve_dt_h(
-    dt_h: float | list[float],
+    dt_h: float | list[float] | None,
     datetime_index: pandas.DatetimeIndex | None,
     steps: int,
 ) -> list[float]:
-    """Return per-period timestep durations [h]. datetime_index overrides dt_h."""
+    """Return per-period timestep durations [h]. ``None`` means the default of
+    1.0; ``datetime_index`` overrides dt_h."""
     if datetime_index is not None:
         return _dt_h_from_datetime_index(dt_h, datetime_index, steps)
+    if dt_h is None:
+        dt_h = 1.0
     if isinstance(dt_h, (list, tuple)):
         if len(dt_h) != steps:
             raise ValueError(
@@ -819,15 +806,17 @@ def run_multi_period(
     optimization_problem=None,
     solver=None,
     backend: str | None = None,
-    dt_h: float | list[float] = 1.0,
+    dt_h: float | list[float] | None = None,
     datetime_index: pandas.DatetimeIndex | None = None,
     initial_state: dict | None = None,
     terminal_state: dict | None = None,
     formulation=None,
 ) -> MultiPeriodResult:
     """Run a single-shot multi-period optimisation. Cross-period coupling goes
-    through the standard ``inter_step_equations`` protocol; ``TimeseriesData``
-    is applied per-period before equations are assembled."""
+    through the ``inter_temporal_equations`` and ``inter_period_equations``
+    protocols; ``TimeseriesData`` is applied per-period before equations are
+    assembled. ``dt_h`` defaults to 1.0 hour when omitted; ``datetime_index``
+    overrides it (a warning is logged if both are given)."""
     solver = resolve_multi_period_solver(solver, backend=backend)
 
     _validate_state_keys(initial_state, network, "initial_state")
@@ -855,7 +844,7 @@ def run_mpc(
     solver=None,
     backend: str | None = None,
     optimization_problem=None,
-    dt_h: float | list[float] = 1.0,
+    dt_h: float | list[float] | None = None,
     datetime_index: pandas.DatetimeIndex | None = None,
     initial_state: dict | None = None,
     terminal_state: dict | None = None,
@@ -867,6 +856,10 @@ def run_mpc(
 
     Note: returned ``objective`` is the sum of per-window values and overcounts
     when ``execution_steps < horizon``.
+
+    A window whose solver reports an unsuccessful solve (``success=False``,
+    GEKKO style) raises a ``RuntimeError`` identifying the failed window;
+    backends that raise on failure (Pyomo) propagate their own error.
 
     Example::
 
@@ -930,6 +923,16 @@ def run_mpc(
             terminal_state=window_terminal_state,
             formulation=formulation,
         )
+        # Some backends (GEKKO) report failure via success=False instead of
+        # raising; carrying on would seed the next window from garbage state.
+        if not window_result.success:
+            raise RuntimeError(
+                f"run_mpc: window starting at step {offset} (periods "
+                f"{offset}..{offset + actual_window - 1} of {total_steps}) "
+                f"failed - the solver reported an unsuccessful solve. "
+                f"Aborting; state extracted from a failed window would "
+                f"poison all subsequent windows."
+            )
 
         n_execute = min(execution_steps, actual_window)
         executed_copies = window_result._net_copies[:n_execute]
@@ -947,6 +950,8 @@ def run_mpc(
     return MultiPeriodResult(
         all_net_copies,
         objective=total_objective,
+        # Every unsuccessful window raises above, so reaching here means all
+        # windows succeeded.
         success=True,
         datetime_index=exec_datetime_index,
         backend_used=getattr(solver, "_backend_name", None),

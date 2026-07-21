@@ -28,6 +28,7 @@ import monee.model.phys.nonlinear.wf as owfmodel
 from monee.model.core import Const, Var
 from monee.model.phys.core.hydraulics import calc_local_max_mass_flow
 
+from ..common import ensure_velocity_report
 from ..core import BranchFormulation, NodeFormulation
 
 C_WATER = ohfmodel.SPECIFIC_HEAT_CAP_WATER
@@ -310,6 +311,7 @@ class McCormickHeatBranchFormulation(BranchFormulation):
         # binary and mass_flow_pos_kgs to Const drops them from the LP.
         model.direction = Const(0)
         model.mass_flow_pos_kgs = Const(0)
+        ensure_velocity_report(model, grid)
         if self.num_partitions > 1:
             for s in range(self.num_partitions):
                 setattr(

@@ -14,4 +14,4 @@ from .multi_period import (
     run_multi_period,
     run_mpc,
 )
-from .stepper import Stepper
+from .stepper import NetworkChange, Stepper

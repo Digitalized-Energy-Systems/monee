@@ -4,16 +4,15 @@ Multi-energy benchmark grid for grid restoration studies.
 Topology
 --------
 
-**Electricity** (~27 buses):
+**Electricity** (21 buses):
     Two 110 kV feeders (ext-grids) supply a meshed 20 kV distribution
-    backbone via transformers.  Three open chains (industrial,
+    backbone via four transformers.  Three chains (industrial,
     commercial, residential) carry loads and distributed generation.
-    A battery provides storage flexibility.
 
-**Gas** (~30 junctions):
+**Gas** (28 junctions):
     Two high-pressure feeders supply a medium-pressure distribution
-    network via compressors.  Three distribution chains serve gas sinks.
-    A gas storage cavern adds flexibility.
+    network via three compressors.  Three distribution chains plus two
+    spurs serve gas sinks.
 
 **Thermal / District Heating** (121 junctions -- 120 supply + 1 return):
     One heat plant feeds a 120-junction supply-pipe chain.  A single
@@ -21,14 +20,12 @@ Topology
     chain).  Heat exchangers bridge supply junctions to the return
     junction at consumer nodes.  Coupling points feed the supply chain.
 
-**Coupling points** (7 total -- all variants):
-    - 2 x CHP  (gas -> electricity + heat)
-    - 1 x P2H  (electricity -> heat)
-    - 1 x G2H  (gas -> heat)
-    - 1 x P2G  (electricity -> gas)
-    - 2 x G2P  (gas -> electricity)
+**Coupling points** (4 total):
+    - 2 x CHP-HG (gas -> electricity + heat)
+    - 1 x P2G    (electricity -> gas)
+    - 1 x G2P    (gas -> electricity)
 
-**Extensions**:
+**Extensions** (opt-in via flags):
     - ``GasLinepack``              -- inherent gas storage in pipes
     - ``LumpedThermalCapacitance``  -- thermal inertia at junctions (LTC)
 
@@ -37,14 +34,9 @@ sequence planning, and resilience studies.
 
 .. note::
 
-   This benchmark is designed for the ``PyomoSolver`` with **ipopt**.
-   Recommended solver options::
-
-       from monee.solver.pyo import DEFAULT_SOLVER_OPTIONS
-       DEFAULT_SOLVER_OPTIONS["max_iter"] = 5000
-       DEFAULT_SOLVER_OPTIONS["tol"] = 1e-4
-       DEFAULT_SOLVER_OPTIONS["acceptable_tol"] = 1e-3
-       DEFAULT_SOLVER_OPTIONS["acceptable_iter"] = 10
+   With the default ``misocp=True`` the benchmark is designed for the
+   ``PyomoSolver`` with a MIQCQP-capable solver (SCIP or Gurobi) and
+   solves with default solver options.
 """
 
 from __future__ import annotations
@@ -52,7 +44,6 @@ from __future__ import annotations
 import monee.express as mx
 import monee.model as mm
 from monee.model import GasLinepack, LumpedThermalCapacitance
-from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 
 # -- electrical line catalogue --
 _HV_LINE = {"length_m": 5000, "r_ohm_per_m": 3e-5, "x_ohm_per_m": 4e-5, "parallel": 1}
@@ -70,19 +61,7 @@ _MP_PIPE = {"diameter_m": 0.3, "length_m": 100}
 _MP_PIPE_SHORT = {"diameter_m": 0.3, "length_m": 80}
 
 # -- water pipe catalogue --
-_DH_PIPE = {"diameter_m": 0.15, "length_m": 100}
-_DH_PIPE_LONG = {"diameter_m": 0.15, "length_m": 150}
 _DH_TRUNK = {"diameter_m": 0.25, "length_m": 100}
-
-# -- heat sizing helpers --
-_CP = 4186.0  # water specific heat, J/(kg K)
-_DT = 25.0  # supply-return temperature drop, K
-_HHV_MJ = DEFAULT_GAS_HHV_MJ_PER_KG  # gas higher heating value, MJ/kg (lgas)
-
-
-def _mf(heat_mw):
-    """Convert heat load (MW) to mass flow (kg/s) for a 25 K drop."""
-    return heat_mw * 1e6 / (_CP * _DT)
 
 
 def create_restoration_benchmark(  # NOSONAR
@@ -117,74 +96,70 @@ def create_restoration_benchmark(  # NOSONAR
     mx.create_line(net, hv1, hv2, **_HV_LINE, name="HV_tie")
 
     # 20 kV backbone buses (4 substations)
-    mv_sub = []
-    for i in range(4):
-        mv_sub.append(mx.create_bus(net, base_kv=20, name=f"MV_sub_{i}"))
+    mv_sub = [mx.create_bus(net, base_kv=20, name=f"MV_sub_{i}") for i in range(4)]
 
-    # Transformers: HV -> MV
-    mx.create_trafo(net, hv1, mv_sub[0], sn_trafo_mva=63, name="Trafo_HV1_S0")
-    mx.create_trafo(net, hv1, mv_sub[1], sn_trafo_mva=63, name="Trafo_HV1_S1")
-    mx.create_trafo(net, hv2, mv_sub[2], sn_trafo_mva=63, name="Trafo_HV2_S2")
-    mx.create_trafo(net, hv2, mv_sub[3], sn_trafo_mva=63, name="Trafo_HV2_S3")
+    # Transformers HV -> MV (create_trafo: from-node = LV side, to-node = HV side)
+    mx.create_trafo(net, mv_sub[0], hv1, sn_trafo_mva=63, name="Trafo_HV1_S0")
+    mx.create_trafo(net, mv_sub[1], hv1, sn_trafo_mva=63, name="Trafo_HV1_S1")
+    mx.create_trafo(net, mv_sub[2], hv2, sn_trafo_mva=63, name="Trafo_HV2_S2")
+    mx.create_trafo(net, mv_sub[3], hv2, sn_trafo_mva=63, name="Trafo_HV2_S3")
 
-    # Chain A: industrial (5 buses, mv_sub[0] -> mv_sub[1])
-    ring_a = []
-    for i in range(5):
-        ring_a.append(mx.create_bus(net, base_kv=20, name=f"Ind_{i}"))
-    mx.create_line(net, mv_sub[0], ring_a[0], **_MV_LINE, name="Ind_in")
-    for i in range(4):
+    # MV chains: (label, sub_in, sub_out, loads, dg_idx, dg_p, dg_name)
+    chains = [
+        (
+            "Ind",
+            0,
+            1,
+            [(0.50, 0.10), (0.30, 0.06), (0.40, 0.08), (0.25, 0.05), (0.35, 0.07)],
+            2,
+            0.3,
+            "DG_Ind_solar",
+        ),
+        (
+            "Com",
+            1,
+            2,
+            [(0.20, 0.04), (0.15, 0.03), (0.30, 0.06), (0.25, 0.05), (0.18, 0.04)],
+            3,
+            0.15,
+            "DG_Com_solar",
+        ),
+        (
+            "Res",
+            2,
+            3,
+            [(0.10, 0.02), (0.08, 0.015), (0.12, 0.025), (0.09, 0.018), (0.07, 0.014)],
+            4,
+            0.08,
+            "DG_Res_wind",
+        ),
+    ]
+
+    chain_buses = []
+    for label, sub_in, sub_out, _, _, _, _ in chains:
+        buses = [mx.create_bus(net, base_kv=20, name=f"{label}_{i}") for i in range(5)]
+        mx.create_line(net, mv_sub[sub_in], buses[0], **_MV_LINE, name=f"{label}_in")
+        for i in range(4):
+            mx.create_line(
+                net, buses[i], buses[i + 1], **_MV_LINE, name=f"{label}_{i}_{i + 1}"
+            )
         mx.create_line(
-            net, ring_a[i], ring_a[i + 1], **_MV_LINE, name=f"Ind_{i}_{i + 1}"
+            net, buses[4], mv_sub[sub_out], **_MV_LINE_LONG, name=f"{label}_out"
         )
-    mx.create_line(net, ring_a[4], mv_sub[1], **_MV_LINE_LONG, name="Ind_out")
-
-    # Chain B: commercial (5 buses, mv_sub[1] -> mv_sub[2])
-    ring_b = []
-    for i in range(5):
-        ring_b.append(mx.create_bus(net, base_kv=20, name=f"Com_{i}"))
-    mx.create_line(net, mv_sub[1], ring_b[0], **_MV_LINE, name="Com_in")
-    for i in range(4):
-        mx.create_line(
-            net, ring_b[i], ring_b[i + 1], **_MV_LINE, name=f"Com_{i}_{i + 1}"
-        )
-    mx.create_line(net, ring_b[4], mv_sub[2], **_MV_LINE_LONG, name="Com_out")
-
-    # Chain C: residential (5 buses, mv_sub[2] -> mv_sub[3])
-    ring_c = []
-    for i in range(5):
-        ring_c.append(mx.create_bus(net, base_kv=20, name=f"Res_{i}"))
-    mx.create_line(net, mv_sub[2], ring_c[0], **_MV_LINE, name="Res_in")
-    for i in range(4):
-        mx.create_line(
-            net, ring_c[i], ring_c[i + 1], **_MV_LINE, name=f"Res_{i}_{i + 1}"
-        )
-    mx.create_line(net, ring_c[4], mv_sub[3], **_MV_LINE_LONG, name="Res_out")
+        chain_buses.append(buses)
+    ring_a, ring_b, ring_c = chain_buses
 
     # MV tie (meshing substations)
     mx.create_line(net, mv_sub[0], mv_sub[3], **_MV_LINE_LONG, name="MV_tie_03")
 
-    # Loads on chain A (industrial)
-    for i, (p, q) in enumerate(
-        [(0.50, 0.10), (0.30, 0.06), (0.40, 0.08), (0.25, 0.05), (0.35, 0.07)]
-    ):
-        mx.create_power_load(net, ring_a[i], p_mw=p, q_mvar=q, name=f"Load_Ind_{i}")
-    mx.create_power_generator(net, ring_a[2], p_mw=0.3, q_mvar=0.0, name="DG_Ind_solar")
-
-    # Loads on chain B (commercial)
-    for i, (p, q) in enumerate(
-        [(0.20, 0.04), (0.15, 0.03), (0.30, 0.06), (0.25, 0.05), (0.18, 0.04)]
-    ):
-        mx.create_power_load(net, ring_b[i], p_mw=p, q_mvar=q, name=f"Load_Com_{i}")
-    mx.create_power_generator(
-        net, ring_b[3], p_mw=0.15, q_mvar=0.0, name="DG_Com_solar"
-    )
-
-    # Loads on chain C (residential)
-    for i, (p, q) in enumerate(
-        [(0.10, 0.02), (0.08, 0.015), (0.12, 0.025), (0.09, 0.018), (0.07, 0.014)]
-    ):
-        mx.create_power_load(net, ring_c[i], p_mw=p, q_mvar=q, name=f"Load_Res_{i}")
-    mx.create_power_generator(net, ring_c[4], p_mw=0.08, q_mvar=0.0, name="DG_Res_wind")
+    for (label, _, _, loads, dg_idx, dg_p, dg_name), buses in zip(chains, chain_buses):
+        for i, (p, q) in enumerate(loads):
+            mx.create_power_load(
+                net, buses[i], p_mw=p, q_mvar=q, name=f"Load_{label}_{i}"
+            )
+        mx.create_power_generator(
+            net, buses[dg_idx], p_mw=dg_p, q_mvar=0.0, name=dg_name
+        )
 
     # Two HP feeders
     gf1 = mx.create_gas_junction(net, name="Gas_HP_feeder_1")
@@ -196,15 +171,9 @@ def create_restoration_benchmark(  # NOSONAR
     mx.create_gas_pipe(net, gf1, gf2, **_HP_PIPE, name="Gas_HP_trunk")
 
     # MP distribution: 3 branches x 8 junctions = 24 junctions
-    gas_a = []
-    gas_b = []
-    gas_c = []
-    for i in range(8):
-        gas_a.append(mx.create_gas_junction(net, name=f"Gas_A{i}"))
-    for i in range(8):
-        gas_b.append(mx.create_gas_junction(net, name=f"Gas_B{i}"))
-    for i in range(8):
-        gas_c.append(mx.create_gas_junction(net, name=f"Gas_C{i}"))
+    gas_a = [mx.create_gas_junction(net, name=f"Gas_A{i}") for i in range(8)]
+    gas_b = [mx.create_gas_junction(net, name=f"Gas_B{i}") for i in range(8)]
+    gas_c = [mx.create_gas_junction(net, name=f"Gas_C{i}") for i in range(8)]
 
     # Compressors HP -> first MP junction
     mx.create_compressor(

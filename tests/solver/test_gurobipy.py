@@ -343,6 +343,69 @@ def test_misocp_optimization_matches_pyomo_gurobi():
 
 
 @requires_gurobi
+def test_chphg_islanded_heat_side_degrades_without_leaking_model_var(monkeypatch):
+    """Regression: when a CHPHG's heat unit (its ``SubHG`` child) is deactivated
+    or its heat node islanded, the solver NaN-injects the SubHG, leaving
+    ``sub_hg.q_mw_heat`` a placeholder model ``Var`` rather than a live backend
+    variable. ``CHPHGControlNode`` reaches that child through a captured
+    reference (not the ignore-filtered branch inputs the sibling P2H/G2H control
+    nodes use), so it used to splice the model ``Var`` straight into a gurobipy
+    constraint and crash the build with ``unsupported operand type(s) for -:
+    'LinExpr' and 'Var'``. It must instead degrade to zero heat output."""
+    import monee
+    from monee.model.core import Var
+    from monee.model.multi import CHPHG, CHPHGControlNode, SubHG
+    from monee.network import create_restoration_benchmark
+    from monee.problem.min_load_shedding import create_min_load_shedding_problem
+    from monee.solver.gurobipy import GurobipySolver
+
+    # GIVEN a benchmark with CHPHG units, one of them with its heat unit cut.
+    net = create_restoration_benchmark(misocp=True)
+    chp = next(c for c in net.compounds if isinstance(c.model, CHPHG))
+    sub = next(sc for sc in chp.subcomponents if isinstance(sc.model, SubHG))
+
+    seen = {"degraded": 0}
+    orig_eqs = CHPHGControlNode.equations
+
+    def spy(self, *args, **kwargs):
+        # A model Var here means the SubHG was NaN-injected (heat side gone).
+        if isinstance(self._sub_hg.q_mw_heat, Var):
+            seen["degraded"] += 1
+        return orig_eqs(self, *args, **kwargs)
+
+    monkeypatch.setattr(CHPHGControlNode, "equations", spy)
+
+    problem = create_min_load_shedding_problem(
+        bounds_vm=(0.5, 1.5),
+        bounds_pressure=(0.5, 1.5),
+        bounds_t=(0.5, 1.5),
+        include_ext_grids=True,
+        include_storages=False,
+        lex_objectives=True,
+    )
+    work = net.copy()
+    work.deactivate(next(c for c in work.all_components() if c.id == sub.id))
+
+    # WHEN the model is built (equations run during build, before optimize).
+    try:
+        monee.run_energy_flow_optimization(
+            work,
+            optimization_problem=problem,
+            solver=GurobipySolver(params={"MIPGap": 1e-4, "TimeLimit": 10}),
+        )
+    except TypeError as exc:  # the exact pre-fix failure
+        pytest.fail(f"CHPHG heat-side islanding leaked a model Var into the build: {exc}")
+    except Exception:
+        # Size-limited licence / infeasibility are unrelated to this regression;
+        # the build (where the leak lived) already ran the control-node equations.
+        pass
+
+    # THEN the islanded unit took the degraded (heat-free) path — i.e. the build
+    # reached the previously-crashing code with a NaN-injected SubHG and survived.
+    assert seen["degraded"] >= 1
+
+
+@requires_gurobi
 def test_nonconvex_miqcqp_solves():
     from monee.solver.gurobipy import GurobipySolver
 
@@ -506,11 +569,13 @@ def test_infeasible_model_reports_iis():
 
     # WHEN
     m.optimize()
-    success, report = solver._classify(m, phase_label="test")
+    success, report, status_str, tc_str = solver._classify(m, phase_label="test")
 
     # THEN
     assert success is False
     assert report is not None
+    assert status_str == "warning"
+    assert tc_str == "infeasible"
     summary = report.summary()
     assert "impossible_c" in summary or "x_var" in summary
 
@@ -543,6 +608,48 @@ def test_ltc_timeseries_on_gurobi_backend_does_not_crash():
     assert not result.failed_steps
     t_last = result.get_result_for(mm.Junction, "t_pu").to_numpy()[-1]
     assert math.isfinite(float(t_last.max()))
+
+
+@requires_gurobi
+def test_stepper_warm_start_defaults_off_on_gurobipy_backend():
+    """``warm_start=None`` follows ``benefits_from_warm_start``: off for
+    gurobipy (Var.Start seeding measured neutral), explicit True wins."""
+    from monee.simulation import Stepper
+
+    assert Stepper(_build_misocp_net(), backend="gurobipy")._warm_start is False
+    assert (
+        Stepper(_build_misocp_net(), backend="gurobipy", warm_start=True)._warm_start
+        is True
+    )
+
+
+@requires_gurobi
+def test_stepper_warm_start_matches_cold_on_gurobipy_backend():
+    """The Stepper's warm start (persisted values seed ``Var.Start``) must not
+    change gurobipy results; the backend has no warm-start hint, so only the
+    value carry-over is exercised."""
+    from monee.simulation import Stepper
+
+    def _run(warm_start):
+        stepper = Stepper(
+            _build_misocp_net(), backend="gurobipy", warm_start=warm_start
+        )
+        slack = []
+        for p in (3.0, 4.5, 2.0):
+            load_id = [
+                c.id
+                for c in stepper._work_net.iter_all_components()
+                if isinstance(c.model, mm.PowerLoad)
+            ][0]
+            sr = stepper.step(
+                dt_h=1.0, data_overrides={((mm.PowerLoad, load_id), "p_mw"): p}
+            )
+            assert not sr.failed
+            slack.append(sr.result.dataframes["ExtPowerGrid"]["p_mw"][0])
+        return slack
+
+    for cold_p, warm_p in zip(_run(False), _run(True)):
+        assert math.isclose(cold_p, warm_p, rel_tol=1e-6, abs_tol=1e-9)
 
 
 # --------------------------------------------------------------------------- #
@@ -728,6 +835,123 @@ def test_run_timeseries_gurobipy_falls_back_when_hooks_present(monkeypatch):
 
     assert calls["reuse"] == 0  # fast path skipped because hooks are present
     assert seen == [0, 1, 2]
+
+
+@requires_gurobi
+def test_run_timeseries_gurobipy_fast_path_raises_on_step_failure():
+    """A step without a usable solution under the build-once fast path raises
+    (default on_step_error='raise'), matching the rebuild loop's contract."""
+    import monee
+    from monee.simulation import TimeseriesData
+    from monee.solver.gurobipy import GurobipySolveError, GurobipySolver
+
+    net, load_id = _el_two_bus_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 1.5])
+
+    with pytest.raises(GurobipySolveError, match="step 0"):
+        monee.run_timeseries(net, td, solver=GurobipySolver(params={"TimeLimit": 0}))
+
+
+@requires_gurobi
+def test_run_timeseries_gurobipy_fast_path_skip_records_failed_steps():
+    """on_step_error='skip' records failed StepResults instead of raising."""
+    import monee
+    from monee.simulation import TimeseriesData
+    from monee.solver.gurobipy import GurobipySolver
+
+    net, load_id = _el_two_bus_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 1.5])
+
+    res = monee.run_timeseries(
+        net,
+        td,
+        solver=GurobipySolver(params={"TimeLimit": 0}),
+        on_step_error="skip",
+    )
+
+    assert res.failed_steps == [0, 1]
+    assert all(sr.failed and sr.result is None for sr in res.step_results)
+
+
+@requires_gurobi
+def test_run_timeseries_gurobipy_fast_path_skip_keeps_carried_state(monkeypatch):
+    """A skipped (infeasible) step must not poison the carried storage state:
+    the next step resumes from the last successful step's SoC, exactly like the
+    rebuild loop whose StepState is only pushed on success."""
+    import numpy as np
+
+    import monee
+    import monee.simulation.timeseries as tsmod
+    from monee.simulation import TimeseriesData
+    from monee.solver.gurobipy import GurobipySolver
+
+    calls = {"reuse": 0}
+    orig = tsmod._run_gurobipy_reuse
+    monkeypatch.setattr(
+        tsmod,
+        "_run_gurobipy_reuse",
+        lambda *a, **k: calls.__setitem__("reuse", calls["reuse"] + 1) or orig(*a, **k),
+    )
+
+    # e_initial=5: step 0 -> e=1, step 1 would need e=-3 (< e_min=0, infeasible),
+    # step 2 resumes from e=1 -> e=3. Carried zeros would instead give e=2.
+    dispatch = [-4.0, -4.0, 2.0]
+
+    net, sid = _el_net_with_storage(e_initial=5.0)
+    td = TimeseriesData()
+    td.add_child_series(sid, "p_mw", dispatch)
+    res_fast = monee.run_timeseries(
+        net, td, solver=GurobipySolver(), on_step_error="skip"
+    )
+
+    net2, sid2 = _el_net_with_storage(e_initial=5.0)
+    td2 = TimeseriesData()
+    td2.add_child_series(sid2, "p_mw", dispatch)
+    res_slow = monee.run_timeseries(
+        net2,
+        td2,
+        solver=GurobipySolver(),
+        on_step_error="skip",
+        step_hooks=[_NOOP_HOOK],
+    )
+
+    assert calls["reuse"] == 1
+    assert res_fast.failed_steps == [1]
+    assert res_slow.failed_steps == [1]
+    e_fast = res_fast.get_result_for_id(sid, "e_mwh").to_numpy()
+    e_slow = res_slow.get_result_for_id(sid2, "e_mwh").to_numpy()
+    assert np.nanmax(np.abs(e_fast - e_slow)) < 1e-6
+    assert abs(float(e_fast[-1]) - 3.0) < 1e-6
+
+
+@requires_gurobi
+def test_run_timeseries_gurobipy_falls_back_when_build_unsupported(monkeypatch):
+    """When the build-once driver cannot represent the case (build-time
+    ValueError/NotImplementedError), run_timeseries falls back to the per-step
+    rebuild loop instead of surfacing the build error."""
+    import monee
+    import monee.solver.gurobipy as gmod
+    from monee.simulation import TimeseriesData
+    from monee.solver.gurobipy import GurobipySolver
+
+    class _Unsupported:
+        def __init__(self, *args, **kwargs):
+            raise ValueError(
+                "compound temporal state is unsupported; use the per-step loop"
+            )
+
+    monkeypatch.setattr(gmod, "GurobipyTimeseries", _Unsupported)
+
+    net, load_id = _el_two_bus_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 1.5, 0.8])
+
+    res = monee.run_timeseries(net, td, solver=GurobipySolver())
+
+    assert res.failed_steps == []
+    assert len(res.step_results) == 3
 
 
 if __name__ == "__main__":

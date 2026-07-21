@@ -50,6 +50,9 @@ for _cls in (_sp.csc_matrix, _sp.csr_matrix, _sp.coo_matrix):
     if not hasattr(_cls, "H"):
         _cls.H = property(lambda self: self.conj().transpose())
 
+import tempfile
+import uuid
+
 import numpy as np
 import pandapower as pp
 import pandapower.networks as ppn
@@ -59,17 +62,32 @@ import pandas as pd
 # on sys.path when this script is run directly).
 from backend_comparison import (
     RESULTS,
-    _build_econ_dispatch,
     _feeder,
     _mnet,
     _time,
+    to_mpc,
 )
 
 from monee import run_energy_flow, run_energy_flow_optimization
+from monee.io.matpower import build_matpower_opf, read_mpc
 from monee.solver.casadi import CasADiSolver
+
+_SQRT_3 = float(np.sqrt(3))
 
 PANDAPOWER = "pandapower"
 CASADI = "monee · CasADi"
+
+
+def _matpower_opf(pp_net, max_loading=None, max_i_ka=None):
+    tmp = os.path.join(tempfile.gettempdir(), f"{uuid.uuid4()}.mat")
+    to_mpc(pp_net, init="flat", filename=tmp)
+    mpc = read_mpc(tmp)
+    os.remove(tmp)
+    if max_i_ka is not None:
+        bus_kv = {int(row[0]): row[9] for row in mpc["bus"]}
+        for row in mpc["branch"]:
+            row[5] = max_i_ka * _SQRT_3 * bus_kv[int(row[0])]
+    return build_matpower_opf(mpc, max_loading=max_loading, limit_basis="current")
 
 
 def _vm_stats(arr):
@@ -174,8 +192,8 @@ def run_pf_suite():
 
 
 def run_opf_suite():
-    """AC OPF: pp.runopp vs monee economic dispatch (CasADi/IPOPT)."""
-    print("\n--- Optimal power flow: pandapower runopp vs monee economic dispatch ---")
+    """AC OPF: pp.runopp vs monee, both solving the same MATPOWER OPF case."""
+    print("\n--- Optimal power flow: pandapower runopp vs monee (MATPOWER OPF) ---")
     rows = []
     for n in (40, 80):
         pp_net = _feeder(n)
@@ -185,7 +203,7 @@ def run_opf_suite():
         p_pp = _slack_p_pp(pp_net)
         n_bus = int(len(pp_net.res_bus))
 
-        mc, pcb = _build_econ_dispatch(_feeder(n))
+        mc, pcb = _matpower_opf(_feeder(n))
         rc, t_cas = _time(
             lambda: run_energy_flow_optimization(mc, pcb, solver=CasADiSolver())
         )
@@ -274,11 +292,11 @@ def _congested_feeder(n_bus, max_i_ka, lat_len=6):
 
 
 def run_opf_limited_suite():
-    """Line-limited AC OPF: pandapower runopp (max_loading_percent) vs monee
-    economic dispatch with a line-loading-limit constraint. The cap binds, so
-    monee's current/loading intermediates re-enter the model (inlined into the
-    limit). pandapower always models line limits; here monee does too, and the
-    limit is active on both, which keeps the comparison fair."""
+    """Line-limited AC OPF: pandapower runopp (max_loading_percent) vs monee on
+    the same MATPOWER OPF case with a line-loading-limit constraint. The cap
+    binds, so monee's current/loading intermediates re-enter the model (inlined
+    into the limit). pandapower always models line limits; here monee does too,
+    and the limit is active on both, which keeps the comparison fair."""
     print(
         "\n--- Line-limited OPF: pandapower runopp vs monee dispatch (limit binds) ---"
     )
@@ -292,14 +310,11 @@ def run_opf_limited_suite():
         p_pp = _slack_p_pp(pp_net)
         n_bus = int(len(pp_net.res_bus))
 
-        def _mk(_n=n):
-            return _build_econ_dispatch(
-                _congested_feeder(_n, _LL_MAX_I_KA),
-                max_i_ka=_LL_MAX_I_KA,
-                max_loading=_LL_MAX_LOADING,
-            )
-
-        mc, pcb = _mk()
+        mc, pcb = _matpower_opf(
+            _congested_feeder(n, _LL_MAX_I_KA),
+            max_loading=_LL_MAX_LOADING,
+            max_i_ka=_LL_MAX_I_KA,
+        )
         rc, t_cas = _time(
             lambda: run_energy_flow_optimization(mc, pcb, solver=CasADiSolver())
         )

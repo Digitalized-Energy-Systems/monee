@@ -18,6 +18,7 @@ from .core import (
     ChildModel,
     NodeModel,
     CompoundModel,
+    MultiGridNodeModel,
     MultiGridBranchModel,
     MultiGridCompoundModel,
     GenericModel,
@@ -32,6 +33,7 @@ from .network import (
     Network,
     transform_network,
     to_spanning_tree,
+    to_backbone,
     calc_coordinates,
 )
 from .node import Bus, Junction
@@ -49,6 +51,8 @@ from .branch import (
     PassiveHeatExchangerGenerator,
     PassiveHeatExchangerLoad,
     Trafo,
+    hx_is_consuming,
+    hx_is_generating,
 )
 from .storage import (
     ElectricStorage,
@@ -62,9 +66,11 @@ from .child import (
     HeatLoad,
     PowerGenerator,
     PowerLoad,
+    PowerShunt,
     Sink,
     Source,
     ConsumeHydrGrid,
+    VoltageControlledGenerator,
 )
 from .multi import (
     CHP,

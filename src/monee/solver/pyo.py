@@ -6,6 +6,7 @@ import tempfile
 import types
 
 import pyomo.environ as pyo
+from pyomo.core.expr.numvalue import NumericValue
 from pyomo.opt import SolverStatus, TerminationCondition
 
 from monee.model import (
@@ -25,16 +26,23 @@ from .core import (
     StepState,
     apply_child_overwrites,
     as_iter,
+    clamp_warm_start,
     filter_bool_eqs,
     filter_intermediate_eqs,
+    finalize_failed_solution,
     finalize_solution,
+    fold_sum,
     ignore_branch,
     ignore_child,
     ignore_compound,
     ignore_node,
     inject_vars,
+    lex_cap_slack,
     mark_slacks_and_prescriptions,
     prepare_solve_network,
+    sanitize_component_name,
+    snap_to_bounds,
+    warn_false_equation,
     withdraw_vars,
 )
 
@@ -45,7 +53,7 @@ DEFAULT_SOLVER_OPTIONS = {}
 # Gurobi defaults tuned for McCormick-DHS + MISOCP electrical:
 #   ScaleFlag=2 - aggressive geometric scaling for the SOC/bilinear blocks;
 #   MIPFocus=2  - close the gap (the LP root bound is already at the optimum);
-#   MIPGap=1e-3 - ~kW precision at MW scale (default 1e-4 wastes B&B).
+#   MIPGap=1e-4 - Gurobi's default gap, pinned explicitly (~W precision at MW scale).
 # NumericFocus stays at 0: was net-negative once Reynolds/pressure_pa scaling fixed.
 PER_SOLVER_OPTIONS = {
     "gurobi": {
@@ -63,6 +71,21 @@ PER_SOLVER_OPTIONS = {
         "limits/time": 300,
     },
 }
+
+
+def _effective_solver_options(solver_name: str) -> dict:
+    """Per-solver tuning for *solver_name*, inheriting the base solver's entry
+    for interface variants (``appsi_gurobi``, ``gurobi_direct``,
+    ``gurobi_persistent`` ... inherit ``gurobi``). Exact-name entries win."""
+    base = solver_name
+    if base.startswith("appsi_"):
+        base = base[len("appsi_") :]
+    for suffix in ("_direct", "_persistent"):
+        if base.endswith(suffix):
+            base = base[: -len(suffix)]
+    options = dict(PER_SOLVER_OPTIONS.get(base, {}))
+    options.update(PER_SOLVER_OPTIONS.get(solver_name, {}))
+    return options
 
 
 def _classic_scip_available() -> bool:
@@ -277,15 +300,8 @@ class PyomoSolver(SolverInterface):
         into ``[min, max]`` (suppresses W1002 when bounds tightened since last solve)."""
         for key, value in target.__dict__.items():
             if isinstance(value, Var):
-                init = value.value
                 # NaN survives into Gurobi's warmstart file and crashes the solve.
-                if init is not None and isinstance(init, float) and math.isnan(init):
-                    init = None
-                if init is not None:
-                    if value.min is not None and init < value.min:
-                        init = value.min
-                    if value.max is not None and init > value.max:
-                        init = value.max
+                init = clamp_warm_start(value)
                 v = pyo.Var(
                     domain=pyo.Integers if value.integer else pyo.Reals,
                     bounds=(value.min, value.max),
@@ -314,11 +330,7 @@ class PyomoSolver(SolverInterface):
                 if is_integer:
                     val = int(round(val))
                 else:
-                    tol = PyomoSolver._BOUND_SNAP_TOL
-                    if lb is not None and lb - tol <= val < lb:
-                        val = lb
-                    if ub is not None and ub < val <= ub + tol:
-                        val = ub
+                    val = snap_to_bounds(val, lb, ub, PyomoSolver._BOUND_SNAP_TOL)
                 setattr(target, key, Var(value=val, min=lb, max=ub, integer=is_integer))
             elif isinstance(value, pyo.Expression):
                 expr_val = pyo.value(value, exception=False)
@@ -340,10 +352,8 @@ class PyomoSolver(SolverInterface):
         # than silently masked (mirrors the GEKKO backend via filter_bool_eqs).
         if isinstance(expr, bool):
             if expr is False:
-                _log.warning(
-                    "Dropping always-false (structurally infeasible) equation%s; "
-                    "this usually means a node/branch was over-deactivated.",
-                    f" ({name})" if name is not None else "",
+                warn_false_equation(
+                    f" ({name})" if name is not None else "", logger=_log
                 )
             return
         if name is not None:
@@ -351,12 +361,7 @@ class PyomoSolver(SolverInterface):
         else:
             pm.cons.add(expr)
 
-    @staticmethod
-    def _sanitize_name(name):
-        """Make a string safe for use as a Pyomo component name."""
-        return (
-            name.replace("(", "").replace(")", "").replace(", ", "_").replace(" ", "_")
-        )
+    _sanitize_name = staticmethod(sanitize_component_name)
 
     def _add_equations(self, pm, exprs, name_prefix=None):
         for i, e in enumerate(exprs):
@@ -377,11 +382,10 @@ class PyomoSolver(SolverInterface):
         """
         for intermediate_eq in [eq for eq in equations if type(eq) is IntermediateEq]:
             attr_val = getattr(model_obj, intermediate_eq.attr)
-            eq = (
-                intermediate_eq.eq()
-                if isinstance(intermediate_eq.eq, types.FunctionType)
-                else intermediate_eq.eq
-            )
+            # callable() semantics as in core._process_intermediate_eqs, except
+            # Pyomo expressions/Vars, which are callable (calling evaluates them).
+            raw = intermediate_eq.eq
+            eq = raw() if callable(raw) and not isinstance(raw, NumericValue) else raw
 
             if type(attr_val) is Intermediate:
                 e = pyo.Expression(expr=eq)
@@ -523,7 +527,7 @@ class PyomoSolver(SolverInterface):
         solver = self._make_solver(solver_name)
         for k, v in DEFAULT_SOLVER_OPTIONS.items():
             solver.options[k] = v
-        for k, v in PER_SOLVER_OPTIONS.get(solver_name, {}).items():
+        for k, v in _effective_solver_options(solver_name).items():
             solver.options[k] = v
 
         solve_kwargs = {"tee": debug}
@@ -535,10 +539,7 @@ class PyomoSolver(SolverInterface):
                 pm, solver, solver_name, solve_kwargs
             )
         else:
-            pm.obj = pyo.Objective(
-                expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
-                sense=pyo.minimize,
-            )
+            self._attach_combined_obj(pm)
             result = solver.solve(pm, **solve_kwargs)
             success, report, status_str, tc_str = _classify_solve_result(
                 result,
@@ -550,9 +551,14 @@ class PyomoSolver(SolverInterface):
         withdraw_vars(
             PyomoSolver.withdraw_pyomo_vars_attr, nodes, branches, compounds, network
         )
-        violations = finalize_solution(
-            nodes, branches, compounds, network, input_network
-        )
+        if success:
+            violations = finalize_solution(
+                nodes, branches, compounds, network, input_network
+            )
+        else:
+            violations = finalize_failed_solution(
+                nodes, branches, compounds, network, input_network
+            )
 
         # NaN fallback: pyo.value raises on unset Vars (e.g. McCormick aux on a
         # freshly-activated branch); SolverResult.success is the real outcome.
@@ -568,22 +574,27 @@ class PyomoSolver(SolverInterface):
             violations,
             solver_status=status_str,
             termination_condition=tc_str,
+            mode_used="optimization",
             infeasibility_report=report if not success else None,
             backend_used=self._backend_name,
             solver_used=solver_name,
         )
         return solver_result
 
-    # Slack added on top of solver MIPGap so the phase-2 cap never excludes
-    # a phase-1 incumbent the solver accepted within tolerance.
-    _LEX_REL_TOL = 1e-6
-    _LEX_ABS_TOL = 1e-9
+    @staticmethod
+    def _lex_cap_slack(s_star: float, solver_options: dict) -> float:
+        return lex_cap_slack(s_star, solver_options.get("MIPGap", 0.0))
 
-    @classmethod
-    def _lex_cap_slack(cls, s_star: float, solver_options: dict) -> float:
-        rel_gap = float(solver_options.get("MIPGap", 0.0) or 0.0)
-        rel = max(rel_gap, cls._LEX_REL_TOL)
-        return cls._LEX_ABS_TOL + rel * max(1.0, abs(s_star))
+    @staticmethod
+    def _attach_combined_obj(pm, active: bool = True):
+        """Combined ``pm.obj`` (kept deactivated in lex mode) for the
+        backwards-compatible ``pyo.value(pm.obj)`` read-out."""
+        pm.obj = pyo.Objective(
+            expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
+            sense=pyo.minimize,
+        )
+        if not active:
+            pm.obj.deactivate()
 
     def _solve_lexicographic(self, pm, solver, solver_name, solve_kwargs):
         """Two-phase lex: minimise ``Σ user`` then ``Σ aux`` under
@@ -602,11 +613,7 @@ class PyomoSolver(SolverInterface):
             phase_label="Lexicographic phase 1",
         )
         if not success:
-            pm.obj = pyo.Objective(
-                expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
-                sense=pyo.minimize,
-            )
-            pm.obj.deactivate()
+            self._attach_combined_obj(pm, active=False)
             return result, success, report, status_str, tc_str
 
         s_star = pyo.value(pm.obj_user, exception=False)
@@ -626,20 +633,14 @@ class PyomoSolver(SolverInterface):
             phase_label="Lexicographic phase 2",
         )
 
-        pm.obj = pyo.Objective(
-            expr=sum(pm.user_obj_exprs) + sum(pm.aux_obj_exprs),
-            sense=pyo.minimize,
-        )
-        pm.obj.deactivate()
+        self._attach_combined_obj(pm, active=False)
         return result, success, report, status_str, tc_str
 
     def process_internal_oxf_components(self, pm, network):
         for constraint in network.constraints:
             self._add_equation(pm, constraint(network))
 
-        obj = None
-        for objective in network.objectives:
-            obj = objective(network) if obj is None else (obj + objective(network))
+        obj = fold_sum(objective(network) for objective in network.objectives)
         if obj is not None:
             pm.user_obj_exprs.append(obj)
 
@@ -660,13 +661,11 @@ class PyomoSolver(SolverInterface):
                 ),
             )
 
-        obj = None
-        for objective in (
+        obj = fold_sum(
             optimization_problem.objectives.all(network, period_index=period_index)
             if optimization_problem.objectives is not None
             else []
-        ):
-            obj = objective if obj is None else (obj + objective)
+        )
         if obj is not None:
             pm.user_obj_exprs.append(obj)
 
@@ -695,7 +694,10 @@ class PyomoSolver(SolverInterface):
         cos_impl = pyo.cos
         abs_impl = abs
         sqrt_impl = pyo.sqrt
-        log_impl = pyo.log
+        # Swamee-Jain and friends expect base-10 log (matches the GEKKO/CasADi/
+        # Gurobi backends); pyo.log is the natural log.
+        log_impl = pyo.log10
+        exp_impl = pyo.exp
 
         for node in nodes:
             if ignore_node(node, network, ignored_nodes):
@@ -731,6 +733,7 @@ class PyomoSolver(SolverInterface):
                     abs_impl=abs_impl,
                     sqrt_impl=sqrt_impl,
                     log_impl=log_impl,
+                    exp_impl=exp_impl,
                 )
             )
 
@@ -748,10 +751,11 @@ class PyomoSolver(SolverInterface):
             for child in node_childs:
                 if ignore_child(child, ignored_nodes):
                     continue
-                for expr in child.minimize(grid, node, sqrt_impl=sqrt_impl):
+                for expr in child.minimize(grid, node.model, sqrt_impl=sqrt_impl):
                     pm.aux_obj_exprs.append(expr)
                 child_eqs = filter_bool_eqs(
-                    as_iter(child.equations(grid, node)), context=f"child_{child.id}"
+                    as_iter(child.equations(grid, node.model)),
+                    context=f"child_{child.id}",
                 )
                 self._process_intermediate_eqs(pm, child.model, child_eqs)
                 self._add_equations(
@@ -765,7 +769,9 @@ class PyomoSolver(SolverInterface):
         cos_impl = pyo.cos
         abs_impl = abs
         sqrt_impl = pyo.sqrt
-        log_impl = pyo.log
+        # Base-10 log, matching the other backends (Swamee-Jain friction).
+        log_impl = pyo.log10
+        exp_impl = pyo.exp
         pwl_impl = PyomoPWLImpl(pm, pw_repn="SOS2")
 
         def if_impl(*args, **kwargs):
@@ -801,6 +807,7 @@ class PyomoSolver(SolverInterface):
                     max_impl=max_impl,
                     sign_impl=sign_impl,
                     log_impl=log_impl,
+                    exp_impl=exp_impl,
                     sqrt_impl=sqrt_impl,
                     pwl_impl=pwl_impl,
                     simulation=self._simulation,

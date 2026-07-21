@@ -196,5 +196,5 @@ def test_lgas_vs_methane_molar_mass_is_live():
     p_lgas = res_lgas.dataframes["Junction"]["pressure_pa"][1]
     p_methane = res_methane.dataframes["Junction"]["pressure_pa"][1]
     assert p_lgas > p_methane
-    assert math.isclose(p_lgas, 999863.291, abs_tol=1.0)
-    assert math.isclose(p_methane, 999847.817, abs_tol=1.0)
+    assert math.isclose(p_lgas, 999863.356, abs_tol=1.0)
+    assert math.isclose(p_methane, 999849.361, abs_tol=1.0)

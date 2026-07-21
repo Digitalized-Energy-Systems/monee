@@ -6,9 +6,10 @@
 
 from __future__ import annotations
 
-from abc import ABC, abstractmethod
+from abc import ABC
 
-from monee.model.child import GridFormingMixin
+from monee.model.child import ExtHydrGrid, ExtPowerGrid, GridFormingMixin
+from monee.model.core import Intermediate, Var
 from monee.model.extension.core import NetworkAspect
 from monee.model.network import Network
 from monee.model.phys.islanding import (
@@ -17,6 +18,49 @@ from monee.model.phys.islanding import (
     connectivity_demand_balance,
     connectivity_super_source_supply,
 )
+
+
+def _real_carrier_components(network: Network, grid_type) -> list[set]:
+    """Connected components of the carrier subgraph over the *real* topology
+    (active branches with on_off not fixed to 0), matching
+    ``generate_real_topology`` semantics."""
+    parent: dict = {}
+
+    def find(x):
+        while parent[x] != x:
+            parent[x] = parent[parent[x]]
+            x = parent[x]
+        return x
+
+    for node in network.nodes:
+        if isinstance(node.grid, grid_type) and node.active:
+            parent[node.id] = node.id
+    for branch in network.branches:
+        if not isinstance(branch.grid, grid_type) or not branch.active:
+            continue
+        on_off = getattr(branch.model, "on_off", None)
+        if on_off is not None and type(on_off) is not Var and on_off == 0:
+            continue
+        if branch.from_node_id in parent and branch.to_node_id in parent:
+            parent[find(branch.from_node_id)] = find(branch.to_node_id)
+
+    components: dict = {}
+    for nid in parent:
+        components.setdefault(find(nid), set()).add(nid)
+    return list(components.values())
+
+
+def node_leads_island(network: Network, node, mode: IslandingMode) -> bool:
+    """True if *node* carries the reference child of its island: an ext grid, or
+    a grid-forming child stamped as leading by :meth:`IslandingMode.prepare`."""
+    for child in network.childs_by_ids(node.child_ids):
+        if not mode.is_grid_forming(child):
+            continue
+        if isinstance(child.model, ExtPowerGrid | ExtHydrGrid):
+            return True
+        if getattr(child.model, "_gf_leading", True):
+            return True
+    return False
 
 
 def _collect_islanding_state(network: Network, mode: IslandingMode, ignored_nodes: set):
@@ -120,17 +164,159 @@ def _build_connectivity_equations(
 class IslandingMode(NetworkAspect, ABC):
     """Per-carrier islanding base. Subclasses set ``carrier_grid_type`` and
     ``var_prefix``, and may override :meth:`add_physical_constraints` to add
-    e.g. angle pinning / pressure bounds."""
+    e.g. angle pinning / pressure bounds. ``big_m_conn`` (set by subclass
+    constructors) overrides the connectivity-arc big-M; ``None`` uses the
+    network-sized default ``len(nodes) * 10``."""
 
     carrier_grid_type: type
     var_prefix: str
+    big_m_conn: float | None = None
+    gated_child_attrs: tuple = ()
 
     def is_grid_forming(self, child) -> bool:
         return isinstance(child.model, GridFormingMixin) and child.active
 
-    @abstractmethod
+    def prepare_common(self, network: Network) -> None:
+        """Shared prepare steps: leadership stamping always; injection gating
+        and the energisation objective only for plain flow solves (an
+        optimization problem sheds via its own vars and applies after
+        prepare, so gating there would fight it)."""
+        self.stamp_gf_leadership(network)
+        if not getattr(network, "_solve_has_optimization_problem", False):
+            self.gate_fixed_injections(network)
+            self.add_energisation_objective(network)
+
+    def gate_fixed_injections(self, network: Network) -> None:
+        """Replace fixed numeric child injections with Vars tied to the host
+        node's energisation binary (``var == setpoint * e``, added in the
+        equations phase), so islands that cannot balance can de-energise
+        nodes instead of rendering the whole solve infeasible."""
+        if not self.gated_child_attrs:
+            return
+        for node in network.nodes:
+            if not isinstance(node.grid, self.carrier_grid_type) or not node.active:
+                continue
+            for child in network.childs_by_ids(node.child_ids):
+                if not child.active or self.is_grid_forming(child):
+                    continue
+                gated = {}
+                for attr in self.gated_child_attrs:
+                    val = getattr(child.model, attr, None)
+                    if not isinstance(val, int | float) or isinstance(val, bool):
+                        continue
+                    if val == 0:
+                        continue
+                    gated[attr] = val
+                    setattr(
+                        child.model,
+                        attr,
+                        Var(
+                            val,
+                            min=min(0.0, val),
+                            max=max(0.0, val),
+                            name=f"islanding_gated_{attr}",
+                        ),
+                    )
+                if gated:
+                    child.model._islanding_gated_attrs = gated
+
+    def add_energisation_objective(self, network: Network) -> None:
+        """Minimize the number of de-energised nodes so blackout is a last
+        resort, never a free alternative to serving reachable load."""
+        e_attr = f"e_{self.var_prefix}"
+        grid_type = self.carrier_grid_type
+
+        def energisation_penalty(net):
+            total = 0
+            for n in net.nodes:
+                if (
+                    not isinstance(n.grid, grid_type)
+                    or not n.active
+                    or getattr(n, "ignored", False)
+                ):
+                    continue
+                e = getattr(n.model, e_attr, None)
+                if e is not None:
+                    total = total + (1 - e)
+            return total
+
+        network.objectives.append(energisation_penalty)
+
+    def _injection_gate_equations(self, network: Network, nodes, e_vars) -> list:
+        eqs = []
+        for node in nodes:
+            e = e_vars[node.id]
+            for child in network.childs_by_ids(node.child_ids):
+                if not child.active or getattr(child, "ignored", False):
+                    continue
+                gated = getattr(child.model, "_islanding_gated_attrs", None)
+                if not gated:
+                    continue
+                for attr, setpoint in gated.items():
+                    eqs.append(getattr(child.model, attr) == setpoint * e)
+        return eqs
+
+    def stamp_gf_leadership(self, network: Network) -> None:
+        """Stamp ``_gf_leading`` on every grid-forming (non-ext) child: an ext
+        grid always leads its component, so GF children there must not pin
+        voltage/pressure references; a component without an ext grid gets
+        exactly one deterministic GF leader."""
+        for component in _real_carrier_components(network, self.carrier_grid_type):
+            ext_led = False
+            gf_children: list = []
+            for nid in component:
+                node = network.node_by_id(nid)
+                for child in network.childs_by_ids(node.child_ids):
+                    if not child.active:
+                        continue
+                    if isinstance(child.model, ExtPowerGrid | ExtHydrGrid):
+                        ext_led = True
+                    elif isinstance(child.model, GridFormingMixin):
+                        gf_children.append((nid, child))
+            leader = (
+                None if ext_led else min((nid for nid, _ in gf_children), default=None)
+            )
+            for nid, child in gf_children:
+                child.model._gf_leading = nid == leader
+
     def prepare(self, network: Network) -> None:
-        """Add Var placeholders before solver variable injection."""
+        """Add Var placeholders before solver variable injection: an energisation
+        binary per carrier node, a super-source var on grid-forming nodes, and
+        forward/reverse connectivity-flow vars per carrier branch."""
+        self.prepare_common(network)
+        grid_type = self.carrier_grid_type
+        prefix = self.var_prefix
+        for node in network.nodes:
+            if not (isinstance(node.grid, grid_type) and node.active):
+                continue
+            self._prepare_node(node)
+            setattr(
+                node.model,
+                f"e_{prefix}",
+                Var(1, min=0, max=1, integer=True, name=f"e_{prefix}"),
+            )
+            is_gf = any(
+                self.is_grid_forming(c) for c in network.childs_by_ids(node.child_ids)
+            )
+            if is_gf:
+                setattr(
+                    node.model,
+                    f"c_src_{prefix}",
+                    Var(1, min=0, name=f"c_src_{prefix}"),
+                )
+        for branch in network.branches:
+            if not (isinstance(branch.grid, grid_type) and branch.active):
+                continue
+            setattr(
+                branch.model, f"c_{prefix}_fwd", Var(0, min=0, name=f"c_{prefix}_fwd")
+            )
+            setattr(
+                branch.model, f"c_{prefix}_rev", Var(0, min=0, name=f"c_{prefix}_rev")
+            )
+
+    def _prepare_node(self, node) -> None:
+        """Hook for extra per-node prepare steps (electricity claims bus-angle
+        management here); no-op by default."""
 
     def equations(self, network: Network, ignored_nodes: set) -> list:
         gf_nodes, regular_nodes, e_vars, c_fwd_vars, c_rev_vars, c_src_vars = (
@@ -138,6 +324,9 @@ class IslandingMode(NetworkAspect, ABC):
         )
         if not e_vars:
             return []
+        big_m = (
+            self.big_m_conn if self.big_m_conn is not None else len(network.nodes) * 10
+        )
         eqs = _build_connectivity_equations(
             network,
             gf_nodes,
@@ -146,14 +335,41 @@ class IslandingMode(NetworkAspect, ABC):
             c_fwd_vars,
             c_rev_vars,
             c_src_vars,
-            len(network.nodes) * 10,
+            big_m,
         )
         eqs += self.add_physical_constraints(network, gf_nodes, regular_nodes, e_vars)
+        eqs += self._injection_gate_equations(network, gf_nodes + regular_nodes, e_vars)
         return eqs
 
     def add_physical_constraints(self, *_) -> list:
         """Carrier-specific physics (override in subclasses). Empty by default."""
         return []
+
+
+class PressureGatedIslandingMode(IslandingMode):
+    r"""Shared base for the gas/water modes: connectivity flow plus
+    :math:`pressure_{pu} \le 2 \cdot e` on regular junctions (grid-forming
+    junctions already pin pressure via ``overwrite()``)."""
+
+    gated_child_attrs = ("mass_flow_kgs",)
+
+    def add_physical_constraints(
+        self, network, gf_nodes, regular_nodes, e_vars
+    ) -> list:
+        eqs = []
+        for node in regular_nodes:
+            e = e_vars[node.id]
+            # 2.0 is the existing model bound; non-binding when e=1. Gate in the
+            # squared domain when the model carries a squared-pressure Var
+            # (MIQCQP): p<=2e <=> p^2<=4e for binary e, and the squared form is
+            # linear (gas) or quadratic (water) instead. An Intermediate is not
+            # a solver variable yet, so fall back to pressure_pu there.
+            p2 = getattr(node.model, "pressure_squared_pu", None)
+            if p2 is not None and not isinstance(p2, Intermediate):
+                eqs.append(p2 <= 4.0 * e)
+            else:
+                eqs.append(node.model.pressure_pu <= 2.0 * e)
+        return eqs
 
 
 class NetworkIslandingConfig(NetworkAspect):

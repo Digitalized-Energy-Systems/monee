@@ -675,3 +675,138 @@ def test_timeseries_with_simbench():
     assert len(result.raw) == steps
     assert len(result.step_results) == steps
     assert len(result.get_result_for(PowerLoad, "p_mw")) == steps
+
+
+class _UnsuccessfulResult:
+    success = False
+    network = None
+    solver_status = "aborted"
+    termination_condition = "infeasible"
+
+
+def _make_unsuccessful_solve(fail_on_call):
+    """Return a solve replacement reporting success=False on the given call."""
+    call_count = [0]
+
+    def fake_solve(*args, **kwargs):
+        call_count[0] += 1
+        if call_count[0] == fail_on_call:
+            return _UnsuccessfulResult()
+        from monee.simulation.core import solve as real_solve
+
+        return real_solve(*args, **kwargs)
+
+    return fake_solve
+
+
+def test_success_false_result_raises_by_default(monkeypatch):
+    # GIVEN
+    net = _el_net()
+    td = TimeseriesData()
+    td.add_child_series(net.childs[1].id, "p_mw", [0.5, 0.8])
+    monkeypatch.setattr(
+        "monee.simulation.timeseries.solve", _make_unsuccessful_solve(2)
+    )
+
+    # WHEN / THEN  (per-step loop, see test_on_step_error_raise_is_default)
+    with pytest.raises(RuntimeError, match="success=False"):
+        run(net, td, solver=GEKKOSolver())
+
+
+def test_success_false_result_skip_records_failure_without_push(monkeypatch):
+    # GIVEN
+    net = _el_net()
+    td = TimeseriesData()
+    td.add_child_series(net.childs[1].id, "p_mw", [0.5, 0.8, 1.0])
+    monkeypatch.setattr(
+        "monee.simulation.timeseries.solve", _make_unsuccessful_solve(2)
+    )
+
+    # WHEN  (per-step loop, see test_on_step_error_raise_is_default)
+    result = run(net, td, on_step_error="skip", solver=GEKKOSolver())
+
+    # THEN: failed like a raising solver; bad network not treated as a result
+    assert result.failed_steps == [1]
+    assert len(result.raw) == 2
+    sr = result.step_results[1]
+    assert sr.failed
+    assert sr.result is None
+    assert "solver_status=aborted" in str(sr.error)
+
+
+def test_result_index_uses_step_numbers_after_skipped_failure(monkeypatch):
+    # GIVEN
+    net = _el_net()
+    load_id = net.childs[1].id
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [0.5, 0.8, 1.0])
+    monkeypatch.setattr(
+        "monee.simulation.timeseries.solve", _make_failing_solve(2, "boom")
+    )
+
+    # WHEN  (per-step loop, see test_on_step_error_raise_is_default)
+    result = run(net, td, on_step_error="skip", solver=GEKKOSolver())
+
+    # THEN: rows labelled by step number, not renumbered positionally
+    df = result.get_result_for(PowerLoad, "p_mw")
+    assert list(df.index) == [0, 2]
+    s = result.get_result_for_id(load_id, "p_mw")
+    assert list(s.index) == [0, 2]
+
+
+def test_datetime_index_shorter_than_steps_raises():
+    # GIVEN
+    net = _el_net()
+    td = TimeseriesData()
+    td.add_child_series(net.childs[1].id, "p_mw", [0.5, 0.8, 1.0])
+    idx = pandas.date_range("2025-01-01", periods=2, freq="h")
+
+    # WHEN / THEN: clear error up front instead of a mid-run IndexError
+    with pytest.raises(ValueError, match="datetime_index length"):
+        run(net, td, datetime_index=idx, solver=GEKKOSolver())
+
+
+def test_dt_h_threaded_to_step_state():
+    # GIVEN
+    net = _el_net()
+    td = TimeseriesData()
+    td.add_child_series(net.childs[1].id, "p_mw", [0.5, 0.8])
+    seen = []
+
+    class _DtCapture(StepHook):
+        def pre_run(self, base_net, step, step_state):
+            seen.append(step_state.dt_h)
+
+    # WHEN
+    result = run(net, td, dt_h=0.25, step_hooks=[_DtCapture()], solver=GEKKOSolver())
+
+    # THEN
+    assert not result.failed_steps
+    assert seen == [0.25, 0.25]
+
+
+def test_dt_h_invalid_raises():
+    # GIVEN
+    net = _el_net()
+    td = TimeseriesData()
+    td.add_child_series(net.childs[1].id, "p_mw", [0.5])
+
+    # WHEN / THEN
+    with pytest.raises(ValueError, match="dt_h must be positive"):
+        run(net, td, dt_h=0.0)
+
+
+def test_add_objective_data_by_name():
+    td = TimeseriesData()
+    td.add_objective_data_by_name("load1", "p_mw", [1, 2, 3])
+    assert td.child_name_data["load1"]["p_mw"] == [1, 2, 3]
+
+
+def test_id_data_properties():
+    td = TimeseriesData()
+    td.add_child_series("c1", "p_mw", [1, 2])
+    td.add_branch_series("b1", "on_off", [1, 0])
+    td.add_compound_series("cmp1", "x", [3, 4])
+    assert td.child_id_data["c1"]["p_mw"] == [1, 2]
+    assert td.branch_id_data["b1"]["on_off"] == [1, 0]
+    assert td.compound_id_data["cmp1"]["x"] == [3, 4]

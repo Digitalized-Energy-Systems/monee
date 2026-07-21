@@ -4,6 +4,7 @@ Entry point: :func:`plot_network`.
 """
 
 import networkx as nx
+import numpy as np
 import plotly.graph_objects as go
 
 import monee.model as mm  # kept for Network type hint only
@@ -28,6 +29,7 @@ from monee.visualization.result_visualization import (
     _format_component_header,
     _grid_type,
     _sep,
+    _write_figure,
 )
 
 _SKIP_ATTRS: frozenset[str] = frozenset({"active", "independent", "ignored"})
@@ -60,8 +62,10 @@ def _adaptive_marker_px(graph: nx.Graph, pos: dict, nominal_px: int = 1000) -> f
         return 24.0
     # 10th-percentile edge length: sizes markers to survive the densest
     # region (e.g. a meshed electrical cluster) without collapsing everywhere
-    # else; the true minimum may be a near-coincident node pair, so avoid it.
-    short_edge = edge_lengths[len(edge_lengths) // 10]
+    # else; the true minimum may be a near-coincident node pair, so avoid it
+    # whenever more than one edge exists.
+    idx = min(len(edge_lengths) - 1, max(1, len(edge_lengths) // 10))
+    short_edge = edge_lengths[idx]
     # Markers at most ~65% of a short edge, in pixels of the nominal plot size.
     return max(8.0, min(20.0, 0.65 * short_edge / extent * nominal_px))
 
@@ -87,7 +91,7 @@ def _model_params(model) -> dict:
             continue
         if callable(val):
             continue
-        if isinstance(val, (int, float, bool, str)):
+        if isinstance(val, (int, float, bool, str, np.integer, np.floating)):
             params[name] = val
     return params
 
@@ -222,12 +226,14 @@ def plot_network(  # NOSONAR
         use_monee_positions: Use stored ``node.position`` coordinates instead
             of the automatic graph layout.
         write_to: Optional path to export the figure (PDF / PNG / SVG).
+            Static export needs the optional ``kaleido`` package
+            (``pip install monee[plot]``).
 
     Returns:
         A :class:`plotly.graph_objects.Figure`.
     """
     graph: nx.Graph = network._network_internal
-    pos = _compute_layout(graph, network, use_monee_positions)
+    pos = _compute_layout(graph, use_monee_positions)
     marker_px = _adaptive_marker_px(graph, pos)
 
     # Node data – collected per grid type
@@ -460,6 +466,6 @@ def plot_network(  # NOSONAR
     if write_to is not None:
         # Fixed export size matching the nominal-pixel basis of the adaptive
         # marker scaling (interactive autosize stays untouched).
-        fig.write_image(write_to, width=1230, height=1000)
+        _write_figure(fig, write_to, width=1230, height=1000)
 
     return fig

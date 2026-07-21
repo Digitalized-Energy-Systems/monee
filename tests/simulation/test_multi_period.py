@@ -12,6 +12,7 @@ from monee.problem import OptimizationProblem
 from monee.simulation.multi_period import run_mpc, run_multi_period
 from monee.simulation.timeseries import TimeseriesData
 from tests.util import child_id_by_type as _child_id_by_type
+from tests.util import solver_available
 
 
 def _storage_problem():
@@ -366,6 +367,47 @@ def test_mpc_state_propagation():
         )
 
 
+def test_mpc_failed_window_raises_with_window_info():
+    from monee.simulation.multi_period import MultiPeriodResult
+
+    # GIVEN
+    net, b0, b1, load_id, bat_id = _storage_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0] * 4)
+
+    class _FailingWindowSolver:
+        """GEKKO-style backend: reports failure via success=False, no raise."""
+
+        _backend_name = "stub"
+        _solver_name = "stub"
+
+        def __init__(self, fail_on_window):
+            self.calls = 0
+            self._fail_on_window = fail_on_window
+
+        def solve_multi_period(self, network, steps=None, **kwargs):
+            self.calls += 1
+            return MultiPeriodResult(
+                [network.copy() for _ in range(steps)],
+                objective=0.0,
+                success=self.calls != self._fail_on_window,
+            )
+
+    stub = _FailingWindowSolver(fail_on_window=2)
+
+    # WHEN / THEN: the second window (offset 2) fails and must abort loudly
+    with pytest.raises(RuntimeError, match="window starting at step 2"):
+        run_mpc(
+            net,
+            td,
+            total_steps=4,
+            horizon=2,
+            execution_steps=2,
+            solver=stub,
+        )
+    assert stub.calls == 2  # no windows solved past the failed one
+
+
 def test_repr_shows_temporal_evolution():
     # GIVEN
     net, b0, b1, load_id, bat_id = _storage_net()
@@ -693,3 +735,425 @@ def test_multi_period_load_shedding_ramp():
         f"Expected ramp to smooth regulation: "
         f"free={max_delta_free:.3f}, ramp={max_delta_ramp:.3f}"
     )
+
+
+# --------------------------------------------------------------------------- #
+# Variable dt_h (list + datetime_index derivation)
+# --------------------------------------------------------------------------- #
+def test_variable_dt_h_list_soc_recursion():
+    # GIVEN
+    net, b0, b1, load_id, bat_id = _storage_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 1.0, 1.0, 1.0])
+    # Pin the battery dispatch (no optimization) so the per-period dt materially
+    # moves the SoC. A single-constant-dt regression would then give a clearly
+    # wrong trajectory (a zero-objective free battery sits idle and hides it).
+    p = [2.0, -2.0, 2.0, -1.0]
+    td.add_child_series(bat_id, "p_mw", p)
+    dt = [0.25, 0.5, 1.0, 2.0]
+
+    # WHEN
+    result = run_multi_period(net, td, steps=4, dt_h=dt)
+
+    # THEN
+    assert result.success
+
+    # SoC recursion must use the per-period dt, not a single constant
+    soc = result.get_result_for(ElectricStorage, "e_mwh")[bat_id]
+    expected = 4.0
+    for t in range(4):
+        expected = expected + dt[t] * p[t]
+        assert abs(soc.iloc[t] - expected) < 1e-3, (
+            f"per-period dt_h not applied at t={t}: "
+            f"got {soc.iloc[t]:.4f}, expected {expected:.4f}"
+        )
+
+
+def test_dt_h_list_length_mismatch_raises():
+    net, b0, b1, load_id = _simple_power_net()
+    with pytest.raises(ValueError, match="must equal steps"):
+        run_multi_period(net, steps=3, dt_h=[1.0, 1.0])
+
+
+def test_dt_h_list_nonpositive_raises():
+    net, b0, b1, load_id = _simple_power_net()
+    with pytest.raises(ValueError, match="positive"):
+        run_multi_period(net, steps=2, dt_h=[1.0, 0.0])
+
+
+def test_datetime_index_derives_variable_dt():
+    # GIVEN: 0.25 h then 1.0 h intervals, with a pinned battery dispatch so the
+    # derived per-period dt materially moves the SoC (a constant-dt regression
+    # would produce a clearly wrong trajectory).
+    net, b0, b1, load_id, bat_id = _storage_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 1.0, 1.0])
+    p = [2.0, -2.0, 1.0]
+    td.add_child_series(bat_id, "p_mw", p)
+    idx = pandas.DatetimeIndex(
+        ["2025-01-01 00:00", "2025-01-01 00:15", "2025-01-01 01:15"]
+    )
+    # period 0 and 1 both use the first 15-min interval (0.25 h); period 2 = 1.0 h
+    dt = [0.25, 0.25, 1.0]
+
+    # WHEN
+    result = run_multi_period(net, td, steps=3, datetime_index=idx)
+
+    # THEN
+    assert result.success
+
+    soc = result.get_result_for(ElectricStorage, "e_mwh")[bat_id]
+    expected = 4.0
+    for t in range(3):
+        expected = expected + dt[t] * p[t]
+        assert abs(soc.iloc[t] - expected) < 1e-3, (
+            f"derived dt not applied at t={t}: "
+            f"got {soc.iloc[t]:.4f}, expected {expected:.4f}"
+        )
+
+
+def test_both_dt_h_and_datetime_index_warns(caplog):
+    import logging
+
+    net, b0, b1, load_id = _simple_power_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 2.0])
+    idx = pandas.date_range("2025-01-01", periods=2, freq="h")
+
+    with caplog.at_level(logging.WARNING, logger="monee.simulation.multi_period"):
+        result = run_multi_period(net, td, steps=2, dt_h=1.0, datetime_index=idx)
+
+    assert result.success
+    assert any("Both dt_h and datetime_index" in r.message for r in caplog.records)
+
+
+def test_datetime_index_non_increasing_raises():
+    net, b0, b1, load_id = _simple_power_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 2.0])
+    idx = pandas.DatetimeIndex(["2025-01-01 01:00", "2025-01-01 00:00"])
+    with pytest.raises(ValueError, match="strictly increasing"):
+        run_multi_period(net, td, steps=2, datetime_index=idx)
+
+
+def test_datetime_index_shorter_than_steps_raises():
+    net, b0, b1, load_id = _simple_power_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 2.0, 3.0])
+    idx = pandas.date_range("2025-01-01", periods=2, freq="h")
+    with pytest.raises(ValueError, match="datetime_index length"):
+        run_multi_period(net, td, steps=3, datetime_index=idx)
+
+
+# --------------------------------------------------------------------------- #
+# initial_state / terminal_state validation and id disambiguation
+# --------------------------------------------------------------------------- #
+def test_initial_state_bad_id_raises():
+    net, b0, b1, load_id, bat_id = _storage_net()
+    with pytest.raises(ValueError, match="initial_state"):
+        run_multi_period(net, steps=2, initial_state={(999999, "e_mwh"): 1.0})
+
+
+def test_initial_state_bad_attr_raises():
+    net, b0, b1, load_id, bat_id = _storage_net()
+    with pytest.raises(ValueError, match="not found"):
+        run_multi_period(net, steps=2, initial_state={(bat_id, "not_an_attr"): 1.0})
+
+
+def test_terminal_state_bad_id_raises():
+    net, b0, b1, load_id, bat_id = _storage_net()
+    with pytest.raises(ValueError, match="terminal_state"):
+        run_multi_period(net, steps=2, terminal_state={(999999, "e_mwh"): 1.0})
+
+
+def test_terminal_state_with_colliding_node_child_id():
+    # Storage created as the FIRST child gets child id 0, which collides with the
+    # first node's id 0. terminal_state must still resolve to the storage (the
+    # component that actually carries e_mwh), not the same-id bus.
+    net = Network(mm.PowerGrid(name="el", sn_mva=1))
+    bat_id = net.child(
+        ElectricStorage(e_mwh_initial=4.0, e_mwh_max=8.0, p_max_mw=2.0),
+        name="battery",
+    )
+    ext_id = net.child(ExtPowerGrid(p_mw=0, q_mvar=0, vm_pu=1.0, va_degree=0.0))
+    load_id = net.child(PowerLoad(p_mw=2.0, q_mvar=0.0))
+    b0 = net.node(Bus(base_kv=1), grid=mm.EL, child_ids=[ext_id])
+    b1 = net.node(Bus(base_kv=1), grid=mm.EL, child_ids=[load_id, bat_id])
+    net.branch(mm.PowerLine(**_LINE), b0, b1)
+    assert bat_id == b0, "test precondition: storage child id collides with node id"
+
+    # target 2.0 differs from the initial SoC 4.0, so the terminal constraint
+    # must actually bind (an idle battery would leave SoC at 4.0). This checks
+    # both that the id resolves to the storage and that the constraint is
+    # applied to the storage SoC variable, not silently skipped.
+    result = run_multi_period(
+        net,
+        steps=2,
+        dt_h=1.0,
+        optimization_problem=_storage_problem(),
+        terminal_state={(bat_id, "e_mwh"): 2.0},
+    )
+    assert result.success
+    soc = result.get_result_for(ElectricStorage, "e_mwh")[bat_id]
+    assert abs(soc.iloc[-1] - 2.0) < 1e-2
+
+
+def test_terminal_state_on_constant_attribute_skipped(caplog):
+    import logging
+
+    # A terminal target on a non-controllable (constant) attribute cannot be
+    # pinned; it must be skipped with a warning rather than injected as a
+    # trivial bool equation.
+    net, b0, b1, load_id, bat_id = _storage_net()
+    with caplog.at_level(logging.WARNING):
+        result = run_multi_period(
+            net,
+            steps=2,
+            dt_h=1.0,
+            optimization_problem=_storage_problem(),
+            terminal_state={(b0, "base_kv"): 999.0},
+        )
+    assert result.success
+    assert any("constant" in r.message for r in caplog.records)
+
+
+# --------------------------------------------------------------------------- #
+# run_mpc: argument validation, oversized horizon, terminal at global end
+# --------------------------------------------------------------------------- #
+def test_mpc_execution_steps_must_be_positive():
+    net, b0, b1, load_id, bat_id = _storage_net()
+    with pytest.raises(ValueError, match="execution_steps must be >= 1"):
+        run_mpc(net, total_steps=4, horizon=2, execution_steps=0)
+
+
+def test_mpc_horizon_must_be_positive():
+    net, b0, b1, load_id, bat_id = _storage_net()
+    with pytest.raises(ValueError, match="horizon must be >= 1"):
+        run_mpc(net, total_steps=4, horizon=0, execution_steps=1)
+
+
+def test_mpc_horizon_exceeds_total_steps():
+    net, b0, b1, load_id, bat_id = _storage_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0] * 3)
+    result = run_mpc(
+        net,
+        td,
+        total_steps=3,
+        horizon=10,
+        execution_steps=1,
+        optimization_problem=_storage_problem(),
+    )
+    assert result.success
+    assert result.T == 3
+
+
+def test_mpc_terminal_state_reaches_global_end():
+    # terminal_state passed to run_mpc anchors the global horizon end. The target
+    # 2.0 differs from the initial SoC 4.0, so an idle battery (the zero-objective
+    # optimum without the terminal) would leave SoC at 4.0 and fail this - the
+    # assertion therefore actually exercises the terminal wiring. A full-horizon
+    # lookahead keeps every window's terminal reachable (robust to non-unique
+    # dispatch).
+    net, b0, b1, load_id, bat_id = _storage_net()  # e_mwh_initial=4.0
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0] * 4)
+    result = run_mpc(
+        net,
+        td,
+        total_steps=4,
+        horizon=4,
+        execution_steps=1,
+        dt_h=1.0,
+        optimization_problem=_storage_problem(),
+        terminal_state={(bat_id, "e_mwh"): 2.0},
+    )
+    assert result.success
+    assert result.T == 4
+    soc = result.get_result_for(ElectricStorage, "e_mwh")[bat_id]
+    assert abs(soc.iloc[-1] - 2.0) < 1e-2
+
+
+def test_mpc_datetime_index_labels_rows():
+    net, b0, b1, load_id, bat_id = _storage_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0] * 4)
+    idx = pandas.date_range("2025-01-01", periods=4, freq="h")
+    result = run_mpc(
+        net,
+        td,
+        total_steps=4,
+        horizon=2,
+        execution_steps=1,
+        optimization_problem=_storage_problem(),
+        datetime_index=idx,
+    )
+    assert result.success
+    soc = result.get_result_for_id(bat_id, "e_mwh")
+    assert isinstance(soc.index, pandas.DatetimeIndex)
+    assert list(soc.index) == list(idx)
+
+
+# --------------------------------------------------------------------------- #
+# Solver backends: GEKKO and Pyomo two-pass assembly (default tests hit CasADi)
+# --------------------------------------------------------------------------- #
+def _assert_soc_recursion(result, bat_id, n):
+    soc = result.get_result_for(ElectricStorage, "e_mwh")[bat_id]
+    p = result.get_result_for(ElectricStorage, "p_mw")[bat_id]
+    assert abs(soc.iloc[0] - (4.0 + p.iloc[0])) < 1e-2
+    for t in range(1, n):
+        assert abs(soc.iloc[t] - (soc.iloc[t - 1] + p.iloc[t])) < 1e-2
+
+
+def test_gekko_multi_period_backend_solves():
+    from monee.simulation.multi_period import GekkoMultiPeriodSolver
+
+    net, b0, b1, load_id, bat_id = _storage_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 1.0, 1.0])
+    # a non-trivial terminal target (differs from the initial SoC 4.0) also
+    # exercises the shared two-pass terminal binding on the GEKKO backend
+    result = run_multi_period(
+        net,
+        td,
+        steps=3,
+        dt_h=1.0,
+        optimization_problem=_storage_problem(),
+        solver=GekkoMultiPeriodSolver(),
+        terminal_state={(bat_id, "e_mwh"): 2.0},
+    )
+    assert result.success
+    assert result.backend_used == "gekko"
+    _assert_soc_recursion(result, bat_id, 3)
+    soc = result.get_result_for(ElectricStorage, "e_mwh")[bat_id]
+    assert abs(soc.iloc[-1] - 2.0) < 1e-2
+
+
+@pytest.mark.skipif(
+    not solver_available("gurobi"),
+    reason="no Pyomo MIQCP solver (gurobi) available",
+)
+def test_pyomo_multi_period_backend_solves():
+    from monee.model.formulation import EL_MISOCP_FORMULATION
+    from monee.simulation.multi_period import PyomoMultiPeriodSolver
+
+    net, b0, b1, load_id, bat_id = _storage_net()
+    net.apply_formulation(EL_MISOCP_FORMULATION)
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 1.0, 1.0])
+    result = run_multi_period(
+        net,
+        td,
+        steps=3,
+        dt_h=1.0,
+        optimization_problem=_storage_problem(),
+        solver=PyomoMultiPeriodSolver(solver_name="gurobi"),
+    )
+    assert result.success
+    assert result.backend_used == "pyomo"
+    _assert_soc_recursion(result, bat_id, 3)
+
+
+# --------------------------------------------------------------------------- #
+# Objective-level when_period (distinct from the constraint-level filter)
+# --------------------------------------------------------------------------- #
+def test_objective_when_period_restricts_cost_terms():
+    from monee.problem.core import Objectives
+
+    net, b0, b1, load_id, bat_id = _storage_net()
+    ext_id = _child_id_by_type(net, ExtPowerGrid)
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [2.0, 2.0, 2.0, 2.0])
+    td.add_objective_data(ext_id, "price", [10.0, 10.0, 10.0, 10.0])
+
+    def _make_prob(period_filter):
+        prob = _storage_problem()
+        obj = Objectives()
+        term = obj.select(lambda m: isinstance(m, ExtPowerGrid)).calculate(
+            lambda models: sum(m.price * m.p_mw for m in models)
+        )
+        if period_filter is not None:
+            term.when_period(period_filter)
+        prob.objectives = obj
+        return prob
+
+    r_all = run_multi_period(
+        net, td, steps=4, optimization_problem=_make_prob(None), dt_h=1.0
+    )
+    r_filtered = run_multi_period(
+        net, td, steps=4, optimization_problem=_make_prob({2, 3}), dt_h=1.0
+    )
+
+    assert r_all.success and r_filtered.success
+    # the filtered objective must count only periods 2 and 3
+    ext_p = r_filtered.get_result_for(mm.ExtPowerGrid, "p_mw")[ext_id]
+    expected = 10.0 * (ext_p.iloc[2] + ext_p.iloc[3])
+    assert abs(r_filtered.objective - expected) < 1e-2
+    assert abs(r_filtered.objective - r_all.objective) > 1e-2
+
+
+# --------------------------------------------------------------------------- #
+# PeriodState look-ahead: reading a FUTURE period via an absolute index
+# --------------------------------------------------------------------------- #
+def test_period_state_lookahead_future_index():
+    # A temporal constraint that reads the NEXT period via a non-negative
+    # (absolute) index. This couples to a controllable Var (storage p_mw), which
+    # is injected in pass 1 and so is available for every period during pass-2
+    # assembly. The constraint forces strictly increasing battery dispatch; an
+    # idle solution (the natural zero-objective optimum) would violate it, so the
+    # assertion fails unless the future-period link is really created.
+    from monee.problem.core import Constraints
+
+    net, b0, b1, load_id, bat_id = _storage_net()
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [1.0, 4.0, 1.0, 4.0])
+
+    def lookahead(model, cid, ts):
+        future = ts.get(cid, "p_mw", step=ts.current_t + 1)
+        if future is None:
+            return []  # last period has no successor
+        return [future - model.p_mw >= 1.0]
+
+    prob = _storage_problem()
+    cons = Constraints()
+    cons.select(lambda c: isinstance(c.model, ElectricStorage)).temporal_equation(
+        lookahead
+    )
+    prob.constraints = cons
+
+    result = run_multi_period(net, td, steps=4, optimization_problem=prob, dt_h=1.0)
+    assert result.success
+
+    p = result.get_result_for(ElectricStorage, "p_mw")[bat_id]
+    for t in range(3):
+        assert p.iloc[t + 1] - p.iloc[t] >= 1.0 - 0.05, (
+            f"future-index look-ahead not enforced between periods {t} and {t + 1}: "
+            f"p[{t}]={p.iloc[t]:.3f}, p[{t + 1}]={p.iloc[t + 1]:.3f}"
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Temporal extension (GasLinepack) coupling in a multi-period solve
+# --------------------------------------------------------------------------- #
+def test_linepack_multi_period_couples_periods():
+    from monee import GasLinepack
+
+    net = mm.Network(mm.create_gas_grid("gas", type="lgas"))
+    net.activate_grid(mm.GAS)
+    source_id = net.child(mm.ExtHydrGrid())
+    sink_id = net.child(mm.Sink(mass_flow_kgs=0.2), name="consumer")
+    n0 = net.node(mm.Junction(), mm.GAS, child_ids=[source_id])
+    n1 = net.node(mm.Junction(), mm.GAS, child_ids=[sink_id])
+    pipe_id = net.branch(mm.GasPipe(diameter_m=0.5, length_m=5000), n0, n1)
+    net.add_extension(GasLinepack())
+
+    td = TimeseriesData()
+    td.add_child_series_by_name("consumer", "mass_flow_kgs", [0.2, 0.2, 0.5, 0.2])
+
+    result = run_multi_period(net, td, steps=4)
+    assert result.success
+
+    # linepack is tracked every period, and the changing demand makes stored mass
+    # change across periods, so net_pack_kgs is non-zero for at least one period.
+    npk = result.get_result_for(mm.GasPipe, "net_pack_kgs")[pipe_id]
+    assert (npk.abs() > 1e-6).any(), "expected inter-period linepack coupling"

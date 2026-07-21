@@ -165,7 +165,7 @@ class LumpedThermalCapacitance(NetworkAspect):
     def _net_convective_heat(
         self, node, network, ignored_nodes: set = frozenset()
     ):  # NOSONAR
-        """Net convective heat flow INTO *node* (inflow-positive).
+        r"""Net convective heat flow INTO *node* (inflow-positive).
 
         Two paths:
           * Plain: use the branch's t_from_pu/t_to_pu (heat-loss aware).
@@ -191,7 +191,7 @@ class LumpedThermalCapacitance(NetworkAspect):
         for branch in network.branches:
             if not isinstance(branch.grid, WaterGrid):
                 continue
-            if _branch_ignored(branch):
+            if not branch.active or _branch_ignored(branch):
                 continue
             bm = branch.model
             bvars = bm.vars
@@ -223,12 +223,23 @@ class LumpedThermalCapacitance(NetworkAspect):
                     terms.append(mneg * bvars["t_to_pu"] - mpos * t_n)
 
         for child in network.childs_by_ids(node.child_ids):
+            # Inactive/ignored childs never get solver vars injected — their
+            # raw model Vars would poison the expression (Var/float TypeError).
+            if not child.active or getattr(child, "ignored", False):
+                continue
             cm = child.model
             cvars = cm.vars
             if "mass_flow_kgs" in cvars:
                 # Well-mixed: m_ext < 0 = injection \to heat IN = -m_ext \cdot t_n.
                 m_ext = cvars["mass_flow_kgs"] * cvars.get("regulation", 1)
-                terms.append(-m_ext * t_n)
+                t_inj_k = getattr(cm, "injection_t_k", None)
+                if t_inj_k is not None:
+                    # Defined-temperature injection (Source(t_k=...)): credit the
+                    # inflow at its own temperature, mirroring
+                    # Junction.calc_signed_heat_flow.
+                    terms.append(-m_ext * (t_inj_k / node.grid.t_ref_k))
+                else:
+                    terms.append(-m_ext * t_n)
             if "q_mw_heat" in cvars:
                 # Load convention: positive = heat OUT → negate.
                 q = cvars["q_mw_heat"] * cvars.get("regulation", 1)
@@ -236,7 +247,7 @@ class LumpedThermalCapacitance(NetworkAspect):
 
         # Branch heat_mw (e.g. GasToHeatHG) absorbed at the TO-node.
         for branch in network.branches:
-            if _branch_ignored(branch):
+            if not branch.active or _branch_ignored(branch):
                 continue
             bm = branch.model
             bvars = bm.vars

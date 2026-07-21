@@ -281,6 +281,13 @@ Re-solve every step with a 6-step lookahead to model real-time dispatch:
    print(f"Total periods: {result.T}")   # 24
    soc = result.get_result_for_id(bat, "e_mwh")
 
+.. note::
+
+   The ``objective`` returned by ``run_mpc`` is a sum over the rolling windows
+   and overcounts when ``execution_steps`` is less than ``horizon``. A
+   ``terminal_state`` passed to ``run_mpc`` anchors only the final window (the
+   global horizon end), not every window.
+
 .. tip::
 
    Increase ``execution_steps`` to reduce computation. ``execution_steps=1``
@@ -379,9 +386,10 @@ from other periods with ``temporal_state.get(component_id, attribute)``.
 
 .. note::
 
-   ``temporal_state.get()`` returns ``None`` when the requested period is
-   before the horizon start (t < 0). Always guard against this; return
-   an empty list to skip the constraint at the first period.
+   Before the horizon start (t < 0) ``temporal_state.get()`` returns the
+   ``initial_state`` value for that attribute when one was seeded, or ``None``
+   otherwise. Guard for ``None`` and return an empty list to skip the constraint
+   at the first period when no initial value is available.
 
 ``temporal_equation`` composes with ``when_period``:
 
@@ -401,7 +409,16 @@ silently skipped in single-period solves.
 Solver selection
 ================
 
+The default is CasADi when installed, with GEKKO as the automatic fallback.
+
 .. tab-set::
+
+   .. tab-item:: CasADi (default, in-process NLP)
+
+      .. code-block:: python
+
+         # CasADi is selected automatically when installed; force it with backend=
+         result = run_multi_period(net, td, backend="casadi")
 
    .. tab-item:: GEKKO (continuous NLP, IPOPT fallback)
 
@@ -470,7 +487,8 @@ Results
    * - ``MultiPeriodResult.get_period_result(t)``
      - ``SolverResult`` for one period
    * - ``MultiPeriodResult.objective``
-     - Global objective value
+     - Global objective value. For run_mpc this is a sum over rolling windows
+       and overcounts when execution_steps is less than horizon
    * - ``GekkoMultiPeriodSolver``
      - GEKKO / IPOPT backend (fallback when CasADi is unavailable)
    * - ``CasADiMultiPeriodSolver``
@@ -532,3 +550,14 @@ cross-period constraints inside the joint solve.
      - Zero-based index of the period currently being assembled
    * - ``state.T``
      - Total number of periods in the horizon
+
+.. note::
+
+   Under :func:`~monee.simulation.run_mpc`, absolute (non-negative) ``step``
+   indices are window-local: ``step=0`` is the first period of the current
+   rolling window, not the global start of the run. Prefer negative relative
+   lookbacks in ``inter_temporal_equations`` for behaviour that does not depend
+   on the MPC window. Look-ahead (a non-negative index past ``current_t``)
+   couples to a future period only for injected solver variables; a value that
+   is only derived during that future period is not yet available when an
+   earlier period is assembled.

@@ -21,6 +21,7 @@ class GenericPowerBranch(BranchModel):
         g_to_pu,
         b_to_pu,
         max_i_ka=3.19,
+        max_s_mva=None,
         backup=False,
         on_off=1,
         **kwargs,
@@ -34,9 +35,13 @@ class GenericPowerBranch(BranchModel):
         self.b_fr_pu = b_fr_pu
         self.g_to_pu = g_to_pu
         self.b_to_pu = b_to_pu
+
         self.max_i_ka = max_i_ka
+        self.max_s_mva = max_s_mva
+
         self.backup = backup
         self.on_off = on_off
+
         self.p_from_mw = Var(1, name="p_from_mw")
         self.q_from_mvar = Var(1, name="q_from_mvar")
         self.i_from_ka = Var(1, min=0, name="i_from_ka")
@@ -51,7 +56,10 @@ class GenericPowerBranch(BranchModel):
         return max(self.loading_to_pu.value, self.loading_from_pu.value)
 
     def loss_percent(self):
-        return abs((self.p_from_mw.value - self.p_to_mw.value) / self.p_from_mw.value)
+        p_from_mw = self.p_from_mw.value
+        if p_from_mw == 0:
+            return 0
+        return abs((p_from_mw - self.p_to_mw.value) / p_from_mw)
 
     def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
         # loading_*_percent \leftrightarrow i_*_ka identity is owned by the branch formulation
@@ -65,12 +73,6 @@ class PowerBranch(GenericPowerBranch, ABC):
         super().__init__(
             tap, shift, 0, 0, 0, 0, 0, 0, backup=backup, on_off=on_off, **kwargs
         )
-        self.tap = tap
-        self.shift = shift
-        self.p_from_mw = Var(1, name="p_from_mw")
-        self.q_from_mvar = Var(1, name="q_from_mvar")
-        self.p_to_mw = Var(1, name="p_to_mw")
-        self.q_to_mvar = Var(1, name="q_to_mvar")
 
     @abstractmethod
     def calc_r_x(self, grid, from_node_model, to_node_model):
@@ -112,6 +114,15 @@ class Trafo(PowerBranch):
         self, vk_percent=12.2, vkr_percent=0.25, sn_trafo_mva=160, shift=0
     ) -> None:
         super().__init__(1, shift)
+        if (
+            isinstance(vk_percent, (int, float))
+            and isinstance(vkr_percent, (int, float))
+            and vkr_percent > vk_percent
+        ):
+            raise ValueError(
+                f"vkr_percent ({vkr_percent}) must not exceed vk_percent "
+                f"({vk_percent}); the reactance sqrt(vk^2 - vkr^2) would be NaN."
+            )
         self.vk_percent = vk_percent
         self.vkr_percent = vkr_percent
         self.sn_trafo_mva = sn_trafo_mva
@@ -124,13 +135,32 @@ class Trafo(PowerBranch):
         x_sc = np.sign(z_sc) * np.sqrt((z_sc**2 - r_sc**2).astype(float))
         return (r_sc, x_sc)
 
-    def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
-        self.tap = 1
-        return super().equations(grid, from_node_model, to_node_model, **kwargs)
+
+def _init_flow_vars(
+    model, flow_seed, direction_seed, velocity_bound_mps, direction_name=None
+):
+    model.mass_flow_kgs = Intermediate(0.1)
+    model.mass_flow_pos_kgs = Var(flow_seed, min=0, name="mass_flow_pos_kgs")
+    model.mass_flow_neg_kgs = Var(flow_seed, min=0, name="mass_flow_neg_kgs")
+    model.mass_flow_pos_kgs_squared = Var(0, min=0, name="mass_flow_pos_kgs_squared")
+    model.mass_flow_neg_kgs_squared = Var(0, min=0, name="mass_flow_neg_kgs_squared")
+    model.direction = Var(
+        direction_seed, integer=True, min=0, max=1, name=direction_name
+    )
+    model.velocity_mps = Var(
+        1, min=-velocity_bound_mps, max=velocity_bound_mps, name="velocity_mps"
+    )
 
 
-def sign(v):
-    return 1 if v >= 0 else -1
+def _friction_var(friction, seed):
+    # Upper bound 7 covers the PWL leftmost breakpoint (Re=10, 64/10).
+    return Var(seed, min=0, max=7, name="friction") if friction is None else friction
+
+
+def _mass_flow_intermediate_eq(model):
+    return IntermediateEq(
+        "mass_flow_kgs", model.mass_flow_pos_kgs - model.mass_flow_neg_kgs
+    )
 
 
 @model
@@ -156,32 +186,30 @@ class WaterPipe(BranchModel):
         self.insulation_thickness_m = insulation_thickness_m
         self.on_off = on_off
         self.unidirectional = unidirectional
-        self.mass_flow_kgs = Intermediate(0.1)
-        self.mass_flow_pos_kgs = Var(0.1, min=0, name="mass_flow_pos_kgs")
-        self.mass_flow_neg_kgs = Var(0.1, min=0, name="mass_flow_neg_kgs")
-        self.mass_flow_pos_kgs_squared = Var(0, min=0, name="mass_flow_pos_kgs_squared")
-        self.mass_flow_neg_kgs_squared = Var(0, min=0, name="mass_flow_neg_kgs_squared")
-        self.direction = Var(1, integer=True, min=0, max=1, name="direction")
-        self.velocity_mps = Var(1, min=-50, max=50, name="velocity_mps")
+        _init_flow_vars(
+            self,
+            flow_seed=0.1,
+            direction_seed=1,
+            velocity_bound_mps=50,
+            direction_name="direction",
+        )
         self.q_mw = Var(1e-6, name="q_mw")
         # reynolds_scaled is stored as Re/1e6 (see REYNOLDS_SCALE); 1e-3 \approx laminar floor.
         self.reynolds_scaled = Var(1e-3, min=0, max=10, name="reynolds_scaled")
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
-        # friction upper bound 7 covers the PWL leftmost breakpoint (Re=10, 64/10).
-        self.friction = (
-            Var(0.02, min=0, max=7, name="friction") if friction is None else friction
-        )
+        self.friction = _friction_var(friction, 0.02)
 
-    def loss_percent(self):
+    def loss_percent(self, grid: WaterGrid | None = None):
         mass_flow_kgs = abs(self.mass_flow_kgs.value)
         if mass_flow_kgs == 0:
             return 0
-        # Average fluid temperature in Kelvin from the per-unit endpoint temps
-        # (WaterGrid.t_ref_k is the per-unit reference; the branch has no grid here).
-        t_average_k = (
-            (self.t_from_pu.value + self.t_to_pu.value) / 2 * WaterGrid.t_ref_k
-        )
+        # Average fluid temperature in Kelvin from the per-unit endpoint temps.
+        # Use the actual grid's reference temperature when the caller provides
+        # it; the class default is only a fallback (the model itself carries no
+        # grid reference).
+        t_ref_k = grid.t_ref_k if grid is not None else WaterGrid.t_ref_k
+        t_average_k = (self.t_from_pu.value + self.t_to_pu.value) / 2 * t_ref_k
         return (
             abs(self.q_mw.value)
             * 1e6
@@ -189,15 +217,50 @@ class WaterPipe(BranchModel):
         )
 
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
-        return [
-            IntermediateEq(
-                "mass_flow_kgs", self.mass_flow_pos_kgs - self.mass_flow_neg_kgs
-            )
-        ]
+        return [_mass_flow_intermediate_eq(self)]
+
+
+def _normalize_he_q_mw(q_mw, *, load: bool):
+    """Make the class name authoritative for the alias subclasses: a Load
+    always consumes (``q_mw_set > 0``, i.e. constructor arg <= 0) and a
+    Generator always injects (``q_mw_set < 0``, i.e. constructor arg >= 0),
+    regardless of the sign passed. Solver Vars pass through untouched."""
+    if isinstance(q_mw, (int, float)) and not isinstance(q_mw, bool):
+        return -abs(q_mw) if load else abs(q_mw)
+    return q_mw
+
+
+def hx_is_consuming(model) -> bool:
+    """True for a heat-exchanger branch whose numeric setpoint marks it as
+    consuming (``q_mw_set > 0``). False for Var-typed setpoints (e.g. a SubHE
+    sized by the surrounding network) and for non-HX models."""
+    if not isinstance(model, (HeatExchanger, PassiveHeatExchanger)):
+        return False
+    q = getattr(model, "q_mw_set", None)
+    return isinstance(q, (int, float)) and q > 0
+
+
+def hx_is_generating(model) -> bool:
+    """True for a heat-exchanger branch whose numeric setpoint marks it as
+    generating (``q_mw_set < 0``); mirror of :func:`hx_is_consuming`."""
+    if not isinstance(model, (HeatExchanger, PassiveHeatExchanger)):
+        return False
+    q = getattr(model, "q_mw_set", None)
+    return isinstance(q, (int, float)) and q < 0
 
 
 @model
 class HeatExchanger(BranchModel):
+    """Active heat exchanger driving its design mass flow for a fixed duty.
+
+    Constructor sign convention: the model stores ``q_mw_set = -q_mw``, and the
+    formulations treat ``q_mw_set > 0`` as consuming (load) and ``q_mw_set < 0``
+    as generating. Hence a negative ``q_mw`` argument builds a load and a
+    positive one a generator. Prefer the sign-normalizing
+    :class:`HeatExchangerLoad` / :class:`HeatExchangerGenerator` aliases or
+    ``monee.express.create_heat_exchanger`` (which takes positive = consumption).
+    """
+
     def __init__(
         self,
         q_mw,
@@ -270,17 +333,27 @@ class HeatExchanger(BranchModel):
 
 @model
 class HeatExchangerLoad(HeatExchanger):
+    """Heat exchanger that consumes heat (``q_mw_set > 0``); the magnitude of
+    ``q_mw`` is used, its sign is ignored."""
+
     def __init__(self, q_mw, mass_flow_design_kgs=None, regulation=1) -> None:
         super().__init__(
-            q_mw, mass_flow_design_kgs=mass_flow_design_kgs, regulation=regulation
+            _normalize_he_q_mw(q_mw, load=True),
+            mass_flow_design_kgs=mass_flow_design_kgs,
+            regulation=regulation,
         )
 
 
 @model
 class HeatExchangerGenerator(HeatExchanger):
+    """Heat exchanger that injects heat (``q_mw_set < 0``); the magnitude of
+    ``q_mw`` is used, its sign is ignored."""
+
     def __init__(self, q_mw, mass_flow_design_kgs=None, regulation=1) -> None:
         super().__init__(
-            q_mw, mass_flow_design_kgs=mass_flow_design_kgs, regulation=regulation
+            _normalize_he_q_mw(q_mw, load=False),
+            mass_flow_design_kgs=mass_flow_design_kgs,
+            regulation=regulation,
         )
 
 
@@ -291,7 +364,12 @@ class PassiveHeatExchanger(BranchModel):
     water branch. Mass flow is determined by surrounding hydraulics; temperature
     change follows from q_mw and actual mass flow.
 
-    Sign: positive q_mw = load, negative = generator.
+    Constructor sign convention: the model stores ``q_mw_set = -q_mw`` and the
+    formulations treat ``q_mw_set > 0`` as consuming, so a negative ``q_mw``
+    argument builds a load and a positive one a generator. Prefer the
+    sign-normalizing :class:`PassiveHeatExchangerLoad` /
+    :class:`PassiveHeatExchangerGenerator` aliases or
+    ``monee.express.create_passive_heat_exchanger`` (positive = consumption).
 
     Hydraulics: by default the pressure drop is Darcy-Weisbach friction over
     ``length_m``. Passing ``loss_coefficient`` (zeta) instead switches to the
@@ -350,13 +428,14 @@ class PassiveHeatExchanger(BranchModel):
 
 @model
 class PassiveHeatExchangerLoad(PassiveHeatExchanger):
-    """Passive heat exchanger that consumes heat (load, ``q_mw > 0``)."""
+    """Passive heat exchanger that consumes heat (``q_mw_set > 0``); the
+    magnitude of ``q_mw`` is used, its sign is ignored."""
 
     def __init__(
         self, q_mw, diameter_m, temperature_ext_k=293, loss_coefficient=None
     ) -> None:
         super().__init__(
-            q_mw,
+            _normalize_he_q_mw(q_mw, load=True),
             diameter_m,
             temperature_ext_k=temperature_ext_k,
             loss_coefficient=loss_coefficient,
@@ -365,13 +444,14 @@ class PassiveHeatExchangerLoad(PassiveHeatExchanger):
 
 @model
 class PassiveHeatExchangerGenerator(PassiveHeatExchanger):
-    """Passive heat exchanger that injects heat (generator, ``q_mw < 0``)."""
+    """Passive heat exchanger that injects heat (``q_mw_set < 0``); the
+    magnitude of ``q_mw`` is used, its sign is ignored."""
 
     def __init__(
         self, q_mw, diameter_m, temperature_ext_k=293, loss_coefficient=None
     ) -> None:
         super().__init__(
-            q_mw,
+            _normalize_he_q_mw(q_mw, load=False),
             diameter_m,
             temperature_ext_k=temperature_ext_k,
             loss_coefficient=loss_coefficient,

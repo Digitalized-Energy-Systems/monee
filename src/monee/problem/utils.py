@@ -16,6 +16,7 @@ from monee.model.multi import (
     PowerToHeatControlNode,
     PowerToHeatHG,
 )
+from monee.model.node import Bus
 
 # Fallback HHV (kWh/kg) when a gas grid is missing ``higher_heating_value_kwh_per_kg``.
 _HHV_DEFAULT = DEFAULT_GAS_HHV_KWH_PER_KG
@@ -23,10 +24,35 @@ _HHV_DEFAULT = DEFAULT_GAS_HHV_KWH_PER_KG
 _UNBOUND_MAX_I_KA = 999.0
 
 
-def line_loading_limit(branch_model, side: str, max_loading: float):
+def line_loading_limit(branch_model, side: str, max_loading: float, basis: str = "mva"):
+    """Cap branch loading at *max_loading* (per unit of the branch rating).
 
+    ``basis="mva"`` (default) caps apparent power as the per-unit loading-squared
+    form ``(p**2 + q**2) / (max_loading * max_s_mva)**2 <= 1`` - smooth, and the
+    same solution as MATPOWER's |S|^2 <= RATE_A^2. The normalization is what makes
+    it O(1): the bare ``p**2 + q**2 <= RATE_A**2`` form has residual/curvature of
+    order RATE_A^2 (~1e6-1e8 in MW), which ill-conditions the OPF and balloons the
+    IPOPT iteration count. When the branch carries no ``max_s_mva`` (None), it
+    falls back to the current basis below, so networks that only have ``max_i_ka``
+    keep their existing current-based behaviour.
+
+    ``basis="current"`` caps current as |I| <= max_loading * max_i_ka (the
+    original behaviour). Unbounded ratings drop the constraint.
+    """
     if side not in ("from", "to"):
         raise ValueError(f"side must be 'from' or 'to', got {side!r}")
+    if basis not in ("mva", "apparent", "current"):
+        raise ValueError(f"basis must be 'mva' or 'current', got {basis!r}")
+
+    if basis in ("mva", "apparent"):
+        max_s_mva = getattr(branch_model, "max_s_mva", None)
+        if max_s_mva is not None:
+            p = getattr(branch_model, f"p_{side}_mw")
+            q = getattr(branch_model, f"q_{side}_mvar")
+            limit = max_loading * max_s_mva
+            return (p**2 + q**2) / (limit * limit) <= 1.0
+        # No MVA rating on this branch: fall through to the current basis.
+
     max_i_ka = getattr(branch_model, "max_i_ka", None)
     if max_i_ka is None or max_i_ka >= _UNBOUND_MAX_I_KA:
         return True
@@ -37,6 +63,36 @@ def line_loading_limit(branch_model, side: str, max_loading: float):
             return True
         return branch_model.current_pu_squared <= (max_loading * max_loading) / scale_sq
     return getattr(branch_model, f"loading_{side}_pu") <= max_loading
+
+
+def make_node_var_bounds_hook(node_type, attr, squared_attr, bounds):
+    """``_controllable_appliables`` hook bounding *attr* (and ``lo²..hi²`` on
+    *squared_attr*) on independent nodes of exactly *node_type*. Only Var-typed
+    attributes are touched: whichever of the pair the formulation uses as its
+    actual decision variable gets the bound, while reporting Intermediates are
+    left alone (a static bound there would be a no-op)."""
+    lo, hi = bounds
+
+    def _apply_bounds(network):
+        for component in network.all_components():
+            model = component.model
+            if type(model) is not node_type or not component.independent:
+                continue
+            v = getattr(model, attr, None)
+            vsq = getattr(model, squared_attr, None)
+            if type(v) is Var:
+                v.min, v.max = lo, hi
+            if type(vsq) is Var:
+                vsq.min, vsq.max = lo * lo, hi * hi
+
+    return _apply_bounds
+
+
+def make_vm_bounds_hook(bounds_vm):
+    """Bound bus voltage magnitudes on the formulation's actual decision
+    variable: ``vm_pu_squared`` under the MISOCP relaxation, ``vm_pu`` under
+    the AC NLP."""
+    return make_node_var_bounds_hook(Bus, "vm_pu", "vm_pu_squared", bounds_vm)
 
 
 def cp_input_rated_mw(component):  # NOSONAR

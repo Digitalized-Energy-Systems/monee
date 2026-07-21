@@ -13,6 +13,17 @@ component_list = []
 _IMMUTABLE_PRIMITIVES = frozenset({int, float, bool, str, bytes, complex, type(None)})
 
 
+def _deepcopy_skip_immutables(obj, memo):
+    new = obj.__class__.__new__(obj.__class__)
+    memo[id(obj)] = new
+    for k, v in obj.__dict__.items():
+        if v is None or v.__class__ in _IMMUTABLE_PRIMITIVES:
+            new.__dict__[k] = v
+        else:
+            new.__dict__[k] = copy.deepcopy(v, memo)
+    return new
+
+
 def model(cls):
     """Register a model class in the global ``component_list`` registry."""
     component_list.append(cls)
@@ -26,6 +37,11 @@ def upper(var_or_const):
             return var_or_const.value
         return var_or_const.max
     return var_or_const
+
+
+def is_plain_number(value) -> bool:
+    """True for a plain int/float (bool excluded), i.e. not a solver Var."""
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def lower(var_or_const):
@@ -83,7 +99,9 @@ class Var:
     ``False`` if the relevant bound is ``None``.
     """
 
-    def __init__(self, value, max=None, min=None, integer=False, name=None) -> None:
+    def __init__(
+        self, value, max=None, min=None, integer=False, name=None, scale=1.0
+    ) -> None:
 
         if not isinstance(value, float | int):
             raise ValueError(
@@ -92,8 +110,11 @@ class Var:
         self.value = value
         self.max = max
         self.min = min
+
         self.integer = integer
         self.name = name
+
+        self.scale = scale
 
     def __neg__(self):
         actual_max = None if self.max is None else -self.max
@@ -104,9 +125,16 @@ class Var:
             min=actual_max,
             integer=self.integer,
             name=self.name,
+            scale=self.scale,
         )
 
     def __mul__(self, other):
+        if isinstance(other, Var | Const | Intermediate | PostProcess):
+            raise TypeError(
+                f"Cannot multiply a Var with a {type(other).__name__} before "
+                "solver injection. Build such expressions inside equations(), "
+                "which run after inject_vars, or use plain numbers."
+            )
         if isinstance(other, (int, float)) and other < 0:
             new_max = None if self.min is None else self.min * other
             new_min = None if self.max is None else self.max * other
@@ -119,6 +147,7 @@ class Var:
             min=new_min,
             integer=self.integer,
             name=self.name,
+            scale=self.scale,
         )
 
     def __lt__(self, other):
@@ -162,6 +191,7 @@ class Var:
         new.min = self.min
         new.integer = self.integer
         new.name = self.name
+        new.scale = self.scale
         return new
 
 
@@ -275,14 +305,7 @@ class GenericModel(ABC):
         return False
 
     def __deepcopy__(self, memo):
-        new = self.__class__.__new__(self.__class__)
-        memo[id(self)] = new
-        for k, v in self.__dict__.items():
-            if v is None or v.__class__ in _IMMUTABLE_PRIMITIVES:
-                new.__dict__[k] = v
-            else:
-                new.__dict__[k] = copy.deepcopy(v, memo)
-        return new
+        return _deepcopy_skip_immutables(self, memo)
 
 
 class NodeModel(GenericModel):
@@ -309,9 +332,6 @@ class BranchModel(GenericModel):
 
     def loss_percent(self):
         return 0
-
-    def is_cp(self):
-        return False
 
     def init(self, grid):
         """Optional pre-solve initialization hook for the branch. Default: no-op."""
@@ -358,8 +378,7 @@ class CompoundModel(GenericModel):
 
 
 class MultiGridCompoundModel(CompoundModel):
-    def is_cp(self):
-        return False
+    pass
 
 
 class ChildModel(GenericModel):
@@ -414,9 +433,9 @@ class Component(ABC):
         # (ensure_var) is deferred to the solver's attach_formulations() pass,
         # which runs on the solve-time network copy.
         self.formulation = formulation
-        # Set by the Network builders when an explicit formulation= was passed;
-        # pinned formulations survive a solver-level formulation override.
-        self.formulation_pinned = False
+        # An explicitly passed formulation is pinned: it survives a
+        # solver-level formulation override.
+        self.formulation_pinned = formulation is not None
 
     @property
     def tid(self):
@@ -426,15 +445,30 @@ class Component(ABC):
     def nid(self):
         return f"{self.model.__class__.__name__}-{self.id}".lower()
 
+    def equations(self, *args, **kwargs):
+        model_eqs = self.model.equations(*args, **kwargs)
+        form_eqs = (
+            []
+            if self.formulation is None
+            else self.formulation.equations(self.model, *args, **kwargs)
+        )
+        return (
+            form_eqs
+            + model_eqs
+            + [c(self.model, *args, **kwargs) for c in self.constraints]
+        )
+
+    def minimize(self, *args, **kwargs):
+        model_eqs = self.model.minimize(*args, **kwargs)
+        form_eqs = (
+            []
+            if self.formulation is None
+            else self.formulation.minimize(self.model, *args, **kwargs)
+        )
+        return form_eqs + model_eqs
+
     def __deepcopy__(self, memo):
-        new = self.__class__.__new__(self.__class__)
-        memo[id(self)] = new
-        for k, v in self.__dict__.items():
-            if v is None or v.__class__ in _IMMUTABLE_PRIMITIVES:
-                new.__dict__[k] = v
-            else:
-                new.__dict__[k] = copy.deepcopy(v, memo)
-        return new
+        return _deepcopy_skip_immutables(self, memo)
 
 
 class Child(Component):
@@ -453,28 +487,6 @@ class Child(Component):
             child_id, model, formulation, constraints, grid, name, active, independent
         )
         self.node_id = None
-
-    def equations(self, grid, node_model, **kwargs):
-        model_eqs = self.model.equations(grid, node_model, **kwargs)
-        form_eqs = []
-        if self.formulation is not None:
-            form_eqs = self.formulation.equations(
-                self.model, grid, node_model, **kwargs
-            )
-
-        return (
-            form_eqs
-            + model_eqs
-            + [c(self.model, grid, node_model, **kwargs) for c in self.constraints]
-        )
-
-    def minimize(self, grid, node_model, **kwargs):
-        model_eqs = self.model.minimize(grid, node_model, **kwargs)
-        form_eqs = []
-        if self.formulation is not None:
-            form_eqs = self.formulation.minimize(self.model, grid, node_model, **kwargs)
-
-        return form_eqs + model_eqs
 
 
 class Compound(Component):
@@ -495,26 +507,6 @@ class Compound(Component):
         )
         self.connected_to = connected_to
         self.subcomponents = subcomponents
-
-    def equations(self, network, **kwargs):
-        model_eqs = self.model.equations(network, **kwargs)
-        form_eqs = []
-        if self.formulation is not None:
-            form_eqs = self.formulation.equations(self.model, network, **kwargs)
-
-        return (
-            form_eqs
-            + model_eqs
-            + [c(self.model, network, **kwargs) for c in self.constraints]
-        )
-
-    def minimize(self, network, **kwargs):
-        model_eqs = self.model.minimize(network, **kwargs)
-        form_eqs = []
-        if self.formulation is not None:
-            form_eqs = self.formulation.minimize(self.model, network, **kwargs)
-
-        return form_eqs + model_eqs
 
     def component_of_type(self, comp_type):
         return [
@@ -544,48 +536,9 @@ class Node(Component):
             node_id, model, formulation, constraints, grid, name, active, independent
         )
         self.child_ids = [] if child_ids is None else child_ids
-        self.constraints = [] if constraints is None else constraints
         self.from_branch_ids = []
         self.to_branch_ids = []
         self.position = position
-
-    def equations(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
-        model_eqs = self.model.equations(
-            grid, in_branch_models, out_branch_models, childs, **kwargs
-        )
-        form_eqs = []
-        if self.formulation is not None:
-            form_eqs = self.formulation.equations(
-                self.model, grid, in_branch_models, out_branch_models, childs, **kwargs
-            )
-
-        return (
-            form_eqs
-            + model_eqs
-            + [
-                c(
-                    self.model,
-                    grid,
-                    in_branch_models,
-                    out_branch_models,
-                    childs,
-                    **kwargs,
-                )
-                for c in self.constraints
-            ]
-        )
-
-    def minimize(self, grid, in_branch_models, out_branch_models, childs, **kwargs):
-        model_eqs = self.model.minimize(
-            grid, in_branch_models, out_branch_models, childs, **kwargs
-        )
-        form_eqs = []
-        if self.formulation is not None:
-            form_eqs = self.formulation.minimize(
-                self.model, grid, in_branch_models, out_branch_models, childs, **kwargs
-            )
-
-        return form_eqs + model_eqs
 
     def add_from_branch_id(self, branch_id):
         self.from_branch_ids.append(branch_id)
@@ -625,36 +578,10 @@ class Branch(Component):
         self.from_node_id = from_node_id
         self.to_node_id = to_node_id
 
-    def equations(self, grid, from_node_model, to_node_model, **kwargs):
-        model_eqs = self.model.equations(grid, from_node_model, to_node_model, **kwargs)
-        form_eqs = []
-        if self.formulation is not None:
-            form_eqs = self.formulation.equations(
-                self.model, grid, from_node_model, to_node_model, **kwargs
-            )
-
-        return (
-            form_eqs
-            + model_eqs
-            + [
-                c(self.model, grid, from_node_model, to_node_model, **kwargs)
-                for c in self.constraints
-            ]
-        )
-
-    def minimize(self, grid, from_node_model, to_node_model, **kwargs):
-        model_eqs = self.model.minimize(grid, from_node_model, to_node_model, **kwargs)
-        form_eqs = []
-        if self.formulation is not None:
-            form_eqs = self.formulation.minimize(
-                self.model, grid, from_node_model, to_node_model, **kwargs
-            )
-
-        return form_eqs + model_eqs
-
     @property
     def tid(self):
+        # Include the MultiGraph key so parallel branches get distinct tids.
         if self.id[0] > self.id[1]:
-            return f"branch-{self.id[0]}-{self.id[1]}"
+            return f"branch-{self.id[0]}-{self.id[1]}-{self.id[2]}"
         else:
-            return f"branch-{self.id[1]}-{self.id[0]}"
+            return f"branch-{self.id[1]}-{self.id[0]}-{self.id[2]}"

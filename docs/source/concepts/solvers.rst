@@ -323,6 +323,19 @@ repeated what-if studies considerably. The Pyomo back-end additionally passes
 ``warmstart=True`` to solvers that support it (e.g. Gurobi), and the native
 gurobipy back-end seeds ``Var.Start`` from the persisted values directly.
 
+The :class:`~monee.simulation.Stepper` carries each successful step's
+solution into its working network the same way (``warm_start``, on by
+default for every backend except gurobipy, whose ``Var.Start`` seeding
+measured neutral), so externally paced loops warm-start step over step. For IPOPT a
+near-optimal starting point under the flat-start defaults can even hurt:
+the default initial barrier pushes the point back into the interior and
+occasionally fails the step computation. The Stepper therefore hints the
+CasADi back-end (``CasADiSolver.set_warm_start_hint``, a no-op on the other
+back-ends) whenever the injected values are a previous solution, and that
+solve runs with IPOPT warm start options (``mu_init=1e-6``, small bound
+pushes) instead. On the bundled multi-energy benchmark network this roughly
+halves the wall time per step (see ``benchmarks/stepper_warm_start.py``).
+
 ----
 
 Lexicographic objectives

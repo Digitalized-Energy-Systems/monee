@@ -5,6 +5,7 @@ from monee.model.extension.islanding import GridFormingGenerator, GridFormingSou
 def create_bus(
     network: mm.Network,
     base_kv=1,
+    *,
     constraints=None,
     grid=mm.EL,
     overwrite_id=None,
@@ -24,6 +25,7 @@ def create_bus(
 
 def create_water_junction(
     network: mm.Network,
+    *,
     grid=mm.WATER,
     constraints=None,
     overwrite_id=None,
@@ -31,11 +33,19 @@ def create_water_junction(
     position=None,
 ):
     """Add a water/heat junction. Returns the node id."""
-    return create_junction(network, grid, constraints, overwrite_id, name, position)
+    return create_junction(
+        network,
+        grid,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        position=position,
+    )
 
 
 def create_gas_junction(
     network: mm.Network,
+    *,
     grid=mm.GAS,
     constraints=None,
     overwrite_id=None,
@@ -43,12 +53,20 @@ def create_gas_junction(
     position=None,
 ):
     """Add a gas junction. Returns the node id."""
-    return create_junction(network, grid, constraints, overwrite_id, name, position)
+    return create_junction(
+        network,
+        grid,
+        constraints=constraints,
+        overwrite_id=overwrite_id,
+        name=name,
+        position=position,
+    )
 
 
 def create_junction(
     network: mm.Network,
     grid,
+    *,
     constraints=None,
     overwrite_id=None,
     name=None,
@@ -97,10 +115,26 @@ def create_line(
     grid=None,
     name=None,
     on_off=1,
+    max_i_ka=None,
+    max_s_mva=None,
 ):
-    """Add a :class:`PowerLine` between two buses; missing buses are auto-created."""
+    """Add a :class:`PowerLine` between two buses; missing buses are auto-created.
+    ``max_i_ka`` / ``max_s_mva`` set the thermal rating (model defaults apply
+    when omitted)."""
+    rating_kwargs = {}
+    if max_i_ka is not None:
+        rating_kwargs["max_i_ka"] = max_i_ka
+    if max_s_mva is not None:
+        rating_kwargs["max_s_mva"] = max_s_mva
     return network.branch(
-        mm.PowerLine(length_m, r_ohm_per_m, x_ohm_per_m, parallel, on_off=on_off),
+        mm.PowerLine(
+            length_m,
+            r_ohm_per_m,
+            x_ohm_per_m,
+            parallel,
+            on_off=on_off,
+            **rating_kwargs,
+        ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
         constraints=constraints,
@@ -143,6 +177,7 @@ def create_compressor(
     to_node_id,
     compression_ratio=1.5,
     max_flow_kgs=10.0,
+    constraints=None,
     grid=None,
     name=None,
 ):
@@ -151,6 +186,7 @@ def create_compressor(
         mm.GasCompressor(compression_ratio, max_flow_kgs),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
+        constraints=constraints,
         grid=grid,
         name=name,
         auto_node_creator=lambda: mm.Junction(),
@@ -355,7 +391,10 @@ def create_ext_hydr_grid(
     **kwargs,
 ):
     """Attach an :class:`ExtHydrGrid` (slack source). Prefer the carrier-specific
-    :func:`create_gas_ext_grid` / :func:`create_water_ext_grid` shortcuts."""
+    :func:`create_gas_ext_grid` / :func:`create_water_ext_grid` shortcuts.
+
+    When ``node_id`` does not exist yet, the auto-created junction is a gas
+    junction (default ``grid_key=mm.GAS_KEY``)."""
     return network.child_to(
         mm.ExtHydrGrid(
             mass_flow_kgs=mass_flow_kgs,
@@ -385,7 +424,10 @@ def create_source(
     name=None,
     **kwargs,
 ):
-    """Attach a :class:`Source`. Pass positive magnitude; constructor negates internally."""
+    """Attach a :class:`Source`. Pass positive magnitude; constructor negates internally.
+
+    When ``node_id`` does not exist yet, the auto-created junction is a gas
+    junction (default ``grid_key=mm.GAS_KEY``)."""
     return network.child_to(
         mm.Source(mass_flow_kgs, **kwargs),
         node_id=node_id,
@@ -412,7 +454,10 @@ def create_consume_hydr_grid(
     """Attach a :class:`ConsumeHydrGrid` (fixed-pressure consumption point).
 
     ``pressure_pu`` is per-unit (relative to the grid's reference pressure),
-    matching :func:`create_ext_hydr_grid` and the model's own convention."""
+    matching :func:`create_ext_hydr_grid` and the model's own convention.
+
+    When ``node_id`` does not exist yet, the auto-created junction is a water
+    junction (default ``grid_key=mm.WATER_KEY``)."""
     return network.child_to(
         mm.ConsumeHydrGrid(
             mass_flow_kgs=mass_flow_kgs, pressure_pu=pressure_pu, t_k=t_k, **kwargs
@@ -436,7 +481,10 @@ def create_sink(
     name=None,
     **kwargs,
 ):
-    """Attach a :class:`Sink` (positive = consumption)."""
+    """Attach a :class:`Sink` (positive = consumption).
+
+    When ``node_id`` does not exist yet, the auto-created junction is a gas
+    junction (default ``grid_key=mm.GAS_KEY``)."""
     return network.child_to(
         mm.Sink(mass_flow_kgs=mass_flow_kgs, **kwargs),
         node_id=node_id,
@@ -679,6 +727,7 @@ def create_g2h(
     diameter_m,
     efficiency,
     temperature_ext_k=293,
+    regulation=1,
     constraints=None,
 ):
     """Add a Gas-to-Heat compound with an internal water HX branch."""
@@ -688,6 +737,7 @@ def create_g2h(
             diameter_m=diameter_m,
             temperature_ext_k=temperature_ext_k,
             efficiency=efficiency,
+            regulation=regulation,
         ),
         constraints=constraints,
         gas_node_id=gas_node_id,
@@ -730,6 +780,7 @@ def create_p2h_hg(
     heat_energy_mw,
     efficiency,
     q_mvar_setpoint=0,
+    regulation=1,
     constraints=None,
 ):
     """Single-branch P2H using :class:`PowerToHeatHG` (heat injected at the to-node)."""
@@ -738,6 +789,7 @@ def create_p2h_hg(
             heat_energy_mw=heat_energy_mw,
             efficiency=efficiency,
             q_mvar_setpoint=q_mvar_setpoint,
+            regulation=regulation,
         ),
         from_node_id=power_node_id,
         to_node_id=heat_node_id,
@@ -751,6 +803,7 @@ def create_g2h_hg(
     heat_node_id,
     heat_energy_mw,
     efficiency,
+    regulation=1,
     constraints=None,
 ):
     """Single-branch G2H using :class:`GasToHeatHG` (heat injected at the to-node)."""
@@ -758,6 +811,7 @@ def create_g2h_hg(
         mm.GasToHeatHG(
             heat_energy_mw=heat_energy_mw,
             efficiency=efficiency,
+            regulation=regulation,
         ),
         from_node_id=gas_node_id,
         to_node_id=heat_node_id,
@@ -801,14 +855,9 @@ def create_gas_ext_grid(
     mass_flow_kgs=1,
     pressure_pu=1,
     t_k=356,
-    constraints=None,
-    overwrite_id=None,
-    name=None,
     **kwargs,
 ):
-    """
-    Adds an external hydraulic grid to a gas node, auto-creating a gas junction if needed.
-    """
+    """Adds an external hydraulic grid to a gas node, auto-creating a gas junction if needed."""
     return create_ext_hydr_grid(
         network,
         node_id,
@@ -816,9 +865,6 @@ def create_gas_ext_grid(
         pressure_pu=pressure_pu,
         t_k=t_k,
         grid_key=mm.GAS_KEY,
-        constraints=constraints,
-        overwrite_id=overwrite_id,
-        name=name,
         **kwargs,
     )
 
@@ -829,14 +875,9 @@ def create_water_ext_grid(
     mass_flow_kgs=1,
     pressure_pu=1,
     t_k=356,
-    constraints=None,
-    overwrite_id=None,
-    name=None,
     **kwargs,
 ):
-    """
-    Adds an external hydraulic grid to a water node, auto-creating a water junction if needed.
-    """
+    """Adds an external hydraulic grid to a water node, auto-creating a water junction if needed."""
     return create_ext_hydr_grid(
         network,
         node_id,
@@ -844,106 +885,35 @@ def create_water_ext_grid(
         pressure_pu=pressure_pu,
         t_k=t_k,
         grid_key=mm.WATER_KEY,
-        constraints=constraints,
-        overwrite_id=overwrite_id,
-        name=name,
         **kwargs,
     )
 
 
-def create_gas_source(
-    network: mm.Network,
-    node_id,
-    mass_flow_kgs=1,
-    constraints=None,
-    overwrite_id=None,
-    name=None,
-    **kwargs,
-):
-    """
-    Adds a gas source (injection) to a gas node, auto-creating a junction if needed.
-    """
+def create_gas_source(network: mm.Network, node_id, mass_flow_kgs=1, **kwargs):
+    """Adds a gas source (injection) to a gas node, auto-creating a junction if needed."""
     return create_source(
-        network,
-        node_id,
-        mass_flow_kgs=mass_flow_kgs,
-        grid_key=mm.GAS_KEY,
-        constraints=constraints,
-        overwrite_id=overwrite_id,
-        name=name,
-        **kwargs,
+        network, node_id, mass_flow_kgs=mass_flow_kgs, grid_key=mm.GAS_KEY, **kwargs
     )
 
 
-def create_gas_sink(
-    network: mm.Network,
-    node_id,
-    mass_flow_kgs=1,
-    constraints=None,
-    overwrite_id=None,
-    name=None,
-    **kwargs,
-):
-    """
-    Adds a gas sink (consumption) to a gas node, auto-creating a junction if needed.
-    """
+def create_gas_sink(network: mm.Network, node_id, mass_flow_kgs=1, **kwargs):
+    """Adds a gas sink (consumption) to a gas node, auto-creating a junction if needed."""
     return create_sink(
-        network,
-        node_id,
-        mass_flow_kgs=mass_flow_kgs,
-        grid_key=mm.GAS_KEY,
-        constraints=constraints,
-        overwrite_id=overwrite_id,
-        name=name,
-        **kwargs,
+        network, node_id, mass_flow_kgs=mass_flow_kgs, grid_key=mm.GAS_KEY, **kwargs
     )
 
 
-def create_water_source(
-    network: mm.Network,
-    node_id,
-    mass_flow_kgs=1,
-    constraints=None,
-    overwrite_id=None,
-    name=None,
-    **kwargs,
-):
-    """
-    Adds a water source (injection) to a water node, auto-creating a junction if needed.
-    """
+def create_water_source(network: mm.Network, node_id, mass_flow_kgs=1, **kwargs):
+    """Adds a water source (injection) to a water node, auto-creating a junction if needed."""
     return create_source(
-        network,
-        node_id,
-        mass_flow_kgs=mass_flow_kgs,
-        grid_key=mm.WATER_KEY,
-        constraints=constraints,
-        overwrite_id=overwrite_id,
-        name=name,
-        **kwargs,
+        network, node_id, mass_flow_kgs=mass_flow_kgs, grid_key=mm.WATER_KEY, **kwargs
     )
 
 
-def create_water_sink(
-    network: mm.Network,
-    node_id,
-    mass_flow_kgs=1,
-    constraints=None,
-    overwrite_id=None,
-    name=None,
-    **kwargs,
-):
-    """
-    Adds a water sink (consumption) to a water node, auto-creating a junction if needed.
-    """
+def create_water_sink(network: mm.Network, node_id, mass_flow_kgs=1, **kwargs):
+    """Adds a water sink (consumption) to a water node, auto-creating a junction if needed."""
     return create_sink(
-        network,
-        node_id,
-        mass_flow_kgs=mass_flow_kgs,
-        grid_key=mm.WATER_KEY,
-        constraints=constraints,
-        overwrite_id=overwrite_id,
-        name=name,
-        **kwargs,
+        network, node_id, mass_flow_kgs=mass_flow_kgs, grid_key=mm.WATER_KEY, **kwargs
     )
 
 
@@ -1001,9 +971,7 @@ def create_gas_grid_forming_source(
     pressure_pu: float = 1.0,
     t_k: float = 356.0,
     mass_flow_max_kgs: float = 1e6,
-    constraints=None,
-    overwrite_id=None,
-    name=None,
+    **kwargs,
 ):
     """Gas-side shortcut for :func:`create_grid_forming_source`."""
     return create_grid_forming_source(
@@ -1013,9 +981,7 @@ def create_gas_grid_forming_source(
         t_k=t_k,
         mass_flow_max_kgs=mass_flow_max_kgs,
         grid_key=mm.GAS_KEY,
-        constraints=constraints,
-        overwrite_id=overwrite_id,
-        name=name,
+        **kwargs,
     )
 
 
@@ -1025,9 +991,7 @@ def create_water_grid_forming_source(
     pressure_pu: float = 1.0,
     t_k: float = 356.0,
     mass_flow_max_kgs: float = 1e6,
-    constraints=None,
-    overwrite_id=None,
-    name=None,
+    **kwargs,
 ):
     """Water-side shortcut for :func:`create_grid_forming_source`."""
     return create_grid_forming_source(
@@ -1037,9 +1001,7 @@ def create_water_grid_forming_source(
         t_k=t_k,
         mass_flow_max_kgs=mass_flow_max_kgs,
         grid_key=mm.WATER_KEY,
-        constraints=constraints,
-        overwrite_id=overwrite_id,
-        name=name,
+        **kwargs,
     )
 
 

@@ -6,49 +6,51 @@ import math
 import numpy as np
 
 import monee.model.phys.nonlinear.ac as opfmodel
-from monee.model.core import Intermediate, IntermediateEq, PostProcess
+from monee.model.core import Intermediate, IntermediateEq, PostProcess, Var
+from monee.model.grid import PowerGrid
 
-from ..core import BranchFormulation, NodeFormulation
+from ..core import BranchFormulation, ChildFormulation, NodeFormulation
 
 SQRT_3 = np.sqrt(3)
 
-# Smoothing scale [MW] for the current-magnitude sqrt - same idiom as
-# smooth_abs in model.phys.nonlinear.smooth. Without it, \sqrt{p^2+q^2} has a
-# singular Jacobian at exactly zero flow, and the min=0 bounds on i_*_ka
-# pin the solver onto that point (e.g. a storage at zero dispatch).
 CURRENT_SMOOTHING_EPS_MW = 1e-4
 
 
 class AcPolarNlpNodeFormulation(NodeFormulation):
     def ensure_var(self, model, simulation=False, grid=None):
-        # Some multi-grid control nodes subclass Bus (so they match here) without
-        # a vm_pu attribute - only act on real voltage buses.
         if simulation and hasattr(model, "vm_pu"):
             model.vm_pu_squared = PostProcess(lambda v: v.vm_pu**2)
 
 
+class AcPolarNlpShuntFormulation(ChildFormulation):
+    """Voltage-dependent bus shunt for the polar NLP: ``p/q`` scale with ``vm_pu**2``."""
+
+    def equations(self, child, grid, node, **kwargs):
+        vm_sq = node.vars["vm_pu"] ** 2
+        return [
+            child.p_mw == child.gs_mw * vm_sq,
+            child.q_mvar == -child.bs_mvar * vm_sq,
+        ]
+
+
 class AcPolarNlpBranchFormulation(BranchFormulation):
     def ensure_var(self, branch, simulation=False, grid=None):
-        # Current magnitude and line loading are report-only quantities: nothing
-        # in the power-flow model consumes them, and a line-loading limit (when
-        # present) is a *constraint* added by the optimisation problem. Declaring
-        # them as passive intermediates - instead of free Vars pinned by an
-        # equality - means they add no variables/constraints to the model unless
-        # such a constraint references them, in which case the defining
-        # expression inlines into it. Mirrors the MISOCP formulation. For a plain
-        # power flow / dispatch this removes 4 vars + 4 constraints (2 nonlinear)
-        # per branch and only evaluates them once, after the solve, for results.
         branch.i_from_ka = Intermediate(0)
         branch.i_to_ka = Intermediate(0)
         branch.loading_from_pu = Intermediate(0)
         branch.loading_to_pu = Intermediate(0)
 
+        sn = grid.sn_mva if isinstance(grid, PowerGrid) else 1.0
+        if sn and not math.isclose(sn, 1.0):
+            for key in ("p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar"):
+                var = getattr(branch, key, None)
+                if isinstance(var, Var):
+                    var.scale = sn
+
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         y = np.linalg.pinv([[branch.br_r_pu + branch.br_x_pu * 1j]])[0][0]
         g, b = (np.real(y), np.imag(y))
 
-        # Built once and reused for both i_*_ka and loading_*_pu, so the sqrt
-        # node is shared (the two intermediates differ only by the /max_i_ka).
         i_from_ka = (
             (branch.p_from_mw**2 + branch.q_from_mvar**2 + CURRENT_SMOOTHING_EPS_MW**2)
             ** 0.5
@@ -86,11 +88,20 @@ class AcPolarNlpBranchFormulation(BranchFormulation):
                 g_to_pu=branch.g_to_pu,
                 b_to_pu=branch.b_to_pu,
                 on_off=branch.on_off,
+                s_base=grid.sn_mva,
             ),
-            # Report-only intermediates: inline into a line-loading limit when one
-            # references them, otherwise evaluated post-solve for results only.
             IntermediateEq("i_from_ka", i_from_ka),
             IntermediateEq("i_to_ka", i_to_ka),
             IntermediateEq("loading_from_pu", i_from_ka / branch.max_i_ka),
-            IntermediateEq("loading_to_pu", i_to_ka / branch.max_i_ka),
+            # max_i_ka is expressed in the from-side voltage basis
+            # (io/matpower.py: rate_a/(sqrt3*V_from)); the to-side rated
+            # current is max_i_ka*V_from/V_to. Dividing i_to_ka by the raw
+            # max_i_ka inflated a transformer's loading_to_pu by the voltage
+            # ratio; for a line (equal base_kv) nothing changes.
+            IntermediateEq(
+                "loading_to_pu",
+                i_to_ka
+                * to_node_model.vars["base_kv"]
+                / (from_node_model.vars["base_kv"] * branch.max_i_ka),
+            ),
         ]

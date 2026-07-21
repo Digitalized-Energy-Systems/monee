@@ -204,6 +204,32 @@ def test_run_timeseries_falls_back_when_hooks_present(monkeypatch):
     assert seen == [0, 1, 2]
 
 
+def test_run_timeseries_casadi_fast_path_forwards_solver_options(monkeypatch):
+    # The reuse driver must honour the resolved solver's per-instance IPOPT
+    # options: a 1-iteration cap cannot converge, so the first step raises.
+    import monee.simulation.timeseries as tsmod
+    from monee.solver.casadi import CasADiSolveError
+
+    calls = {"reuse": 0}
+    orig = tsmod._run_casadi_reuse
+
+    def _spy(*a, **k):
+        calls["reuse"] += 1
+        return orig(*a, **k)
+
+    monkeypatch.setattr(tsmod, "_run_casadi_reuse", _spy)
+
+    net = _two_line_net()
+    with pytest.raises(CasADiSolveError):
+        monee.run_timeseries(
+            net,
+            _load_profile_td(net, 3),
+            solver=CasADiSolver(solver_options={"ipopt.max_iter": 1}),
+            simulation=True,
+        )
+    assert calls["reuse"] == 1
+
+
 # --------------------------------------------------------------------------- #
 # Temporal coupling (storage) and multi-period
 # --------------------------------------------------------------------------- #
@@ -362,3 +388,39 @@ def test_multi_period_initial_and_terminal_state():
     e = res.get_result_for(ElectricStorage, "e_mwh")[sid].to_numpy()
     # Terminal SoC pinned to 5.0.
     assert abs(e[-1] - 5.0) < 1e-2
+
+
+# --------------------------------------------------------------------------- #
+# Warm-start hint
+# --------------------------------------------------------------------------- #
+def test_merged_ipopt_opts_warm_overlay_and_user_override():
+    from monee.solver.casadi import _IPOPT_WARM_OPTS, _merged_ipopt_opts
+
+    warm = _merged_ipopt_opts(None, warm=True)
+    for key, val in _IPOPT_WARM_OPTS.items():
+        assert warm[key] == val
+    assert warm["ipopt.constr_viol_tol"] == 1e-6
+    cold = _merged_ipopt_opts(None, warm=False)
+    assert "ipopt.mu_init" not in cold
+    assert "ipopt.constr_viol_tol" not in cold
+    # explicit user options win over the warm overlay
+    user = _merged_ipopt_opts({"ipopt.mu_init": 0.05}, warm=True)
+    assert user["ipopt.mu_init"] == 0.05
+    # the warm feasibility cap follows a tighter user tol; explicit wins
+    tight = _merged_ipopt_opts({"ipopt.tol": 1e-8}, warm=True)
+    assert tight["ipopt.constr_viol_tol"] == 1e-8
+    explicit = _merged_ipopt_opts({"ipopt.constr_viol_tol": 1e-4}, warm=True)
+    assert explicit["ipopt.constr_viol_tol"] == 1e-4
+
+
+def test_casadi_warm_start_hint_is_one_shot_and_matches_cold_solve():
+    solver = CasADiSolver()
+    net = _two_line_net()
+
+    cold = solver.solve(net)  # persists the solution into net (warm values)
+    solver.set_warm_start_hint(True)
+    warm = solver.solve(net)
+    assert solver._warm_start_hint is False  # consumed by the solve
+
+    assert cold.success and warm.success
+    np.testing.assert_allclose(_vm(warm), _vm(cold), rtol=1e-6)

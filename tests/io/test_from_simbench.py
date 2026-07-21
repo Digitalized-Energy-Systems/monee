@@ -1,4 +1,51 @@
+from types import SimpleNamespace
+
+import pandas as pd
 import pytest
+
+
+def _fake_simbench_net():
+    load = pd.DataFrame(
+        {
+            "bus": [0, 0],
+            "name": ["L1", "L2"],
+            "profile": ["H0", "H0"],
+            "p_mw": [2.0, 4.0],
+            "q_mvar": [1.0, 0.5],
+            "scaling": [0.5, 1.0],
+        }
+    )
+    profiles = {
+        "load": pd.DataFrame(
+            {
+                "time": [0, 1],
+                "H0_pload": [0.1, 0.2],
+                "H0_qload": [0.3, 0.4],
+            }
+        )
+    }
+    return SimpleNamespace(load=load, profiles=profiles)
+
+
+@pytest.mark.pptest
+def test_profile_includes_per_load_scaling():
+    from monee.io.from_simbench import obtain_simbench_profile_by_pp_net
+
+    td = obtain_simbench_profile_by_pp_net(_fake_simbench_net())
+
+    attrs = td.child_name_data["L1+L2"]
+    # p: 2.0*0.5*profile + 4.0*1.0*profile ; q: 1.0*0.5*profile + 0.5*1.0*profile
+    assert attrs["p_mw"] == pytest.approx([0.5, 1.0])
+    assert attrs["q_mvar"] == pytest.approx([0.3, 0.4])
+
+
+@pytest.mark.pptest
+def test_missing_profiles_raises_clear_error():
+    from monee.io.from_simbench import obtain_simbench_profile_by_pp_net
+
+    net = SimpleNamespace(load=pd.DataFrame())
+    with pytest.raises(ValueError, match="profiles"):
+        obtain_simbench_profile_by_pp_net(net)
 
 
 @pytest.mark.pptest

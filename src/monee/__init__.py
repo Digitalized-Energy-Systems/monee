@@ -89,6 +89,7 @@ from monee.simulation import (
     GekkoMultiPeriodSolver,
     PyomoMultiPeriodSolver,
     Stepper,
+    NetworkChange,
 )
 from monee.solver import GEKKOSolver, PyomoSolver
 from monee.solver.core import persist_solution, compute_bound_violations
@@ -143,11 +144,15 @@ def run_energy_flow(net: mm.Network, solver=None, simulation: bool = True, **kwa
 
     Raises:
         ValueError: If the network is incomplete, invalid, or if incompatible parameters are provided.
-        SolverError: If the solver fails to compute the energy flow or encounters an error during analysis.
+
+    Note:
+        There is no dedicated solver-failure exception: depending on the backend,
+        a failed solve either raises a backend-specific error or returns a result
+        with ``success=False``.
 
     Examples:
         Run a basic energy flow analysis with a specified solver:
-            result = run_energy_flow(my_network, solver='default_solver')
+            result = run_energy_flow(my_network, solver='ipopt')
 
         Run analysis with additional solver options:
             result = run_energy_flow(my_network, max_iter=500, tol=1e-5)
@@ -176,11 +181,15 @@ def run_energy_flow_optimization(
 
     Raises:
         ValueError: If the network or optimization problem is invalid, incomplete, or incompatible.
-        SolverError: If the solver fails to find a feasible solution or encounters an internal error.
+
+    Note:
+        There is no dedicated solver-failure exception: depending on the backend,
+        a failed solve either raises a backend-specific error or returns a result
+        with ``success=False``.
 
     Examples:
         Optimize energy flow with a custom solver:
-            result = run_energy_flow_optimization(my_network, my_problem, solver='cbc')
+            result = run_energy_flow_optimization(my_network, my_problem, solver='scip')
 
         Use the default solver with additional options:
             result = run_energy_flow_optimization(my_network, my_problem, max_iter=1000, tol=1e-6)
@@ -191,44 +200,65 @@ def run_energy_flow_optimization(
 def solve_load_shedding_problem(  # NOSONAR
     network: Network,
     *,
+    demand_weight=WEIGHT_DEMAND,
+    generator_weight=WEIGHT_GENERATOR,
+    weight_for_load=None,
     bounds_vm: tuple = (0.9, 1.1),
     bounds_pressure: tuple = (0.9, 1.1),
     bounds_t: tuple = (0.9, 1.1),
+    max_line_loading=1.5,
     bounds_ext_el: tuple = (-3, 3),
     bounds_ext_gas: tuple = (-10, 10),
     bounds_ext_heat: tuple = (-10, 10),
+    regulation_ramp_limit=None,
+    include_storages=False,
     include_ext_grids=True,
+    include_coupling_points=False,
     check_lp=True,
     check_vm=True,
     check_pressure=True,
     check_t=True,
+    lex_objectives=False,
+    auto_priority_floor=True,
+    priority_safety_factor=10.0,
     debug=False,
     **kwargs,
 ):
     """
     Solves a load shedding optimization problem for a network using specified operational bounds across subsystems.
 
-    The bound / check parameters mirror :func:`create_min_load_shedding_problem`
-    one-to-one, using the physical-quantity vocabulary: ``bounds_vm`` (voltage
-    magnitude), ``bounds_t`` (temperature), ``bounds_pressure`` (gas pressure),
-    ``bounds_ext_el`` / ``bounds_ext_gas`` / ``bounds_ext_heat`` (external-grid
-    exchange) and the ``check_vm`` / ``check_t`` / ``check_pressure`` /
-    ``check_lp`` toggles. Any remaining keyword argument is forwarded to the
-    solver via :func:`run_energy_flow_optimization`.
+    Every parameter of :func:`create_min_load_shedding_problem` is accepted here
+    with the factory's own defaults and forwarded to it, using the
+    physical-quantity vocabulary: ``bounds_vm`` (voltage magnitude), ``bounds_t``
+    (temperature), ``bounds_pressure`` (gas pressure), ``bounds_ext_el`` /
+    ``bounds_ext_gas`` / ``bounds_ext_heat`` (external-grid exchange) and the
+    ``check_vm`` / ``check_t`` / ``check_pressure`` / ``check_lp`` toggles. Any
+    remaining keyword argument is forwarded to the solver via
+    :func:`run_energy_flow_optimization`.
 
     Args:
         network (Network): The network to optimize, representing the system's topology and parameters.
+        demand_weight: Objective weight per shed demand unit.
+        generator_weight: Objective weight per shed generation unit.
+        weight_for_load: Optional callable ``weight_for_load(model)`` returning a per-load weight (None falls back to ``demand_weight``).
         bounds_vm (tuple): Per-unit voltage-magnitude bounds (min, max) for the electrical subsystem.
         bounds_pressure (tuple): Per-unit pressure bounds (min, max) for the gas subsystem.
         bounds_t (tuple): Per-unit temperature bounds (min, max) for the thermal subsystem.
+        max_line_loading: Line-loading cap enforced when ``check_lp`` is True.
         bounds_ext_el (tuple): External electrical-grid exchange bounds (min, max).
         bounds_ext_gas (tuple): External gas-grid exchange bounds (min, max).
         bounds_ext_heat (tuple): External heat-grid exchange bounds (min, max).
+        regulation_ramp_limit: Optional per-step regulation ramp limit.
+        include_storages (bool): Make storages controllable. Defaults to False.
         include_ext_grids (bool): Constrain external-grid exchange. Defaults to True.
+        include_coupling_points (bool): Penalise coupling-point shedding too. Defaults to False.
         check_lp (bool): Enforce the line-loading limit. Defaults to True.
         check_vm (bool): Enforce voltage-magnitude bounds. Defaults to True.
         check_pressure (bool): Enforce gas-pressure bounds. Defaults to True.
         check_t (bool): Enforce temperature bounds. Defaults to True.
+        lex_objectives (bool): Two-phase lexicographic solve (Pyomo only). Defaults to False.
+        auto_priority_floor (bool): Scale ``demand_weight`` so shed terms dominate aux terms. Defaults to True.
+        priority_safety_factor (float): Safety factor for the priority floor. Defaults to 10.0.
         debug (bool, optional): If True, enables verbose logging and diagnostics. Defaults to False.
         **kwargs: Additional keyword arguments forwarded to the solver. Refer to the solver documentation for supported options.
 
@@ -237,7 +267,11 @@ def solve_load_shedding_problem(  # NOSONAR
 
     Raises:
         ValueError: If the network or any bounds are missing, improperly defined, or incompatible.
-        SolverError: If the solver fails to find a feasible solution or encounters an error during optimization.
+
+    Note:
+        There is no dedicated solver-failure exception: depending on the backend,
+        a failed solve either raises a backend-specific error or returns a result
+        with ``success=False``.
 
     Examples:
         Solve a load shedding problem with specific operational bounds::
@@ -245,27 +279,37 @@ def solve_load_shedding_problem(  # NOSONAR
             result = solve_load_shedding_problem(
                 my_network,
                 bounds_vm=(0.95, 1.05),
-                bounds_t=(60, 80),
-                bounds_pressure=(30, 50),
-                bounds_ext_el=(0.9, 1.1),
-                bounds_ext_gas=(25, 45),
+                bounds_t=(0.9, 1.05),
+                bounds_pressure=(0.85, 1.1),
+                bounds_ext_el=(-2, 2),
+                bounds_ext_gas=(-5, 5),
                 debug=True,
             )
 
         This executes the optimization with the specified bounds and returns the results.
     """
     optimization_problem = mp.create_min_load_shedding_problem(
+        demand_weight=demand_weight,
+        generator_weight=generator_weight,
+        weight_for_load=weight_for_load,
         bounds_vm=bounds_vm,
         bounds_pressure=bounds_pressure,
         bounds_t=bounds_t,
+        max_line_loading=max_line_loading,
         bounds_ext_el=bounds_ext_el,
         bounds_ext_gas=bounds_ext_gas,
         bounds_ext_heat=bounds_ext_heat,
+        regulation_ramp_limit=regulation_ramp_limit,
+        include_storages=include_storages,
         include_ext_grids=include_ext_grids,
+        include_coupling_points=include_coupling_points,
         check_lp=check_lp,
         check_vm=check_vm,
         check_pressure=check_pressure,
         check_t=check_t,
+        lex_objectives=lex_objectives,
+        auto_priority_floor=auto_priority_floor,
+        priority_safety_factor=priority_safety_factor,
         debug=debug,
     )
     return run_energy_flow_optimization(

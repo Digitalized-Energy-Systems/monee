@@ -46,10 +46,21 @@ _GRID_LABEL: dict[str, str] = {
     "cp": "Control Point",
 }
 
-# Columns to hide from hover text
-_META_COLS: frozenset[str] = frozenset({"active", "independent", "ignored"})
-_ID_COLS: frozenset[str] = frozenset({"id", "node_id"})
-_SKIP: frozenset[str] = _META_COLS | _ID_COLS | frozenset({"_type"})
+# Columns / attributes to hide from hover text
+_SKIP: frozenset[str] = frozenset(
+    {"active", "independent", "ignored", "id", "node_id", "_type"}
+)
+
+
+def _write_figure(fig: go.Figure, path: str, **kwargs) -> None:
+    """Export *fig* to *path* via plotly's static image engine (kaleido)."""
+    try:
+        fig.write_image(path, **kwargs)
+    except (ImportError, ValueError) as e:
+        raise ImportError(
+            "Static image export requires the optional 'kaleido' package. "
+            "Install it with 'pip install monee[plot]' or 'pip install kaleido'."
+        ) from e
 
 
 # Value formatting
@@ -124,9 +135,9 @@ def _node_result_map(result: SolverResult) -> dict:
             continue
         if "node_id" in df.columns:
             continue  # child - skip
-        if isinstance(df["id"].iloc[0], tuple):
-            continue  # branch - skip
         for _, row in df.iterrows():
+            if isinstance(row["id"], tuple):
+                continue  # branch - skip
             m[row["id"]] = {"_type": type_name, **row.to_dict()}
     return m
 
@@ -142,11 +153,11 @@ def _branch_result_map(result: SolverResult) -> dict:
     for type_name, df in result.dataframes.items():
         if df.empty or "id" not in df.columns:
             continue
-        if not isinstance(df["id"].iloc[0], tuple):
-            continue
         for _, row in df.iterrows():
-            entry = {"_type": type_name, **row.to_dict()}
             bid = row["id"]
+            if not isinstance(bid, tuple):
+                continue
+            entry = {"_type": type_name, **row.to_dict()}
             m[bid] = entry
             # reversed direction alias so graph.edges() order never misses
             m[(bid[1], bid[0], bid[2])] = entry
@@ -254,67 +265,52 @@ def _node_label_and_color(row: dict) -> tuple[str, str]:
     return "", _TL_GRAY
 
 
-def _branch_label_and_color(
-    row: dict, is_cp: bool = False
-) -> tuple[str, str]:  # NOSONAR
+def _first_finite(row: dict, cols: tuple) -> float | None:
+    """First value among ``row[cols]`` convertible to a non-NaN float."""
+    for col in cols:
+        v = row.get(col)
+        if v is None:
+            continue
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            continue
+        if not math.isnan(f):
+            return f
+    return None
+
+
+def _branch_label_and_color(row: dict, is_cp: bool = False) -> tuple[str, str]:
     """Return (short inline label, colour) for a branch result row.
 
     Single-grid branches use the traffic-light palette; coupling branches
     fall back to the CP accent colour.
     """
-    # single-grid electrical loading
-    for col in ("loading_pu", "loading_from_pu"):
-        v = row.get(col)
-        if v is not None:
-            try:
-                return f"{float(v):.0f}%", _line_color(v)
-            except (TypeError, ValueError):
-                pass
+    # single-grid electrical loading (result frames store per-unit values)
+    f = _first_finite(row, ("loading_from_pu", "loading_to_pu"))
+    if f is not None:
+        pct = f * 100
+        return f"{pct:.0f}%", _line_color(pct)
 
-    # single-grid hydraulic mass flow
-    for col in ("mass_flow_kgs", "mass_flow_pos_kgs"):
-        v = row.get(col)
-        if v is not None:
-            try:
-                f = float(v)
-                if not math.isnan(f):
-                    return f"{f:.3g} kg/s", _TL_GREEN
-            except (TypeError, ValueError):
-                pass
-
-    # multi-grid: electrical power
     cp_color = _ACCENT["cp"]
-    for col in ("el_mw", "p_mw", "p_from_mw", "p_to_mw"):
-        v = row.get(col)
-        if v is not None:
-            try:
-                f = float(v)
-                if not math.isnan(f):
-                    return f"{f:.3g} MW", cp_color
-            except (TypeError, ValueError):
-                pass
-
-    # multi-grid: gas / hydraulic flow
-    for col in ("gas_mass_flow_kgs", "from_mass_flow_kgs", "to_mass_flow_kgs"):
-        v = row.get(col)
-        if v is not None:
-            try:
-                f = float(v)
-                if not math.isnan(f):
-                    return f"{f:.3g} kg/s", cp_color
-            except (TypeError, ValueError):
-                pass
-
-    # multi-grid: heat
-    for col in ("q_mw", "q_mw_heat"):
-        v = row.get(col)
-        if v is not None:
-            try:
-                f = float(v)
-                if not math.isnan(f):
-                    return f"{f:.3g} MW", cp_color
-            except (TypeError, ValueError):
-                pass
+    metric_groups = (
+        # single-grid hydraulic mass flow
+        (("mass_flow_kgs", "mass_flow_pos_kgs"), "kg/s", _TL_GREEN),
+        # multi-grid: electrical power
+        (("el_mw", "p_mw", "p_from_mw", "p_to_mw"), "MW", cp_color),
+        # multi-grid: gas / hydraulic flow
+        (
+            ("gas_mass_flow_kgs", "from_mass_flow_kgs", "to_mass_flow_kgs"),
+            "kg/s",
+            cp_color,
+        ),
+        # multi-grid: heat
+        (("q_mw", "q_mw_heat"), "MW", cp_color),
+    )
+    for cols, unit, color in metric_groups:
+        f = _first_finite(row, cols)
+        if f is not None:
+            return f"{f:.3g} {unit}", color
 
     return "", cp_color if is_cp else _TL_GRAY
 
@@ -330,10 +326,117 @@ def _branch_line_style(is_cp: bool) -> dict:
     }
 
 
+def _edge_traces(color_groups: dict, opacity: float) -> list:
+    """One line Scatter per (color, is_cp) group of branch segments."""
+    traces = []
+    for (color, is_cp), segs in color_groups.items():
+        x_pts: list = []
+        y_pts: list = []
+        for x0, y0, x1, y1 in segs:
+            x_pts += [x0, x1, None]
+            y_pts += [y0, y1, None]
+        traces.append(
+            go.Scatter(
+                x=x_pts,
+                y=y_pts,
+                mode="lines",
+                hoverinfo="none",
+                showlegend=False,
+                line={"color": color, **_branch_line_style(is_cp)},
+                opacity=opacity,
+            )
+        )
+    return traces
+
+
+def _midpoint_trace(
+    mid_x: list,
+    mid_y: list,
+    mid_label: list,
+    mid_hover: list,
+    mid_colors: list,
+    size: float,
+    opacity: float,
+) -> go.Scatter:
+    """Branch-midpoint markers carrying per-branch hover text + inline labels."""
+    return go.Scatter(
+        x=mid_x,
+        y=mid_y,
+        mode="markers+text",
+        text=mid_label,
+        textposition="middle right",
+        textfont={"family": _FONT, "size": 10, "color": _DIM_COLOR},
+        hovertext=mid_hover,
+        hoverinfo="text",
+        showlegend=False,
+        marker={
+            "size": size,
+            "color": mid_colors,
+            "symbol": "circle",
+            "opacity": opacity,
+            "line": {"width": 1.5, "color": _BG},
+        },
+    )
+
+
+def _figure_layout(title_text: str) -> go.Layout:
+    """Shared figure layout for :func:`plot_result` and ``plot_network``."""
+    return go.Layout(
+        title={
+            "text": title_text,
+            "font": {"family": _FONT, "size": 18, "color": _FONT_COLOR},
+            "x": 0.5,
+            "xanchor": "center",
+            "y": 0.97,
+        },
+        paper_bgcolor=_BG,
+        plot_bgcolor=_BG,
+        hovermode="closest",
+        hoverlabel={
+            "bgcolor": _PANEL,
+            "bordercolor": _BORDER,
+            "font": {"family": _FONT, "size": 12, "color": _FONT_COLOR},
+            "namelength": -1,
+        },
+        xaxis={
+            "showgrid": False,
+            "zeroline": False,
+            "showticklabels": False,
+            "showline": False,
+        },
+        yaxis={
+            "showgrid": False,
+            "zeroline": False,
+            "showticklabels": False,
+            "showline": False,
+            "scaleanchor": "x",
+        },
+        font={"family": _FONT, "color": _FONT_COLOR},
+        autosize=True,
+        margin={"l": 30, "r": 200, "t": 60, "b": 30},
+        legend={
+            "title": {
+                "text": "Legend",
+                "font": {"family": _FONT, "size": 12, "color": _DIM_COLOR},
+            },
+            "x": 1.02,
+            "y": 1.0,
+            "xanchor": "left",
+            "yanchor": "top",
+            "bgcolor": "rgba(246, 248, 250, 0.95)",
+            "bordercolor": _BORDER,
+            "borderwidth": 1,
+            "font": {"family": _FONT, "size": 11, "color": _FONT_COLOR},
+            "itemsizing": "constant",
+            "tracegroupgap": 6,
+        },
+    )
+
+
 # Graph layout  –  spread out nodes for readability
 
 
-def _compute_layout(graph: nx.Graph, _network, use_monee_positions: bool) -> dict:
+def _compute_layout(graph: nx.Graph, use_monee_positions: bool) -> dict:
     if use_monee_positions and all(
         graph.nodes[nid]["internal_node"].position is not None for nid in graph.nodes
     ):
@@ -345,26 +448,18 @@ def _compute_layout(graph: nx.Graph, _network, use_monee_positions: bool) -> dic
             for nid in graph.nodes
         }
 
-    pos = None
-    for prog, args in [
-        ("fdp", "-Goverlap=false -Gmode=ipsep -Gsep=200"),
-    ]:
-        try:
-            import networkx.drawing.nx_agraph as nxd
+    try:
+        import networkx.drawing.nx_agraph as nxd
 
-            pos = nxd.pygraphviz_layout(graph, prog=prog, args=args)
-            break
-        except Exception:
-            continue
-
-    if pos is None:
+        return nxd.pygraphviz_layout(
+            graph, prog="fdp", args="-Goverlap=false -Gmode=ipsep -Gsep=200"
+        )
+    except Exception:
         # Graphviz/pygraphviz unavailable - fall back to pure-networkx layouts.
         try:
-            pos = nx.kamada_kawai_layout(graph)
+            return nx.kamada_kawai_layout(graph)
         except Exception:
-            pos = nx.spring_layout(graph, seed=42)
-
-    return pos
+            return nx.spring_layout(graph, seed=42)
 
 
 # Main function
@@ -404,6 +499,8 @@ def plot_result(  # NOSONAR
         show_children: Include child components in parent-node hover text.
         use_monee_positions: Use stored ``node.position`` coordinates.
         write_to: Optional path to export the figure (PDF / PNG / SVG).
+            Static export needs the optional ``kaleido`` package
+            (``pip install monee[plot]``).
 
     Returns:
         A :class:`plotly.graph_objects.Figure`.
@@ -414,7 +511,7 @@ def plot_result(  # NOSONAR
     node_map = _node_result_map(result)
     branch_map = _branch_result_map(result)
     child_map = _child_by_node_map(result) if show_children else {}
-    pos = _compute_layout(graph, network, use_monee_positions)
+    pos = _compute_layout(graph, use_monee_positions)
 
     # Node data – collected per grid type
     grid_data: dict[str, dict] = {
@@ -528,42 +625,9 @@ def plot_result(  # NOSONAR
         mid_label.append(label)
         mid_colors.append(color)
 
-    edge_traces = []
-    for (color, is_cp), segs in color_groups.items():
-        x_pts: list = []
-        y_pts: list = []
-        for x0, y0, x1, y1 in segs:
-            x_pts += [x0, x1, None]
-            y_pts += [y0, y1, None]
-        edge_traces.append(
-            go.Scatter(
-                x=x_pts,
-                y=y_pts,
-                mode="lines",
-                hoverinfo="none",
-                showlegend=False,
-                line={"color": color, **_branch_line_style(is_cp)},
-                opacity=0.65,
-            )
-        )
-
-    midpoint_trace = go.Scatter(
-        x=mid_x,
-        y=mid_y,
-        mode="markers+text",
-        text=mid_label,
-        textposition="middle right",
-        textfont={"family": _FONT, "size": 10, "color": _DIM_COLOR},
-        hovertext=mid_hover,
-        hoverinfo="text",
-        showlegend=False,
-        marker={
-            "size": 9,
-            "color": mid_colors,
-            "symbol": "circle",
-            "opacity": 0.90,
-            "line": {"width": 1.5, "color": _BG},
-        },
+    edge_traces = _edge_traces(color_groups, opacity=0.65)
+    midpoint_trace = _midpoint_trace(
+        mid_x, mid_y, mid_label, mid_hover, mid_colors, size=9, opacity=0.90
     )
 
     # Traffic-light legend entries
@@ -574,105 +638,36 @@ def plot_result(  # NOSONAR
             mode="markers",
             marker={
                 "size": 11,
-                "color": _TL_GREEN,
+                "color": color,
                 "symbol": "square",
                 "line": {"width": 0},
             },
-            name="OK  (< 70 % / vm ±5 %)",
-        ),
-        go.Scatter(
-            x=[None],
-            y=[None],
-            mode="markers",
-            marker={
-                "size": 11,
-                "color": _TL_YELLOW,
-                "symbol": "square",
-                "line": {"width": 0},
-            },
-            name="Warning  (70–90 % / vm ±10 %)",
-        ),
-        go.Scatter(
-            x=[None],
-            y=[None],
-            mode="markers",
-            marker={
-                "size": 11,
-                "color": _TL_RED,
-                "symbol": "square",
-                "line": {"width": 0},
-            },
-            name="Critical  (≥ 90 % / vm > ±10 %)",
-        ),
+            name=name,
+        )
+        for color, name in (
+            (_TL_GREEN, "OK  (< 70 % / vm ±5 %)"),
+            (_TL_YELLOW, "Warning  (70–90 % / vm ±10 %)"),
+            (_TL_RED, "Critical  (≥ 90 % / vm > ±10 %)"),
+        )
+    ]
+    tl_legend.append(
         go.Scatter(
             x=[None],
             y=[None],
             mode="lines",
             line={"color": _ACCENT["cp"], "width": 2, "dash": "dot"},
             name="Coupling branch (CP)",
-        ),
-    ]
+        )
+    )
 
     # Assemble  –  render order: edges → midpoints → glow → markers → legend
     all_traces = (
         edge_traces + [midpoint_trace] + glow_traces + marker_traces + tl_legend
     )
 
-    fig = go.Figure(
-        data=all_traces,
-        layout=go.Layout(
-            title={
-                "text": title or "Network Result",
-                "font": {"family": _FONT, "size": 18, "color": _FONT_COLOR},
-                "x": 0.5,
-                "xanchor": "center",
-                "y": 0.97,
-            },
-            paper_bgcolor=_BG,
-            plot_bgcolor=_BG,
-            hovermode="closest",
-            hoverlabel={
-                "bgcolor": _PANEL,
-                "bordercolor": _BORDER,
-                "font": {"family": _FONT, "size": 12, "color": _FONT_COLOR},
-                "namelength": -1,
-            },
-            xaxis={
-                "showgrid": False,
-                "zeroline": False,
-                "showticklabels": False,
-                "showline": False,
-            },
-            yaxis={
-                "showgrid": False,
-                "zeroline": False,
-                "showticklabels": False,
-                "showline": False,
-                "scaleanchor": "x",
-            },
-            font={"family": _FONT, "color": _FONT_COLOR},
-            autosize=True,
-            margin={"l": 30, "r": 200, "t": 60, "b": 30},
-            legend={
-                "title": {
-                    "text": "Legend",
-                    "font": {"family": _FONT, "size": 12, "color": _DIM_COLOR},
-                },
-                "x": 1.02,
-                "y": 1.0,
-                "xanchor": "left",
-                "yanchor": "top",
-                "bgcolor": "rgba(246, 248, 250, 0.95)",
-                "bordercolor": _BORDER,
-                "borderwidth": 1,
-                "font": {"family": _FONT, "size": 11, "color": _FONT_COLOR},
-                "itemsizing": "constant",
-                "tracegroupgap": 6,
-            },
-        ),
-    )
+    fig = go.Figure(data=all_traces, layout=_figure_layout(title or "Network Result"))
 
     if write_to is not None:
-        fig.write_image(write_to)
+        _write_figure(fig, write_to)
 
     return fig

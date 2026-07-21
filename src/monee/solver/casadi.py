@@ -76,13 +76,11 @@ from .core import (
     apply_post_process_all,
     compute_bound_violations,
     finalize_solution,
-    ignore_branch,
-    ignore_child,
-    ignore_compound,
-    ignore_node,
     inject_vars,
+    iter_active_models,
     mark_slacks_and_prescriptions,
     prepare_solve_network,
+    warn_false_equation,
 )
 
 try:  # CasADi is an optional backend; keep monee importable without it.
@@ -116,13 +114,10 @@ class CasADiSolveError(RuntimeError):
 
 
 def _sx(x):
-    """Underlying CasADi expression of a :class:`CasSym`, or the value itself."""
     return x.e if isinstance(x, CasSym) else x
 
 
 class _Rel:
-    """A captured ``(residual, op)`` constraint: ``residual {==,<=} 0``."""
-
     __slots__ = ("r", "op")
 
     def __init__(self, r, op):
@@ -231,16 +226,11 @@ class CasModel:
         return CasSym(ca.sign(_sx(x)))
 
     @staticmethod
-    def sign3(x):
-        return CasSym(ca.sign(_sx(x)))
-
-    @staticmethod
     def if2(cond, a, b):
         return CasSym(ca.if_else(_sx(cond), _sx(a), _sx(b)))
 
-    @staticmethod
-    def if3(cond, a, b):
-        return CasSym(ca.if_else(_sx(cond), _sx(a), _sx(b)))
+    sign3 = sign2
+    if3 = if2
 
     # --- model assembly hooks ---
     def Intermediate(self, expr):  # NOSONAR
@@ -250,6 +240,11 @@ class CasModel:
     def Equation(self, eq):  # NOSONAR
         if isinstance(eq, _Rel):
             self.cons.append(eq)
+        elif eq is False:
+            # Mirrors the Pyomo/Gurobipy backends (and core.filter_bool_eqs):
+            # a False sentinel is a structurally infeasible constraint from an
+            # over-deactivated component - drop it, but surface the error.
+            warn_false_equation(logger=_log)
 
     def Equations(self, eqs):  # NOSONAR
         for eq in eqs:
@@ -290,14 +285,107 @@ class CasADiCubicSplineImpl:
         self.m.Equation(CasSym(_sx(y)) == CasSym(interp(_sx(x))))
 
 
-# IPOPT options shared by the single-shot solver and the timeseries driver.
+# Default IPOPT options shared by the single-shot solver and the timeseries
+# driver; overridable per instance via ``solver_options`` (merged over these).
 _IPOPT_OPTS = {
     "print_time": 0,
     "ipopt.print_level": 0,
     "ipopt.sb": "yes",
-    "ipopt.tol": 1e-8,
+    "ipopt.tol": 1e-6,
     "ipopt.max_iter": 3000,
 }
+
+# draw_debug/verbose overlay: show the IPOPT log instead of silencing it.
+_IPOPT_DEBUG_OPTS = {
+    "print_time": 1,
+    "ipopt.print_level": 5,
+    "ipopt.sb": "no",
+}
+
+# For solves whose x0 is a previous solution (see set_warm_start_hint). The
+# flat-start defaults are actively harmful there: the default initial barrier
+# (mu_init=0.1) pushes a near-optimal point far back into the interior and can
+# fail the step computation outright. Full warm-start mode keeps the point
+# (and its near-zero bound distances) as-is: the only tested set that never
+# failed nor drifted (<=1e-8 vs cold) from a near-solution start. Trade-off:
+# on LARGE smooth gas/heat NLPs (degenerate pos/neg flow bounds get near-zero
+# multipliers) it roughly doubles iterations vs a cold start - there, either
+# pass warm_start=False to the Stepper or override per instance with
+# solver_options={"ipopt.warm_start_init_point": "no", "ipopt.mu_init": 1e-5}
+# (~1.5x faster than cold, at the cost of occasional flat-start retries and
+# result staleness up to the warm constr_viol_tol).
+_IPOPT_WARM_OPTS = {
+    "ipopt.warm_start_init_point": "yes",
+    "ipopt.mu_init": 1e-6,
+    "ipopt.warm_start_bound_push": 1e-9,
+    "ipopt.warm_start_mult_bound_push": 1e-9,
+}
+
+
+def _merged_ipopt_opts(
+    solver_options: dict | None, debug: bool = False, warm: bool = False
+) -> dict:
+    opts = dict(_IPOPT_OPTS)
+    if warm:
+        opts.update(_IPOPT_WARM_OPTS)
+    if debug:
+        opts.update(_IPOPT_DEBUG_OPTS)
+    if solver_options:
+        opts.update(solver_options)
+    if warm and "ipopt.constr_viol_tol" not in (solver_options or {}):
+        # A near-feasible start may be accepted after 0 iterations when the
+        # parameter change since the last solve is small; the default unscaled
+        # feasibility check (1e-4) would let per-constraint residuals 100x
+        # looser than ipopt.tol pass as converged. Cap it at the effective tol
+        # (staleness bound); slightly stricter than cold acceptance, and a warm
+        # solve that cannot reach it fails into the Stepper's flat-start retry.
+        opts["ipopt.constr_viol_tol"] = min(1e-6, opts.get("ipopt.tol", 1e-6))
+    return opts
+
+
+def _assemble_nlp_vectors(reg, m: CasModel):
+    """``(X, x0, lbx, ubx, g, lbg, ubg, f)`` from the injected variable register
+    and the collected constraints/objective terms."""
+    X = ca.vertcat(*[r["sx"] for r in reg])
+    x0 = ca.DM([r["x0"] for r in reg])
+    lbx = ca.DM([r["lb"] for r in reg])
+    ubx = ca.DM([r["ub"] for r in reg])
+    g = ca.vertcat(*[c.r for c in m.cons]) if m.cons else ca.SX.zeros(0)
+    lbg = ca.DM([0.0 if c.op == "eq" else -INF for c in m.cons])
+    ubg = ca.DM([0.0 for _ in m.cons])
+    f = ca.SX(0)
+    for t in m.obj_terms:
+        f = f + t
+    return X, x0, lbx, ubx, g, lbg, ubg, f
+
+
+def _write_back_solution(reg, x_opt):
+    """Scatter the solved vector into the models as plain monee Vars."""
+    for i, r in enumerate(reg):
+        r["model"].__dict__[r["key"]] = Var(
+            value=float(x_opt[i]) * r.get("scale", 1.0),
+            min=r["vmin"],
+            max=r["vmax"],
+            integer=r.get("integer", False),
+            name=r["name"],
+        )
+
+
+def _eval_leftover_cassyms(models, X, x_opt, fname="intval"):
+    """Evaluate remaining CasSym attributes (inlined intermediates) on *models*
+    in one batched call and materialise them as :class:`Intermediate`."""
+    leftover = [
+        (model, key, val.e)
+        for model in models
+        for key, val in model.__dict__.items()
+        if isinstance(val, CasSym)
+    ]
+    if not leftover:
+        return
+    F = ca.Function(fname, [X], [ca.vertcat(*[e for _, _, e in leftover])])
+    vals = np.array(F(ca.DM(x_opt))).flatten()
+    for (model, key, _), v in zip(leftover, vals):
+        model.__dict__[key] = Intermediate(value=float(v))
 
 
 class CasADiSolver(OperatorEquationAssembly, SolverInterface):
@@ -305,34 +393,41 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
     :class:`~monee.solver.core.OperatorEquationAssembly` equation passes; only
     variable injection, the solve, and the write-back are CasADi-specific."""
 
-    def __init__(self):
+    def __init__(self, solver_options: dict | None = None):
+        """``solver_options`` are CasADi/IPOPT options merged over the module
+        defaults (e.g. ``{"ipopt.max_iter": 500, "ipopt.tol": 1e-8}``)."""
         _require_casadi()
         self._backend_name = "casadi"
         self._solver_name = "ipopt"
-        # Per-solve simulation flag, read by the shared branch pass to drop
-        # operational flow limits (mirrors GEKKOSolver).
+        self.solver_options = dict(solver_options) if solver_options else {}
+
         self._simulation: bool = False
         self._reg: list = []
-        # in-process timing (no subprocess at any layer):
+        self._warm_start_hint: bool = False
+
         self.last_build_s = None  # nlpsol construction: graph -> derivative fns
         self.last_solve_s = None  # the IPOPT solve() call
         self.last_engine_s = None  # build + solve (the GEKKO "engine" analogue)
         self.last_iters = None
 
+    def set_warm_start_hint(self, active: bool) -> None:
+        """Declare that the next solve's variable values are a previous
+        solution (e.g. the :class:`~monee.simulation.Stepper` persisted the
+        last step's result). That solve then runs IPOPT with warm-start
+        options (small initial barrier) instead of the flat-start defaults.
+        One-shot: consumed and reset by the next :meth:`solve`."""
+        self._warm_start_hint = bool(active)
+
     def _add_equations(self, m, eqs):
         m.Equations(eqs)
 
     def _pwl_impl(self, m):
-        """Smooth B-spline implementation of the gas/heat PWL hook (the GEKKO
-        backend uses a cubic spline; CasADi mirrors it with ``ca.interpolant``)."""
         return CasADiCubicSplineImpl(m)
 
     def _inject(self, model, comp, cat):  # NOSONAR
         for key, val in list(model.__dict__.items()):  # NOSONAR
             if isinstance(val, Var):
-                if val.integer:
-                    # IPOPT is continuous; relax integers for this backend.
-                    pass
+                # Integer Vars are relaxed: IPOPT is continuous.
                 sx = ca.SX.sym(f"v{len(self._reg)}")
                 lo = -INF if val.min is None else float(val.min)
                 hi = INF if val.max is None else float(val.max)
@@ -342,6 +437,16 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
                     if (v0 is None or (isinstance(v0, float) and math.isnan(v0)))
                     else float(v0)
                 )
+
+                scale = getattr(val, "scale", 1.0) or 1.0
+                phys = sx if math.isclose(scale, 1.0) else scale * sx
+                if not math.isclose(scale, 1.0):
+                    lo = lo / scale
+                    hi = hi / scale
+                    # A negative scale flips the interval; reorder after division.
+                    if lo > hi:
+                        lo, hi = hi, lo
+                    x0 = x0 / scale
                 self._reg.append(
                     {
                         "model": model,
@@ -350,18 +455,15 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
                         "lb": lo,
                         "ub": hi,
                         "x0": x0,
+                        "scale": scale,
                         "name": val.name,
                         "vmin": val.min,
                         "vmax": val.max,
+                        "integer": val.integer,
                     }
                 )
-                setattr(model, key, CasSym(sx))
+                setattr(model, key, CasSym(phys))
             elif isinstance(val, Const):
-                # A boundary child's overwrite() can fold a time-varying input into
-                # a Const, e.g. ``node.t_pu = Const(ext_grid.t_k / t_ref)`` with a
-                # per-step CasADi parameter ``t_k``. Keep such symbolic values
-                # symbolic so the parameter still reaches the graph; only genuine
-                # numeric constants collapse to a float.
                 v = val.value
                 if isinstance(v, CasSym):
                     setattr(model, key, v)
@@ -371,19 +473,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
                     setattr(model, key, float(v))
 
     def _active_models(self, network, nodes, branches, compounds, ignored_nodes):
-        for branch in branches:
-            if not ignore_branch(branch, network, ignored_nodes):
-                yield branch.model
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                continue
-            yield node.model
-            for child in network.childs_by_ids(node.child_ids):
-                if not ignore_child(child, ignored_nodes):
-                    yield child.model
-        for compound in compounds:
-            if not ignore_compound(compound, ignored_nodes):
-                yield compound.model
+        return iter_active_models(network, nodes, branches, compounds, ignored_nodes)
 
     def solve(  # NOSONAR
         self,
@@ -397,6 +487,8 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
     ) -> SolverResult:
         self._simulation = simulation
         self._reg = []
+        warm = self._warm_start_hint
+        self._warm_start_hint = False
         m = CasModel()
 
         # --- network prep (mirrors GEKKOSolver.solve) ---
@@ -465,16 +557,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
 
         # --- assemble & solve the NLP in-process ---
         reg = self._reg
-        X = ca.vertcat(*[r["sx"] for r in reg])
-        x0 = ca.DM([r["x0"] for r in reg])
-        lbx = ca.DM([r["lb"] for r in reg])
-        ubx = ca.DM([r["ub"] for r in reg])
-        g = ca.vertcat(*[c.r for c in m.cons]) if m.cons else ca.SX.zeros(0)
-        lbg = ca.DM([0.0 if c.op == "eq" else -INF for c in m.cons])
-        ubg = ca.DM([0.0 for _ in m.cons])
-        f = ca.SX(0)
-        for t in m.obj_terms:
-            f = f + t
+        X, x0, lbx, ubx, g, lbg, ubg, f = _assemble_nlp_vectors(reg, m)
 
         t0 = time.perf_counter()
         # Common-subexpression elimination: monee's per-element equation bodies
@@ -485,7 +568,10 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         # nlpsol construction and speeds per-iteration evaluation.
         f, g = ca.cse([f, g])
         solver = ca.nlpsol(
-            "monee_casadi", "ipopt", {"x": X, "f": f, "g": g}, _IPOPT_OPTS
+            "monee_casadi",
+            "ipopt",
+            {"x": X, "f": f, "g": g},
+            _merged_ipopt_opts(self.solver_options, debug=draw_debug, warm=warm),
         )
         self.last_build_s = time.perf_counter() - t0
 
@@ -503,25 +589,12 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             )
         x_opt = np.array(sol["x"]).flatten()
 
-        # --- write the solution back into the model ---
-        for i, r in enumerate(reg):
-            r["model"].__dict__[r["key"]] = Var(
-                value=float(x_opt[i]), min=r["vmin"], max=r["vmax"], name=r["name"]
-            )
-        # Evaluate any remaining CasSym attributes (inlined intermediates) in one pass.
-        leftover = [
-            (model, key, val.e)
-            for model in self._active_models(
-                network, nodes, branches, compounds, ignored_nodes
-            )
-            for key, val in model.__dict__.items()
-            if isinstance(val, CasSym)
-        ]
-        if leftover:
-            F = ca.Function("intval", [X], [ca.vertcat(*[e for _, _, e in leftover])])
-            vals = np.array(F(ca.DM(x_opt))).flatten()
-            for (model, key, _), v in zip(leftover, vals):
-                model.__dict__[key] = Intermediate(value=float(v))
+        _write_back_solution(reg, x_opt)
+        _eval_leftover_cassyms(
+            self._active_models(network, nodes, branches, compounds, ignored_nodes),
+            X,
+            x_opt,
+        )
 
         violations = finalize_solution(
             nodes, branches, compounds, network, input_network
@@ -533,7 +606,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             objective,
             success,
             violations,
-            mode_used="optimization",
+            mode_used="simulation" if simulation else "optimization",
             backend_used=self.backend_name,
             solver_used=self.solver_name,
         )
@@ -564,10 +637,12 @@ class CasADiTimeseries:
         formulation=None,
         simulation=True,
         steps=None,
+        solver_options: dict | None = None,
     ):
         _require_casadi()
         self._td = timeseries_data
-        cs = CasADiSolver()
+        self._simulation = simulation
+        cs = CasADiSolver(solver_options=solver_options)
         cs._simulation = simulation
         cs._reg = []
         m = CasModel()
@@ -610,28 +685,25 @@ class CasADiTimeseries:
         self._network, self._nodes = network, nodes
         self._branches, self._compounds, self._ignored = branches, compounds, ignored
         self._var_entries = reg
-        X = ca.vertcat(*[r["sx"] for r in reg])
         P = (
             ca.vertcat(*[p[2] for p in self._params])
             if self._params
             else ca.SX.zeros(0)
         )
-        self._lbx = ca.DM([r["lb"] for r in reg])
-        self._ubx = ca.DM([r["ub"] for r in reg])
-        self._x = ca.DM([r["x0"] for r in reg])  # warm-start state
-        g = ca.vertcat(*[c.r for c in m.cons]) if m.cons else ca.SX.zeros(0)
-        self._lbg = ca.DM([0.0 if c.op == "eq" else -INF for c in m.cons])
-        self._ubg = ca.DM([0.0 for _ in m.cons])
-        f = ca.SX(0)
-        for t in m.obj_terms:
-            f = f + t
+        X, x0, lbx, ubx, g, lbg, ubg, f = _assemble_nlp_vectors(reg, m)
+        self._lbx, self._ubx = lbx, ubx
+        self._x = x0  # warm-start state
+        self._lbg, self._ubg = lbg, ubg
         self._has_obj = bool(m.obj_terms)
 
         t0 = time.perf_counter()
         # Merge duplicate sub-terms before the autodiff build (see CasADiSolver.solve).
         f, g = ca.cse([f, g])
         self._solver = ca.nlpsol(
-            "monee_ts", "ipopt", {"x": X, "f": f, "g": g, "p": P}, _IPOPT_OPTS
+            "monee_ts",
+            "ipopt",
+            {"x": X, "f": f, "g": g, "p": P},
+            _merged_ipopt_opts(cs.solver_options),
         )
 
         # One compiled function (X, P) -> all inlined-intermediate values, for
@@ -652,9 +724,7 @@ class CasADiTimeseries:
             else None
         )
         self.build_s = time.perf_counter() - t0
-        length = timeseries_data.length
-        length = length() if callable(length) else length
-        self.steps = steps if steps is not None else length
+        self.steps = steps if steps is not None else timeseries_data.length
         self.last_solve_total_s = None
         self.last_iters_total = None
         self.last_step_success = None
@@ -701,20 +771,9 @@ class CasADiTimeseries:
                 add(compound.model, attr, series)
 
     def _active_models(self):
-        net, ign = self._network, self._ignored
-        for branch in self._branches:
-            if not ignore_branch(branch, net, ign):
-                yield branch.model
-        for node in self._nodes:
-            if ignore_node(node, net, ign):
-                continue
-            yield node.model
-            for child in net.childs_by_ids(node.child_ids):
-                if not ignore_child(child, ign):
-                    yield child.model
-        for compound in self._compounds:
-            if not ignore_compound(compound, ign):
-                yield compound.model
+        return iter_active_models(
+            self._network, self._nodes, self._branches, self._compounds, self._ignored
+        )
 
     # ------------------------------------------------------------------ #
     def _solve_step(self, t):
@@ -737,10 +796,7 @@ class CasADiTimeseries:
 
         # scatter into models for result extraction
         xv = np.array(sol["x"]).flatten()
-        for i, r in enumerate(self._var_entries):
-            r["model"].__dict__[r["key"]] = Var(
-                value=float(xv[i]), min=r["vmin"], max=r["vmax"], name=r["name"]
-            )
+        _write_back_solution(self._var_entries, xv)
         for model, key, _psx, series in self._params:
             model.__dict__[key] = float(series[t])
         if self._f_inter is not None:
@@ -772,7 +828,7 @@ class CasADiTimeseries:
             self._last_objective,
             success,
             violations,
-            mode_used="optimization",
+            mode_used="simulation" if self._simulation else "optimization",
             backend_used="casadi",
             solver_used="ipopt",
         )
@@ -780,7 +836,9 @@ class CasADiTimeseries:
     def run(self):
         """Solve every timestep, reusing the compiled solver. Returns a list of
         per-step ``{type_name: DataFrame}`` dicts (like
-        :attr:`SolverResult.dataframes`)."""
+        :attr:`SolverResult.dataframes`). A non-converged step raises
+        :class:`CasADiSolveError` (same failure contract as
+        :meth:`step_result`)."""
         results = []
         solve_total = 0.0
         iters_total = 0
@@ -788,6 +846,15 @@ class CasADiTimeseries:
             solve_s, stats = self._solve_step(t)
             solve_total += solve_s
             iters_total += stats.get("iter_count") or 0
+            success = bool(stats.get("success", False))
+            self.last_step_success = success
+            if not success:
+                self.last_solve_total_s = solve_total
+                self.last_iters_total = iters_total
+                raise CasADiSolveError(
+                    f"CasADi/IPOPT timeseries step {t} did not converge "
+                    f"(return status: {stats.get('return_status')!r})."
+                )
             results.append(self._network.as_result_dataframe_dict())
         self.last_solve_total_s = solve_total
         self.last_iters_total = iters_total
@@ -819,7 +886,7 @@ class CasADiMultiPeriodSolver:
         timeseries_data=None,
         steps: int = None,
         optimization_problem=None,
-        dt_h=1.0,
+        dt_h=None,
         datetime_index=None,
         initial_state: dict = None,
         terminal_state: dict = None,
@@ -905,21 +972,22 @@ class CasADiMultiPeriodSolver:
             if terminal_state and t == steps - 1:
                 for (comp_id, attr), target in terminal_state.items():
                     var = _find_component_var(net_t, comp_id, attr)
-                    if var is not None:
+                    if isinstance(var, (int, float)):
+                        # A plain constant would make ``var == target`` a Python
+                        # bool; only a solver variable / expression can be pinned.
+                        _log.warning(
+                            "terminal_state target (%r, %r) is a constant, not "
+                            "a solver variable; the terminal constraint was "
+                            "skipped. Make the attribute controllable to pin it.",
+                            comp_id,
+                            attr,
+                        )
+                    elif var is not None:
                         m.Equation(var == target)
 
         # Assemble and solve the whole horizon as one NLP.
         reg = cs._reg
-        X = ca.vertcat(*[r["sx"] for r in reg])
-        x0 = ca.DM([r["x0"] for r in reg])
-        lbx = ca.DM([r["lb"] for r in reg])
-        ubx = ca.DM([r["ub"] for r in reg])
-        g = ca.vertcat(*[c.r for c in m.cons]) if m.cons else ca.SX.zeros(0)
-        lbg = ca.DM([0.0 if c.op == "eq" else -INF for c in m.cons])
-        ubg = ca.DM([0.0 for _ in m.cons])
-        f = ca.SX(0)
-        for term in m.obj_terms:
-            f = f + term
+        X, x0, lbx, ubx, g, lbg, ubg, f = _assemble_nlp_vectors(reg, m)
 
         _log.info("Multi-period CasADi solve: T=%d periods", steps)
         t0 = time.perf_counter()
@@ -941,26 +1009,19 @@ class CasADiMultiPeriodSolver:
         x_opt = np.array(sol["x"]).flatten()
 
         # Scatter the solution back into every period's models.
-        for i, r in enumerate(reg):
-            r["model"].__dict__[r["key"]] = Var(
-                value=float(x_opt[i]), min=r["vmin"], max=r["vmax"], name=r["name"]
-            )
-        leftover = [
-            (model, key, val.e)
-            for net_t, ignored_t in zip(net_copies, ignored_list)
-            for model in cs._active_models(
-                net_t, net_t.nodes, net_t.branches, net_t.compounds, ignored_t
-            )
-            for key, val in model.__dict__.items()
-            if isinstance(val, CasSym)
-        ]
-        if leftover:
-            F = ca.Function(
-                "intval_mp", [X], [ca.vertcat(*[e for _, _, e in leftover])]
-            )
-            vals = np.array(F(ca.DM(x_opt))).flatten()
-            for (model, key, _), v in zip(leftover, vals):
-                model.__dict__[key] = Intermediate(value=float(v))
+        _write_back_solution(reg, x_opt)
+        _eval_leftover_cassyms(
+            (
+                model
+                for net_t, ignored_t in zip(net_copies, ignored_list)
+                for model in cs._active_models(
+                    net_t, net_t.nodes, net_t.branches, net_t.compounds, ignored_t
+                )
+            ),
+            X,
+            x_opt,
+            fname="intval_mp",
+        )
         for net_t in net_copies:
             apply_post_process_all(net_t.nodes, net_t.branches, net_t.compounds, net_t)
 
@@ -970,4 +1031,6 @@ class CasADiMultiPeriodSolver:
             objective=objective,
             success=success,
             datetime_index=datetime_index,
+            backend_used=self._backend_name,
+            solver_used=self._solver_name,
         )

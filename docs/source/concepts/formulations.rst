@@ -229,7 +229,7 @@ remain importable but are deprecated.
       and turbulent regimes both resolve. Use it when lightly-loaded pipes
       (Re < 2300) matter.
 
-      :func:`~monee.model.formulation.make_gas_nlp_formulation` ``(friction_model="constant", smoothing_eps=1e-3, n_breakpoints=12)``
+      :func:`~monee.model.formulation.make_gas_nlp_formulation` ``(friction_model="constant", smoothing_eps=1e-3)``
       / ``GAS_NLP_FORMULATION``
 
       Pure-NLP, binary-free Weymouth: one signed mass-flow variable drives
@@ -271,7 +271,7 @@ remain importable but are deprecated.
       Heat-exchanger formulations are unchanged; the temperature bilinears
       keep the model a non-convex MIQCQP.
 
-      :func:`~monee.model.formulation.make_heat_nlp_formulation` ``(friction_model="constant", smoothing_eps=1e-3, n_breakpoints=12)``
+      :func:`~monee.model.formulation.make_heat_nlp_formulation` ``(friction_model="constant", smoothing_eps=1e-3)``
       / ``HEAT_NLP_FORMULATION``
 
       Pure-NLP, binary-free water/heat: smooth signed flow plus smooth

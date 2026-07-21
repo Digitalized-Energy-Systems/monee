@@ -67,12 +67,15 @@ def weymouth_pressure(
     return abs_diff * on_off == -drop_term / coeff
 
 
-def darcy_pressure(p_i, p_j, drop_term, length_m, diameter_m, fluid_density_kg_per_m3):
-    r"""Signed Darcy-Weisbach: :math:`(p_i-p_j) = -K \cdot \text{drop\_term}` with
-    :math:`K = L / (2 \cdot \rho \cdot A^2 \cdot D)`."""
+def darcy_pressure(
+    p_i, p_j, drop_term, length_m, diameter_m, fluid_density_kg_per_m3, on_off=1
+):
+    r"""Signed Darcy-Weisbach: :math:`(p_i-p_j) \cdot \text{on\_off} = -K \cdot \text{drop\_term}` with
+    :math:`K = L / (2 \cdot \rho \cdot A^2 \cdot D)`. ``on_off`` mirrors
+    :func:`weymouth_pressure`: an off pipe must not enforce :math:`p_i = p_j`."""
     area = hyd.calc_pipe_area(diameter_m)
     K = length_m / (2.0 * fluid_density_kg_per_m3 * area**2 * diameter_m)
-    return (p_i - p_j) == -K * drop_term
+    return (p_i - p_j) * on_off == -K * drop_term
 
 
 def minor_loss_pressure(

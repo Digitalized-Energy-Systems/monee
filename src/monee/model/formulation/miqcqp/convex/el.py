@@ -4,7 +4,11 @@ r"""Branch-flow MISOCP electricity formulation: convex SOC relaxation
 import math
 
 from monee.model.core import Intermediate, IntermediateEq, Var
-from monee.model.formulation.core import BranchFormulation, NodeFormulation
+from monee.model.formulation.core import (
+    BranchFormulation,
+    ChildFormulation,
+    NodeFormulation,
+)
 from monee.model.phys.misoc.pf import (
     active_power_loss,
     reactive_power_loss,
@@ -46,6 +50,18 @@ class MISOCPElectricityNodeFormulation(NodeFormulation):
         ]
 
 
+class MISOCPShuntFormulation(ChildFormulation):
+    """Voltage-dependent bus shunt for the branch-flow model: ``p/q`` are linear
+    in the voltage-squared decision variable ``vm_pu_squared`` (``W``)."""
+
+    def equations(self, child, grid, node, **kwargs):
+        w = node.vars["vm_pu_squared"]
+        return [
+            child.p_mw == child.gs_mw * w,
+            child.q_mvar == -child.bs_mvar * w,
+        ]
+
+
 def _branch_tap(branch) -> float:
     """Off-nominal turns ratio (1.0 if absent or zero)."""
     tap = getattr(branch, "tap", 1.0) or 1.0
@@ -53,16 +69,13 @@ def _branch_tap(branch) -> float:
 
 
 def _ell_physics_max(branch, w_max: float) -> float:
-    r"""Per-unit :math:`|I|^2` upper bound from voltage bounds: :math:`4 \cdot W_{max} / |Z|^2`."""
-    return 4 * w_max / (branch.br_r_pu**2 + branch.br_x_pu**2)
+    r"""Per-unit :math:`|I|^2` upper bound from voltage bounds:
+    :math:`(1 + 1/tap)^2 \cdot W_{max} / |Z|^2` (from :math:`|V_i/tap - V_j| \le
+    (1/tap + 1)\sqrt{W_{max}}`); reduces to :math:`4 \cdot W_{max}/|Z|^2` at tap=1."""
+    tap = _branch_tap(branch)
+    return (1 + 1 / tap) ** 2 * w_max / (branch.br_r_pu**2 + branch.br_x_pu**2)
 
 
-# Headroom factor on the thermal rating for the current_pu_squared bound. The bound is
-# a big-M tightening device, not the operational loading constraint (that one
-# is line_loading_limit()); 3x rating is far above any acceptable steady-state
-# loading while keeping the bound finite on near-zero-impedance lines, where
-# the voltage-derived 4*W_max/|Z|^2 explodes (~1e9) and wrecks the matrix
-# conditioning badly enough that SCIP/Gurobi spuriously prove infeasibility.
 _ELL_THERMAL_HEADROOM = 3.0
 
 
@@ -84,6 +97,12 @@ def _big_m(w_max: float) -> float:
 
 
 class MISOCPElectricityBranchFormulation(BranchFormulation):
+    """Branch-flow (BFM) MISOCP line/trafo model.
+
+    Known limitation: the branch-flow model works on voltage/current magnitudes
+    only, so a transformer phase shift (``branch.shift``) cannot be represented
+    and is silently ignored; only the magnitude ratio ``tap`` enters."""
+
     def ensure_var(self, branch, simulation=False, grid=None):
         branch.current_pu_squared = Var(1, min=0)
         branch.i_from_ka = Intermediate(0)
@@ -120,32 +139,30 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         i_mag_pu = sqrt_impl(branch.current_pu_squared)
         # loading^2 = current_pu_squared \cdot (I_base/max_i_ka)^2 is linear in current_pu_squared.
         # Used by line_loading_limit() instead of the sqrt-bearing form.
+        # max_i_ka is expressed in the from-side voltage basis (io/matpower.py:
+        # rate_a/(sqrt3*V_from)), so the to-side rated current is
+        # max_i_ka*V_from/V_to and the to-side loading scale reduces to
+        # i_base_from*tap (= sn/(sqrt3*V_from)); dividing i_to_ka by the raw
+        # max_i_ka inflated a transformer's loading_to_pu by the voltage ratio.
+        # For a line (equal base_kv, tap=1) both forms are identical.
         branch._misocp_loading_from_scale_squared = (i_base_from / branch.max_i_ka) ** 2
-        branch._misocp_loading_to_scale_squared = (i_base_to / branch.max_i_ka) ** 2
+        branch._misocp_loading_to_scale_squared = (
+            i_base_from * tap / branch.max_i_ka
+        ) ** 2
+        vd = voltage_drop(
+            from_node_model.vars["vm_pu_squared"],
+            to_node_model.vars["vm_pu_squared"],
+            _to_pu(branch.vars["p_from_mw"], grid),
+            _to_pu(branch.vars["q_from_mvar"], grid),
+            branch.current_pu_squared,
+            branch.br_r_pu,
+            branch.br_x_pu,
+            tap=tap,
+        )
         return [
             branch.current_pu_squared <= ell_phys * branch.on_off,
-            voltage_drop(
-                from_node_model.vars["vm_pu_squared"],
-                to_node_model.vars["vm_pu_squared"],
-                _to_pu(branch.vars["p_from_mw"], grid),
-                _to_pu(branch.vars["q_from_mvar"], grid),
-                branch.current_pu_squared,
-                branch.br_r_pu,
-                branch.br_x_pu,
-                tap=tap,
-            )
-            <= big_m * (1 - branch.on_off),
-            voltage_drop(
-                from_node_model.vars["vm_pu_squared"],
-                to_node_model.vars["vm_pu_squared"],
-                _to_pu(branch.vars["p_from_mw"], grid),
-                _to_pu(branch.vars["q_from_mvar"], grid),
-                branch.current_pu_squared,
-                branch.br_r_pu,
-                branch.br_x_pu,
-                tap=tap,
-            )
-            >= -big_m * (1 - branch.on_off),
+            vd <= big_m * (1 - branch.on_off),
+            vd >= -big_m * (1 - branch.on_off),
             *self._soc_constraints(branch, grid, from_node_model, tap),
             active_power_loss(
                 _to_pu(branch.vars["p_from_mw"], grid),
@@ -164,5 +181,7 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
             IntermediateEq("i_from_ka", i_mag_pu * i_base_from),
             IntermediateEq("i_to_ka", i_mag_pu * i_base_to),
             IntermediateEq("loading_from_pu", i_mag_pu * i_base_from / branch.max_i_ka),
-            IntermediateEq("loading_to_pu", i_mag_pu * i_base_to / branch.max_i_ka),
+            IntermediateEq(
+                "loading_to_pu", i_mag_pu * i_base_from * tap / branch.max_i_ka
+            ),
         ]
