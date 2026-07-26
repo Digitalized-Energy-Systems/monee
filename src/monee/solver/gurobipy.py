@@ -546,6 +546,12 @@ class GurobipySolver(SolverInterface):
             for gc in gm.getGenConstrs():
                 if getattr(gc, "IISGenConstr", 0):
                     constraints.append(gc.GenConstrName or f"genc{gc.index}")
+            # Quadratic rows live in their own pool; without them an IIS whose
+            # blocking constraint is e.g. a Weymouth or a bilinear heat balance
+            # reports as bounds-only and reads like a mystery.
+            for qc in gm.getQConstrs():
+                if getattr(qc, "IISQConstr", 0):
+                    constraints.append(qc.QCName or f"qc{qc.index}")
             for v in gm.getVars():
                 if v.IISLB or v.IISUB:
                     side = "/".join(

@@ -113,4 +113,5 @@ from .extension import (
 from .formulation import (
     HEAT_CONVEX_MILP_FORMULATION,
     make_heat_convex_milp_formulation,
+    orient_unidirectional_water_pipes,
 )

@@ -46,7 +46,11 @@ from .bundles import (
     make_smooth_nlp_formulation,
 )
 from .core import Formulation, NetworkFormulation
-from .milp.heat import mccormick_dhs_gap_bound_k, mccormick_dhs_gap_bound_mw
+from .milp.heat import (
+    mccormick_dhs_gap_bound_k,
+    mccormick_dhs_gap_bound_mw,
+    orient_unidirectional_water_pipes,
+)
 from .registry import (
     FORMULATIONS,
     attach_formulations,
@@ -80,6 +84,7 @@ __all__ = [
     "make_heat_nlp_formulation",
     "make_heat_convex_milp_formulation",
     "make_heat_nonconvex_pwl_formulation",
+    "orient_unidirectional_water_pipes",
     # bundles
     "SMOOTH_NLP_FORMULATION",
     "CONVEX_MIQCQP_FORMULATION",

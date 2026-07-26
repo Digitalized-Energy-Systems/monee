@@ -37,6 +37,7 @@ from monee.model.formulation import (
     make_heat_nlp_formulation,
     make_heat_nonconvex_pwl_formulation,
     make_smooth_nlp_formulation,
+    orient_unidirectional_water_pipes,
 )
 from monee.model.formulation import (
     FORMULATIONS,

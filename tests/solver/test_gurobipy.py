@@ -394,7 +394,9 @@ def test_chphg_islanded_heat_side_degrades_without_leaking_model_var(monkeypatch
             solver=GurobipySolver(params={"MIPGap": 1e-4, "TimeLimit": 10}),
         )
     except TypeError as exc:  # the exact pre-fix failure
-        pytest.fail(f"CHPHG heat-side islanding leaked a model Var into the build: {exc}")
+        pytest.fail(
+            f"CHPHG heat-side islanding leaked a model Var into the build: {exc}"
+        )
     except Exception:
         # Size-limited licence / infeasibility are unrelated to this regression;
         # the build (where the leak lived) already ran the control-node equations.
@@ -578,6 +580,31 @@ def test_infeasible_model_reports_iis():
     assert tc_str == "infeasible"
     summary = report.summary()
     assert "impossible_c" in summary or "x_var" in summary
+
+
+@requires_gurobi
+def test_iis_reports_the_blocking_quadratic_row():
+    """Quadratic rows live in their own Gurobi pool. Without reading it, an IIS
+    blocked by a Weymouth or a bilinear heat balance reports as bounds-only."""
+    from monee.solver.gurobipy import GurobipySolver, _require_gurobipy
+
+    # GIVEN a point forced outside the unit ball by a linear row
+    solver = GurobipySolver()
+    gp, _GRB, _nlfunc = _require_gurobipy()
+    m = gp.Model()
+    m.setParam("OutputFlag", 0)
+    x = m.addVar(lb=-10, ub=10, name="x_var")
+    y = m.addVar(lb=-10, ub=10, name="y_var")
+    m.addQConstr(x * x + y * y <= 1.0, name="unit_ball_qc")
+    m.addConstr(x >= 5, name="impossible_c")
+    m.optimize()
+
+    # WHEN
+    report = solver._compute_iis(m)
+
+    # THEN both halves of the conflict are named, not just the linear one
+    assert "unit_ball_qc" in report.constraints
+    assert "impossible_c" in report.constraints
 
 
 @requires_gurobi

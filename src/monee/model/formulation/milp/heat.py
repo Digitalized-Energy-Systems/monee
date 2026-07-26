@@ -22,9 +22,11 @@ balance to HE branches so a network with HEs stays convex end to end.
 """
 
 import warnings
+from collections import deque
 
 import monee.model.phys.nonlinear.hf as ohfmodel
 import monee.model.phys.nonlinear.wf as owfmodel
+from monee.model.branch import HeatExchanger, PassiveHeatExchanger, WaterPipe
 from monee.model.core import Const, Var
 from monee.model.phys.core.hydraulics import calc_local_max_mass_flow
 
@@ -32,6 +34,24 @@ from ..common import ensure_velocity_report
 from ..core import BranchFormulation, NodeFormulation
 
 C_WATER = ohfmodel.SPECIFIC_HEAT_CAP_WATER
+
+# Set by orient_unidirectional_water_pipes(); read by the branch/node
+# formulations to run a pipe against its stored from -> to orientation.
+REVERSE_ATTR = "_mccormick_reverse"
+
+# Also set by orient_unidirectional_water_pipes(); makes _branch_m_u ignore a
+# stale m_U_design instead of destroying it.
+DROP_DESIGN_CAP_ATTR = "_mccormick_drop_m_u_design"
+
+# Pinned to their stored from -> to direction with no reversal support:
+# FixedFlowHeatExchangerFormulation._he_equations pins mass_flow_pos_kgs == 0,
+# and McCormickPassiveHeatExchangerFormulation inherits the Const(0) from
+# McCormickHeatBranchFormulation.ensure_var.
+_FIXED_DIRECTION_BRANCHES = (HeatExchanger, PassiveHeatExchanger)
+
+
+def _reversed_flow(branch_model) -> bool:
+    return bool(getattr(branch_model, REVERSE_ATTR, False))
 
 
 class FixedFlowHeatExchangerFormulation(BranchFormulation):
@@ -141,7 +161,11 @@ def _branch_m_u(branch, grid):
     r"""Per-pipe mass-flow upper bound [kg/s]: the smaller of ``grid.max_mass_flow_kgs``
     and the velocity cap :math:`\pi/4 \cdot D^2 \cdot \rho \cdot v_{max}`, further capped
     by ``branch.m_U_design`` when set."""
-    explicit = getattr(branch, "m_U_design", None)
+    explicit = (
+        None
+        if getattr(branch, DROP_DESIGN_CAP_ATTR, False)
+        else getattr(branch, "m_U_design", None)
+    )
     velocity_cap = calc_local_max_mass_flow(
         grid, branch, grid.fluid_density_kg_per_m3, grid.v_max_mps
     )
@@ -219,17 +243,18 @@ class McCormickHeatNodeFormulation(NodeFormulation):
         ltc_owns_node = getattr(node, "_ltc_active", False)
 
         if not ltc_owns_node:
-            # eq. 9c/9d - sender H_out, receiver H_in.
-            h_out_terms = [
-                bm.vars["H_out_mw"] * bm.vars.get("on_off", 1)
-                for bm in from_branch_models
-                if "H_out_mw" in bm.vars
-            ]
-            h_in_terms = [
-                bm.vars["H_in_mw"] * bm.vars.get("on_off", 1)
-                for bm in to_branch_models
-                if "H_in_mw" in bm.vars
-            ]
+            # eq. 9c/9d - sender H_out, receiver H_in. A reversed pipe swaps the
+            # two ends: its TO node is the sender.
+            h_out_terms = []
+            h_in_terms = []
+            ends = [(bm, not _reversed_flow(bm)) for bm in from_branch_models]
+            ends += [(bm, _reversed_flow(bm)) for bm in to_branch_models]
+            for bm, node_is_sender in ends:
+                key = "H_out_mw" if node_is_sender else "H_in_mw"
+                if key not in bm.vars:
+                    continue
+                term = bm.vars[key] * bm.vars.get("on_off", 1)
+                (h_out_terms if node_is_sender else h_in_terms).append(term)
 
             # Load convention: HeatGenerator \to negative q_mw, HeatLoad \to positive.
             q_child_terms = [
@@ -307,10 +332,15 @@ class McCormickHeatBranchFormulation(BranchFormulation):
         model.H_out_mw = Var(0, name="H_out_mw")
         model.H_in_mw = Var(0, name="H_in_mw")
         model.mass_flow_mag_kgs = Var(0, min=0, name="mass_flow_mag_kgs")
-        # §2.1 fixed flow direction: only mass_flow_neg_kgs (m \ge 0); pinning the
-        # binary and mass_flow_pos_kgs to Const drops them from the LP.
-        model.direction = Const(0)
-        model.mass_flow_pos_kgs = Const(0)
+        # §2.1 fixed flow direction: one flow half only (m \ge 0); pinning the
+        # binary and the unused half to Const drops them from the LP. Forward
+        # flow rides mass_flow_neg_kgs (direction 0), reverse mass_flow_pos_kgs.
+        if _reversed_flow(model):
+            model.direction = Const(1)
+            model.mass_flow_neg_kgs = Const(0)
+        else:
+            model.direction = Const(0)
+            model.mass_flow_pos_kgs = Const(0)
         ensure_velocity_report(model, grid)
         if self.num_partitions > 1:
             for s in range(self.num_partitions):
@@ -320,12 +350,12 @@ class McCormickHeatBranchFormulation(BranchFormulation):
                     Var(0, min=0, name=f"m_piece_{s}"),
                 )
 
-    def _heat_balance_eqs(self, branch, grid, from_node_model):
+    def _heat_balance_eqs(self, branch, grid, sender_node_model):
         """eq. 9b: Taylor-linearised insulation heat loss along the pipe."""
         # vL = 2 \pi \cdot \lambda \cdot L / ln(r_out/r_in) [W/K] \cdot 1e-6 \to MW.
         vl_mw_per_k = owfmodel.pipe_insulation_ua(branch) / 1e6
         t_a_pu = branch.temperature_ext_k / grid.t_ref_k
-        t_pu_send = from_node_model.vars["t_pu"]
+        t_pu_send = sender_node_model.vars["t_pu"]
         return [
             branch.H_in_mw
             == branch.H_out_mw - vl_mw_per_k * grid.t_ref_k * (t_pu_send - t_a_pu),
@@ -338,16 +368,18 @@ class McCormickHeatBranchFormulation(BranchFormulation):
 
         scale_mw = C_WATER * grid.t_ref_k / 1e6
 
-        t_pu_send = from_node_model.vars["t_pu"]
-        m = branch.mass_flow_neg_kgs
+        reverse = _reversed_flow(branch)
+        sender_node_model = to_node_model if reverse else from_node_model
+        t_pu_send = sender_node_model.vars["t_pu"]
+        m = branch.mass_flow_pos_kgs if reverse else branch.mass_flow_neg_kgs
 
         eqs = [
-            branch.mass_flow_neg_kgs <= m_u * branch.on_off,
-            branch.mass_flow_mag_kgs == branch.mass_flow_neg_kgs,
+            m <= m_u * branch.on_off,
+            branch.mass_flow_mag_kgs == m,
             branch.H_out_mw <= scale_mw * m_u * tpu_u * branch.on_off,
             branch.H_in_mw <= scale_mw * m_u * tpu_u * branch.on_off,
         ]
-        eqs += self._heat_balance_eqs(branch, grid, from_node_model)
+        eqs += self._heat_balance_eqs(branch, grid, sender_node_model)
 
         if self.num_partitions <= 1:
             # eq. 17b-17e: McCormick envelopes.
@@ -364,9 +396,9 @@ class McCormickHeatBranchFormulation(BranchFormulation):
         else:
             # eq. 18b/18d/18h: piecewise McCormick over \tau partition.
             S = self.num_partitions
-            y_pieces = [getattr(from_node_model, f"_piece_y_{s}") for s in range(S)]
+            y_pieces = [getattr(sender_node_model, f"_piece_y_{s}") for s in range(S)]
             tpu_pieces = [
-                getattr(from_node_model, f"_t_pu_piece_{s}") for s in range(S)
+                getattr(sender_node_model, f"_t_pu_piece_{s}") for s in range(S)
             ]
             m_pieces = [getattr(branch, f"_m_piece_{s}") for s in range(S)]
 
@@ -406,7 +438,7 @@ class McCormickPassiveHeatExchangerFormulation(McCormickHeatBranchFormulation):
     ``H_in = H_out - q_mw``, but the :math:`H = c \cdot m \cdot \tau` surface is McCormick-relaxed,
     so the branch stays LP/MILP."""
 
-    def _heat_balance_eqs(self, branch, grid, from_node_model):
+    def _heat_balance_eqs(self, branch, grid, sender_node_model):
         return [branch.H_in_mw == branch.H_out_mw - branch.q_mw]
 
 
@@ -434,6 +466,184 @@ class McCormickHeatExchangerFormulation(FixedFlowHeatExchangerFormulation):
             branch.H_in_mw == branch.H_out_mw - branch.q_mw_delivered,
         ]
         return eqs
+
+
+def _is_live(branch) -> bool:
+    """Branch present in the solved topology: active, and not switched off by a
+    numeric ``on_off`` (a Var ``on_off`` is a decision, so it stays live)."""
+    if not branch.active:
+        return False
+    on_off = getattr(branch.model, "on_off", 1)
+    return not (isinstance(on_off, (int, float)) and on_off == 0)
+
+
+def _water_mass_roles(net, water_node_ids, fixed_directed=()):
+    """``(injectors, drawers)`` node-id sets: junctions that must receive mass
+    from / can add mass to the water network."""
+    from monee.model.child import ExtHydrGrid
+
+    injectors, drawers = set(), set()
+    for child in net.childs:
+        if not child.active or child.node_id not in water_node_ids:
+            continue
+        model = child.model
+        if isinstance(model, ExtHydrGrid):
+            injectors.add(child.node_id)
+            continue
+        flow = getattr(model, "mass_flow_kgs", None)
+        if not isinstance(flow, (int, float)) or isinstance(flow, bool):
+            continue
+        # Load convention: positive draws, negative injects.
+        if flow > 0:
+            drawers.add(child.node_id)
+        elif flow < 0:
+            injectors.add(child.node_id)
+    # An active HE pulls its design flow out of its FROM node, so that junction
+    # must be supplied exactly like one hosting a Sink. A PassiveHeatExchanger
+    # carries no mass_flow_design_kgs (its flow is free in [0, m_U], so it
+    # imposes no supply requirement) and a SubHE carries a Var, so the getattr
+    # excludes both.
+    for tail, _head, branch in fixed_directed:
+        design_kgs = getattr(branch.model, "mass_flow_design_kgs", None)
+        if not isinstance(design_kgs, (int, float)) or isinstance(design_kgs, bool):
+            continue
+        if design_kgs > 0:
+            drawers.add(tail)
+    return injectors, drawers
+
+
+def _reachable(sources, out_edges):
+    reached, queue = set(sources), deque(sources)
+    while queue:
+        node = queue.popleft()
+        for nxt in out_edges.get(node, ()):
+            if nxt not in reached:
+                reached.add(nxt)
+                queue.append(nxt)
+    return reached
+
+
+def orient_unidirectional_water_pipes(net) -> list:
+    r"""Repair :class:`WaterPipe` flow directions for the McCormick DHS
+    formulation; returns the branch ids marked for reversal.
+
+    :class:`McCormickHeatBranchFormulation` fixes each pipe's flow to the stored
+    ``from -> to`` orientation (paper §2.1, ``mass_flow_pos_kgs = Const(0)``).
+    That orientation is the network's *design* flow. Once a failure removes a
+    junction's inbound pipe, the junction can only be re-fed by reversing the
+    pipes below it - which the formulation forbids, so its nodal mass balance
+    conflicts with ``mass_flow_neg_kgs >= 0`` and the model is infeasible with a
+    one-bound/one-constraint IIS at that junction.
+
+    This marks the smallest set of pipes whose reversal restores a directed path
+    from a mass injector to every junction that must be supplied. Water branches
+    fall in three classes: ``WaterPipe`` is directed and reversible; the heat
+    exchangers of :data:`_FIXED_DIRECTION_BRANCHES` are directed but cannot be
+    reversed, so they only ever carry supply the stored way; everything else
+    (e.g. a ``GenericTransferBranch``) keeps both flow halves free and is
+    bidirectional. Only pipes whose own from-node is unreachable get marked -
+    they can carry no flow as oriented - so a topology whose design orientation
+    still supplies every draw is left untouched.
+
+    Call this before solving. It writes only the private markers this module
+    reads, and rewrites them on every call, so re-running it against the same
+    network across scenarios is safe.
+    """
+    from monee.model.grid import WaterGrid
+
+    water_node_ids = {n.id for n in net.nodes if isinstance(n.grid, WaterGrid)}
+    if not water_node_ids:
+        return []
+
+    reversible, fixed_directed, undirected, water_pipes = [], [], [], []
+    for branch in net.branches:
+        tail, head = branch.id[0], branch.id[1]
+        if tail not in water_node_ids or head not in water_node_ids:
+            continue
+        is_pipe = isinstance(branch.model, WaterPipe)
+        if is_pipe:
+            water_pipes.append(branch)
+        if not _is_live(branch):
+            continue
+        if is_pipe:
+            reversible.append((tail, head, branch))
+        elif isinstance(branch.model, _FIXED_DIRECTION_BRANCHES):
+            fixed_directed.append((tail, head, branch))
+        else:
+            undirected.append((tail, head, branch))
+
+    injectors, drawers = _water_mass_roles(net, water_node_ids, fixed_directed)
+
+    orientation = {branch.id: (tail, head) for tail, head, branch in reversible}
+    while injectors and drawers:
+        out_edges: dict = {}
+        adjacency: dict = {}
+        for _, _, branch in reversible:
+            tail, head = orientation[branch.id]
+            out_edges.setdefault(tail, []).append(head)
+            adjacency.setdefault(tail, []).append((head, branch, False))
+            adjacency.setdefault(head, []).append((tail, branch, True))
+        for tail, head, _branch in fixed_directed:
+            # Forward only: reaching the tail from the head is not realizable
+            # and no flip makes it so.
+            out_edges.setdefault(tail, []).append(head)
+            adjacency.setdefault(tail, []).append((head, None, False))
+        for tail, head, branch in undirected:
+            out_edges.setdefault(tail, []).append(head)
+            out_edges.setdefault(head, []).append(tail)
+            adjacency.setdefault(tail, []).append((head, branch, False))
+            adjacency.setdefault(head, []).append((tail, branch, False))
+
+        supplied = _reachable(injectors, out_edges)
+        starved = drawers - supplied
+        if not starved:
+            break
+        path = _shortest_supply_path(supplied, starved, adjacency)
+        if not path:
+            # Severed from every injector in the undirected graph too; no
+            # orientation helps (the solve drops such islands as unconnected).
+            break
+        for branch in path:
+            tail, head = orientation[branch.id]
+            orientation[branch.id] = (head, tail)
+
+    flipped = []
+    for branch in water_pipes:
+        stored = orientation.get(branch.id)
+        reverse = stored is not None and stored[0] != branch.id[0]
+        setattr(branch.model, REVERSE_ATTR, reverse)
+        if reverse:
+            flipped.append(branch.id)
+    # ``m_U_design`` is each pipe's downstream demand in the as-built supply
+    # tree - a tightening hint, not physics. Reversing any pipe re-roots the
+    # tree, so the hint is stale for the whole grid, not just the reversed
+    # pipes: an untouched pipe upstream of the reconnection now feeds the
+    # reversed branch too. The velocity cap remains the physical limit.
+    for branch in water_pipes:
+        setattr(branch.model, DROP_DESIGN_CAP_ATTR, bool(flipped))
+    return flipped
+
+
+def _shortest_supply_path(supplied, starved, adjacency):
+    """The wrong-way pipes on the shortest undirected water path from the
+    supplied set to the nearest starved junction."""
+    previous: dict = {node: None for node in supplied}
+    queue = deque(supplied)
+    while queue:
+        node = queue.popleft()
+        if node in starved:
+            path = []
+            while previous[node] is not None:
+                node, branch, needs_flip = previous[node]
+                if needs_flip:
+                    path.append(branch)
+            return path
+        for nxt, branch, needs_flip in adjacency.get(node, ()):
+            if nxt in previous:
+                continue
+            previous[nxt] = (node, branch, needs_flip)
+            queue.append(nxt)
+    return None
 
 
 def mccormick_dhs_gap_bound_mw(branch, grid, num_partitions: int = 1) -> float:

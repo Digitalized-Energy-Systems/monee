@@ -53,6 +53,7 @@ class WaterGrid(Grid):
     v_max_mps: float = 5.0
     fluid_density_kg_per_m3: float | None = None
     dynamic_visc_pas: float | None = None
+    node_heat_reg_kgs: float = 0.0
 
     def __post_init__(self):
         if self.fluid_density_kg_per_m3 is None:
@@ -169,13 +170,21 @@ def create_gas_grid(
 
 
 def create_water_grid(
-    name, t_ref_k=WaterGrid.t_ref_k, pressure_ref_pa=WaterGrid.pressure_ref_pa
+    name,
+    t_ref_k=WaterGrid.t_ref_k,
+    pressure_ref_pa=WaterGrid.pressure_ref_pa,
+    node_heat_reg_kgs=WaterGrid.node_heat_reg_kgs,
 ):
     """Return a :class:`WaterGrid` whose density/viscosity are derived from
     ``t_ref_k`` (see :class:`WaterGrid`). Pass ``t_ref_k`` here rather than
     mutating the grid afterwards, so the derived properties match the final
     reference temperature."""
-    return WaterGrid(name, t_ref_k=t_ref_k, pressure_ref_pa=pressure_ref_pa)
+    return WaterGrid(
+        name,
+        t_ref_k=t_ref_k,
+        pressure_ref_pa=pressure_ref_pa,
+        node_heat_reg_kgs=node_heat_reg_kgs,
+    )
 
 
 def create_power_grid(name, sn_mva=1):
