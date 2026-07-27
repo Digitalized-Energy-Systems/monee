@@ -191,6 +191,28 @@ def test_iis_report_summary_handles_empty():
     assert "empty IIS" in summary
 
 
+def test_iis_report_summary_marks_truncation():
+    """A cut list must say so: Gurobi returns model order, so a silently
+    truncated IIS reads as a conflict among only the lowest-numbered
+    components rather than the whole-network conflict it is."""
+    # GIVEN
+    from monee.solver.gurobipy import GurobiIISReport
+
+    report = GurobiIISReport(
+        constraints=[f"node_{i}_eq_0" for i in range(9)], bounds=["b [LB]"]
+    )
+
+    # WHEN
+    summary = report.summary(max_items=4)
+
+    # THEN
+    assert "Constraints in IIS (9)" in summary
+    assert "... 5 more (truncated at max_items=4)" in summary
+    # The un-truncated section stays clean.
+    assert "Variable bounds in IIS (1)" in summary
+    assert summary.count("truncated") == 1
+
+
 # --------------------------------------------------------------------------- #
 # Minimal solve (smallest model; proves license-free operation)
 # --------------------------------------------------------------------------- #

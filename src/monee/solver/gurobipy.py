@@ -143,14 +143,21 @@ class GurobiIISReport:
         self.constraints = constraints
         self.bounds = bounds
 
-    def summary(self, max_items: int = 50) -> str:
+    @staticmethod
+    def _section(title: str, items: list[str], max_items: int) -> list[str]:
+        lines = [f"  {title} in IIS ({len(items)}):"]
+        lines += [f"    {i}" for i in items[:max_items]]
+        hidden = len(items) - max_items
+        if hidden > 0:
+            lines.append(f"    ... {hidden} more (truncated at max_items={max_items})")
+        return lines
+
+    def summary(self, max_items: int = 200) -> str:
         lines = ["Irreducible Inconsistent Subsystem (Gurobi IIS):"]
         if self.bounds:
-            lines.append(f"  Variable bounds in IIS ({len(self.bounds)}):")
-            lines += [f"    {b}" for b in self.bounds[:max_items]]
+            lines += self._section("Variable bounds", self.bounds, max_items)
         if self.constraints:
-            lines.append(f"  Constraints in IIS ({len(self.constraints)}):")
-            lines += [f"    {c}" for c in self.constraints[:max_items]]
+            lines += self._section("Constraints", self.constraints, max_items)
         if not self.bounds and not self.constraints:
             lines.append("  (empty IIS - model may be unbounded, not infeasible)")
         return "\n".join(lines)
@@ -520,7 +527,7 @@ class GurobipySolver(SolverInterface):
                 "%s infeasible (status=%s).  Diagnostic report:\n%s",
                 phase_label,
                 status,
-                report.summary(max_items=50),
+                report.summary(),
             )
             return False, report, solver_status, tc
         if gm.SolCount > 0:
