@@ -775,6 +775,12 @@ class Network:
         new._constraints = list(self._constraints)
         new._objectives = list(self._objectives)
         new._extensions = copy.deepcopy(self._extensions, memo)
+        # ``enable_islanding`` attaches the config as an extension AND as this
+        # attribute; the whitelist would otherwise drop the latter, leaving a
+        # copy whose solver still sees islanding but whose callers do not.
+        # ``memo`` makes this the same object that landed in ``new._extensions``.
+        if hasattr(self, "islanding_config"):
+            new.islanding_config = copy.deepcopy(self.islanding_config, memo)
         # Compound-construction transients - deepcopy preserves consistency
         # if the copy ever lands mid-build. The blacklist is keyed by object
         # identity, so rebuild the keys from the copied objects.

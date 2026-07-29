@@ -242,6 +242,41 @@ class IslandingMode(NetworkAspect, ABC):
 
         network.objectives.append(energisation_penalty)
 
+    def _regulation_gate_equations(self, network: Network, nodes, e_vars) -> list:
+        r""":math:`regulation \le e` for every controllable child, under an
+        optimization problem only.
+
+        ``prepare_common`` deliberately skips ``gate_fixed_injections`` there —
+        the child's injection is already an optimisation Var, so pinning it to
+        ``setpoint * e`` would fight the shedding formulation. But that left
+        ``e`` tied to no load AND priced by no objective (the energisation
+        penalty is skipped too, and it appends to ``network.objectives``, which
+        the optimization path never reads), so de-energising a node became free
+        constraint relief while its loads kept full ``regulation = 1.0`` credit.
+        The solve then reports a serve-it-and-blackout-it solution: on the
+        simbench MES, 30 nodes de-energised inside the component that still had
+        its ext grid, 27 loads (2 of them tier 1) held at regulation 1.0.
+
+        Both are in [0, 1] with ``e`` binary, so this is linear — no bilinear
+        term, no McCormick. It makes de-energising cost exactly the served
+        credit, which is the correct economics and removes the degeneracy.
+        """
+        if not getattr(network, "_solve_has_optimization_problem", False):
+            return []
+        eqs = []
+        for node in nodes:
+            e = e_vars[node.id]
+            for child in network.childs_by_ids(node.child_ids):
+                if not child.active or getattr(child, "ignored", False):
+                    continue
+                if self.is_grid_forming(child):
+                    continue
+                reg = getattr(child.model, "regulation", None)
+                if not isinstance(reg, Var):
+                    continue
+                eqs.append(reg <= e)
+        return eqs
+
     def _injection_gate_equations(self, network: Network, nodes, e_vars) -> list:
         eqs = []
         for node in nodes:
@@ -339,6 +374,9 @@ class IslandingMode(NetworkAspect, ABC):
         )
         eqs += self.add_physical_constraints(network, gf_nodes, regular_nodes, e_vars)
         eqs += self._injection_gate_equations(network, gf_nodes + regular_nodes, e_vars)
+        eqs += self._regulation_gate_equations(
+            network, gf_nodes + regular_nodes, e_vars
+        )
         return eqs
 
     def add_physical_constraints(self, *_) -> list:
