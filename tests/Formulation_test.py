@@ -196,29 +196,34 @@ def monee_create_11bus_low_meshed():
 
     line_args = dict(length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
 
-    # strings
-    mx.create_line(net, buses[0], buses[1], **line_args)
-    mx.create_line(net, buses[1], buses[2], **line_args)
-    mx.create_line(net, buses[2], buses[3], **line_args)
+    connections = [
+        (0, 1),
+        (1, 2),
+        (2, 3),
+        (0, 4),
+        (4, 5),
+        (5, 6),
+        (0, 7),
+        (7, 8),
+        (8, 9),
+        (9, 10),
+        (3, 6),
+        (6, 10),
+    ]
 
-    mx.create_line(net, buses[0], buses[4], **line_args)
-    mx.create_line(net, buses[4], buses[5], **line_args)
-    mx.create_line(net, buses[5], buses[6], **line_args)
+    line_buses = {}
 
-    mx.create_line(net, buses[0], buses[7], **line_args)
-    mx.create_line(net, buses[7], buses[8], **line_args)
-    mx.create_line(net, buses[8], buses[9], **line_args)
-    mx.create_line(net, buses[9], buses[10], **line_args)
-
-    # low meshing
-    mx.create_line(net, buses[3], buses[6], **line_args)
-    mx.create_line(net, buses[6], buses[10], **line_args)
+    for i, j in connections:
+        branch_id = mx.create_line(net, buses[i], buses[j], **line_args)
+        line_buses[branch_id] = (buses[i], buses[j])
 
     for b in [2, 3, 5, 6, 8, 9, 10]:
         mx.create_power_load(net, buses[b], p_mw=0.5, q_mvar=0.0)
+
     for b in [4, 7]:
         mx.create_power_generator(net, buses[b], p_mw=1.0, q_mvar=0.0)
-    return net
+
+    return net, line_buses
 
 def pp_create_11bus_high_meshed():
     net = pp.create_empty_network()
@@ -750,7 +755,7 @@ def run_result_comparison(ac_result, qc_result, component_name, id_col="id",
         if "vm_pu" in ac:
             ac["vm_pu_squared_exact"] = ac["vm_pu"] ** 2
         if "vm_pu" in qc:
-            qc["vm_pu_squared_exact"] = qc["vm_pu"] ** 2
+            qc["vm_pu_squared_exact"] = qc["vm_pu"]
         if "vm_pu" in ac and "vm_pu_squared" in qc:
             ac["vm_pu_squared_comparison"] = ac["vm_pu"] ** 2
             qc["vm_pu_squared_comparison"] = qc["vm_pu_squared"]
@@ -789,6 +794,151 @@ def run_result_comparison(ac_result, qc_result, component_name, id_col="id",
         plt.xlabel(component_name); plt.ylabel("vm_pu_squared - vm_pu**2")
         plt.xticks(x, gap.index, rotation=45)
         plt.grid(); plt.tight_layout(); plt.show()
+
+def result_plots(ac_result, qc_result, component_name, id_col="id", tol=1e-6):
+    ac, qc = [solver_result_to_tables(r)[component_name].copy()
+              for r in (ac_result, qc_result)]
+    print(component_name, "QC columns: ", qc.columns.tolist())
+    print(component_name, "AC columns: ", ac.columns.tolist())
+
+    if id_col in ac and id_col in qc:
+        ac, qc = ac.set_index(id_col), qc.set_index(id_col)
+
+    ac, qc = ac.align(qc, join="inner", axis=0)
+
+    exclude = {
+        "active", "independent", "ignored", "backup", "on_off",
+        "x_ohm_per_m", "r_ohm_per_m", "length_m", "max_i_ka",
+        "max_s_mva", "shift", "tap", "base_kv", "node_id",
+        "vm_pu", "vm_pu_squared",
+        "vv", "wc", "ws", "cs", "s", "i_qc", "v_on_from", "v_on_to",
+        "v_sq_p_from", "v_sq_p_to", "theta_u", "theta_M",
+        "parallel", "b_to_pu", "g_to_pu", "b_fr_pu", "g_fr_pu",
+        "br_x_pu", "br_r_pu",
+    }
+
+    cols = [
+        c for c in ac.columns.intersection(qc.columns)
+        if c not in exclude
+        and pd.api.types.is_numeric_dtype(ac[c])
+        and pd.api.types.is_numeric_dtype(qc[c])
+    ]
+
+    print(f"\n--- {component_name} ---")
+
+    x = np.arange(len(ac))
+
+    for c in cols:
+        d = qc[c] - ac[c]
+
+        print(
+            f"{c:20s} "
+            f"max diff = {d.abs().max():.6g}, "
+            f"mean diff = {d.abs().mean():.6g}, "
+            f"{'MISMATCH' if (d.abs() > tol).any() else 'OK'}"
+        )
+
+        plt.figure(figsize=(9, 4))
+        plt.scatter(x, ac[c], label="AC", marker="o")
+        plt.scatter(x, qc[c], label="QC", marker="x")
+        plt.xticks(x, ac.index, rotation=45)
+        plt.xlabel(component_name)
+        plt.ylabel(c)
+        plt.title(f"{component_name} — {c}")
+        plt.legend()
+        plt.grid()
+        plt.tight_layout()
+        plt.show()
+    if "vm_pu" in ac.columns and "vm_pu" in qc.columns:
+
+        voltage_comparisons = [
+            (
+                "Physical Voltage Magnitude: AC v vs QC v",
+                ac["vm_pu"],
+                qc["vm_pu"],
+                "AC v",
+                "QC v",
+                "Voltage magnitude [p.u.]",
+            )
+        ]
+
+        if "vm_pu_squared" in qc.columns:
+            voltage_comparisons += [
+                (
+                    "Squared-Voltage Terms: AC v² vs QC Lifted ṽ",
+                    ac["vm_pu"] ** 2,
+                    qc["vm_pu_squared"],
+                    "AC v²",
+                    "QC ṽ",
+                    "Squared voltage [p.u.²]",
+                ),
+                (
+                    "QC Square Relaxation: Physical v² vs Lifted ṽ",
+                    qc["vm_pu"] ** 2,
+                    qc["vm_pu_squared"],
+                    "QC v²",
+                    "QC ṽ",
+                    "Squared voltage [p.u.²]",
+                ),
+            ]
+
+        for title, a, b, label_a, label_b, ylabel in voltage_comparisons:
+            d = b - a
+
+            print(
+                f"\n{title}: "
+                f"max diff={d.abs().max():.6g}, "
+                f"mean diff={d.abs().mean():.6g}"
+            )
+
+            plt.figure(figsize=(9, 4))
+            plt.scatter(x, a, label=label_a, marker="o")
+            plt.scatter(x, b, label=label_b, marker="x")
+            plt.xticks(x, ac.index, rotation=45)
+            plt.xlabel(component_name)
+            plt.ylabel(ylabel)
+            plt.title(f"{component_name} — {title}")
+            plt.legend()
+            plt.grid()
+            plt.tight_layout()
+            plt.show()
+def plot_va_diff(ac_result, qc_result, line_buses, tol=1e-6):
+    ac = solver_result_to_tables(ac_result)
+    qc = solver_result_to_tables(qc_result)
+
+    ac_bus = ac["Bus"].set_index("id")
+    qc_line = qc["PowerLine"].set_index("id")
+
+    pairs = line_buses.values() if isinstance(line_buses, dict) else line_buses
+
+    va_diff_ac = pd.Series(
+        [ac_bus.loc[i, "va_radians"] - ac_bus.loc[j, "va_radians"]
+         for i, j in pairs],
+        index=qc_line.index
+    )
+
+    va_diff_qc = qc_line["va_diff"]
+    d = va_diff_qc - va_diff_ac
+
+    print(
+        f"va_diff: max diff={d.abs().max():.6g}, "
+        f"mean diff={d.abs().mean():.6g}, "
+        f"{'MISMATCH' if (d.abs() > tol).any() else 'OK'}"
+    )
+
+    x = np.arange(len(qc_line))
+
+    plt.figure(figsize=(9, 4))
+    plt.scatter(x, va_diff_ac, label="AC Δθ", marker="o")
+    plt.scatter(x, va_diff_qc, label="QC Δθ", marker="x")
+    plt.xticks(x, qc_line.index, rotation=45)
+    plt.xlabel("PowerLine")
+    plt.ylabel("Angle difference [rad]")
+    plt.title("PowerLine — Voltage Angle Difference: AC vs QC")
+    plt.legend()
+    plt.grid()
+    plt.tight_layout()
+    plt.show()
 def solver_result_to_tables(result):
     tables = {}
 
@@ -893,21 +1043,22 @@ def compare_extracted_tables_more_than_percent( MISCOP_result,QC_result,tol=0.05
 #PP_net = pp_create_66bus_high_meshed()
 #PP_results = PP_test_power_network(PP_net, AC = True, show_results = False)
 print("--------------Monee AC--------------------------")
-monee_net_NLP_AC = monee_create_11bus_low_meshed()
+monee_net_NLP_AC, line_buses_AC = monee_create_11bus_low_meshed()
 monee_net_NLP_AC.apply_formulation(EL_NLP_FORMULATION)
 monee_result_NLP_AC = monee_test_power_network(monee_net_NLP_AC, show_results = False)
 #For result table comparison
 
 print("--------------Monee QC--------------------------")
-monee_net_QC = monee_create_11bus_low_meshed()
+monee_net_QC, line_buses_QC = monee_create_11bus_low_meshed()
 monee_net_QC.apply_formulation(EL_QC_FORMULATION)
 monee_result_QC = monee_test_power_network(monee_net_QC, show_results = False)
 #For result table comparison
 
-run_result_comparison(monee_result_NLP_AC, monee_result_QC, "Bus")
-run_result_comparison(monee_result_NLP_AC, monee_result_QC, "PowerLine")
-run_result_comparison(monee_result_NLP_AC, monee_result_QC, "PowerLoad")
-run_result_comparison(monee_result_NLP_AC, monee_result_QC, "PowerGenerator")
+result_plots(monee_result_NLP_AC, monee_result_QC, "Bus")
+result_plots(monee_result_NLP_AC, monee_result_QC, "PowerLine")
+result_plots(monee_result_NLP_AC, monee_result_QC, "PowerLoad")
+result_plots(monee_result_NLP_AC, monee_result_QC, "PowerGenerator")
+plot_va_diff(monee_result_NLP_AC, monee_result_QC, line_buses_AC)
 #column_comparison = compare_extracted_tables_more_than_percent(monee_result_AC, monee_result_QC)
 #print(column_comparison)
 '''
@@ -939,3 +1090,10 @@ plot_column_compare(lines1_mismatches, lines2_mismatches)
 boxplot_comparison(lines1_mismatches, lines2_mismatches)
 '''
 
+#todo: ist vm_pu wirklich vm_pu oder vm_pu quadratic
+#todo: McCormick anschauen und relaxations überprüfen
+#todo: formulation Squareroot in gleichung? Ist das convexifiziert? -> current als square berechnen, hab ich das schon wo?
+#todo: mal nur strom plotten jeweils eizeln, sind das max werte oder haben die noch variationen
+#todo:  Leistungsformeln für Lines anschauen, warum sind die off?
+# bounds für mccomic nochmal anschauen, ist was unbound? oder falsch bound?
+#in power models ist das auch implementiert, vll mal als referenz anschauen
