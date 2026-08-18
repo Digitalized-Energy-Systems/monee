@@ -115,7 +115,6 @@ class _RegulatedCompound:
 
     def set_active(self, activation_flag):
         if activation_flag:
-
             if not self._active:
                 self._active = True
                 self._restore_controls()

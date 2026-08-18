@@ -189,9 +189,7 @@ def test_equations_actually_emits_the_regulation_gate(monkeypatch):
 
     from monee.model.child import GridFormingMixin
 
-    expected = sum(
-        1 for c in net.childs if not isinstance(c.model, GridFormingMixin)
-    )
+    expected = sum(1 for c in net.childs if not isinstance(c.model, GridFormingMixin))
     assert expected, "nothing controllable in the fixture — test is vacuous"
     assert len(mode.equations(net, set())) == expected
 
