@@ -28,6 +28,7 @@ from monee.model.child import (
     Sink,
     Source,
 )
+from monee.model.core import Var
 from monee.model.grid import (
     DEFAULT_GAS_HHV_KWH_PER_KG,
     KGPS_KWHPERKG_TO_MW,
@@ -44,7 +45,7 @@ from monee.model.multi import (
     PowerToHeatControlNode,
     PowerToHeatHG,
 )
-from monee.model.node import Junction
+from monee.model.node import Bus, Junction
 from monee.problem.core import (
     REGULATION_ATTR,
     Constraints,
@@ -365,6 +366,42 @@ def _calc_objective(model_to_data):
         _shedding_mw(model, gas_mw_factor=g, cp_rated_mw=cp) * weight
         for model, (weight, g, cp) in model_to_data.items()
     )
+
+
+def _make_vm_bounds_hook(bounds_vm):
+    lo, hi = bounds_vm
+
+    def _apply_vm_bounds(network):
+        for component in network.all_components():
+            model = component.model
+            if type(model) is not Bus:
+                continue
+            vm = getattr(model, "vm_pu", None)
+            vm_sq = getattr(model, "vm_pu_squared", None)
+            if type(vm) is Var:
+                vm.min, vm.max = lo, hi
+            if type(vm_sq) is Var:
+                vm_sq.min, vm_sq.max = lo * lo, hi * hi
+
+    return _apply_vm_bounds
+
+
+def _make_pressure_bounds_hook(bounds_pressure):
+    lo, hi = bounds_pressure
+
+    def _apply_pressure_bounds(network):
+        for component in network.all_components():
+            model = component.model
+            if type(model) is not Junction or not component.independent:
+                continue
+            p = getattr(model, "pressure_pu", None)
+            psq = getattr(model, "pressure_squared_pu", None)
+            if type(p) is Var:
+                p.min, p.max = lo, hi
+            if type(psq) is Var:
+                psq.min, psq.max = lo * lo, hi * hi
+
+    return _apply_pressure_bounds
 
 
 def create_min_load_shedding_problem(  # NOSONAR

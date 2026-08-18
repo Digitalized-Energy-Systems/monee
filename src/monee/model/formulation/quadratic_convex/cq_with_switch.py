@@ -1,6 +1,6 @@
 import math
 import numpy as np
-import monee.model.phys.quadratic_convex.cq_with_switch as opfmodel
+import monee.model.phys.quadratic_convex.cq_with_switch as opfmodel, fixed_closed
 from ..core import BranchFormulation, NodeFormulation
 from monee.model.core import Intermediate, IntermediateEq, Var
 
@@ -10,7 +10,10 @@ from monee.model.core import Intermediate, IntermediateEq, Var
 
 SQRT_3 = np.sqrt(3)
 CURRENT_SMOOTHING_EPS_MW = 1e-4 # constant for numerical smoothing
-
+# Last-resort envelope band, used only when neither the node nor the grid
+# carries voltage limits.
+DEFAULT_V_MIN = 0.9
+DEFAULT_V_MAX = 1.1
 def _is_fixed_one(value): #to check if branch is active (on-off variable)
     return isinstance(value, (int, float, bool)) and float(value) == 1.0
 
@@ -102,9 +105,49 @@ def _switch_copy_relax(copy_var, original_var, on_off, lb, ub):
         copy_var >= original_var - ub * (1 - z),
         copy_var <= original_var - lb * (1 - z),
     ]
+def _v_bounds(node, grid=None, override=(None, None)):
+    """Envelope voltage band: explicit *override*, else node
+    ``min_vm_pu``/``max_vm_pu``, else the grid's ``vm_pu_min``/``vm_pu_max``,
+    else the module default.
+
+    The band is not cosmetic and it is not only a relaxation parameter - it is a
+    *hard constraint*. ``square_relax`` pairs ``w >= v^2`` with the chord
+    ``w <= (v_max + v_min) v - v_max v_min``, and the two are jointly satisfiable
+    only for ``v in [v_min, v_max]``. So the QC feasible set is the AC one
+    INTERSECTED with this band: narrow it below the true solution and the model
+    goes *infeasible*, it does not merely lose accuracy.
+
+    Hence the default is the grid's own limits (``PowerGrid``: 0.5/1.5), which
+    can never cut off a solution the AC NLP would find. Tightening is opt-in,
+    via ``min_vm_pu``/``max_vm_pu`` on the buses or ``v_min``/``v_max`` on the
+    formulation. It buys accuracy quadratically - every envelope gap scales with
+    ``(v_max - v_min)^2``, so 0.9/1.1 is 25x tighter than 0.5/1.5 - but only on
+    the ``vm_pu`` lifting variable: ``vm_pu_squared`` (and everything derived
+    from it: flows, losses, currents) is already exact at the default band once
+    the :meth:`~QCElectricityBranchFormulation.minimize` loss term is in play.
+    """
+    v_min, v_max = override
+    if v_min is None:
+        v_min = getattr(node, "min_vm_pu", getattr(node, "v_min", None))
+    if v_max is None:
+        v_max = getattr(node, "max_vm_pu", getattr(node, "v_max", None))
+    if v_min is None and grid is not None:
+        v_min = getattr(grid, "vm_pu_min", None)
+    if v_max is None and grid is not None:
+        v_max = getattr(grid, "vm_pu_max", None)
+    return (
+        DEFAULT_V_MIN if v_min is None else float(v_min),
+        DEFAULT_V_MAX if v_max is None else float(v_max),
+    )
+
+
 
 
 class QCElectricityNodeFormulation(NodeFormulation):
+    def __init__(self, v_min=None, v_max=None):
+        """*v_min* / *v_max* override the envelope band for every bus - see
+        :func:`_v_bounds` for what the band costs and what it risks."""
+        self.v_override = (v_min, v_max)
     def ensure_var( #to make sure variables for formulation are there
             self,
             node,
@@ -114,11 +157,20 @@ class QCElectricityNodeFormulation(NodeFormulation):
     ):
         # Monee stores the actual voltage bounds on vm_pu.min / vm_pu.max.
         # Caching original vm_pu bounds may later be replaced by a solver variable. But needed for convexification
+        if not hasattr(node, "vm_pu"):
+            return
+        v_min, v_max = _v_bounds(node, grid, self.v_override)
+        node.vm_pu = Var(1, min=v_min, max=v_max, name="vm_pu")
+        node.vm_pu_squared = Var(1, min=v_min**2, max=v_max**2, name="vm_pu_squared")
+
+        v_min, v_max = _v_bounds(node, grid, self.v_override)
         if node.vm_pu.min is None or node.vm_pu.max is None:
             raise ValueError( "QC requires finite voltage magnitude bounds." )
 
         node._qc_v_min = float(node.vm_pu.min)
         node._qc_v_max = float(node.vm_pu.max)
+        node.vm_pu_from_w = PostProcess(lambda v: float(v.vm_pu_squared) ** 0.5)
+
     def equations( self, node, grid, from_branch_models,to_branch_models, connected_node_models, **kwargs ):
         v_min = node._qc_v_min
         v_max = node._qc_v_max
@@ -127,6 +179,11 @@ class QCElectricityNodeFormulation(NodeFormulation):
 
 
 class QCElectricityBranchFormulation(BranchFormulation):
+    def __init__(self, v_min=None, v_max=None):
+        """*v_min* / *v_max* override the envelope band - pass the same values
+        to :class:`QCElectricityNodeFormulation`, the two must agree."""
+        self.v_override = (v_min, v_max)
+
     def ensure_var(self, branch, simulation=False, grid=None, **kwargs):
         theta_u = _angle_bound(branch) #active-line angle bound
         theta_M = _big_m_angle_bound(branch, theta_u) #angle bound relevant for switchable branches
@@ -154,6 +211,15 @@ class QCElectricityBranchFormulation(BranchFormulation):
         #no optimization variables, just stored for later to branch
         branch.theta_u = theta_u
         branch.theta_M = theta_M
+    def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
+        """Ohmic loss ``r * l``, the term that drives the relaxation tight.
+
+        Same device the branch-flow MISOCP formulation uses. It is what makes
+        the ``wc``/``ws`` envelopes and the current SOC bind at the AC-feasible
+        point; drop it and the solver is free to return any point of the relaxed
+        set - on a 0.5 MW radial feeder that means a ~56 MW slack injection.
+        """
+        return [branch.i_qc * branch.br_r_pu]
 
     def equations( self,branch, grid, from_node_model, to_node_model, **kwargs):
         sn_mva = float(grid.sn_mva)
@@ -165,8 +231,8 @@ class QCElectricityBranchFormulation(BranchFormulation):
         vm_to = _get_vm_var(to_node_model)
         v_sq_from = _get_v_sq_var(from_node_model) #lifted variables v_welle as approx of v^2
         v_sq_to = _get_v_sq_var(to_node_model) #lifted variable v_welle as approx of v^2
-        v_from_min, v_from_max = _voltage_bounds(from_node_model)
-        v_to_min, v_to_max = _voltage_bounds(to_node_model)
+        v_from_min, v_from_max = _v_bounds(from_node_model, grid, self.v_override)
+        v_to_min, v_to_max = _v_bounds(to_node_model, grid, self.v_override)
         theta_u = branch.theta_u
         theta_M = branch.theta_M
 
@@ -192,7 +258,12 @@ class QCElectricityBranchFormulation(BranchFormulation):
 
         # Voltage-angle difference. already linear
         eqs = [ branch.va_diff == from_node_model.vars["va_radians"]  - to_node_model.vars["va_radians"], ]
-
+        if _is_fixed_one:
+            eqs += [
+                branch.cs >= cs_min,
+                branch.s <= s_max,
+                branch.s >= -s_max, #todo maybe s_min?
+            ]
         # Paper Eqs. (27)-(28): switched sine and cosine relaxations.
         eqs += opfmodel.cosine_relax( cs_var=branch.cs, delta_var=branch.va_diff, delta_max=theta_u, on_off=z, delta_big_m=theta_M)
         eqs += opfmodel.sine_relax( s_var=branch.s, delta_var=branch.va_diff,delta_max=theta_u, on_off=z, delta_big_m=theta_M )

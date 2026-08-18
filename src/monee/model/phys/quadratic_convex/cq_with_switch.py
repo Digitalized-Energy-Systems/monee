@@ -269,9 +269,9 @@ def perspective_voltage_relax(
 
 def int_flow_from_p(
     p_from_var,
-    v_sq_from_var,
-    wc_var,
-    ws_var,
+    v_sq_from_var,  # squared voltage
+    wc_var,  # v_i*v_j*cos(theta_i-theta_j)
+    ws_var,  # v_i*v_j*sin(theta_i-theta_j)
     g_branch,
     b_branch,
     tap,
@@ -578,3 +578,14 @@ def current_switch_relax(
         i_var <= on_off * i_ub,
         on_off * v_sq_var * i_ub >= s_sq_pu,
     ]
+def voltage_product_soc(wc_var, ws_var, v_sq_from_var, v_sq_to_var):
+    """
+    W-matrix 2x2 positive-semidefiniteness as a rotated SOC:
+    ``w_c^2 + w_s^2 <= v_i^2 * v_j^2``.
+
+    The standard QC-OPF tightening (Coffrin et al.). It couples ``wc``/``ws``
+    to the squared voltages directly instead of only through the sequential
+    ``vv`` McCormick chain, and is exact - it holds for every AC-feasible
+    point.
+    """
+    return wc_var**2 + ws_var**2 <= v_sq_from_var * v_sq_to_var

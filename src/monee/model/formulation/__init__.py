@@ -40,6 +40,7 @@ from .bundles import (
     SMOOTH_NLP_FORMULATION,
     combine,
     make_convex_miqcqp_formulation,
+    make_el_qc_formulation,
     make_gas_milp_pwl_formulation,
     make_gas_nlp_formulation,
     make_heat_convex_milp_formulation,
@@ -91,6 +92,7 @@ __all__ = [
     "DEFAULT_SIMULATION_FORMULATION",
     "make_smooth_nlp_formulation",
     "make_convex_miqcqp_formulation",
+    "make_el_qc_formulation",
     # gap diagnostics
     "mccormick_dhs_gap_bound_mw",
     "mccormick_dhs_gap_bound_k",
