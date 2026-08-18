@@ -26,6 +26,7 @@ from monee.model.child import (
     Sink,
     Source,
 )
+from monee.model.core import Var
 from monee.model.grid import (
     DEFAULT_GAS_HHV_KWH_PER_KG,
     KGPS_KWHPERKG_TO_MW,
@@ -42,7 +43,6 @@ from monee.model.multi import (
     PowerToHeatControlNode,
     PowerToHeatHG,
 )
-from monee.model.core import Var
 from monee.model.node import Bus, Junction
 from monee.problem.core import (
     REGULATION_ATTR,
@@ -352,6 +352,24 @@ def _calc_objective(model_to_data):
     )
 
 
+def _make_vm_bounds_hook(bounds_vm):
+    lo, hi = bounds_vm
+
+    def _apply_vm_bounds(network):
+        for component in network.all_components():
+            model = component.model
+            if type(model) is not Bus:
+                continue
+            vm = getattr(model, "vm_pu", None)
+            vm_sq = getattr(model, "vm_pu_squared", None)
+            if type(vm) is Var:
+                vm.min, vm.max = lo, hi
+            if type(vm_sq) is Var:
+                vm_sq.min, vm_sq.max = lo * lo, hi * hi
+
+    return _apply_vm_bounds
+
+
 def _make_pressure_bounds_hook(bounds_pressure):
     lo, hi = bounds_pressure
 
@@ -443,7 +461,12 @@ def create_min_load_shedding_problem(  # NOSONAR
         )
 
     if check_vm:
-        problem.bounds(bounds_vm, lambda m, _: type(m) is Bus, ["vm_pu"])
+        # Bound the actual decision var, as for pressure below. Under the lifted
+        # formulations (MISOCP, QC) the physics runs on vm_pu_squared and vm_pu
+        # is derived; under QC specifically vm_pu is only a McCormick lifting
+        # variable tied to w by a single chord, so v <= sqrt(w) and an upper
+        # bound on vm_pu alone leaves the true voltage free to overshoot it.
+        problem._controllable_appliables.append(_make_vm_bounds_hook(bounds_vm))
     if check_pressure:
         # Bound the actual decision var (pressure_pu under NLP, pressure_squared_pu
         # under the linearised gas formulation); a static bound on pressure_pu is

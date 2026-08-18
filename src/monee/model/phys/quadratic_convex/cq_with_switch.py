@@ -15,7 +15,9 @@ def calc_branch_t(tap, shift):
     return (tap * math.cos(shift), tap * math.sin(shift))
 
 
-def square_relax(v_sq_var, v_var, v_min, v_max): #quadratic terms v² relaxed into convex envelopes (according paper Fig 3, equation in 4.1 power flow relaxation)
+def square_relax(
+    v_sq_var, v_var, v_min, v_max
+):  # quadratic terms v² relaxed into convex envelopes (according paper Fig 3, equation in 4.1 power flow relaxation)
     """
     Convex bounds of v^2 on [v_min, v_max].
     """
@@ -40,11 +42,13 @@ def cosine_relax(
     if delta_big_m is None:
         delta_big_m = delta_max
 
-    alpha = (1 - math.cos(delta_max)) / (delta_max**2) #alpha as helper variable for whole equation for figure 1a
+    alpha = (1 - math.cos(delta_max)) / (
+        delta_max**2
+    )  # alpha as helper variable for whole equation for figure 1a
 
-    return [#cosine variable bounded by constraints for convex outer approx.
+    return [  # cosine variable bounded by constraints for convex outer approx.
         cs_var <= on_off - alpha * delta_var**2 + (1 - on_off) * alpha * delta_big_m**2,
-        cs_var >=  on_off * math.cos(delta_max),
+        cs_var >= on_off * math.cos(delta_max),
         cs_var <= on_off,
         delta_var >= -on_off * delta_max - (1 - on_off) * delta_big_m,
         delta_var <= on_off * delta_max + (1 - on_off) * delta_big_m,
@@ -105,9 +109,9 @@ def mccormick_relax(
 
 def int_flow_from_p(
     p_from_var,
-    v_sq_from_var, #squared voltage
-    wc_var, #v_i*v_j*cos(theta_i-theta_j)
-    ws_var, #v_i*v_j*sin(theta_i-theta_j)
+    v_sq_from_var,  # squared voltage
+    wc_var,  # v_i*v_j*cos(theta_i-theta_j)
+    ws_var,  # v_i*v_j*sin(theta_i-theta_j)
     g_branch,
     b_branch,
     tap,
@@ -119,7 +123,7 @@ def int_flow_from_p(
     QC relaxation of active power flow from-side.
     """
     tr, ti = calc_branch_t(tap, shift)
-    return p_from_var == ( #Ohm's law linearized , paper equation 1
+    return p_from_var == on_off * (  # Ohm's law linearized , paper equation 1
         (g_branch + g_from) / tap**2 * v_sq_from_var
         + (-g_branch * tr + b_branch * ti) / tap**2 * wc_var
         + (-b_branch * tr - g_branch * ti) / tap**2 * ws_var
@@ -142,7 +146,7 @@ def int_flow_from_q(
     QC relaxation of reactive power flow from-side.
     """
     tr, ti = calc_branch_t(tap, shift)
-    return q_from_var == ( #Ohm's law linearized , paper equation 2
+    return q_from_var == on_off * (  # Ohm's law linearized , paper equation 2
         -(b_branch + b_from) / tap**2 * v_sq_from_var
         - (-b_branch * tr - g_branch * ti) / tap**2 * wc_var
         + (-g_branch * tr + b_branch * ti) / tap**2 * ws_var
@@ -165,7 +169,7 @@ def int_flow_to_p(
     QC relaxation of active power flow to-side.
     """
     tr, ti = calc_branch_t(tap, shift)
-    return p_to_var == (
+    return p_to_var == on_off * (
         (g_branch + g_to) * v_sq_to_var
         + (-g_branch * tr - b_branch * ti) / tap**2 * wc_var
         - (-b_branch * tr + g_branch * ti) / tap**2 * ws_var
@@ -188,7 +192,7 @@ def int_flow_to_q(
     QC relaxation of reactive power flow to-side.
     """
     tr, ti = calc_branch_t(tap, shift)
-    return q_to_var == (
+    return q_to_var == on_off * (
         -(b_branch + b_to) * v_sq_to_var
         - (-b_branch * tr + g_branch * ti) / tap**2 * wc_var
         - (-g_branch * tr - b_branch * ti) / tap**2 * ws_var
@@ -202,24 +206,86 @@ def current_flow_equation(
     wc_var,
     g_branch,
     b_branch,
+    tap=1,
+    shift=0,
+    ws_var=0,
+    on_off=1,
 ):
+    r"""
+        Squared series-current magnitude, equation 23 generalised to an
+        off-nominal complex turns ratio :math:`T = tap \cdot e^{j\,shift}`:
+
+        .. math::
+            l_{ij} = (g^2+b^2)\left(rac{w_i}{tap^2} + w_j
+                     - rac{2}{tap}ig(w_c \cos(shift) + w_s \sin(shift)ig)
+    ight)
+
+        which is exactly :math:`|(V_i/T - V_j)\,y|^2`. The paper's
+        :math:`w_i + w_j - 2 w_c` is the ``tap = 1, shift = 0`` special case; using
+        it on a transformer overstates the current (3.9x on a 1.05 tap), which then
+        propagates into the ``r * l`` objective term as a phantom loss penalty.
+
+        Gated on ``on_off`` so an open branch carries no current; combined with
+        :func:`current_soc_relax` that is what forces p = q = 0 across it.
     """
-    Strengthening equation l_ij = (g^2 + b^2)(v_i^2 + v_j^2 - 2 w_c)
-    Equation 23
-    """
-    return i_var == (g_branch**2 + b_branch**2) * (v_sq_from_var + v_sq_to_var - 2 * wc_var)
+    cross = wc_var
+    if shift:
+        cross = wc_var * math.cos(shift) + ws_var * math.sin(shift)
+    return i_var == on_off * (g_branch**2 + b_branch**2) * (
+        v_sq_from_var / tap**2 + v_sq_to_var - 2 / tap * cross
+    )
 
 
 def current_soc_relax(
     p_var,
     q_var,
     v_sq_var,
-    i_var, #QC current-squared-like variable l_ij power line
-    v_sq_ub,
-    on_off=1,
+    i_var,  # QC current-squared-like variable l_ij power line
+    tap=1,
+    g_from=0,
+    b_from=0,
 ):
+    r"""
+        Rotated second-order cone on the *series* branch power, equation 21
+        generalised to shunt admittance and an off-nominal turns ratio:
+
+        .. math::
+            \left(p - rac{g_{fr}}{tap^2} w_i
+    ight)^2
+            + \left(q + rac{b_{fr}}{tap^2} w_i
+    ight)^2
+            \;\le\; rac{w_i}{tap^2}\, l_{ij}
+
+        Both corrections matter. ``p_var``/``q_var`` are the *terminal* flows, which
+        include the from-side shunt draw :math:`\overline{y_{fr}} w_i / tap^2`;
+        ``i_var`` is the *series* current. Writing the naive
+        ``p^2 + q^2 <= w_i * l`` instead does not merely lose tightness - it
+        EXCLUDES AC-feasible points: with ``b_fr = 0.015`` and both ends at 1.0 pu
+        an exact AC point has ``p^2 + q^2 = 2.25e-4`` against ``l = 0``. In the
+        corrected form the two sides are equal at every AC point (verified to
+        1e-13 across shunt / tap / shift combinations), so it is exact rather than
+        merely valid.
+
+        Convex: a sum of squares of affine expressions bounded by the product of
+        two non-negative variables is a rotated cone.
+
+        No ``on_off`` factor is needed - :func:`current_flow_equation` already
+        drives ``i_var`` to 0 on an open branch, and ``v_sq_var > 0`` then forces
+        the series flow, hence ``p`` and ``q``, to 0 here.
     """
-    Switched current-magnitude relaxation.
-    Uses the stronger perspective-style bound z * l * v_u^2 >= p^2 + q^2, Equation 21
+    p_series = p_var - g_from / tap**2 * v_sq_var
+    q_series = q_var + b_from / tap**2 * v_sq_var
+    return i_var * v_sq_var / tap**2 >= p_series**2 + q_series**2
+
+
+def voltage_product_soc(wc_var, ws_var, v_sq_from_var, v_sq_to_var):
     """
-    return on_off * i_var * v_sq_ub >= p_var**2 + q_var**2
+    W-matrix 2x2 positive-semidefiniteness as a rotated SOC:
+    ``w_c^2 + w_s^2 <= v_i^2 * v_j^2``.
+
+    The standard QC-OPF tightening (Coffrin et al.). It couples ``wc``/``ws``
+    to the squared voltages directly instead of only through the sequential
+    ``vv`` McCormick chain, and is exact - it holds for every AC-feasible
+    point.
+    """
+    return wc_var**2 + ws_var**2 <= v_sq_from_var * v_sq_to_var

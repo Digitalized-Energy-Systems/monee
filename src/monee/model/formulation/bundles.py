@@ -64,6 +64,7 @@ from .quadratic_convex.cq_with_switch import (
     QCElectricityNodeFormulation,
 )
 
+
 def combine(*network_formulations: NetworkFormulation) -> NetworkFormulation:
     """Merge per-sector :class:`NetworkFormulation` objects into one apply.
     Later arguments win on type collisions."""
@@ -108,12 +109,32 @@ EL_NONCONVEX_MIQCQP_FORMULATION = NetworkFormulation(
     node_type_to_formulations={Bus: ExactBranchFlowNodeFormulation()},
 )
 
-EL_QC_FORMULATION = NetworkFormulation(
-    branch_type_to_formulations={
-        GenericPowerBranch: QCElectricityBranchFormulation()
-    },
-    node_type_to_formulations={Bus: QCElectricityNodeFormulation()},
-)
+
+def make_el_qc_formulation(v_min=None, v_max=None) -> NetworkFormulation:
+    """QC (quadratic-convex) bus-injection relaxation with branch switching.
+
+    ``v_min``/``v_max`` narrow the envelope voltage band on the node *and* the
+    branch formulation together - they have to agree, which is the only reason
+    this factory exists. Leave them unset (the default) and the band comes from
+    the grid's own ``vm_pu_min``/``vm_pu_max``, which can never cut off a point
+    the AC NLP would find. Narrowing it sharpens the ``vm_pu`` lifting variable
+    quadratically but makes the model *infeasible* if the true solution falls
+    outside - see
+    :func:`monee.model.formulation.quadratic_convex.cq_with_switch._v_bounds`.
+    """
+    return NetworkFormulation(
+        branch_type_to_formulations={
+            GenericPowerBranch: QCElectricityBranchFormulation(v_min=v_min, v_max=v_max)
+        },
+        node_type_to_formulations={
+            Bus: QCElectricityNodeFormulation(v_min=v_min, v_max=v_max)
+        },
+    )
+
+
+EL_QC_FORMULATION = make_el_qc_formulation()
+
+
 # ---------------------------------------------------------------------------
 # Gas
 # ---------------------------------------------------------------------------
