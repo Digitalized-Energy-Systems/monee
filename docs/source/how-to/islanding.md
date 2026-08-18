@@ -25,9 +25,9 @@ import monee.express as mx
 # 1. Build the network
 net = mm.Network()
 
-bus_0 = mx.create_bus(net)   # island A - reference
-bus_1 = mx.create_bus(net)   # island A - load bus
-bus_2 = mx.create_bus(net)   # island B - isolated
+bus_0 = mx.create_bus(net)  # island A - reference
+bus_1 = mx.create_bus(net)  # island A - load bus
+bus_2 = mx.create_bus(net)  # island B - isolated
 
 mx.create_ext_power_grid(net, bus_0)
 mx.create_power_load(net, bus_1, p_mw=0.05, q_mvar=0)

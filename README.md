@@ -87,22 +87,22 @@ net = mx.create_multi_energy_network()
 # Electricity grid
 bus_0 = mx.create_bus(net)
 bus_1 = mx.create_bus(net)
-mx.create_line(net, bus_0, bus_1, length_m=100,
-               r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+mx.create_line(net, bus_0, bus_1, length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
 mx.create_ext_power_grid(net, bus_0)
 mx.create_power_load(net, bus_1, p_mw=0.1, q_mvar=0.0)
 
 # District heating loop
 j_supply = mx.create_water_junction(net)
-j_mid    = mx.create_water_junction(net)
+j_mid = mx.create_water_junction(net)
 j_return = mx.create_water_junction(net)
 mx.create_ext_hydr_grid(net, j_supply)
 mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.12, length_m=100)
 mx.create_sink(net, j_return, mass_flow_kgs=1.0)
 
 # Coupling: bus_1 drives a heat pump that feeds the heating loop
-mx.create_p2h(net, bus_1, j_mid, j_return,
-              heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9)
+mx.create_p2h(
+    net, bus_1, j_mid, j_return, heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9
+)
 
 result = run_energy_flow(net)
 print(result.get(mm.Bus)[["vm_pu", "va_degree"]])
@@ -130,20 +130,20 @@ from monee import mx
 
 net = mx.create_multi_energy_network()
 bus_ext = mx.create_bus(net)
-bus_a   = mx.create_bus(net)
-bus_b   = mx.create_bus(net)
+bus_a = mx.create_bus(net)
+bus_b = mx.create_bus(net)
 mx.create_line(net, bus_ext, bus_a, length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
 mx.create_line(net, bus_ext, bus_b, length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
 mx.create_ext_power_grid(net, bus_ext)
 mx.create_power_load(net, bus_a, p_mw=0.1, q_mvar=0.0)
 
 # Two dispatchable generators with different marginal costs (currency/MW)
-mx.create_power_generator(net, bus_a, p_mw=0.15, q_mvar=0.0, cost=10.0)   # cheap
-mx.create_power_generator(net, bus_b, p_mw=0.15, q_mvar=0.0, cost=40.0)   # expensive
+mx.create_power_generator(net, bus_a, p_mw=0.15, q_mvar=0.0, cost=10.0)  # cheap
+mx.create_power_generator(net, bus_b, p_mw=0.15, q_mvar=0.0, cost=40.0)  # expensive
 
 problem = monee.create_economic_dispatch_problem(
-    ext_grid_cost_default=0.0,        # include the slack so it can be bounded
-    ext_grid_bounds=(-0.01, 0.01),    # substation import/export limit (MW)
+    ext_grid_cost_default=0.0,  # include the slack so it can be bounded
+    ext_grid_bounds=(-0.01, 0.01),  # substation import/export limit (MW)
 )
 
 result = monee.run_energy_flow_optimization(net, problem, solver="ipopt")
@@ -184,7 +184,9 @@ To use the convex MISOCP relaxation for electricity optimal power flow, select i
 ```python
 import monee
 
-result = monee.run_energy_flow(net, solver="gurobi", formulation="el_misocp", simulation=False)
+result = monee.run_energy_flow(
+    net, solver="gurobi", formulation="el_misocp", simulation=False
+)
 
 # or record it as the network-level choice for all subsequent solves
 net.apply_formulation(monee.EL_MISOCP_FORMULATION)
@@ -197,6 +199,7 @@ from monee.model.core import Const, Var
 from monee.model.formulation.core import BranchFormulation, NetworkFormulation
 from monee.model.branch import GasPipe
 
+
 class MyGasPipeFormulation(BranchFormulation):
     """Toy linear pipe: pressure drop proportional to the mass flow."""
 
@@ -206,9 +209,14 @@ class MyGasPipeFormulation(BranchFormulation):
         branch.mass_flow_kgs = Var(0.1, name="mass_flow_kgs")
         branch.resistance = Const(1e-3 * branch.length_m / branch.diameter_m**2)
         branch.direction = Const(1)
-        for unused in ("velocity_mps", "reynolds_scaled", "gas_density_kg_per_m3",
-                       "friction", "mass_flow_pos_kgs_squared",
-                       "mass_flow_neg_kgs_squared"):
+        for unused in (
+            "velocity_mps",
+            "reynolds_scaled",
+            "gas_density_kg_per_m3",
+            "friction",
+            "mass_flow_pos_kgs_squared",
+            "mass_flow_neg_kgs_squared",
+        ):
             setattr(branch, unused, Const(0.0))
 
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
@@ -222,9 +230,12 @@ class MyGasPipeFormulation(BranchFormulation):
             branch.mass_flow_neg_kgs == 0.5 * (mag - m),
         ]
 
-net.apply_formulation(NetworkFormulation(
-    branch_type_to_formulations={GasPipe: MyGasPipeFormulation()},
-))
+
+net.apply_formulation(
+    NetworkFormulation(
+        branch_type_to_formulations={GasPipe: MyGasPipeFormulation()},
+    )
+)
 ```
 
 ---
@@ -240,26 +251,34 @@ Every layer of the framework is designed to be subclassed or replaced without mo
 ```python
 import monee.model as mm
 from monee import run_energy_flow_optimization
-from monee.problem import AttributeParameter, Constraints, Objectives, OptimizationProblem
+from monee.problem import (
+    AttributeParameter,
+    Constraints,
+    Objectives,
+    OptimizationProblem,
+)
 
 problem = OptimizationProblem()
 
 # Make regulation ∈ [0, 1] a solver decision variable for each demand
-problem.controllable_demands([
-    ("regulation", AttributeParameter(
-        min=lambda attr, val: 0,
-        max=lambda attr, val: 1,
-        val=lambda attr, val: 1,
-    ))
-])
+problem.controllable_demands(
+    [
+        (
+            "regulation",
+            AttributeParameter(
+                min=lambda attr, val: 0,
+                max=lambda attr, val: 1,
+                val=lambda attr, val: 1,
+            ),
+        )
+    ]
+)
 
 # Objective: minimise curtailment cost weighted by load priority
 objectives = Objectives()
 objectives.select(
     lambda model: isinstance(model, mm.PowerLoad) and hasattr(model, "_priority")
-).data(
-    lambda model: (1 - model.regulation) * model.p_mw * model._priority
-).calculate(
+).data(lambda model: (1 - model.regulation) * model.p_mw * model._priority).calculate(
     lambda model_to_data: sum(model_to_data.values())
 )
 problem.objectives = objectives

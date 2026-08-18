@@ -83,10 +83,8 @@ td3.add_child_series(ld, "p_mw", [0.5, 0.9, 1.3])
 import pandas as pd
 from monee.simulation import TimeseriesData
 
-df = pd.read_csv("load_profile.csv")   # columns: p_mw, q_mvar
-td = TimeseriesData.from_dataframe(
-    df, component_type="child", component_name="demand"
-)
+df = pd.read_csv("load_profile.csv")  # columns: p_mw, q_mvar
+td = TimeseriesData.from_dataframe(df, component_type="child", component_name="demand")
 ```
 `component_type` is one of `'node'`, `'child'`, `'branch'`, or `'compound'`.
 :::
@@ -147,7 +145,7 @@ import pandas as pd
 idx = pd.date_range("2024-01-01", periods=6, freq="h")
 result = run_timeseries(net, td, datetime_index=idx)
 vm = result.get_result_for(mm.Bus, "vm_pu")
-print(vm.index)   # DatetimeIndex
+print(vm.index)  # DatetimeIndex
 ```
 :::
 
@@ -207,7 +205,8 @@ from tqdm import tqdm
 
 bar = tqdm(total=8760)
 result = run_timeseries(
-    net, td,
+    net,
+    td,
     progress_callback=lambda step, total: bar.update(1),
 )
 bar.close()
