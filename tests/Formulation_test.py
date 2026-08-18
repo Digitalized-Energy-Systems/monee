@@ -176,11 +176,11 @@ def pp_create_11bus_low_meshed():
     pp.create_line_from_parameters(net, buses[7], buses[8], **line_args)
     pp.create_line_from_parameters(net, buses[8], buses[9], **line_args)
     pp.create_line_from_parameters(net, buses[9], buses[10], **line_args)
-
+    '''
     # low meshing (only ends connected)
     pp.create_line_from_parameters(net, buses[3], buses[6], **line_args)
     pp.create_line_from_parameters(net, buses[6], buses[10], **line_args)
-
+    '''
     # loads &generators
     for b in [2, 3, 5, 6, 8, 9, 10]:
         pp.create_load(net, bus=buses[b], p_mw=0.5, q_mvar=0)
@@ -206,10 +206,10 @@ def monee_create_11bus_low_meshed():
         (0, 7),
         (7, 8),
         (8, 9),
-        (9, 10),
-        (3, 6),
-        (6, 10),
-    ]
+        (9, 10)    ]
+        #(3, 6),
+        #(6, 10),
+
 
     line_buses = {}
 
@@ -1096,4 +1096,7 @@ boxplot_comparison(lines1_mismatches, lines2_mismatches)
 #todo: mal nur strom plotten jeweils eizeln, sind das max werte oder haben die noch variationen
 #todo:  Leistungsformeln für Lines anschauen, warum sind die off?
 # bounds für mccomic nochmal anschauen, ist was unbound? oder falsch bound?
-#in power models ist das auch implementiert, vll mal als referenz anschauen
+# in power models ist das auch implementiert, vll mal als referenz anschauen
+# grund für alles könnte voltage berechnung und voltage bounds sein?
+# fehlt eine optimierungsfunktion? Die nur den power flow optimiert? nur losses minimieren? jedenfalls nicht basierend auf kosten?
+# durch claude schicken? falls objective nicht passt
