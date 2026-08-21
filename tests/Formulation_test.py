@@ -8,7 +8,7 @@ import monee.model as mm
 from monee.solver.gekko import GEKKOSolver
 #from monee.model.formulation import (AC_NETWORK_FORMULATION, MISOCP_NETWORK_FORMULATION, QC_NETWORK_FORMULATION)
 import matplotlib.pyplot as plt
-
+import networkx as nx
 
 import networkx as nx
 import pytest
@@ -31,203 +31,114 @@ from monee.simulation.timeseries import TimeseriesData
 from monee.solver import GEKKOSolver
 
 
-def PP_create_two_nodes_power_example(source_flow=0.1):
-    net = pp.create_empty_network()
-    bus0 = pp.create_bus(net, vn_kv=1)
-    bus1 = pp.create_bus(net, vn_kv=1)
-    #pp.create_sgen(net, bus=bus0, p_mw=4)
-    pp.create_ext_grid(net, bus=bus0)
-    pp.create_load(net, bus=bus1, p_mw=0.5, q_mvar=0)
+def create_grid_topology(bus_number=11, meshed=1, n_feeders=3, plot = False):
+    if bus_number < 2:
+        raise ValueError("bus_number must be >= 2")
+    if meshed not in (0, 1, 2):
+        raise ValueError("meshed must be 0, 1 or 2")
 
-    pp.create_line_from_parameters(
-        net,
-        from_bus=bus0,
-        to_bus=bus1,
-        length_km=0.1,
-        r_ohm_per_km=0.07,
-        x_ohm_per_km=0.07,
-        c_nf_per_km=0,
-        max_i_ka=3.19
-    )
-    return net
+    n_feeders = min(n_feeders, bus_number - 1)
 
-def monee_create_two_nodes_power_example():
+    nodes = list(range(1, bus_number))
+    size = len(nodes) // n_feeders
+    rest = len(nodes) % n_feeders
+
+    feeders, start = [], 0
+    for i in range(n_feeders):
+        end = start + size + (1 if i < rest else 0)
+        feeders.append(nodes[start:end])
+        start = end
+
+    edges = set()
+
+    def add(i, j):
+        if i != j:
+            edges.add(tuple(sorted((i, j))))
+
+    # radial
+    for f in feeders:
+        add(0, f[0])
+        for i, j in zip(f[:-1], f[1:]):
+            add(i, j)
+
+    # low meshed
+    if meshed >= 1:
+        for a, b in zip(feeders[:-1], feeders[1:]):
+            add(a[-1], b[-1])
+
+    # high meshed
+    if meshed >= 2:
+        for f in feeders:
+            for i in range(len(f) - 2):
+                add(f[i], f[i + 2])
+
+        for a, b in zip(feeders[:-1], feeders[1:]):
+            for i in range(0, min(len(a), len(b)), 2):
+                add(a[i], b[i])
+    if plot:
+        G = nx.Graph()
+        G.add_nodes_from(range(bus_number))
+        G.add_edges_from(edges)
+
+        pos = {0: (0, (len(feeders) - 1) / 2)}
+        for i, feeder in enumerate(feeders):
+            for j, bus in enumerate(feeder):
+                pos[bus] = (j + 1, len(feeders) - 1 - i)
+
+        plt.figure(figsize=(10, 5))
+        nx.draw(G, pos, with_labels=True, node_size=700)
+        plt.title(
+            f"{bus_number}-bus grid — "
+            f"{['radial', 'low meshed', 'high meshed'][meshed]}"
+        )
+        plt.axis("off")
+        plt.tight_layout()
+        plt.show()
+
+    return sorted(edges), feeders
+def monee_create_grid(bus_number=11, meshed=1, n_feeders=3, show_plot=False):
     net = mx.create_multi_energy_network()
-    bus_0 = mx.create_bus(net)
-    bus_1 = mx.create_bus(net)
-    mx.create_line(net, bus_0, bus_1, length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-    mx.create_ext_power_grid(net, bus_0)
-    mx.create_power_load(net, bus_1, p_mw=0.5, q_mvar=0.0)
-    #mx.create_power_generator(net, bus_0, p_mw = 4.0)
-    return net
-
-def PP_create_three_string_network():
-
-    net = pp.create_empty_network()
-    buses = [pp.create_bus(net, vn_kv=1) for _ in range(20)]
-    pp.create_ext_grid(net, bus=buses[0], vm_pu=1.0)
-    line_args = dict(
-        length_km=0.1,
-        r_ohm_per_km=0.07,
-        x_ohm_per_km=0.07,
-        c_nf_per_km=0,
-        max_i_ka=3.19
-    )
-
-    pp.create_line_from_parameters(net, buses[0], buses[1], **line_args)
-    pp.create_line_from_parameters(net, buses[1], buses[2], **line_args)
-    pp.create_line_from_parameters(net, buses[2], buses[3], **line_args)
-    pp.create_line_from_parameters(net, buses[3], buses[4], **line_args)
-    pp.create_line_from_parameters(net, buses[4], buses[5], **line_args)
-    pp.create_line_from_parameters(net, buses[5], buses[6], **line_args)
-
-    pp.create_line_from_parameters(net, buses[0], buses[7], **line_args)
-    pp.create_line_from_parameters(net, buses[7], buses[8], **line_args)
-    pp.create_line_from_parameters(net, buses[8], buses[9], **line_args)
-    pp.create_line_from_parameters(net, buses[9], buses[10], **line_args)
-    pp.create_line_from_parameters(net, buses[10], buses[11], **line_args)
-    pp.create_line_from_parameters(net, buses[11], buses[12], **line_args)
-
-    pp.create_line_from_parameters(net, buses[0], buses[13], **line_args)
-    pp.create_line_from_parameters(net, buses[13], buses[14], **line_args)
-    pp.create_line_from_parameters(net, buses[14], buses[15], **line_args)
-    pp.create_line_from_parameters(net, buses[15], buses[16], **line_args)
-    pp.create_line_from_parameters(net, buses[16], buses[17], **line_args)
-    pp.create_line_from_parameters(net, buses[17], buses[18], **line_args)
-    pp.create_line_from_parameters(net, buses[18], buses[19], **line_args)
-
-    load_buses = [2,3,5,6,8,10,11,12,14,16,18,19]
-
-    for b in load_buses:
-        pp.create_load(net, bus=buses[b], p_mw=0.5, q_mvar=0)
-
-    sgen_buses = [4,9,13,15,17]
-
-    for b in sgen_buses:
-        pp.create_sgen(net, bus=buses[b], p_mw=1.0, vm_pu=1.0,max_q_mvar=0.0, min_q_mvar=0.0)
-    return net
-
-def monee_create_three_string_network():
-    net = mx.create_multi_energy_network()
-
-    buses = [mx.create_bus(net) for _ in range(20)]
+    buses = [mx.create_bus(net) for _ in range(bus_number)]
 
     mx.create_ext_power_grid(net, buses[0])
 
-    line_args = dict(length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-
-    mx.create_line(net, buses[0], buses[1], **line_args)
-    mx.create_line(net, buses[1], buses[2], **line_args)
-    mx.create_line(net, buses[2], buses[3], **line_args)
-    mx.create_line(net, buses[3], buses[4], **line_args)
-    mx.create_line(net, buses[4], buses[5], **line_args)
-    mx.create_line(net, buses[5], buses[6], **line_args)
-
-    mx.create_line(net, buses[0], buses[7], **line_args)
-    mx.create_line(net, buses[7], buses[8], **line_args)
-    mx.create_line(net, buses[8], buses[9], **line_args)
-    mx.create_line(net, buses[9], buses[10], **line_args)
-    mx.create_line(net, buses[10], buses[11], **line_args)
-    mx.create_line(net, buses[11], buses[12], **line_args)
-
-    mx.create_line(net, buses[0], buses[13], **line_args)
-    mx.create_line(net, buses[13], buses[14], **line_args)
-    mx.create_line(net, buses[14], buses[15], **line_args)
-    mx.create_line(net, buses[15], buses[16], **line_args)
-    mx.create_line(net, buses[16], buses[17], **line_args)
-    mx.create_line(net, buses[17], buses[18], **line_args)
-    mx.create_line(net, buses[18], buses[19], **line_args)
-
-    load_buses = [2, 3, 5, 6, 8, 10, 11, 12, 14, 16, 18, 19]
-
-    for b in load_buses:
-        mx.create_power_load(net, buses[b], p_mw=0.5, q_mvar=0.0)
-
-    gen_buses = [4, 9, 13, 15, 17]
-
-    for b in gen_buses:
-        mx.create_power_generator(net, buses[b], p_mw=1.0, q_mvar=0.0)
-    return net
-
-def pp_create_11bus_low_meshed():
-    net = pp.create_empty_network()
-    buses = [pp.create_bus(net, vn_kv=1) for _ in range(11)]
-
-    pp.create_ext_grid(net, bus=buses[0], vm_pu=1.0)
-
     line_args = dict(
-        length_km=0.1,
-        r_ohm_per_km=0.07,
-        x_ohm_per_km=0.07,
-        c_nf_per_km=0,
-        max_i_ka=3.19
+        length_m=100,
+        r_ohm_per_m=7e-5,
+        x_ohm_per_m=7e-5,
     )
 
-    # three strings
-    pp.create_line_from_parameters(net, buses[0], buses[1], **line_args)
-    pp.create_line_from_parameters(net, buses[1], buses[2], **line_args)
-    pp.create_line_from_parameters(net, buses[2], buses[3], **line_args)
-
-    pp.create_line_from_parameters(net, buses[0], buses[4], **line_args)
-    pp.create_line_from_parameters(net, buses[4], buses[5], **line_args)
-    pp.create_line_from_parameters(net, buses[5], buses[6], **line_args)
-
-    pp.create_line_from_parameters(net, buses[0], buses[7], **line_args)
-    pp.create_line_from_parameters(net, buses[7], buses[8], **line_args)
-    pp.create_line_from_parameters(net, buses[8], buses[9], **line_args)
-    pp.create_line_from_parameters(net, buses[9], buses[10], **line_args)
-    '''
-    # low meshing (only ends connected)
-    pp.create_line_from_parameters(net, buses[3], buses[6], **line_args)
-    pp.create_line_from_parameters(net, buses[6], buses[10], **line_args)
-    '''
-    # loads &generators
-    for b in [2, 3, 5, 6, 8, 9, 10]:
-        pp.create_load(net, bus=buses[b], p_mw=0.5, q_mvar=0)
-    for b in [4, 7]:
-        pp.create_sgen(net, bus=buses[b], p_mw=1.0, vm_pu=1.0, max_q_mvar=0.0, min_q_mvar=0.0)
-    return net
-
-def monee_create_11bus_low_meshed():
-    net = mx.create_multi_energy_network()
-    buses = [mx.create_bus(net) for _ in range(11)]
-
-    mx.create_ext_power_grid(net, buses[0])
-
-    line_args = dict(length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-
-    connections = [
-        (0, 1),
-        (1, 2),
-        (2, 3),
-        (0, 4),
-        (4, 5),
-        (5, 6),
-        (0, 7),
-        (7, 8),
-        (8, 9),
-        (9, 10)    ]
-        #(3, 6),
-        #(6, 10),
-
+    connections, feeders = create_grid_topology(
+        bus_number, meshed, n_feeders, plot = show_plot,
+    )
 
     line_buses = {}
 
     for i, j in connections:
-        branch_id = mx.create_line(net, buses[i], buses[j], **line_args)
-        line_buses[branch_id] = (buses[i], buses[j])
+        line_id = mx.create_line(net, buses[i], buses[j], **line_args)
+        line_buses[line_id] = (buses[i], buses[j])
 
-    for b in [2, 3, 5, 6, 8, 9, 10]:
-        mx.create_power_load(net, buses[b], p_mw=0.5, q_mvar=0.0)
+    gen_buses = [f[0] for f in feeders[1:]]
+    feeder_heads = {f[0] for f in feeders}
+    load_buses = [
+        i for i in range(1, bus_number)
+        if i not in feeder_heads
+    ]
 
-    for b in [4, 7]:
-        mx.create_power_generator(net, buses[b], p_mw=1.0, q_mvar=0.0)
+    for i in load_buses:
+        mx.create_power_load(net, buses[i], p_mw=0.5, q_mvar=0.0)
+
+    for i in gen_buses:
+        mx.create_power_generator(net, buses[i], p_mw=1.0, q_mvar=0.0)
 
     return net, line_buses
-
-def pp_create_11bus_high_meshed():
+def pp_create_grid(bus_number=11, meshed=1, n_feeders=3):
     net = pp.create_empty_network()
-    buses = [pp.create_bus(net, vn_kv=1) for _ in range(11)]
+
+    buses = [
+        pp.create_bus(net, vn_kv=1.0)
+        for _ in range(bus_number)
+    ]
 
     pp.create_ext_grid(net, bus=buses[0], vm_pu=1.0)
 
@@ -235,170 +146,49 @@ def pp_create_11bus_high_meshed():
         length_km=0.1,
         r_ohm_per_km=0.07,
         x_ohm_per_km=0.07,
-        c_nf_per_km=0,
-        max_i_ka=3.19
+        c_nf_per_km=0.0,
+        max_i_ka=3.19,
     )
 
-    # three strings
-    pp.create_line_from_parameters(net, buses[0], buses[1], **line_args)
-    pp.create_line_from_parameters(net, buses[1], buses[2], **line_args)
-    pp.create_line_from_parameters(net, buses[2], buses[3], **line_args)
+    connections, feeders = create_grid_topology(
+        bus_number, meshed, n_feeders
+    )
 
-    pp.create_line_from_parameters(net, buses[0], buses[4], **line_args)
-    pp.create_line_from_parameters(net, buses[4], buses[5], **line_args)
-    pp.create_line_from_parameters(net, buses[5], buses[6], **line_args)
+    line_buses = {}
 
-    pp.create_line_from_parameters(net, buses[0], buses[7], **line_args)
-    pp.create_line_from_parameters(net, buses[7], buses[8], **line_args)
-    pp.create_line_from_parameters(net, buses[8], buses[9], **line_args)
-    pp.create_line_from_parameters(net, buses[9], buses[10], **line_args)
+    for i, j in connections:
+        line_id = pp.create_line_from_parameters(
+            net,
+            buses[i],
+            buses[j],
+            **line_args,
+        )
+        line_buses[line_id] = (buses[i], buses[j])
 
-    # high meshing
-    pp.create_line_from_parameters(net, buses[3], buses[6], **line_args)
-    pp.create_line_from_parameters(net, buses[6], buses[10], **line_args)
-    pp.create_line_from_parameters(net, buses[7], buses[2], **line_args)
-    pp.create_line_from_parameters(net, buses[8], buses[5], **line_args)
-    pp.create_line_from_parameters(net, buses[4], buses[1], **line_args)
-    # loads &generators
-    for b in [2, 3, 5, 6, 8, 9, 10]:
-        pp.create_load(net, bus=buses[b], p_mw=0.5, q_mvar=0)
-    for b in [4, 7]:
-        pp.create_sgen(net, bus=buses[b], p_mw=1.0, vm_pu=1.0, max_q_mvar=0.0, min_q_mvar=0.0)
-    return net
+    gen_buses = [f[0] for f in feeders[1:]]
+    feeder_heads = {f[0] for f in feeders}
+    load_buses = [
+        i for i in range(1, bus_number)
+        if i not in feeder_heads
+    ]
 
-def monee_create_11bus_high_meshed():
-    net = mx.create_multi_energy_network()
-    buses = [mx.create_bus(net) for _ in range(11)]
+    for i in load_buses:
+        pp.create_load(
+            net,
+            bus=buses[i],
+            p_mw=0.5,
+            q_mvar=0.0,
+        )
 
-    mx.create_ext_power_grid(net, buses[0])
+    for i in gen_buses:
+        pp.create_sgen(
+            net,
+            bus=buses[i],
+            p_mw=1.0,
+            q_mvar=0.0,
+        )
 
-    line_args = dict(length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-
-    # strings
-    mx.create_line(net, buses[0], buses[1], **line_args)
-    mx.create_line(net, buses[1], buses[2], **line_args)
-    mx.create_line(net, buses[2], buses[3], **line_args)
-
-    mx.create_line(net, buses[0], buses[4], **line_args)
-    mx.create_line(net, buses[4], buses[5], **line_args)
-    mx.create_line(net, buses[5], buses[6], **line_args)
-
-    mx.create_line(net, buses[0], buses[7], **line_args)
-    mx.create_line(net, buses[7], buses[8], **line_args)
-    mx.create_line(net, buses[8], buses[9], **line_args)
-    mx.create_line(net, buses[9], buses[10], **line_args)
-
-    # low meshing
-    mx.create_line(net, buses[3], buses[6], **line_args)
-    mx.create_line(net, buses[6], buses[10], **line_args)
-    mx.create_line(net, buses[7], buses[2], **line_args)
-    mx.create_line(net, buses[8], buses[5], **line_args)
-    mx.create_line(net, buses[4], buses[1], **line_args)
-
-    for b in [2, 3, 5, 6, 8, 9, 10]:
-        mx.create_power_load(net, buses[b], p_mw=0.5, q_mvar=0.0)
-    for b in [4, 7]:
-        mx.create_power_generator(net, buses[b], p_mw=1.0, q_mvar=0.0)
-    return net
-
-def pp_create_66bus_high_meshed():
-    net = pp.create_empty_network()
-    buses = [pp.create_bus(net, vn_kv=1) for _ in range(66)]
-    pp.create_ext_grid(net, bus=buses[0], vm_pu=1.0)
-    line_args = dict( length_km=0.1, r_ohm_per_km=0.07,  x_ohm_per_km=0.07, c_nf_per_km=0, max_i_ka=3.19)
-
-    feeders = []
-    idx = 1
-    for f in range(6):
-        chain = []
-        prev = 0
-        for _ in range(10):  # remaining nodes attached later
-            if idx >= 66:
-                break
-            pp.create_line_from_parameters(net, buses[prev], buses[idx], **line_args)
-            chain.append(idx)
-            prev = idx
-            idx += 1
-        feeders.append(chain)
-
-    while idx < 66:
-        pp.create_line_from_parameters(net, buses[feeders[-1][-1]], buses[idx], **line_args)
-        feeders[-1].append(idx)
-        idx += 1
-
-    for chain in feeders:
-        for i in range(len(chain) - 2):
-            pp.create_line_from_parameters( net, buses[chain[i]], buses[chain[i+2]], **line_args )
-
-    for i in range(len(feeders)):
-        for j in range(i+1, len(feeders)):
-            for k in range(min(len(feeders[i]), len(feeders[j]))):
-                if k % 2 == 0:
-                    pp.create_line_from_parameters(net, buses[feeders[i][k]], buses[feeders[j][k]], **line_args)
-
-    for i in range(1, 66, 3):
-        j = (i + 7) % 66
-        if j != 0:
-            pp.create_line_from_parameters(net, buses[i], buses[j], **line_args)
-
-    for i in range(1, 66):
-        if i % 2 == 0:
-            pp.create_load(net, bus=buses[i], p_mw=0.5, q_mvar=0)
-
-    for i in range(1, 66):
-        if i % 10 == 0:
-            pp.create_sgen(net, bus=buses[i], p_mw=1.0, vm_pu=1.0, max_q_mvar=0.0, min_q_mvar=0.0)
-    return net
-
-def monee_create_66bus_high_meshed():
-    net = mx.create_multi_energy_network()
-    buses = [mx.create_bus(net) for _ in range(66)]
-    mx.create_ext_power_grid(net, buses[0])
-    line_args = dict(length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
-
-    feeders = []
-    idx = 1
-    for f in range(6):
-        chain = []
-        prev = 0
-        for _ in range(10):
-            if idx >= 66:
-                break
-            mx.create_line(net, buses[prev], buses[idx], **line_args)
-            chain.append(idx)
-            prev = idx
-            idx += 1
-        feeders.append(chain)
-    while idx < 66:
-        mx.create_line(net, buses[feeders[-1][-1]], buses[idx], **line_args)
-        feeders[-1].append(idx)
-        idx += 1
-
-    for chain in feeders:
-        for i in range(len(chain) - 2):
-            mx.create_line(net, buses[chain[i]], buses[chain[i+2]], **line_args)
-
-    for i in range(len(feeders)):
-        for j in range(i+1, len(feeders)):
-            for k in range(min(len(feeders[i]), len(feeders[j]))):
-                if k % 2 == 0:
-                    mx.create_line(
-                        net,
-                        buses[feeders[i][k]],
-                        buses[feeders[j][k]],
-                        **line_args
-                    )
-    for i in range(1, 66, 3):
-        j = (i + 7) % 66
-        if j != 0:
-            mx.create_line(net, buses[i], buses[j], **line_args)
-    for i in range(1, 66):
-        if i % 2 == 0:
-            mx.create_power_load(net, buses[i], p_mw=0.5, q_mvar=0.0)
-    for i in range(1, 66):
-        if i % 10 == 0:
-            mx.create_power_generator(net, buses[i], p_mw=1.0, q_mvar=0.0)
-    return net
+    return net, line_buses
 
 def PP_test_power_network(net, AC=True, show_results=False):
     print("Pandapower test_power_network")
@@ -795,13 +585,23 @@ def run_result_comparison(ac_result, qc_result, component_name, id_col="id",
         plt.xticks(x, gap.index, rotation=45)
         plt.grid(); plt.tight_layout(); plt.show()
 
-def result_plots(ac_result, qc_result, component_name, id_col="id", tol=1e-6):
-    ac, qc = [solver_result_to_tables(r)[component_name].copy()
-              for r in (ac_result, qc_result)]
-    print(component_name, "QC columns: ", qc.columns.tolist())
-    print(component_name, "AC columns: ", ac.columns.tolist())
+def result_plots(
+    ac_result,
+    qc_result,
+    component_name,
+    id_col="id",
+    tol=1e-6,
+    rel_tol = 0.01,
+    vmin_col=None,
+    vmax_col=None,
+):
+    ac, qc = [
+        solver_result_to_tables(r)[component_name].copy()
+        for r in (ac_result, qc_result)
+    ]
 
-    if id_col in ac and id_col in qc:
+
+    if id_col in ac.columns and id_col in qc.columns:
         ac, qc = ac.set_index(id_col), qc.set_index(id_col)
 
     ac, qc = ac.align(qc, join="inner", axis=0)
@@ -811,9 +611,12 @@ def result_plots(ac_result, qc_result, component_name, id_col="id", tol=1e-6):
         "x_ohm_per_m", "r_ohm_per_m", "length_m", "max_i_ka",
         "max_s_mva", "shift", "tap", "base_kv", "node_id",
         "vm_pu", "vm_pu_squared",
-        "vv", "wc", "ws", "cs", "s", "i_qc", "v_on_from", "v_on_to",
-        "v_sq_p_from", "v_sq_p_to", "theta_u", "theta_M",
-        "parallel", "b_to_pu", "g_to_pu", "b_fr_pu", "g_fr_pu",
+        "vv", "wc", "ws", "cs", "s", "i_qc",
+        "v_on_from", "v_on_to",
+        "v_sq_p_from", "v_sq_p_to",
+        "theta_u", "theta_M",
+        "parallel", "b_to_pu", "g_to_pu",
+        "b_fr_pu", "g_fr_pu",
         "br_x_pu", "br_r_pu",
     }
 
@@ -830,12 +633,12 @@ def result_plots(ac_result, qc_result, component_name, id_col="id", tol=1e-6):
 
     for c in cols:
         d = qc[c] - ac[c]
-
+        tol_prozent = rel_tol * ac[c].abs().mean()
         print(
             f"{c:20s} "
             f"max diff = {d.abs().max():.6g}, "
             f"mean diff = {d.abs().mean():.6g}, "
-            f"{'MISMATCH' if (d.abs() > tol).any() else 'OK'}"
+            f"{'MISMATCH' if (d.abs() > tol_prozent).any() else 'OK'}"
         )
 
         plt.figure(figsize=(9, 4))
@@ -849,59 +652,206 @@ def result_plots(ac_result, qc_result, component_name, id_col="id", tol=1e-6):
         plt.grid()
         plt.tight_layout()
         plt.show()
-    if "vm_pu" in ac.columns and "vm_pu" in qc.columns:
 
-        voltage_comparisons = [
-            (
-                "Physical Voltage Magnitude: AC v vs QC v",
-                ac["vm_pu"],
-                qc["vm_pu"],
-                "AC v",
-                "QC v",
-                "Voltage magnitude [p.u.]",
-            )
-        ]
+    if "vm_pu" not in ac.columns or "vm_pu" not in qc.columns:
+        return
 
-        if "vm_pu_squared" in qc.columns:
-            voltage_comparisons += [
-                (
-                    "Squared-Voltage Terms: AC v² vs QC Lifted ṽ",
-                    ac["vm_pu"] ** 2,
-                    qc["vm_pu_squared"],
-                    "AC v²",
-                    "QC ṽ",
-                    "Squared voltage [p.u.²]",
-                ),
-                (
-                    "QC Square Relaxation: Physical v² vs Lifted ṽ",
-                    qc["vm_pu"] ** 2,
-                    qc["vm_pu_squared"],
-                    "QC v²",
-                    "QC ṽ",
-                    "Squared voltage [p.u.²]",
-                ),
-            ]
+    ac_v = ac["vm_pu"]
+    qc_v = qc["vm_pu"]
 
-        for title, a, b, label_a, label_b, ylabel in voltage_comparisons:
-            d = b - a
+    d_v = qc_v - ac_v
 
+    print(
+        "\nAC v vs QC v\n"
+        f"  max abs diff  = {d_v.abs().max():.6g}\n"
+        f"  mean abs diff = {d_v.abs().mean():.6g}\n"
+        f"  status        = "
+        f"{'MISMATCH' if (d_v.abs() > tol).any() else 'OK'}"
+    )
+
+    plt.figure(figsize=(9, 4))
+    plt.scatter(x, ac_v, label="AC v", marker="o")
+    plt.scatter(x, qc_v, label="QC v", marker="x")
+    plt.xticks(x, ac.index, rotation=45)
+    plt.xlabel(component_name)
+    plt.ylabel("Voltage magnitude [p.u.]")
+    plt.title(f"{component_name} — AC v vs QC v")
+    plt.legend()
+    plt.grid()
+    plt.tight_layout()
+    plt.show()
+
+    if "vm_pu_squared" not in qc.columns:
+        return
+
+    qc_v_tilde = qc["vm_pu_squared"]
+    ac_v_sq = ac_v ** 2
+
+    d_v_tilde_ac = qc_v_tilde - ac_v_sq
+
+    print(
+        "\nAC v² vs QC ṽ\n"
+        f"  max abs diff  = {d_v_tilde_ac.abs().max():.6g}\n"
+        f"  mean abs diff = {d_v_tilde_ac.abs().mean():.6g}"
+    )
+
+    plt.figure(figsize=(9, 4))
+    plt.scatter(x, ac_v_sq, label="AC v²", marker="o")
+    plt.scatter(x, qc_v_tilde, label="QC ṽ", marker="x")
+    plt.xticks(x, ac.index, rotation=45)
+    plt.xlabel(component_name)
+    plt.ylabel("Squared voltage [p.u.²]")
+    plt.title(f"{component_name} — AC v² vs QC ṽ")
+    plt.legend()
+    plt.grid()
+    plt.tight_layout()
+    plt.show()
+
+    if (qc_v_tilde < -tol).any():
+        print("\nWARNING: QC ṽ contains negative values.")
+
+    qc_v_from_tilde = np.sqrt(qc_v_tilde.clip(lower=0.0))
+    d_v_from_tilde = qc_v_from_tilde - ac_v
+
+    print(
+        "\nAC v vs sqrt(QC ṽ)\n"
+        f"  max abs diff  = {d_v_from_tilde.abs().max():.6g}\n"
+        f"  mean abs diff = {d_v_from_tilde.abs().mean():.6g}"
+    )
+
+    plt.figure(figsize=(9, 4))
+    plt.scatter(x, ac_v, label="AC v", marker="o")
+    plt.scatter(x, qc_v_from_tilde, label="sqrt(QC ṽ)", marker="x")
+    plt.xticks(x, ac.index, rotation=45)
+    plt.xlabel(component_name)
+    plt.ylabel("Voltage magnitude [p.u.]")
+    plt.title(f"{component_name} — AC v vs sqrt(QC ṽ)")
+    plt.legend()
+    plt.grid()
+    plt.tight_layout()
+    plt.show()
+
+    qc_v_sq = qc_v ** 2
+    square_gap = qc_v_tilde - qc_v_sq
+
+    print(
+        "\nQC square relaxation gap: ṽ - v²\n"
+        f"  min gap       = {square_gap.min():.6g}\n"
+        f"  max gap       = {square_gap.max():.6g}\n"
+        f"  mean gap      = {square_gap.mean():.6g}\n"
+        f"  mean abs gap  = {square_gap.abs().mean():.6g}"
+    )
+
+    if (square_gap < -tol).any():
+        bad = square_gap[square_gap < -tol]
+        print(
+            "  INVALID: ṽ < v²\n"
+            f"  violating buses: {bad.index.tolist()}"
+        )
+    else:
+        print("  constraint ṽ >= v²: OK")
+
+    plt.figure(figsize=(9, 4))
+    plt.scatter(x, qc_v_sq, label="QC v²", marker="o")
+    plt.scatter(x, qc_v_tilde, label="QC ṽ", marker="x")
+    plt.xticks(x, ac.index, rotation=45)
+    plt.xlabel(component_name)
+    plt.ylabel("Squared voltage [p.u.²]")
+    plt.title(f"{component_name} — QC v² vs ṽ")
+    plt.legend()
+    plt.grid()
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(9, 4))
+    plt.scatter(x, square_gap, marker="o")
+    plt.axhline(0.0, linestyle="--")
+    plt.xticks(x, ac.index, rotation=45)
+    plt.xlabel(component_name)
+    plt.ylabel("ṽ - v² [p.u.²]")
+    plt.title(f"{component_name} — QC square relaxation gap between v_tilde and v²")
+    plt.grid()
+    plt.tight_layout()
+    plt.show()
+
+    if vmin_col is not None and vmax_col is not None:
+        if vmin_col in qc.columns:
+            v_min = qc[vmin_col]
+        elif vmin_col in ac.columns:
+            v_min = ac[vmin_col]
+        else:
+            raise KeyError(f"Column '{vmin_col}' not found.")
+
+        if vmax_col in qc.columns:
+            v_max = qc[vmax_col]
+        elif vmax_col in ac.columns:
+            v_max = ac[vmax_col]
+        else:
+            raise KeyError(f"Column '{vmax_col}' not found.")
+
+        upper_envelope = (
+            (v_min + v_max) * qc_v
+            - v_min * v_max
+        )
+
+        upper_gap = upper_envelope - qc_v_tilde
+
+        print(
+            "\nQC square upper-envelope check\n"
+            f"  min slack  = {upper_gap.min():.6g}\n"
+            f"  mean slack = {upper_gap.mean():.6g}"
+        )
+
+        if (upper_gap < -tol).any():
+            bad = upper_gap[upper_gap < -tol]
             print(
-                f"\n{title}: "
-                f"max diff={d.abs().max():.6g}, "
-                f"mean diff={d.abs().mean():.6g}"
+                "  INVALID: ṽ exceeds upper envelope\n"
+                f"  violating buses: {bad.index.tolist()}"
             )
+        else:
+            print("  upper-envelope constraint: OK")
 
-            plt.figure(figsize=(9, 4))
-            plt.scatter(x, a, label=label_a, marker="o")
-            plt.scatter(x, b, label=label_b, marker="x")
-            plt.xticks(x, ac.index, rotation=45)
-            plt.xlabel(component_name)
-            plt.ylabel(ylabel)
-            plt.title(f"{component_name} — {title}")
-            plt.legend()
-            plt.grid()
-            plt.tight_layout()
-            plt.show()
+        max_square_gap = ((v_max - v_min) ** 2) / 4.0
+
+        normalized_gap = pd.Series(
+            np.nan,
+            index=qc.index,
+            dtype=float,
+        )
+
+        valid = max_square_gap > tol
+
+        normalized_gap.loc[valid] = (
+            square_gap.loc[valid]
+            / max_square_gap.loc[valid]
+        )
+
+        print(
+            "\nNormalized QC square gap\n"
+            f"  max  = {normalized_gap.max():.6g}\n"
+            f"  mean = {normalized_gap.mean():.6g}"
+        )
+
+        plt.figure(figsize=(9, 4))
+        plt.scatter(x, normalized_gap, marker="o")
+        plt.axhline(0.0, linestyle="--")
+        plt.axhline(1.0, linestyle="--")
+        plt.xticks(x, ac.index, rotation=45)
+        plt.xlabel(component_name)
+        plt.ylabel("Normalized relaxation gap")
+        plt.title(f"{component_name} — normalized QC square gap")
+        plt.grid()
+        plt.tight_layout()
+        plt.show()
+
+    if "vm_pu_squared" in ac.columns:
+        ac_square_consistency = ac["vm_pu_squared"] - ac_v ** 2
+
+        print(
+            "\nAC v² consistency\n"
+            f"  max abs diff  = {ac_square_consistency.abs().max():.6g}\n"
+            f"  mean abs diff = {ac_square_consistency.abs().mean():.6g}"
+        )
 def plot_va_diff(ac_result, qc_result, line_buses, tol=1e-6):
     ac = solver_result_to_tables(ac_result)
     qc = solver_result_to_tables(qc_result)
@@ -939,6 +889,76 @@ def plot_va_diff(ac_result, qc_result, line_buses, tol=1e-6):
     plt.grid()
     plt.tight_layout()
     plt.show()
+def compare_currents(
+    ac_result,
+    qc_result,
+    sn_mva,
+    base_kv,
+    component_name="PowerLine",
+    id_col="id",
+    rel_tol=0.01,
+):
+    ac = solver_result_to_tables(ac_result)[component_name].copy()
+    qc = solver_result_to_tables(qc_result)[component_name].copy()
+
+    if id_col in ac and id_col in qc:
+        ac, qc = ac.set_index(id_col), qc.set_index(id_col)
+
+    ac, qc = ac.align(qc, join="inner", axis=0)
+
+    i_base_ka = sn_mva / (np.sqrt(3) * base_kv)
+    qc_i_lifted = np.sqrt(qc["i_qc"].clip(lower=0)) * i_base_ka
+
+    result = pd.DataFrame({
+        "AC i_from_ka": ac["i_from_ka"],
+        "QC i_from_ka": qc["i_from_ka"],
+        "QC i_qc_ka": qc_i_lifted,
+    })
+
+    d = result["QC i_from_ka"] - result["AC i_from_ka"]
+    tol_prozent = rel_tol * result["AC i_from_ka"].abs().mean()
+
+    print(
+        f"{'AC vs QC physical':20s} "
+        f"max diff = {d.abs().max():.6g}, "
+        f"mean diff = {d.abs().mean():.6g}, "
+        f"{'MISMATCH' if (d.abs() > tol_prozent).any() else 'OK'}"
+    )
+
+    d = result["QC i_qc_ka"] - result["AC i_from_ka"]
+
+    print(
+        f"{'AC vs QC lifted':20s} "
+        f"max diff = {d.abs().max():.6g}, "
+        f"mean diff = {d.abs().mean():.6g}, "
+        f"{'MISMATCH' if (d.abs() > tol_prozent).any() else 'OK'}"
+    )
+
+    x = np.arange(len(result))
+
+    plt.figure(figsize=(9, 4))
+    plt.scatter(x, result["AC i_from_ka"], label="AC", marker="o")
+    plt.scatter(x, result["QC i_from_ka"], label="QC physical", marker="x")
+    plt.xticks(x, result.index, rotation=45)
+    plt.ylabel("Current [kA]")
+    plt.title("AC vs QC current from P, Q, v")
+    plt.legend()
+    plt.grid()
+    plt.tight_layout()
+    plt.show()
+
+    plt.figure(figsize=(9, 4))
+    plt.scatter(x, result["AC i_from_ka"], label="AC", marker="o")
+    plt.scatter(x, result["QC i_qc_ka"], label="QC from i_qc", marker="x")
+    plt.xticks(x, result.index, rotation=45)
+    plt.ylabel("Current [kA]")
+    plt.title("AC current vs QC lifted current")
+    plt.legend()
+    plt.grid()
+    plt.tight_layout()
+    plt.show()
+
+    return result
 def solver_result_to_tables(result):
     tables = {}
 
@@ -1043,13 +1063,13 @@ def compare_extracted_tables_more_than_percent( MISCOP_result,QC_result,tol=0.05
 #PP_net = pp_create_66bus_high_meshed()
 #PP_results = PP_test_power_network(PP_net, AC = True, show_results = False)
 print("--------------Monee AC--------------------------")
-monee_net_NLP_AC, line_buses_AC = monee_create_11bus_low_meshed()
+monee_net_NLP_AC, line_buses_AC = monee_create_grid(bus_number =11, meshed= 2, n_feeders = 8, show_plot=True)
 monee_net_NLP_AC.apply_formulation(EL_NLP_FORMULATION)
 monee_result_NLP_AC = monee_test_power_network(monee_net_NLP_AC, show_results = False)
 #For result table comparison
 
 print("--------------Monee QC--------------------------")
-monee_net_QC, line_buses_QC = monee_create_11bus_low_meshed()
+monee_net_QC, line_buses_QC = monee_create_grid(bus_number = 11, meshed= 2, n_feeders = 8, show_plot=True)
 monee_net_QC.apply_formulation(EL_QC_FORMULATION)
 monee_result_QC = monee_test_power_network(monee_net_QC, show_results = False)
 #For result table comparison
@@ -1059,44 +1079,6 @@ result_plots(monee_result_NLP_AC, monee_result_QC, "PowerLine")
 result_plots(monee_result_NLP_AC, monee_result_QC, "PowerLoad")
 result_plots(monee_result_NLP_AC, monee_result_QC, "PowerGenerator")
 plot_va_diff(monee_result_NLP_AC, monee_result_QC, line_buses_AC)
+current_comparison = compare_currents(monee_result_NLP_AC, monee_result_QC, sn_mva=1.0, base_kv=1.0)
 #column_comparison = compare_extracted_tables_more_than_percent(monee_result_AC, monee_result_QC)
 #print(column_comparison)
-'''
-print("--------------Result comparison-------------------------")
-print("Pandapower AC with Monee AC")
-compare_line_results(PP_net, monee_result_AC)
-print("Pandapower AC with Monee QC")
-compare_line_results(PP_net, monee_result_QC)
-print("Monee QC with Monee AC")
-#compare_line_results(monee_result_QC, monee_result_AC)
-
-# OPF evaluation
-print("-----------------------Monee OPF AC Grid------------------------------")
-extgrid_bounds = (-0.5,0.5) #set bounds for both problems, other bounds are set internally (pandapower problem according to monee load_shedding)
-monee_opf_result_AC = monee_opf(monee_net_AC, extgrid_bounds= extgrid_bounds, show_details = True)
-print("-----------------------Monee OPF QC Grid------------------------------")
-extgrid_bounds = (-0.5,0.5) #set bounds for both problems, other bounds are set internally (pandapower problem according to monee load_shedding)
-monee_opf_result_QC = monee_opf(monee_net_QC, extgrid_bounds= extgrid_bounds, show_details = True)
-print("-----------------------Pandapower OPF AC------------------------------")
-pp_opf_net = pp_opf(PP_net,AC = True, extgrid_bounds = extgrid_bounds, show_details=True)
-#print_pp_summary(pp_opf_net)
-#print("Monee AC")
-#print_monee_summary(monee_opf_result_AC)
-#print("Monee QC")
-#print_monee_summary(monee_opf_result_QC)
-print("Compare monee results")
-lines1_mismatches , lines2_mismatches = compare_monee_results(monee_opf_result_QC, monee_opf_result_AC)
-plot_column_compare(lines1_mismatches, lines2_mismatches)
-boxplot_comparison(lines1_mismatches, lines2_mismatches)
-'''
-
-#todo: ist vm_pu wirklich vm_pu oder vm_pu quadratic
-#todo: McCormick anschauen und relaxations überprüfen
-#todo: formulation Squareroot in gleichung? Ist das convexifiziert? -> current als square berechnen, hab ich das schon wo?
-#todo: mal nur strom plotten jeweils eizeln, sind das max werte oder haben die noch variationen
-#todo:  Leistungsformeln für Lines anschauen, warum sind die off?
-# bounds für mccomic nochmal anschauen, ist was unbound? oder falsch bound?
-# in power models ist das auch implementiert, vll mal als referenz anschauen
-# grund für alles könnte voltage berechnung und voltage bounds sein?
-# fehlt eine optimierungsfunktion? Die nur den power flow optimiert? nur losses minimieren? jedenfalls nicht basierend auf kosten?
-# durch claude schicken? falls objective nicht passt

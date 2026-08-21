@@ -60,7 +60,7 @@ def _angle_bound(branch):
             "range.",
             stacklevel=2,
         ) #default value based on paper expectation
-        theta_u = math.pi / 6 #todo try to set to pi/36 -> accord to p.5 of paper
+        theta_u = math.pi / 6 #todo try to set to pi/36 -> accord to p.5 of paper  ?
     theta_u = float(theta_u)
 
     if not (0 < theta_u <= math.pi / 2): #according to paper relaxation only valid for agles smaller that pi/2
@@ -161,7 +161,15 @@ class QCElectricityBranchFormulation(BranchFormulation):
         #no optimization variables, just stored for later to branch
         branch.theta_u = theta_u
         branch.theta_M = theta_M
+    def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
+        """Ohmic loss ``r * l``, the term that drives the relaxation tight.
 
+        Same device the branch-flow MISOCP formulation uses. It is what makes
+        the ``wc``/``ws`` envelopes and the current SOC bind at the AC-feasible
+        point; drop it and the solver is free to return any point of the relaxed
+        set - on a 0.5 MW radial feeder that means a ~56 MW slack injection.
+        """
+        return [branch.i_qc * branch.br_r_pu]
     def equations( self,branch, grid, from_node_model, to_node_model, **kwargs):
         sn_mva = float(grid.sn_mva)
         if sn_mva <= 0:
@@ -352,30 +360,14 @@ class QCElectricityBranchFormulation(BranchFormulation):
         #  current, same as AC
 
         i_from_ka = (
-                (
-                        branch.p_from_mw ** 2
-                        + branch.q_from_mvar ** 2
-                        + CURRENT_SMOOTHING_EPS_MW ** 2
-                )
-                ** 0.5
-                / (
-                        vm_from
-                        * from_node_model.vars["base_kv"]
-                )
+                (branch.p_from_mw ** 2+ branch.q_from_mvar ** 2+ CURRENT_SMOOTHING_EPS_MW ** 2 ) ** 0.5
+                / (vm_from* from_node_model.vars["base_kv"] )
                 / SQRT_3
         )
 
         i_to_ka = (
-                (
-                        branch.p_to_mw ** 2
-                        + branch.q_to_mvar ** 2
-                        + CURRENT_SMOOTHING_EPS_MW ** 2
-                )
-                ** 0.5
-                / (
-                        vm_to
-                        * to_node_model.vars["base_kv"]
-                )
+                (branch.p_to_mw ** 2+ branch.q_to_mvar ** 2  + CURRENT_SMOOTHING_EPS_MW ** 2 ) ** 0.5
+                / (vm_to * to_node_model.vars["base_kv"])
                 / SQRT_3
         )
 
