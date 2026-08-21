@@ -269,9 +269,9 @@ def perspective_voltage_relax(
 
 def int_flow_from_p(
     p_from_var,
-    v_sq_from_var,  # squared voltage
-    wc_var,  # v_i*v_j*cos(theta_i-theta_j)
-    ws_var,  # v_i*v_j*sin(theta_i-theta_j)
+    v_sq_from_var,
+    wc_var,
+    ws_var,
     g_branch,
     b_branch,
     tap,
@@ -567,6 +567,15 @@ def current_switch_relax(
         z*v_sq*l^u >= p_pu^2 + q_pu^2
 
     Paper equations use p.u.; Monee gives P in MW and Q in MVAr.
+
+    NOTE: this strengthening is *not* part of the paper's actual QC-OTS
+    formulation (Appendix A.2.1 lists (3)-(7), (16), (21), (23), (32)-(34) as
+    the constraint set) -- it is presented as an additional valid, optional
+    tightening. It is provided here for callers who want the extra strength
+    on switching-heavy problems; it is intentionally not wired into every
+    switchable branch by default. Using it requires a thermal limit t_ij per
+    branch (thermal_limit_sq_pu_from_mva) and an upper bound on i_var
+    (current_upper_bound).
     """
     p_pu = _power_pu(p_var, sn_mva)
     q_pu = _power_pu(q_var, sn_mva)
@@ -578,14 +587,32 @@ def current_switch_relax(
         i_var <= on_off * i_ub,
         on_off * v_sq_var * i_ub >= s_sq_pu,
     ]
-def voltage_product_soc(wc_var, ws_var, v_sq_from_var, v_sq_to_var):
-    """
-    W-matrix 2x2 positive-semidefiniteness as a rotated SOC:
-    ``w_c^2 + w_s^2 <= v_i^2 * v_j^2``.
 
-    The standard QC-OPF tightening (Coffrin et al.). It couples ``wc``/``ws``
-    to the squared voltages directly instead of only through the sequential
-    ``vv`` McCormick chain, and is exact - it holds for every AC-feasible
-    point.
+
+def generation_cost(p_g, c0=0.0, c1=1.0, c2=0.0):
     """
-    return wc_var**2 + ws_var**2 <= v_sq_from_var * v_sq_to_var
+    Paper Eq. (11), generator fuel-cost objective term for a single generator:
+
+        c2*(p_g)^2 + c1*p_g + c0
+
+    Paper Eq. (10) (pure active-power / loss minimization) is the special
+    case c2=0, c1=1, c0=0 -- the paper's own default when no cost curve is
+    given (Section 2.3).
+
+    p_g is the *generated* active-power magnitude (positive for generation),
+    matching the paper's p^g_i convention -- NOT Monee's internal signed
+    p_mw (which is negative for generation); callers pass -model.p_mw.
+
+    Convexity requirement: the paper's relaxations (and this whole QC model)
+    are only meaningful as a convex program if the objective stays convex
+    too, which requires c2 >= 0 -- true for any physical fuel-cost curve.
+    A negative c2 is rejected here rather than silently producing a
+    nonconvex objective.
+    """
+    if isinstance(c2, (int, float)) and c2 < 0:
+        raise ValueError(
+            "Paper Eq. (11) requires c2 >= 0 for the OPF objective to "
+            f"remain convex; got c2={c2!r}."
+        )
+
+    return c2 * p_g**2 + c1 * p_g + c0
