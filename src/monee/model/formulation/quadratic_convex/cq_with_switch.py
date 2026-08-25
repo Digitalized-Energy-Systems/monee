@@ -55,12 +55,10 @@ def _angle_bound(branch):
     if theta_u is None:
         import warnings
         warnings.warn(
-            "No explicit value for theta_u (angmax/delta_max) given; "
-            "defaulting to pi/6, per the paper's expected angle-difference "
-            "range.",
+            "No explicit value for theta_u (angmax/delta_max) given; defaulting to pi/36, tighter than paper (theha_u <=pi/2).",
             stacklevel=2,
         ) #default value based on paper expectation
-        theta_u = math.pi / 6 #todo try to set to pi/36 -> accord to p.5 of paper  ?
+        theta_u = math.pi / 36 #todo try to set to pi/36 -> accord to p.5 of paper  ?
     theta_u = float(theta_u)
 
     if not (0 < theta_u <= math.pi / 2): #according to paper relaxation only valid for agles smaller that pi/2

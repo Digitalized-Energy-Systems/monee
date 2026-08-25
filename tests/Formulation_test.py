@@ -634,11 +634,17 @@ def result_plots(
     for c in cols:
         d = qc[c] - ac[c]
         tol_prozent = rel_tol * ac[c].abs().mean()
+        abs_mean = ac[c].abs().mean()
+        if abs_mean < 1e-12:
+            mean_rel_diff = 0.0 if d.abs().mean() < 1e-12 else np.inf
+        else:
+            mean_rel_diff = d.abs().mean() / abs_mean * 100
         print(
             f"{c:20s} "
             f"max diff = {d.abs().max():.6g}, "
             f"mean diff = {d.abs().mean():.6g}, "
-            f"{'MISMATCH' if (d.abs() > tol_prozent).any() else 'OK'}"
+            f"mean rel diff = {mean_rel_diff:.3f}%, " 
+            f"{'at least one abs diff > tolerance' if (d.abs() > tol_prozent).any() else 'OK'}"
         )
 
         plt.figure(figsize=(9, 4))
@@ -852,7 +858,8 @@ def result_plots(
             f"  max abs diff  = {ac_square_consistency.abs().max():.6g}\n"
             f"  mean abs diff = {ac_square_consistency.abs().mean():.6g}"
         )
-def plot_va_diff(ac_result, qc_result, line_buses, tol=1e-6):
+def va_diff_and_analysis(ac_result, qc_result, line_buses, tol=1e-6, tol_degree=0.05
+):
     ac = solver_result_to_tables(ac_result)
     qc = solver_result_to_tables(qc_result)
 
@@ -861,19 +868,66 @@ def plot_va_diff(ac_result, qc_result, line_buses, tol=1e-6):
 
     pairs = line_buses.values() if isinstance(line_buses, dict) else line_buses
 
-    va_diff_ac = pd.Series(
-        [ac_bus.loc[i, "va_radians"] - ac_bus.loc[j, "va_radians"]
-         for i, j in pairs],
+    va_diff_ac_rad = pd.Series(
+        [
+            ac_bus.loc[i, "va_radians"] - ac_bus.loc[j, "va_radians"]
+            for i, j in pairs
+        ],
         index=qc_line.index
     )
 
-    va_diff_qc = qc_line["va_diff"]
-    d = va_diff_qc - va_diff_ac
+    va_diff_qc_rad = qc_line["va_diff"]
+    va_diff_lifted_rad = np.arctan2(qc_line["ws"], qc_line["wc"])
+
+    va_diff_ac = np.rad2deg(va_diff_ac_rad)
+    va_diff_qc = np.rad2deg(va_diff_qc_rad)
+    va_diff_lifted = np.rad2deg(va_diff_lifted_rad)
+
+    sin_gap = qc_line["s"] - np.sin(va_diff_qc_rad)
+    cos_gap = qc_line["cs"] - np.cos(va_diff_qc_rad)
+    ws_gap = qc_line["ws"] - qc_line["vv"] * qc_line["s"]
+    wc_gap = qc_line["wc"] - qc_line["vv"] * qc_line["cs"]
+
+    comparisons = {
+        "AC vs QC va_diff": va_diff_qc - va_diff_ac,
+        "AC vs QC lifted": va_diff_lifted - va_diff_ac,
+        "QC internal": va_diff_lifted - va_diff_qc,
+    }
+
+    print("\nVoltage angle difference comparison [degree]")
+
+    for name, d in comparisons.items():
+        print(
+            f"{name:20s} "
+            f"max diff = {d.abs().max():.6g}°, "
+            f"mean diff = {d.abs().mean():.6g}°, "
+            f"{'MISMATCH' if (d.abs() > tol_degree).any() else 'OK'}"
+        )
+
+    print("\nQC relaxation gaps [dimensionless / lifted variable units]")
 
     print(
-        f"va_diff: max diff={d.abs().max():.6g}, "
-        f"mean diff={d.abs().mean():.6g}, "
-        f"{'MISMATCH' if (d.abs() > tol).any() else 'OK'}"
+        f"{'sin gap':20s} "
+        f"max = {sin_gap.abs().max():.6g}, "
+        f"mean = {sin_gap.abs().mean():.6g}"
+    )
+
+    print(
+        f"{'cos gap':20s} "
+        f"max = {cos_gap.abs().max():.6g}, "
+        f"mean = {cos_gap.abs().mean():.6g}"
+    )
+
+    print(
+        f"{'ws gap':20s} "
+        f"max = {ws_gap.abs().max():.6g}, "
+        f"mean = {ws_gap.abs().mean():.6g}"
+    )
+
+    print(
+        f"{'wc gap':20s} "
+        f"max = {wc_gap.abs().max():.6g}, "
+        f"mean = {wc_gap.abs().mean():.6g}"
     )
 
     x = np.arange(len(qc_line))
@@ -881,9 +935,16 @@ def plot_va_diff(ac_result, qc_result, line_buses, tol=1e-6):
     plt.figure(figsize=(9, 4))
     plt.scatter(x, va_diff_ac, label="AC Δθ", marker="o")
     plt.scatter(x, va_diff_qc, label="QC Δθ", marker="x")
+    plt.scatter(
+        x,
+        va_diff_lifted,
+        label="QC atan2(ws, wc)",
+        marker="+"
+    )
+
     plt.xticks(x, qc_line.index, rotation=45)
     plt.xlabel("PowerLine")
-    plt.ylabel("Angle difference [rad]")
+    plt.ylabel("Voltage angle difference [°]")
     plt.title("PowerLine — Voltage Angle Difference: AC vs QC")
     plt.legend()
     plt.grid()
@@ -919,7 +980,7 @@ def compare_currents(
     tol_prozent = rel_tol * result["AC i_from_ka"].abs().mean()
 
     print(
-        f"{'AC vs QC physical':20s} "
+        f"{'AC vs QC i_from_ka physical':20s} "
         f"max diff = {d.abs().max():.6g}, "
         f"mean diff = {d.abs().mean():.6g}, "
         f"{'MISMATCH' if (d.abs() > tol_prozent).any() else 'OK'}"
@@ -928,7 +989,7 @@ def compare_currents(
     d = result["QC i_qc_ka"] - result["AC i_from_ka"]
 
     print(
-        f"{'AC vs QC lifted':20s} "
+        f"{'AC (i_from_ka) vs QC (i_qc_ka) lifted':20s} "
         f"max diff = {d.abs().max():.6g}, "
         f"mean diff = {d.abs().mean():.6g}, "
         f"{'MISMATCH' if (d.abs() > tol_prozent).any() else 'OK'}"
@@ -1063,13 +1124,13 @@ def compare_extracted_tables_more_than_percent( MISCOP_result,QC_result,tol=0.05
 #PP_net = pp_create_66bus_high_meshed()
 #PP_results = PP_test_power_network(PP_net, AC = True, show_results = False)
 print("--------------Monee AC--------------------------")
-monee_net_NLP_AC, line_buses_AC = monee_create_grid(bus_number =11, meshed= 2, n_feeders = 8, show_plot=True)
+monee_net_NLP_AC, line_buses_AC = monee_create_grid(bus_number =11, meshed= 2, n_feeders = 4, show_plot=True)
 monee_net_NLP_AC.apply_formulation(EL_NLP_FORMULATION)
 monee_result_NLP_AC = monee_test_power_network(monee_net_NLP_AC, show_results = False)
 #For result table comparison
 
 print("--------------Monee QC--------------------------")
-monee_net_QC, line_buses_QC = monee_create_grid(bus_number = 11, meshed= 2, n_feeders = 8, show_plot=True)
+monee_net_QC, line_buses_QC = monee_create_grid(bus_number = 11, meshed= 2, n_feeders = 4, show_plot=True)
 monee_net_QC.apply_formulation(EL_QC_FORMULATION)
 monee_result_QC = monee_test_power_network(monee_net_QC, show_results = False)
 #For result table comparison
@@ -1078,7 +1139,10 @@ result_plots(monee_result_NLP_AC, monee_result_QC, "Bus")
 result_plots(monee_result_NLP_AC, monee_result_QC, "PowerLine")
 result_plots(monee_result_NLP_AC, monee_result_QC, "PowerLoad")
 result_plots(monee_result_NLP_AC, monee_result_QC, "PowerGenerator")
-plot_va_diff(monee_result_NLP_AC, monee_result_QC, line_buses_AC)
+va_diff_and_analysis(monee_result_NLP_AC, monee_result_QC, line_buses_AC)
 current_comparison = compare_currents(monee_result_NLP_AC, monee_result_QC, sn_mva=1.0, base_kv=1.0)
 #column_comparison = compare_extracted_tables_more_than_percent(monee_result_AC, monee_result_QC)
 #print(column_comparison)
+
+#todo angle gaps in claude anschauen, sind die schon korrigiert?
+# Ggf gedanken über Monee paper und vorstellung von Merkmalen überlegen
