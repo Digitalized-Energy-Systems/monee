@@ -58,7 +58,7 @@ def _angle_bound(branch):
             "No explicit value for theta_u (angmax/delta_max) given; defaulting to pi/36, tighter than paper (theha_u <=pi/2).",
             stacklevel=2,
         ) #default value based on paper expectation
-        theta_u = math.pi / 36 #todo try to set to pi/36 -> accord to p.5 of paper  ?
+        theta_u = math.pi / 2 #todo try to set to pi/36 -> accord to p.5 of paper  ?
     theta_u = float(theta_u)
 
     if not (0 < theta_u <= math.pi / 2): #according to paper relaxation only valid for agles smaller that pi/2
@@ -140,6 +140,7 @@ class QCElectricityBranchFormulation(BranchFormulation):
         branch.i_to_ka = Intermediate(0)
         branch.loading_from_pu = Intermediate(0)
         branch.loading_to_pu = Intermediate(0)
+
         # QC variables
         branch.va_diff = Var(0, min=-theta_M, max=theta_M) #branch voltage-angle difference with bounds
         branch.cs = Var(1, min=0, max=1) #lifted cosine variable ~cos(delta_ij) (0 to 1 because delta -pi/2 to pi/2)

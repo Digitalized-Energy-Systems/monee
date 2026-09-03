@@ -934,13 +934,8 @@ def va_diff_and_analysis(ac_result, qc_result, line_buses, tol=1e-6, tol_degree=
 
     plt.figure(figsize=(9, 4))
     plt.scatter(x, va_diff_ac, label="AC Δθ", marker="o")
-    plt.scatter(x, va_diff_qc, label="QC Δθ", marker="x")
-    plt.scatter(
-        x,
-        va_diff_lifted,
-        label="QC atan2(ws, wc)",
-        marker="+"
-    )
+    #plt.scatter(x, va_diff_qc, label="QC Δθ", marker="x")
+    plt.scatter(x,va_diff_lifted,label="QC atan2(ws, wc)",marker="+")
 
     plt.xticks(x, qc_line.index, rotation=45)
     plt.xlabel("PowerLine")
@@ -950,6 +945,7 @@ def va_diff_and_analysis(ac_result, qc_result, line_buses, tol=1e-6, tol_degree=
     plt.grid()
     plt.tight_layout()
     plt.show()
+
 def compare_currents(
     ac_result,
     qc_result,
