@@ -674,7 +674,7 @@ def result_plots(
         f"  status        = "
         f"{'MISMATCH' if (d_v.abs() > tol).any() else 'OK'}"
     )
-
+    '''
     plt.figure(figsize=(9, 4))
     plt.scatter(x, ac_v, label="AC v", marker="o")
     plt.scatter(x, qc_v, label="QC v", marker="x")
@@ -686,7 +686,7 @@ def result_plots(
     plt.grid()
     plt.tight_layout()
     plt.show()
-
+    '''
     if "vm_pu_squared" not in qc.columns:
         return
 
@@ -838,6 +838,7 @@ def result_plots(
             f"  mean = {normalized_gap.mean():.6g}"
         )
 
+        '''
         plt.figure(figsize=(9, 4))
         plt.scatter(x, normalized_gap, marker="o")
         plt.axhline(0.0, linestyle="--")
@@ -849,15 +850,9 @@ def result_plots(
         plt.grid()
         plt.tight_layout()
         plt.show()
+        '''
 
-    if "vm_pu_squared" in ac.columns:
-        ac_square_consistency = ac["vm_pu_squared"] - ac_v ** 2
 
-        print(
-            "\nAC v² consistency\n"
-            f"  max abs diff  = {ac_square_consistency.abs().max():.6g}\n"
-            f"  mean abs diff = {ac_square_consistency.abs().mean():.6g}"
-        )
 def va_diff_and_analysis(ac_result, qc_result, line_buses, tol=1e-6, tol_degree=0.05
 ):
     ac = solver_result_to_tables(ac_result)
