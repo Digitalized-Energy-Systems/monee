@@ -43,7 +43,12 @@ def _flow_and_pressure_eqs(
     signed = branch.mass_flow_kgs
     mag = branch.mass_flow_mag_kgs
     eqs = [
-        mag == smoothmodel.smooth_abs(signed, formulation.smoothing_eps, sqrt_impl),
+        mag
+        == smoothmodel.smooth_abs(
+            signed,
+            smoothmodel.scaled_smoothing_eps(formulation.smoothing_eps, f_max_local),
+            sqrt_impl,
+        ),
         branch.mass_flow_pos_kgs == 0.5 * (mag + signed),  # NOSONAR
         branch.mass_flow_neg_kgs == 0.5 * (mag - signed),  # NOSONAR
     ]

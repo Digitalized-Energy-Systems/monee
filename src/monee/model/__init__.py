@@ -89,6 +89,7 @@ from .multi import (
     SubHG,
 )
 from .grid import (
+    STANDARD_ATMOSPHERE_PA,
     create_gas_grid,
     create_water_grid,
     create_power_grid,

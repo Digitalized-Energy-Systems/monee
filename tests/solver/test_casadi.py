@@ -6,12 +6,15 @@ solver) rather than hard-coded numbers, so these stay valid as formulations
 evolve.
 """
 
+import contextlib
+import logging
 import math
 
 import numpy as np
 import pytest
 
 import monee
+import monee.express as mx
 import monee.model as mm
 from monee import TimeseriesData
 from monee.model import Network, Var
@@ -25,6 +28,7 @@ from monee.solver.dispatch import resolve_multi_period_solver, resolve_solver
 ca = pytest.importorskip("casadi")
 
 from monee.solver import CasADiSolver, CasADiTimeseries  # noqa: E402
+from monee.solver.casadi import CasADiSolveError  # noqa: E402
 
 
 def _two_line_net(vm=1.0, controllable_gen=False):
@@ -424,3 +428,271 @@ def test_casadi_warm_start_hint_is_one_shot_and_matches_cold_solve():
 
     assert cold.success and warm.success
     np.testing.assert_allclose(_vm(warm), _vm(cold), rtol=1e-6)
+
+
+def _single_gas_pipe_net(mass_flow_kgs=0.12):
+    gas = mm.create_gas_grid("gas", type="lgas")
+    pn = Network()
+    g0 = pn.node(mm.Junction(), grid=gas, child_ids=[pn.child(mm.ExtHydrGrid())])
+    g1 = pn.node(
+        mm.Junction(),
+        grid=gas,
+        child_ids=[pn.child(mm.Sink(mass_flow_kgs=mass_flow_kgs))],
+    )
+    pn.branch(mm.GasPipe(diameter_m=0.15, length_m=400, temperature_ext_k=300), g0, g1)
+    return pn
+
+
+def test_relaxed_gas_formulation_warns_on_casadi():
+    # GIVEN the epigraph-relaxed gas formulation solved on IPOPT, which relaxes
+    # its direction binary.
+    from monee.solver.core import reset_validation_summary_counts
+
+    reset_validation_summary_counts()
+    with pytest.warns(UserWarning, match="Result validation"):
+        result = monee.run_energy_flow(
+            _single_gas_pipe_net(), formulation="convex_miqcqp"
+        )
+
+    # THEN the untightened relaxation is reported instead of silently returning
+    # a pressure drop that is several times the Weymouth value.
+    assert result.success
+    assert any(w.category == "relaxation" for w in result.warnings)
+
+
+def test_default_gas_formulation_does_not_warn(caplog):
+    with caplog.at_level(logging.WARNING, logger="monee.solver.casadi"):
+        result = monee.run_energy_flow(_single_gas_pipe_net())
+
+    assert not [w for w in result.warnings if w.category == "relaxation"]
+
+
+def _unidirectional_water_ring(n=6):
+    net = mm.Network()
+    pipe_kwargs = dict(
+        diameter_m=0.2,
+        length_m=250,
+        insulation_thickness_m=0.05,
+        lambda_insulation_w_per_m_k=0.03,
+        temperature_ext_k=278.15,
+        unidirectional=True,
+    )
+    supply = [mx.create_water_junction(net) for _ in range(n)]
+    return_ = [mx.create_water_junction(net) for _ in range(n)]
+    for i in range(n):
+        mx.create_water_pipe(net, supply[i], supply[(i + 1) % n], **pipe_kwargs)
+        mx.create_water_pipe(net, return_[i], return_[(i + 1) % n], **pipe_kwargs)
+    for i in range(1, n):
+        mx.create_heat_exchanger(net, supply[i], return_[i], q_mw=0.3)
+    mx.create_water_ext_grid(net, supply[0], t_k=363.15)
+    mx.create_consume_hydr_grid(net, return_[0])
+    return net
+
+
+def test_squared_mass_flow_stays_tied_to_the_flow():
+    # GIVEN a ring of unidirectional pipes, which pins every positive flow to 0.
+    net = _unidirectional_water_ring()
+
+    # WHEN
+    try:
+        result = monee.run_energy_flow(net)
+    except CasADiSolveError:
+        # The pinned ring has no physical solution; reporting that is correct.
+        return
+
+    # THEN the Darcy epigraph variable is never larger than the flow allows, so
+    # no pressure drop can be fabricated on a pipe that carries no flow.
+    pipes = result.get(mm.WaterPipe)
+    squared = pipes["mass_flow_pos_kgs_squared"]
+    flow = pipes["mass_flow_pos_kgs"].clip(lower=0)
+    assert (squared <= (flow + 1e-3) ** 2 + 1e-2).all()
+
+
+def _two_bus_net(load_mw=2.0):
+    net = mx.create_multi_energy_network()
+    bus_0 = mx.create_bus(net, base_kv=20)
+    bus_1 = mx.create_bus(net, base_kv=20)
+    mx.create_line(net, bus_0, bus_1, 800, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+    mx.create_ext_power_grid(net, bus_0)
+    mx.create_power_load(net, bus_1, p_mw=load_mw, q_mvar=0.0)
+    return net, bus_1
+
+
+def test_solve_reports_termination_metadata_and_residuals():
+    net, _ = _two_bus_net()
+
+    result = monee.run_energy_flow(net)
+
+    assert result.solver_status == "ok"
+    assert result.termination_condition == "Solve_Succeeded"
+    assert result.residuals is not None
+    assert result.residuals < 1e-6
+
+
+def test_acceptable_level_stop_is_reported_as_a_warning(caplog):
+    net, _ = _two_bus_net()
+    # Ask for a tolerance IPOPT cannot reach, so it stops at the acceptable
+    # level instead - which stats["success"] alone cannot distinguish.
+    solver = CasADiSolver(
+        solver_options={
+            "ipopt.tol": 1e-16,
+            "ipopt.acceptable_tol": 1e-6,
+            "ipopt.acceptable_iter": 2,
+        }
+    )
+
+    with caplog.at_level(logging.WARNING, logger="monee.solver.casadi"):
+        result = solver.solve(net)
+
+    assert result.termination_condition == "Solved_To_Acceptable_Level"
+    assert result.solver_status == "warning"
+    assert any("Solved_To_Acceptable_Level" in r.message for r in caplog.records)
+
+
+def test_non_converged_solve_is_retried_with_an_adaptive_barrier(monkeypatch, caplog):
+    calls = []
+
+    class _FakeSolver:
+        def __init__(self, status):
+            self._status = status
+
+        def __call__(self, **_kwargs):
+            return {"x": 0.0, "f": 0.0}
+
+        def stats(self):
+            return {
+                "success": self._status == "Solve_Succeeded",
+                "return_status": self._status,
+            }
+
+    def fake_nlpsol(name, _plugin, _nlp, opts):
+        calls.append((name, opts))
+        return _FakeSolver("Solve_Succeeded")
+
+    from monee.solver import casadi as casadi_backend
+
+    monkeypatch.setattr(casadi_backend.ca, "nlpsol", fake_nlpsol)
+
+    with caplog.at_level(logging.WARNING, logger="monee.solver.casadi"):
+        _sol, stats = casadi_backend._solve_with_retry(
+            _FakeSolver("Restoration_Failed"), {}, {}, {}, "monee_test", "solve"
+        )
+
+    assert stats["return_status"] == "Solve_Succeeded"
+    assert calls[0][1]["ipopt.mu_strategy"] == "adaptive"
+    messages = [r.getMessage() for r in caplog.records]
+    assert any("retrying automatically" in m for m in messages)
+    # The notice must not read like a failed run: it says a recovery step is
+    # under way and a closing line reports that the retry converged.
+    assert any("not a failed run" in m for m in messages)
+    assert any("recovered at return status 'Solve_Succeeded'" in m for m in messages)
+
+
+def test_multi_period_retry_notice_carries_the_window_index(monkeypatch, caplog):
+    import monee.express as mx_
+    from monee.solver import casadi as casadi_backend
+
+    net = mx_.create_multi_energy_network()
+    bus_0 = mx_.create_bus(net, base_kv=20)
+    bus_1 = mx_.create_bus(net, base_kv=20)
+    mx_.create_line(net, bus_0, bus_1, 800, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+    mx_.create_ext_power_grid(net, bus_0)
+    mx_.create_power_load(net, bus_1, p_mw=0.1, q_mvar=0.0)
+
+    labels = []
+    original = casadi_backend._solve_with_retry
+
+    def spy(solver, nlp, opts, args, name, what, x0_alt=None):
+        labels.append(what)
+        return original(solver, nlp, opts, args, name, what, x0_alt=x0_alt)
+
+    monkeypatch.setattr(casadi_backend, "_solve_with_retry", spy)
+
+    solver = casadi_backend.CasADiMultiPeriodSolver()
+    solver.solve_multi_period(net, steps=2, dt_h=1.0)
+    solver.solve_multi_period(net, steps=2, dt_h=1.0)
+
+    assert labels[0].startswith("multi-period solve 1 (T=2 periods; window 1")
+    assert labels[1].startswith("multi-period solve 2 (T=2 periods; window 2")
+
+
+def test_simulation_warns_about_a_custom_child_var_without_equations(caplog):
+    @mm.model
+    class _FreeVarChild(mm.ChildModel):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.p_mw = Var(1.0, min=0.5, max=3.0, name="p_mw")
+            self.q_mvar = 0.0
+
+        def equations(self, grid, node, **kwargs):
+            return []
+
+    net, bus_1 = _two_bus_net()
+    mx.create_el_child(net, _FreeVarChild(), node_id=bus_1)
+
+    with caplog.at_level(logging.WARNING, logger="monee.solver.casadi"):
+        result = monee.run_energy_flow(net)
+
+    assert result.mode_used == "simulation"
+    assert any(
+        w.category == "dof" and "not square" in w.message for w in result.warnings
+    )
+
+
+def _infeasible_electric_net():
+    net = mx.create_multi_energy_network()
+    bus_0 = mx.create_bus(net, base_kv=20)
+    bus_1 = mx.create_bus(net, base_kv=20)
+    mx.create_line(net, bus_0, bus_1, 800, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+    mx.create_ext_power_grid(net, bus_0, max_import_mw=0.5)
+    mx.create_power_load(net, bus_1, p_mw=2.0, q_mvar=0.0)
+    return net
+
+
+def test_infeasible_electric_net_message_carries_no_compound_hint():
+    net = _infeasible_electric_net()
+
+    # Batch solver-ergonomics item S1: the failure is reported on the result.
+    result = monee.run_energy_flow(net)
+    assert result.success is False
+    report = result.infeasibility_report
+    assert report.numerics_failure is False  # a verdict, not a breakdown
+
+    message = report.message
+    assert "Infeasible_Problem_Detected" in message
+    assert "compound" not in message.lower()
+    assert "flat start" not in message.lower()
+    # The compound-specific retry hint must stay absent; the generic pointer
+    # to the Pyomo structured report is expected on every failed solve.
+    assert "result.infeasibility_report" in message
+    assert "diagnose_infeasibility" in message
+
+
+def test_solver_options_kwarg_passes_through_the_functional_api(caplog):
+    from monee.problem import OptimizationProblem
+
+    net, _ = _two_bus_net()
+    result = monee.run_energy_flow_optimization(
+        net,
+        OptimizationProblem(),
+        backend="casadi",
+        solver_options={"ipopt.print_level": 0},
+    )
+    assert result.success
+
+    net2, _ = _two_bus_net()
+    with caplog.at_level(logging.WARNING, logger="monee.solver.casadi"):
+        with contextlib.suppress(CasADiSolveError):
+            monee.run_energy_flow_optimization(
+                net2,
+                OptimizationProblem(),
+                backend="casadi",
+                solver_options={"ipopt.max_iter": 3},
+            )
+    assert any("Maximum_Iterations_Exceeded" in r.message for r in caplog.records)
+
+
+def test_solve_solver_options_merge_over_instance_options():
+    net, _ = _two_bus_net()
+    solver = CasADiSolver(solver_options={"ipopt.max_iter": 3})
+    assert solver.solve(net, solver_options={"ipopt.max_iter": 3000}).success

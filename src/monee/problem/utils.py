@@ -56,6 +56,10 @@ def line_loading_limit(branch_model, side: str, max_loading: float, basis: str =
     max_i_ka = getattr(branch_model, "max_i_ka", None)
     if max_i_ka is None or max_i_ka >= _UNBOUND_MAX_I_KA:
         return True
+    # Under the branch-flow formulations current_pu_squared is the SERIES current,
+    # so this caps the terminal current only up to the pi-shunt charging current.
+    # Branches that carry charging (MATPOWER, CIM) reach this code only when they
+    # have no max_s_mva, and both importers leave those unrated.
     scale_attr = f"_misocp_loading_{side}_scale_squared"
     if hasattr(branch_model, scale_attr):
         scale_sq = getattr(branch_model, scale_attr)
@@ -66,7 +70,7 @@ def line_loading_limit(branch_model, side: str, max_loading: float, basis: str =
 
 
 def make_node_var_bounds_hook(node_type, attr, squared_attr, bounds):
-    """``_controllable_appliables`` hook bounding *attr* (and ``lo²..hi²`` on
+    """``_controllable_appliables`` hook bounding *attr* (and ``lo^2..hi^2`` on
     *squared_attr*) on independent nodes of exactly *node_type*. Only Var-typed
     attributes are touched: whichever of the pair the formulation uses as its
     actual decision variable gets the bound, while reporting Intermediates are
@@ -137,12 +141,13 @@ def cp_input_rated_mw(component):  # NOSONAR
 
     # ---- Power-input CPs --------------------------------------------------
     if isinstance(model, PowerToHeatControlNode):
-        return ("power", abs(_scalar(model.el_mw)))
+        # el_mw is the solved draw; load_p_mw carries the nameplate setpoint.
+        return ("power", abs(_scalar(model.load_p_mw)))
     if isinstance(model, PowerToHeatHG):
         return ("power", abs(_scalar(model.load_p_mw)))
     if isinstance(model, PowerToGas):
         eff = max(getattr(model, "efficiency", 1.0), 1e-6)
-        # gas_mass_flow_kgs stored as -mass_flow_setpoint_kgs; rated input power = output / η.
+        # gas_mass_flow_kgs stored as -mass_flow_setpoint_kgs; rated input power = output / eta.
         return (
             "power",
             abs(_scalar(model.gas_mass_flow_kgs)) * KGPS_KWHPERKG_TO_MW * _hhv() / eff,

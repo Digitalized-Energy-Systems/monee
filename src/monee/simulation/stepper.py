@@ -9,6 +9,7 @@ storage SoC, ...) via the shared StepState plumbing. Each
 from __future__ import annotations
 
 import logging
+import warnings
 from collections.abc import Mapping
 from dataclasses import astuple, dataclass, fields
 from typing import Any
@@ -25,7 +26,7 @@ from monee.model.core import (
     PostProcess,
     value,
 )
-from monee.simulation.step_state import StepState
+from monee.simulation.step_state import StepState, _extract_value
 from monee.simulation.timeseries import (
     StepResult,
     TimeseriesData,
@@ -208,7 +209,13 @@ class Stepper:
     the warm-start options self-heals with a flat-start retry. With
     ``copy_base=False`` the working net is the caller's live network, so warm
     starting writes solved values into it; pass ``warm_start=False`` to keep
-    it strictly caller-owned."""
+    it strictly caller-owned.
+
+    ``carry_failed_dt`` (default ``True``) rolls a step that failed under
+    ``on_step_error='skip'`` into the next successful step's integration
+    interval. A co-simulation host that owns the clock and wants every step
+    integrated over exactly the ``dt_h`` it passed sets it to ``False``; see
+    :meth:`step`."""
 
     __slots__ = (
         "_base_net",
@@ -224,6 +231,7 @@ class Stepper:
         "_step_count",
         "_t_h",
         "_carry_dt_h",
+        "_carry_failed_dt",
         "_work_net",
         "_copy_base",
         "_warm_start",
@@ -252,6 +260,7 @@ class Stepper:
         max_changes: int | None = None,
         copy_base: bool = True,
         warm_start: bool | None = None,
+        carry_failed_dt: bool = True,
         **solver_kwargs: Any,
     ) -> None:
         if on_step_error not in ("raise", "skip"):
@@ -280,10 +289,15 @@ class Stepper:
         )
         self._optimization_problem = optimization_problem
         self._timeseries_data = timeseries_data
+        if timeseries_data is not None:
+            timeseries_data.validate_bound(net, strict=False)
         self._initial_state: dict = dict(initial_state) if initial_state else {}
         self._on_step_error = on_step_error
         self._max_history = max_history
+        self._carry_failed_dt = carry_failed_dt
         self._solver_kwargs = dict(solver_kwargs)
+        if optimization_problem is None:
+            self._solver_kwargs.setdefault("simulation", True)
         self._state = StepState(
             initial_state=self._initial_state, max_steps=max_history
         )
@@ -340,14 +354,29 @@ class Stepper:
         is rolled back, so a raising step leaves no change events; the deltas
         are re-detected and attributed to the next attempted step.
 
-        Failed-interval time accounting: under ``on_step_error='skip'`` a
-        failed step's elapsed interval (including any carried backlog) is
-        accumulated into the ``dt_h`` seen by the next successful step's
-        inter-step integration, so temporal integration (storage SoC,
-        linepack, ...) stays conservative. ``t_h`` always advances by the raw
-        ``dt_h``."""
+        Failed-interval time accounting: under ``on_step_error='skip'`` and
+        ``carry_failed_dt=True`` (default) a failed step's elapsed interval
+        (including any carried backlog) is accumulated into the ``dt_h`` seen
+        by the next successful step's inter-step integration, so no time goes
+        missing from a storage SoC or a linepack. The carried interval is
+        integrated against the *new* step's setpoints, which were never
+        requested for it, and it multiplies that setpoint against storage
+        bounds, so a rated-power step can turn infeasible after a long
+        failure streak; ``carry_failed_dt=False`` keeps every step at its own
+        ``dt_h`` instead. Either way the step is logged at WARNING and the
+        StepResult reports ``dt_h`` and ``effective_dt_h``. ``t_h`` always
+        advances by the raw ``dt_h``."""
         if dt_h <= 0:
             raise ValueError(f"dt_h must be > 0, got {dt_h}")
+        if self._timeseries_data is not None and ts_index is not None:
+            length = self._timeseries_data.length
+            if length is not None and not 0 <= ts_index < length:
+                raise ValueError(
+                    f"ts_index {ts_index} is out of range for the registered "
+                    f"series (length {length}). Register longer series or use "
+                    "TimeseriesData.slice to window them. See the "
+                    "how-to/timeseries docs page."
+                )
 
         net_copy = self._work_net.copy()
         if self._timeseries_data is not None and ts_index is not None:
@@ -361,6 +390,16 @@ class Stepper:
         topo_changes = self._record_topology_changes(net_copy, step_idx, t_h_at_step)
 
         solve_dt_h = dt_h + self._carry_dt_h
+        if solve_dt_h != dt_h:
+            _log.warning(
+                "Stepper step %d integrates over %g h instead of the requested "
+                "%g h: %g h carried over from earlier failed step(s). Pass "
+                "carry_failed_dt=False to keep every step at its own dt_h.",
+                step_idx,
+                solve_dt_h,
+                dt_h,
+                self._carry_dt_h,
+            )
         self._state.dt_h = solve_dt_h
         self._solver.set_warm_start_hint(self._warm_values)
         try:
@@ -380,8 +419,16 @@ class Stepper:
                 self._rollback_recording(recording_checkpoint)
                 raise
             _log.warning("Stepper step %d failed: %s", step_idx, exc)
-            self._carry_dt_h = solve_dt_h
-            sr = StepResult(step=step_idx, result=None, failed=True, error=exc)
+            self._carry_dt_h = solve_dt_h if self._carry_failed_dt else 0.0
+            sr = StepResult(
+                step=step_idx,
+                result=None,
+                failed=True,
+                error=exc,
+                dt_h=dt_h,
+                effective_dt_h=solve_dt_h,
+                t_h=t_h_at_step,
+            )
             self._record(sr, dt_h)
             return sr
         finally:
@@ -400,7 +447,13 @@ class Stepper:
             result.network, step_idx, t_h_at_step, topo_changes
         )
         self._state.push(result.network, step=step_idx)
-        sr = StepResult(step=step_idx, result=result)
+        sr = StepResult(
+            step=step_idx,
+            result=result,
+            dt_h=dt_h,
+            effective_dt_h=solve_dt_h,
+            t_h=t_h_at_step,
+        )
         self._record(sr, dt_h)
         return sr
 
@@ -485,17 +538,62 @@ class Stepper:
         )
         self._prev_islanded = cur
 
-    def get(self, component_id, attr: str, step: int = -1):
+    def get(self, component_id, attr: str, step: int = -1, component_type=None):
         """Solved value of ``attr`` on component ``component_id`` - by default
         from the most recent successful step (the *get* side of a co-simulation
         adapter's set/step/get contract; ``data_overrides`` is the *set* side).
+
+        ``component_id`` accepts the same forms as ``data_overrides`` keys: a
+        bare id, a ``(type, id)`` tuple, or a bare id with *component_type*.
+        Node and child ids are independent counters, so a bare id shared by a
+        node and a child resolves to the child - the node aggregate is only
+        returned when the node is addressed explicitly - and an id that stays
+        ambiguous raises ``ValueError``. An id matching no component raises
+        ``KeyError``; an id whose matching models all lack *attr* raises
+        ``AttributeError``, mirroring the ``data_overrides`` validation. See
+        the how-to/stepper docs page.
 
         ``step`` follows :meth:`StepState.get`: negative = relative to the
         latest successful solve, non-negative = the absolute step index as
         reported by ``StepResult.step`` (failed/skipped steps have no entry and
         fall back). Returns ``None`` (or the ``initial_state`` fallback) when
         no solve has written the value."""
-        return self._state.get(component_id, attr, step=step)
+        component_type, bare_id = _split_typed_id(component_id, component_type)
+        net = self._state._network_for_step(step)
+        _, matches = _match_components(
+            net if net is not None else self._work_net, bare_id, component_type
+        )
+        if not matches:
+            raise KeyError(
+                f"Stepper.get: component id {bare_id!r} not found in the "
+                "network. See the how-to/stepper docs page."
+            )
+        with_attr = [comp for comp in matches if hasattr(comp.model, attr)]
+        if not with_attr:
+            kinds = sorted({type(comp.model).__name__ for comp in matches})
+            raise AttributeError(
+                f"Stepper.get: attribute {attr!r} not found on any model with "
+                f"id {bare_id!r} (checked {', '.join(kinds)}), mirroring the "
+                "data_overrides validation. See the how-to/stepper docs page."
+            )
+        if len(with_attr) > 1:
+            non_node = [comp for comp in with_attr if not isinstance(comp, Node)]
+            with_attr = non_node or with_attr
+        if len(with_attr) > 1:
+            kinds = sorted({type(comp).__name__ for comp in with_attr})
+            raise ValueError(
+                f"Stepper.get: component id {bare_id!r} with attribute "
+                f"{attr!r} is ambiguous across {kinds}; pass component_type= "
+                "or a (type, id) tuple to disambiguate. See the "
+                "how-to/stepper docs page."
+            )
+        if net is not None and with_attr:
+            val = _extract_value(getattr(with_attr[0].model, attr))
+            if val is not None:
+                return val
+        if (component_id, attr) in self._initial_state:
+            return self._initial_state[component_id, attr]
+        return self._initial_state.get((bare_id, attr))
 
     @property
     def changes(self) -> list[NetworkChange]:
@@ -654,12 +752,34 @@ class Stepper:
         datetime_index: pandas.DatetimeIndex | None = None,
     ) -> TimeseriesResult:
         """Wrap the retained history as a :class:`TimeseriesResult`. With
-        ``max_history`` set this covers only the retained window."""
+        ``max_history`` set this covers only the retained window.
+
+        ``datetime_index`` may carry one entry per taken step (absolute
+        labels; entries for dropped steps are simply never used) or, under
+        ``max_history``, one entry per retained step (labels for the retained
+        window); any other length raises ``ValueError``."""
+        index_offset = 0
+        if datetime_index is not None and self._history:
+            retained = len(self._history)
+            if len(datetime_index) >= self._step_count:
+                index_offset = 0
+            elif len(datetime_index) == retained:
+                index_offset = self._history[0].step
+            else:
+                raise ValueError(
+                    f"to_timeseries_result: datetime_index has "
+                    f"{len(datetime_index)} entries but the Stepper has taken "
+                    f"{self._step_count} step(s) ({retained} retained under "
+                    "max_history). Pass one entry per taken step (absolute "
+                    "labels) or one per retained step (labels for the "
+                    "retained window). See the how-to/stepper docs page."
+                )
         return TimeseriesResult(
             list(self._history),
             datetime_index=datetime_index,
             backend_used=getattr(self._solver, "backend_name", None),
             solver_used=getattr(self._solver, "solver_name", None),
+            index_offset=index_offset,
         )
 
     def __enter__(self) -> Stepper:
@@ -717,4 +837,14 @@ def _apply_overrides(net: Network, overrides: Mapping[tuple, float]) -> None:
                 f"{attr!r} is ambiguous across {kinds}; use a "
                 f"((type, id), attr) key to disambiguate"
             )
-        TimeseriesData._set_model_attr(settable[0].model, attr, override_value)
+        target = settable[0]
+        if not _effective_active(target) or getattr(target, "ignored", False):
+            warnings.warn(
+                f"data_overrides: ({bare_id!r}, {attr!r}) targets an inactive "
+                f"component ({type(target).__name__} "
+                f"{target.name or target.id!r}); the value is applied but has "
+                "no effect on this step's solve. See the how-to/stepper docs "
+                "page.",
+                stacklevel=3,
+            )
+        TimeseriesData._set_model_attr(target.model, attr, override_value)

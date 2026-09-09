@@ -11,7 +11,7 @@ class NetworkAspect(ABC):
     Phase 1 - ``prepare(network)``: called *before* variable injection; add
     ``Var`` placeholders to model objects so the injection loop picks them up.
 
-    Phase 2 - ``equations(network, ignored_nodes) → list``: called *after*
+    Phase 2 - ``equations(network, ignored_nodes) -> list``: called *after*
     variable injection; return relational expressions (``==``, ``<=``,
     ``>=``) built from injected model attributes.  The solver registers them
     with ``m.Equations(eqs)`` / ``pm.cons.add`` without inspecting their

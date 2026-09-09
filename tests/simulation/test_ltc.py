@@ -2,6 +2,8 @@
 
 import math
 
+import pytest
+
 import monee.model as mm
 from monee import run_energy_flow
 from monee.model import LumpedThermalCapacitance
@@ -135,3 +137,18 @@ def test_ltc_pipe_volume_computed_correctly():
 
     # Sum covers only the 2 LTC-constrained nodes (3rd pipe-end at n0 is excluded)
     assert abs(sum(rho_v.values()) - 2 * expected) < 1.0
+
+
+def test_node_temperature_series_on_ext_grid_junction_is_refused():
+    # GIVEN  (n0 carries an ExtHydrGrid, which pins its junction's temperature)
+    net, n0, _, _ = _water_loop()
+    td = TimeseriesData()
+    td.add_node_series(n0, "t_pu", [1.0, 0.95])
+
+    # WHEN / THEN  (the run-start Var-series warning names the boundary
+    # child's 't_k' input; the solve itself still refuses the double pin)
+    with (
+        pytest.warns(UserWarning, match="solved variable.*t_k"),
+        pytest.raises(ValueError, match="pin_temperature"),
+    ):
+        run(net, td, steps=2, solver="ipopt")

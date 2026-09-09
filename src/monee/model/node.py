@@ -1,6 +1,14 @@
 import math
 
-from .core import Intermediate, IntermediateEq, NodeModel, PostProcess, Var, model
+from .core import (
+    Intermediate,
+    IntermediateEq,
+    NodeModel,
+    PostProcess,
+    Var,
+    model,
+    store_unknown_kwargs,
+)
 from .grid import PowerGrid
 from .phys.core.hydraulics import junction_mass_flow_balance
 from .phys.nonlinear.ac import power_balance_equation
@@ -89,7 +97,7 @@ class Junction(NodeModel):
         # MultiGridNodeModel, Junction, Bus) where chaining further would hit
         # Bus.__init__ which requires base_kv. Replicate the essential
         # GenericModel state instead.
-        self._ext_data = kwargs
+        self._ext_data = store_unknown_kwargs(self, kwargs)
         self.t_k = PostProcess(lambda v: float("nan"))
         self.t_pu = Var(1, min=0.3, max=2, name="t_pu")
         self.pressure_squared_pu = Var(1, min=0.5, max=2, name="pressure_squared_pu")

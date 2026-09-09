@@ -67,6 +67,7 @@ from .core import (
     lex_cap_slack,
     mark_slacks_and_prescriptions,
     prepare_solve_network,
+    validate_result,
     withdraw_vars,
 )
 
@@ -580,6 +581,7 @@ class GurobipySolver(SolverInterface):
         step_state: StepState = None,
         simulation: bool = False,
         formulation=None,
+        strict: bool = False,
         **kwargs,
     ):
         gp, GRB, nlfunc = _require_gurobipy()
@@ -598,6 +600,7 @@ class GurobipySolver(SolverInterface):
                 step_state=step_state,
                 simulation=simulation,
                 formulation=formulation,
+                strict=strict,
             )
         finally:
             gm.dispose()
@@ -613,6 +616,7 @@ class GurobipySolver(SolverInterface):
         step_state,
         simulation,
         formulation,
+        strict=False,
     ):
         gm.setParam("OutputFlag", 1 if debug else 0)
         for key, val in self._params.items():
@@ -731,8 +735,11 @@ class GurobipySolver(SolverInterface):
             )
 
         obj_val = self._obj_value(gm, all_obj_exprs) if success else float("nan")
+        user_objective = (
+            self._obj_value(gm, user_obj_exprs) if success and user_obj_exprs else None
+        )
 
-        return SolverResult(
+        result = SolverResult(
             network,
             network.as_result_dataframe_dict(),
             obj_val,
@@ -743,6 +750,17 @@ class GurobipySolver(SolverInterface):
             infeasibility_report=report if not success else None,
             backend_used=self.backend_name,
             solver_used=self.solver_name,
+            user_objective=user_objective,
+            aux_objective=(
+                None if user_objective is None else obj_val - user_objective
+            ),
+        )
+        return validate_result(
+            network,
+            result,
+            ignored_nodes=ignored_nodes,
+            simulation=simulation,
+            strict=strict,
         )
 
     def _solve_lexicographic(self, gm, user_obj_exprs, aux_obj_exprs):
@@ -918,7 +936,12 @@ class GurobipySolver(SolverInterface):
 
             equations = as_iter(
                 node.equations(
-                    grid, from_branches, to_branches, connected_childs, **impls
+                    grid,
+                    from_branches,
+                    to_branches,
+                    connected_childs,
+                    simulation=self._simulation,
+                    **impls,
                 )
             )
 
@@ -939,7 +962,9 @@ class GurobipySolver(SolverInterface):
                 for expr in child.minimize(grid, node.model, sqrt_impl=nf.sqrt):
                     aux_obj_exprs.append(expr)
                 child_eqs = filter_bool_eqs(
-                    as_iter(child.equations(grid, node.model)),
+                    as_iter(
+                        child.equations(grid, node.model, simulation=self._simulation)
+                    ),
                     context=f"child_{child.id}",
                 )
                 self._process_intermediate_eqs(child.model, child_eqs)
@@ -1105,6 +1130,7 @@ class GurobipyTimeseries:
         carry_mip_start=True,
         params: dict | None = None,
     ):
+        timeseries_data.validate_bound(input_network, strict=False)
         self._td = timeseries_data
         self.carry_mip_start = carry_mip_start
         gp, GRB, nlfunc = _require_gurobipy()

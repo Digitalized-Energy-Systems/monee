@@ -1,5 +1,7 @@
 import inspect
 
+import pytest
+
 from monee import mm, mx, run_energy_flow
 
 
@@ -63,8 +65,7 @@ def test_api_el_super_ex():
     assert result is not None
 
 
-def test_api_example_index():
-    # GIVEN
+def _build_api_example_index(with_p2h: bool):
     # change doc if you change this!
     net = mx.create_multi_energy_network()
 
@@ -83,24 +84,38 @@ def test_api_example_index():
     mx.create_water_pipe(net, junc_0, junc_1, diameter_m=0.12, length_m=100)
     mx.create_sink(net, junc_2, mass_flow_kgs=1)
 
-    mx.create_p2h(
-        net,
-        bus_1,
-        junc_1,
-        junc_2,
-        heat_energy_mw=0.100,
-        diameter_m=0.1,
-        efficiency=0.9,
-    )
+    if with_p2h:
+        mx.create_p2h(
+            net,
+            bus_1,
+            junc_1,
+            junc_2,
+            heat_energy_mw=0.100,
+            diameter_m=0.1,
+            efficiency=0.9,
+        )
+    return net
+
+
+def test_api_example_index():
+    # GIVEN
+    net = _build_api_example_index(with_p2h=True)
+    net_without_p2h = _build_api_example_index(with_p2h=False)
 
     # WHEN
     result = run_energy_flow(net)
-    print(result)
+    result_without_p2h = run_energy_flow(net_without_p2h)
 
     # THEN
     assert result.success
+    assert result_without_p2h.success
 
-    assert result is not None
+    # The P2H draws heat_energy_mw / efficiency from the bus, so the external
+    # grid has to import that much more (ext p_mw is negative for an import).
+    ext_p_mw = result.get(mm.ExtPowerGrid)["p_mw"].iloc[0]
+    ext_p_mw_without_p2h = result_without_p2h.get(mm.ExtPowerGrid)["p_mw"].iloc[0]
+    assert ext_p_mw < ext_p_mw_without_p2h
+    assert ext_p_mw_without_p2h - ext_p_mw == pytest.approx(0.100 / 0.9, rel=0.05)
 
 
 def test_ext_power_grid_defaults():
@@ -220,3 +235,231 @@ def test_create_el_branch():
     )
     assert bid is not None
     assert net.branch_by_id(bid) is not None
+
+
+def _heat_compound_nodes(net, cold, hot):
+    control = {b.to_node_id for b in net.branches if b.from_node_id == cold} & {
+        b.from_node_id for b in net.branches if b.to_node_id == hot
+    }
+    return control
+
+
+@pytest.mark.parametrize("kind", ["p2h", "g2h", "chp"])
+def test_heat_compound_flows_from_cold_node_to_hot_node(kind):
+    # GIVEN
+    net = mx.create_multi_energy_network()
+    bus = mx.create_bus(net)
+    junc_gas = mx.create_gas_junction(net)
+    cold = mx.create_water_junction(net)
+    hot = mx.create_water_junction(net)
+
+    # WHEN
+    if kind == "p2h":
+        mx.create_p2h(
+            net,
+            power_node_id=bus,
+            cold_node_id=cold,
+            hot_node_id=hot,
+            heat_energy_mw=0.1,
+            diameter_m=0.1,
+            efficiency=0.9,
+        )
+    elif kind == "g2h":
+        mx.create_g2h(
+            net,
+            gas_node_id=junc_gas,
+            cold_node_id=cold,
+            hot_node_id=hot,
+            heat_energy_mw=0.1,
+            diameter_m=0.1,
+            efficiency=0.9,
+        )
+    else:
+        mx.create_chp(
+            net,
+            power_node_id=bus,
+            cold_node_id=cold,
+            hot_node_id=hot,
+            gas_node_id=junc_gas,
+            diameter_m=0.1,
+            efficiency_power=0.35,
+            efficiency_heat=0.45,
+            mass_flow_setpoint_kgs=0.05,
+        )
+
+    # THEN the water runs cold node -> control node -> hot node
+    assert _heat_compound_nodes(net, cold, hot)
+    assert not _heat_compound_nodes(net, hot, cold)
+
+
+def test_heat_side_aliases_wire_like_the_original_names():
+    # GIVEN
+    def build(use_aliases):
+        net = mx.create_multi_energy_network()
+        bus = mx.create_bus(net)
+        cold = mx.create_water_junction(net)
+        hot = mx.create_water_junction(net)
+        kwargs = (
+            {"cold_node_id": cold, "hot_node_id": hot}
+            if use_aliases
+            else {"heat_node_id": cold, "heat_return_node_id": hot}
+        )
+        mx.create_p2h(
+            net,
+            power_node_id=bus,
+            heat_energy_mw=0.1,
+            diameter_m=0.1,
+            efficiency=0.9,
+            **kwargs,
+        )
+        return net
+
+    # THEN
+    assert [(b.from_node_id, b.to_node_id) for b in build(True).branches] == [
+        (b.from_node_id, b.to_node_id) for b in build(False).branches
+    ]
+
+
+def test_heat_side_aliases_reject_ambiguous_and_missing_wiring():
+    net = mx.create_multi_energy_network()
+    bus = mx.create_bus(net)
+    cold = mx.create_water_junction(net)
+    hot = mx.create_water_junction(net)
+
+    with pytest.raises(ValueError):
+        mx.create_p2h(
+            net,
+            power_node_id=bus,
+            heat_node_id=cold,
+            cold_node_id=cold,
+            hot_node_id=hot,
+            heat_energy_mw=0.1,
+            diameter_m=0.1,
+            efficiency=0.9,
+        )
+    with pytest.raises(ValueError):
+        mx.create_p2h(
+            net,
+            power_node_id=bus,
+            cold_node_id=cold,
+            heat_energy_mw=0.1,
+            diameter_m=0.1,
+            efficiency=0.9,
+        )
+
+
+def test_heat_compound_heats_the_water_towards_the_hot_node():
+    # GIVEN a closed loop with the plant reference pinned on the cold side
+    net = mx.create_multi_energy_network()
+    bus = mx.create_bus(net)
+    mx.create_ext_power_grid(net, bus)
+    cold = mx.create_water_junction(net)
+    hot = mx.create_water_junction(net)
+    mx.create_water_ext_grid(net, cold, t_k=330)
+    mx.create_passive_heat_exchanger(net, hot, cold, q_mw=0.5, diameter_m=0.1)
+    mx.create_p2h(
+        net,
+        power_node_id=bus,
+        cold_node_id=cold,
+        hot_node_id=hot,
+        heat_energy_mw=0.5,
+        diameter_m=0.1,
+        efficiency=0.95,
+    )
+
+    # WHEN
+    result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
+    temperatures = result.get(mm.Junction)["t_k"]
+    assert temperatures.iloc[0] == pytest.approx(330, abs=1e-3)
+    assert temperatures.iloc[1] > temperatures.iloc[0] + 25
+
+
+def test_compound_creators_store_name():
+    net = mx.create_multi_energy_network()
+    bus = mx.create_bus(net)
+    junc_gas = mx.create_gas_junction(net)
+    cold = mx.create_water_junction(net)
+    hot = mx.create_water_junction(net)
+
+    chp_id = mx.create_chp(
+        net,
+        power_node_id=bus,
+        cold_node_id=cold,
+        hot_node_id=hot,
+        gas_node_id=junc_gas,
+        diameter_m=0.1,
+        efficiency_power=0.35,
+        efficiency_heat=0.45,
+        mass_flow_setpoint_kgs=0.05,
+        name="chp_1",
+    )
+    p2h_id = mx.create_p2h(
+        net,
+        power_node_id=bus,
+        cold_node_id=cold,
+        hot_node_id=hot,
+        heat_energy_mw=0.1,
+        diameter_m=0.1,
+        efficiency=0.9,
+        name="hp_1",
+    )
+    g2h_id = mx.create_g2h(
+        net,
+        gas_node_id=junc_gas,
+        cold_node_id=cold,
+        hot_node_id=hot,
+        heat_energy_mw=0.1,
+        diameter_m=0.1,
+        efficiency=0.9,
+        name="boiler_1",
+    )
+    chp_hg_id = mx.create_chp_hg(
+        net,
+        power_node_id=bus,
+        heat_node_id=mx.create_water_junction(net),
+        gas_node_id=junc_gas,
+        efficiency_power=0.35,
+        efficiency_heat=0.45,
+        mass_flow_setpoint_kgs=0.05,
+        name="chp_hg_1",
+    )
+
+    assert net.compound_by_id(chp_id).name == "chp_1"
+    assert net.compound_by_id(p2h_id).name == "hp_1"
+    assert net.compound_by_id(g2h_id).name == "boiler_1"
+    assert net.compound_by_id(chp_hg_id).name == "chp_hg_1"
+
+
+def test_hg_coupler_branch_creators_store_name():
+    net = mx.create_multi_energy_network()
+    bus = mx.create_bus(net)
+    junc_gas = mx.create_gas_junction(net)
+    heat_1 = mx.create_water_junction(net)
+    heat_2 = mx.create_water_junction(net)
+
+    p2h_id = mx.create_p2h_hg(
+        net, bus, heat_1, heat_energy_mw=0.1, efficiency=0.9, name="p2h_hg_1"
+    )
+    g2h_id = mx.create_g2h_hg(
+        net, junc_gas, heat_2, heat_energy_mw=0.1, efficiency=0.9, name="g2h_hg_1"
+    )
+
+    assert net.branch_by_id(p2h_id).name == "p2h_hg_1"
+    assert net.branch_by_id(g2h_id).name == "g2h_hg_1"
+
+
+def test_name_lands_on_the_container_not_on_the_model():
+    net = mx.create_multi_energy_network()
+    bus = mx.create_bus(net, name="bus_a")
+    load_id = mx.create_power_load(net, bus, p_mw=0.1, q_mvar=0.0, name="hp_feeder")
+
+    load = net.child_by_id(load_id)
+
+    assert load.name == "hp_feeder"
+    assert net.node_by_id(bus).name == "bus_a"
+    assert not hasattr(load.model, "name")
+    with pytest.raises(AttributeError):
+        load.model.name

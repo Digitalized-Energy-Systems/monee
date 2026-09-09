@@ -105,3 +105,18 @@ def test_adaptive_marker_px_single_edge_not_clamped_to_floor():
     px = _adaptive_marker_px(graph, pos)
     assert 8.0 <= px <= 20.0
     assert px == 20.0  # single long edge should hit the upper cap, not the floor
+
+
+def test_write_figure_html_and_real_error_for_unknown_format(tmp_path):
+    import plotly.graph_objects as go
+    import pytest
+
+    from monee.visualization.result_visualization import _write_figure
+
+    fig = go.Figure()
+    target = tmp_path / "result.html"
+    _write_figure(fig, str(target))
+    assert target.exists() and target.stat().st_size > 1000
+
+    with pytest.raises(ValueError, match="format"):
+        _write_figure(fig, str(tmp_path / "result.txt"))

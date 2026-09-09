@@ -72,8 +72,8 @@ def test_electric_storage_inter_step_constraint_holds():
     # THEN
     assert not ts_result.failed_steps
 
-    e_series = ts_result.get_result_for_id(storage_id, "e_mwh")
-    p_series = ts_result.get_result_for_id(storage_id, "p_mw")
+    e_series = ts_result.get_result_for_id(storage_id, "e_mwh", ElectricStorage)
+    p_series = ts_result.get_result_for_id(storage_id, "p_mw", ElectricStorage)
     assert e_series is not None and p_series is not None
     assert len(e_series) == 3
 
@@ -156,8 +156,8 @@ def test_gas_storage_inter_step_constraint_holds():
     # THEN
     assert not ts_result.failed_steps
 
-    m_series = ts_result.get_result_for_id(storage_id, "m_stored_kg")
-    f_series = ts_result.get_result_for_id(storage_id, "mass_flow_kgs")
+    m_series = ts_result.get_result_for_id(storage_id, "m_stored_kg", GasStorage)
+    f_series = ts_result.get_result_for_id(storage_id, "mass_flow_kgs", GasStorage)
     assert m_series is not None and f_series is not None
     assert len(m_series) == 3
 
@@ -230,3 +230,111 @@ def test_controllable_storages_via_problem():
     # Storage participated in the solve.
     p_df = result.get_result_for(ElectricStorage, "p_mw")
     assert storage_id in p_df.columns
+
+
+def _lossy_el_net(eta=0.95):
+    net = Network(mm.PowerGrid(name="power", sn_mva=1))
+    n_slack = net.node(
+        Bus(base_kv=1),
+        child_ids=[net.child(ExtPowerGrid(p_mw=0, q_mvar=0, vm_pu=1, va_degree=0))],
+        grid=mm.EL,
+    )
+    storage_id = net.child(
+        ElectricStorage(
+            e_mwh_initial=1.0,
+            e_mwh_max=2.0,
+            p_max_mw=1.0,
+            efficiency_charge=eta,
+            efficiency_discharge=eta,
+        ),
+        name="storage",
+    )
+    n_storage = net.node(Bus(base_kv=1), grid=mm.EL, child_ids=[storage_id])
+    net.branch(
+        mm.PowerLine(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1),
+        n_slack,
+        n_storage,
+    )
+    return net, storage_id
+
+
+def _controllable_storage_problem():
+    from monee.problem import OptimizationProblem
+
+    problem = OptimizationProblem()
+    problem.controllable_storages()
+    return problem
+
+
+def _val(attr):
+    return float(getattr(attr, "value", attr))
+
+
+def test_lossy_storage_dispatch_equals_charge_minus_discharge():
+    import monee
+    import monee.solver as ms
+
+    for solver in (None, ms.PyomoSolver()):
+        net, storage_id = _lossy_el_net()
+        result = monee.run_energy_flow_optimization(
+            net, optimization_problem=_controllable_storage_problem(), solver=solver
+        )
+
+        assert result.success
+        model = result.network.child_by_id(storage_id).model
+        p = _val(model.p_mw)
+        charge = _val(model.p_charge_mw)
+        discharge = _val(model.p_discharge_mw)
+        assert abs(p - (charge - discharge)) < 1e-6
+
+
+def test_lossy_storage_soc_follows_efficiency_split():
+    from monee.simulation.multi_period import run_multi_period
+
+    eta = 0.95
+    net, storage_id = _lossy_el_net(eta=eta)
+    td = TimeseriesData()
+
+    result = run_multi_period(
+        net,
+        td,
+        steps=3,
+        dt_h=1.0,
+        optimization_problem=_controllable_storage_problem(),
+    )
+
+    assert result.success
+    p = result.get_result_for(ElectricStorage, "p_mw")[storage_id]
+    soc = result.get_result_for(ElectricStorage, "e_mwh")[storage_id]
+    chg = result.get_result_for(ElectricStorage, "p_charge_mw")[storage_id]
+    dis = result.get_result_for(ElectricStorage, "p_discharge_mw")[storage_id]
+
+    prev = 1.0
+    for t in range(3):
+        assert abs(p.iloc[t] - (chg.iloc[t] - dis.iloc[t])) < 1e-5
+        expected = prev + eta * chg.iloc[t] - dis.iloc[t] / eta
+        assert abs(soc.iloc[t] - expected) < 1e-5
+        prev = soc.iloc[t]
+
+
+def test_lossy_gas_storage_couples_dispatch_after_make_controllable():
+    model = GasStorage(
+        m_stored_kg_initial=100.0,
+        m_stored_kg_max=500.0,
+        flow_max_kgs=0.2,
+        efficiency_charge=0.9,
+        efficiency_discharge=0.9,
+    )
+    assert model.equations(None, None) == []
+
+    model.make_controllable()
+    # The backends replace the Vars with their own symbols before equations()
+    # runs; floats stand in for those symbols here.
+    model.mass_flow_kgs = 0.25
+    model.flow_charge_kgs = 0.5
+    model.flow_discharge_kgs = 0.25
+
+    assert model.equations(None, None) == [True]
+
+    model.mass_flow_kgs = 0.5
+    assert model.equations(None, None) == [False]

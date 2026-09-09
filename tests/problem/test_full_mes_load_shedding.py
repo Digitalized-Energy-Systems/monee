@@ -199,8 +199,9 @@ bounds_pressure = (
     BOUND_GAS[1] * (1 + BOUND_GAS[2]),
 )
 
-bounds_ext_el = (0, 10)
-bounds_ext_gas = (0, 10)
+# Load convention: import is negative, export positive.
+bounds_ext_el = (-10, 10)
+bounds_ext_gas = (-10, 10)
 
 
 # def test_load_shedding_multimicrogrid():

@@ -26,14 +26,17 @@ from monee.simulation.result_utils import (
     build_type_stats_html as _build_type_stats_html,
 )
 from monee.simulation.result_utils import (
+    split_id_key as _split_id_key,
+)
+from monee.simulation.result_utils import (
     wrap_result_html as _wrap_result_html,
 )
 from monee.simulation.step_state import PeriodState
 from monee.simulation.timeseries import (
-    _SERIES_ATTRS,
     TimeseriesData,
     _dt_h_at_step,
     _resolve_steps,
+    _warn_on_var_series_targets,
 )
 
 # Shared result-rendering helpers, imported from the solver's public reporting
@@ -148,24 +151,7 @@ def _validate_state_keys(state: dict | None, net: Network, label: str) -> None:
 
 def _slice_timeseries(td: TimeseriesData, start: int, length: int) -> TimeseriesData:
     """Return a TimeseriesData sliced to ``[start, start+length)``."""
-    end = start + length
-
-    def _slice_dict(d: dict) -> dict:
-        # Normalize to a list before slicing: a pandas Series keeps its original
-        # integer labels under ``series[start:end]``, so the later positional
-        # read ``series[timestep]`` (timestep is 0-based within the window) would
-        # be label-based and read the wrong row / raise KeyError. ``list(...)``
-        # makes both lists and Series slice positionally and consistently.
-        return {
-            comp_id: {attr: list(series)[start:end] for attr, series in attrs.items()}
-            for comp_id, attrs in d.items()
-        }
-
-    new_td = TimeseriesData()
-    for attr in _SERIES_ATTRS:
-        setattr(new_td, attr, _slice_dict(getattr(td, attr)))
-    new_td._length = length
-    return new_td
+    return td.slice(start, start + length)
 
 
 class MultiPeriodResult:
@@ -176,7 +162,18 @@ class MultiPeriodResult:
     period, all solved in a single solver invocation.
 
     Attributes:
-        objective: Global objective value at the solution.
+        objective: Global objective value at the solution. This is the value
+            the solver minimized: the user objective PLUS every auxiliary
+            term the model adds internally (formulation tightening and
+            regularization terms, built-in compound duty terms). It therefore
+            differs slightly from re-evaluating the user objective on the
+            returned variable values; use ``user_objective`` for that.
+        user_objective: Value of the user-supplied objective alone (the
+            ``OptimizationProblem`` objectives, or the network-attached ones),
+            evaluated at the solution. ``None`` when the backend cannot
+            separate it (GEKKO) or the solve failed.
+        aux_objective: ``objective - user_objective`` (the internal auxiliary
+            terms); ``None`` whenever ``user_objective`` is.
         success: ``True`` if the solver reported a feasible solution.
     """
 
@@ -188,15 +185,26 @@ class MultiPeriodResult:
         datetime_index: pandas.DatetimeIndex | None = None,
         backend_used: str | None = None,
         solver_used: str | None = None,
+        solver_status: str | None = None,
+        termination_condition: str | None = None,
+        user_objective: float | None = None,
     ) -> None:
         self._net_copies = net_copies
         self.objective = objective
+        self.user_objective = user_objective
+        self.aux_objective = (
+            None if user_objective is None else objective - user_objective
+        )
         self.success = success
         self._datetime_index = datetime_index
         #: Backend and solver convention selected for this multi-period solve
         #: (see :func:`monee.solver.dispatch.resolve_multi_period_solver`).
         self.backend_used = backend_used
         self.solver_used = solver_used
+        #: Termination metadata of the single horizon-wide solve (see
+        #: :class:`~monee.solver.core.SolverResult`).
+        self.solver_status = solver_status
+        self.termination_condition = termination_condition
         # Build per-period DataFrames once; queried repeatedly by get_result_for.
         self._period_dfs: list[dict[str, pandas.DataFrame]] = [
             net_t.as_result_dataframe_dict() for net_t in net_copies
@@ -224,15 +232,24 @@ class MultiPeriodResult:
             self._frames(), model_type, attribute, self._make_index
         )
 
-    def get_result_for_id(self, component_id, attribute: str) -> pandas.Series:
-        """Series of *attribute* for *component_id* across all periods."""
+    def get_result_for_id(
+        self, component_id, attribute: str, model_type=None
+    ) -> pandas.Series:
+        """Series of *attribute* for *component_id* across all periods.
+        Component ids are unique per category only; *model_type* selects one
+        when the id matches several."""
         return _build_id_series(
-            self._frames(), component_id, attribute, self._make_index
+            self._frames(), component_id, attribute, self._make_index, model_type
         )
 
-    def __getitem__(self, component_id) -> pandas.DataFrame:
-        """All result attributes for *component_id*, one row per period."""
-        return _build_component_frame(self._frames(), component_id, self._make_index)
+    def __getitem__(self, key) -> pandas.DataFrame:
+        """All result attributes for a component, one row per period. *key* is
+        the component id, or ``(id, model_type)`` when the id is shared by
+        several component categories."""
+        component_id, model_type = _split_id_key(key)
+        return _build_component_frame(
+            self._frames(), component_id, self._make_index, model_type
+        )
 
     def get_period_result(self, t: int) -> SolverResult:
         """SolverResult for period *t* (``objective`` is None; only the global
@@ -242,6 +259,8 @@ class MultiPeriodResult:
             self._period_dfs[t],
             None,
             self.success,
+            solver_status=self.solver_status,
+            termination_condition=self.termination_condition,
             backend_used=self.backend_used,
             solver_used=self.solver_used,
         )
@@ -284,7 +303,7 @@ class MultiPeriodResult:
                 else:
                     val_str = (
                         "  ".join(f"{v:.3g}" for v in vals[:3])
-                        + "  …  "
+                        + "  ...  "
                         + f"{vals[-1]:.3g}"
                     )
                 lines.append(f"    {type_name}.{col}: [{val_str}]")
@@ -307,14 +326,14 @@ class MultiPeriodResult:
         for col in num.columns:
             s = _col_summary(num[col])
             if s:
-                parts.append(f"{col} ∈ {s}" if "[" in s else f"{col} = {s}")
-        row = f"  {type_name:<22} ×{len(df):>2}"
+                parts.append(f"{col} in {s}" if "[" in s else f"{col} = {s}")
+        row = f"  {type_name:<22} x{len(df):>2}"
         if parts:
-            row += "  │  " + "  ·  ".join(parts[:4])
+            row += "  |  " + "  ;  ".join(parts[:4])
         return row
 
     def __repr__(self) -> str:
-        SEP = "─" * 68
+        SEP = "-" * 68
         status = "ok" if self.success else "FAILED"
         lines = [
             f"MultiPeriodResult  T={self.T}  obj={self.objective:.4g}  [{status}]",
@@ -342,8 +361,8 @@ class MultiPeriodResult:
             sections = _build_type_stats_html(self._collect_type_dfs(), "period")
         return _wrap_result_html(
             "MultiPeriodResult",
-            f"<span style='font-weight:normal;color:#555'>T={self.T} &nbsp;·&nbsp; "
-            f"obj={self.objective:.4g} &nbsp;·&nbsp; "
+            f"<span style='font-weight:normal;color:#555'>T={self.T} &nbsp;&middot;&nbsp; "
+            f"obj={self.objective:.4g} &nbsp;&middot;&nbsp; "
             f"<span style='color:{status_color}'>{status_text}</span></span>",
             sections,
         )
@@ -366,6 +385,7 @@ def _assemble_two_pass(
     sink_objective,
     add_equations,
     add_terminal,
+    begin_period=None,
 ) -> list[Network]:
     """Shared two-pass assembly for the multi-period backends: pass 1 prepares
     per-period network copies and injects backend variables, pass 2 builds
@@ -373,8 +393,9 @@ def _assemble_two_pass(
     differences are confined to the callbacks: ``inject(net_t, ignored_t, t)``,
     ``process_branches(net_t, ignored_t) -> ctx`` (may collect objective
     expressions), ``sink_objective(ctx)`` (called between the OXF components and
-    the inter-period equations), ``add_equations(eqs)`` and
-    ``add_terminal(var, target)``."""
+    the inter-period equations), ``add_equations(eqs)``,
+    ``add_terminal(var, target)`` and the optional ``begin_period(t)``, invoked
+    before each period's equation pass."""
     _log.info("Multi-period %s solve: T=%d periods", label, steps)
 
     # Pass 1: prepare networks and inject variables for all periods.
@@ -398,6 +419,9 @@ def _assemble_two_pass(
     for t in range(steps):
         net_t = net_copies[t]
         ignored_t = ignored_list[t]
+
+        if begin_period is not None:
+            begin_period(t)
 
         period_state = PeriodState(
             net_copies,
@@ -497,6 +521,8 @@ class GekkoMultiPeriodSolver:
         from monee.solver.gekko import GEKKOSolver, _solver_options
 
         steps = _resolve_steps(steps, timeseries_data)
+        if timeseries_data is not None:
+            timeseries_data.validate_bound(network, strict=False)
         dt_h_list = _resolve_dt_h(dt_h, datetime_index, steps)
 
         m = GEKKO(remote=False)
@@ -558,7 +584,7 @@ class GekkoMultiPeriodSolver:
             m.solve(disp=False)
         except Exception as exc:
             terminal_hint = (
-                "  • terminal_state constraints may be infeasible given the "
+                "  - terminal_state constraints may be infeasible given the "
                 "horizon length or storage capacity.\n"
                 if terminal_state
                 else ""
@@ -567,10 +593,10 @@ class GekkoMultiPeriodSolver:
                 f"Multi-period GEKKO/IPOPT solve failed (T={steps} periods, "
                 f"solver={self._solver_int}).\n"
                 f"Common causes:\n"
-                f"  • Problem is physically infeasible (conflicting bounds or "
+                f"  - Problem is physically infeasible (conflicting bounds or "
                 f"insufficient supply).\n"
                 f"{terminal_hint}"
-                f"  • Numerical scaling - try normalising loads to per-unit or "
+                f"  - Numerical scaling - try normalising loads to per-unit or "
                 f"reducing T.\n"
                 f"Tip: set steps=1 and increase incrementally to isolate the "
                 f"first infeasible period."
@@ -627,10 +653,13 @@ class PyomoMultiPeriodSolver:
         from monee.solver.pyo import PyomoSolver
 
         steps = _resolve_steps(steps, timeseries_data)
+        if timeseries_data is not None:
+            timeseries_data.validate_bound(network, strict=False)
         dt_h_list = _resolve_dt_h(dt_h, datetime_index, steps)
 
         pm = pyo.ConcreteModel()
         pm.cons = pyo.ConstraintList()
+        pm._monee_network = network
         # Split user vs aux objectives so a future lex extension can separate
         # them; multi-period currently solves the single-phase sum.
         pm.user_obj_exprs: list = []
@@ -652,6 +681,9 @@ class PyomoMultiPeriodSolver:
                 ignored_t,
             )
 
+        def _begin_period(t):
+            _single._name_suffix = f"_t{t}"
+
         net_copies = _assemble_two_pass(
             pm,
             _single,
@@ -671,6 +703,7 @@ class PyomoMultiPeriodSolver:
             sink_objective=lambda _ctx: None,
             add_equations=lambda eqs: _single._add_equations(pm, eqs),
             add_terminal=lambda var, target: pm.cons.add(var == target),
+            begin_period=_begin_period,
         )
 
         all_exprs = pm.user_obj_exprs + pm.aux_obj_exprs
@@ -702,6 +735,7 @@ class PyomoMultiPeriodSolver:
                 pm,
                 solver_name=self._solver_name,
                 compute_mis_flag=False,
+                network=network,
             )
             report_str = report.summary()
             _log.warning(
@@ -709,8 +743,12 @@ class PyomoMultiPeriodSolver:
                 report_str,
             )
 
+            first_t = report.first_violated_period()
+            period_hint = (
+                f"First violated period: t={first_t}.\n" if first_t is not None else ""
+            )
             terminal_hint = (
-                "  • terminal_state constraints may be infeasible given the "
+                "  - terminal_state constraints may be infeasible given the "
                 "horizon length or storage capacity.\n"
                 if terminal_state
                 else ""
@@ -719,9 +757,10 @@ class PyomoMultiPeriodSolver:
                 f"Multi-period Pyomo/{self._solver_name} solve failed "
                 f"(T={steps} periods, status={solve_result.solver.status}).\n"
                 f"Common causes:\n"
-                f"  • Problem is physically infeasible (conflicting bounds or "
+                f"  - Problem is physically infeasible (conflicting bounds or "
                 f"insufficient supply).\n"
                 f"{terminal_hint}"
+                f"{period_hint}"
                 f"Tip: set steps=1 and increase incrementally to isolate the "
                 f"first infeasible period.\n\n"
                 f"Infeasibility diagnostics:\n{report_str}"
@@ -736,6 +775,10 @@ class PyomoMultiPeriodSolver:
                 net_t,
             )
 
+        user_objective = None
+        if pm.user_obj_exprs:
+            user_objective = pyo.value(sum(pm.user_obj_exprs), exception=False)
+
         return MultiPeriodResult(
             net_copies,
             objective=pyo.value(pm.obj),
@@ -743,6 +786,7 @@ class PyomoMultiPeriodSolver:
             datetime_index=datetime_index,
             backend_used=self._backend_name,
             solver_used=self._solver_name,
+            user_objective=user_objective,
         )
 
 
@@ -816,8 +860,18 @@ def run_multi_period(
     through the ``inter_temporal_equations`` and ``inter_period_equations``
     protocols; ``TimeseriesData`` is applied per-period before equations are
     assembled. ``dt_h`` defaults to 1.0 hour when omitted; ``datetime_index``
-    overrides it (a warning is logged if both are given)."""
+    overrides it (a warning is logged if both are given). Registered series
+    that bind to no component of *network* are reported once, up front, as a
+    warning (:meth:`TimeseriesData.validate_bound` raises on them instead).
+    A series that targets a solver ``Var`` attribute warns up front, the same
+    way :func:`monee.simulation.run_timeseries` does: such a series only pins
+    the Var through its bounds, in every period at once, which commonly makes
+    the single-shot solve infeasible. See the how-to/timeseries docs page."""
     solver = resolve_multi_period_solver(solver, backend=backend)
+
+    if timeseries_data is not None:
+        timeseries_data.validate_bound(network, strict=False)
+        _warn_on_var_series_targets(timeseries_data, network, context="multi_period")
 
     _validate_state_keys(initial_state, network, "initial_state")
     _validate_state_keys(terminal_state, network, "terminal_state")
@@ -875,6 +929,10 @@ def run_mpc(
     total_steps = _resolve_steps(total_steps, timeseries_data)
     dt_h_list = _resolve_dt_h(dt_h, datetime_index, total_steps)
 
+    if timeseries_data is not None:
+        timeseries_data.validate_bound(network, strict=False)
+        _warn_on_var_series_targets(timeseries_data, network, context="multi_period")
+
     _validate_state_keys(initial_state, network, "initial_state")
     _validate_state_keys(terminal_state, network, "terminal_state")
 
@@ -887,6 +945,7 @@ def run_mpc(
 
     all_net_copies: list[Network] = []
     total_objective = 0.0
+    total_user_objective = 0.0
     current_initial_state = dict(initial_state) if initial_state else None
     offset = 0
 
@@ -938,6 +997,11 @@ def run_mpc(
         executed_copies = window_result._net_copies[:n_execute]
         all_net_copies.extend(executed_copies)
         total_objective += window_result.objective
+        if total_user_objective is not None:
+            window_user = getattr(window_result, "user_objective", None)
+            total_user_objective = (
+                None if window_user is None else total_user_objective + window_user
+            )
 
         current_initial_state = _extract_terminal_state(executed_copies[-1])
         offset += n_execute
@@ -956,4 +1020,5 @@ def run_mpc(
         datetime_index=exec_datetime_index,
         backend_used=getattr(solver, "_backend_name", None),
         solver_used=getattr(solver, "_solver_name", None),
+        user_objective=total_user_objective,
     )

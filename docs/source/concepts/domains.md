@@ -84,13 +84,31 @@ using the average pressure between the two endpoints.
 > and easier for NLP solvers; the SI value is recovered after the solve as a
 > report-only quantity.
 
-In the MISOCP-shaped default (`GAS_CONVEX_MIQCQP_FORMULATION`) the flow
+In the MISOCP-shaped `GAS_CONVEX_MIQCQP_FORMULATION` the flow
 is split into two non-negative variables $\dot{m}_{ij}$ / $\dot{m}_{ji}$
 (`mass_flow_pos_kgs` / `mass_flow_neg_kgs`) gated by a direction binary; by
 convention `direction == 0` means *forward* flow, carried by
 `mass_flow_neg_kgs`. The squared flows enter through a convex epigraph relaxation
 kept tight by a small objective term, so MIQCP solvers recognise the problem
 as a MISOCP.
+
+That split fixes the sign of the reported flow: every hydraulic branch reports
+`mass_flow_kgs = mass_flow_pos_kgs - mass_flow_neg_kgs`, so `mass_flow_kgs`
+(and `velocity_mps`, which shares its sign) is *negative* when gas actually
+flows from the from-node to the to-node, and positive for the reverse. A pipe
+carrying 0.1 kg/s away from the external grid reports `mass_flow_kgs = -0.1`.
+Read the direction off the sign and take `abs()` for the throughput. Power
+branches use the opposite convention, see
+{doc}`data_model` for the full picture.
+
+That relaxation is only sound on a solver that enforces integrality
+(SCIP, Gurobi). A continuous solver such as IPOPT relaxes the direction binary
+and its convergence tolerance absorbs the tightening term, so the epigraph rows
+stay slack and the pressure drop comes out several times too large. The
+CasADi/IPOPT backend therefore substitutes the smooth Weymouth below wherever a
+pipe reached the relaxed form as the default choice, and logs a warning naming
+the worst pipe when it is asked for the relaxed formulation explicitly and the
+solution comes back slack.
 
 Each pipe's flow is capped by the tighter of the grid-wide limit and a
 velocity cap,
@@ -99,6 +117,24 @@ $$\dot{m}_\text{max} = \min\!\left( f_\text{max},\; \tfrac{\pi}{4} D^2 \, \rho \
 
 where the gas $v_\text{max}$ defaults to 20 m/s, the erosional velocity limit
 for gas pipelines. This per-pipe bound tightens every big-M constraint.
+
+The $\rho$ in that cap is the grid's reference gas density, evaluated once at
+the reference absolute pressure (`pressure_ref_pa` plus `pressure_ambient_pa`)
+and the grid temperature `t_k`, and the reported `velocity_mps` column uses the
+same reference density: $v = \dot m / (\rho_\text{ref} A)$. It is therefore a
+reporting convention, not the local velocity at the pipe's own operating point.
+Two pipes of equal diameter carrying the same mass flow report the same
+`velocity_mps` even where the `gas_density_kg_per_m3` column of their rows
+differs, because that column is the local density at the solved pressure. To
+get the local velocity, scale the reported one by
+$\rho_\text{ref} / \rho_\text{local}$; at 0.93 pu pressure that is about 7
+percent above the reported value. Water and heat grids report `velocity_mps`
+the same way, using the constant `fluid_density_kg_per_m3`.
+
+Junction pressures are bounded by the grid's `pressure_squared_pu_min` /
+`pressure_squared_pu_max` (0.7 to 1.3 by default, in squared per unit) whenever
+an optimization runs; a plain simulation keeps the wide 0 to 3 range so a square
+solve stays feasible. See {doc}`data_model` for how to tighten them per problem.
 
 ## Smooth (binary-free) hydraulics
 
@@ -145,6 +181,12 @@ As in the gas domain, the default formulation splits the flow into
 (`direction == 0` ⇒ forward flow via `mass_flow_neg_kgs`), and each pipe's flow
 is capped by $\min\!\left( f_\text{max},\; \tfrac{\pi}{4} D^2 \rho \, v_\text{max} \right)$
 using the water grid's velocity limit `v_max_mps`.
+
+The reported flow carries the same sign convention as in the gas domain:
+`mass_flow_kgs = mass_flow_pos_kgs - mass_flow_neg_kgs`, so a pipe whose water
+runs from its from-node to its to-node reports a negative `mass_flow_kgs` and a
+negative `velocity_mps`. Heat exchangers and pumps follow suit, since they are
+hydraulic branches too.
 
 ## Friction models
 

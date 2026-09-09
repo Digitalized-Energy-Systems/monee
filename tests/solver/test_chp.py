@@ -2,12 +2,18 @@
 
 import math
 
+import pytest
+
+import monee.express as mx
 import monee.model as mm
 import monee.solver as ms
+from monee import run_energy_flow
 from monee.model.formulation import (
     EL_MISOCP_FORMULATION,
     SMOOTH_NLP_FORMULATION,
 )
+from monee.solver.casadi import _no_convergence_message
+from monee.solver.core import preview_squareness
 
 
 def _gekko_energy_flow(net):
@@ -345,3 +351,150 @@ def test_chp_power_dominated():
     el_mw = cn["el_mw"].iloc[0]
     heat_mw = cn["heat_mw"].iloc[0]
     assert math.isclose(abs(heat_mw), abs(el_mw) * (eff_h / eff_p), rel_tol=1e-4)
+
+
+def _chp_behind_power_line_network():
+    """CHP on a load bus one AC line away from the slack, all three carriers
+    slacked. See docs/source/how-to/diagnose_infeasibility.rst."""
+    net = mx.create_multi_energy_network()
+    gas_junction = mx.create_gas_junction(net)
+    mx.create_gas_ext_grid(net, gas_junction)
+    slack_bus = mx.create_bus(net)
+    mx.create_ext_power_grid(net, slack_bus)
+    load_bus = mx.create_bus(net)
+    mx.create_line(
+        net, slack_bus, load_bus, length_m=200, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4
+    )
+    mx.create_power_load(net, load_bus, p_mw=1.0, q_mvar=0.0)
+    supply = mx.create_water_junction(net)
+    return_junction = mx.create_water_junction(net)
+    mx.create_ext_hydr_grid(net, supply)
+    mx.create_sink(net, return_junction, mass_flow_kgs=15)
+    mx.create_chp(
+        net,
+        load_bus,
+        supply,
+        return_junction,
+        gas_junction,
+        diameter_m=0.15,
+        efficiency_power=0.35,
+        efficiency_heat=0.45,
+        mass_flow_setpoint_kgs=0.1,
+    )
+    return net
+
+
+def test_chp_behind_power_line_scip():
+    # GIVEN
+    net = _chp_behind_power_line_network()
+
+    # WHEN
+    result = ms.PyomoSolver().solve(net, solver_name="scip", simulation=True)
+
+    # THEN
+    assert result.success
+    assert result.dataframes["CHPControlNode"]["el_mw"].iloc[0] < 0
+
+
+def test_chp_behind_power_line_default_backend():
+    """F-019: IPOPT used to hit Restoration_Failed here because every
+    GenericTransferBranch injected the private Vars of all three carriers."""
+    # GIVEN
+    net = _chp_behind_power_line_network()
+
+    # WHEN
+    result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
+    el_mw = result.dataframes["CHPControlNode"]["el_mw"].iloc[0]
+    assert el_mw < 0
+    scip = ms.PyomoSolver().solve(
+        _chp_behind_power_line_network(), solver_name="scip", simulation=True
+    )
+    assert math.isclose(
+        el_mw, scip.dataframes["CHPControlNode"]["el_mw"].iloc[0], rel_tol=1e-6
+    )
+
+
+def test_transfer_branches_add_no_phantom_variables():
+    """Every private Var of a GenericTransferBranch is aliased by one of its
+    carriers, so none of them shows up as an unpinned degree of freedom."""
+    # GIVEN
+    net = _chp_behind_power_line_network()
+
+    # WHEN
+    n_vars, n_eqs, unpinned = preview_squareness(net)
+
+    # THEN
+    assert not [name for name in unpinned if name.startswith("GenericTransferBranch.")]
+    assert n_vars - n_eqs == 3
+
+
+@pytest.mark.parametrize(
+    ("grids", "expected"),
+    [
+        (mm.create_power_grid("power"), {"_p_mw", "_q_mvar"}),
+        (
+            mm.create_gas_grid("gas", type="methane"),
+            {"_mass_flow_pos", "_mass_flow_neg"},
+        ),
+        (
+            mm.create_water_grid("water"),
+            {"_mass_flow_pos", "_mass_flow_neg", "_t_from_pu", "_t_to_pu"},
+        ),
+    ],
+)
+def test_transfer_branch_drops_foreign_carrier_vars(grids, expected):
+    # GIVEN
+    branch = mm.GenericTransferBranch()
+
+    # WHEN
+    branch.drop_unused_vars(grids)
+
+    # THEN
+    private_vars = {
+        key
+        for key, val in branch.__dict__.items()
+        if key.startswith("_") and isinstance(val, mm.Var)
+    }
+    assert private_vars == expected
+    branch.init(grids)
+
+
+def test_casadi_non_convergence_message_offers_scip_for_compound_flat_start():
+    # GIVEN a network that actually contains a multi-energy compound
+    net = _chp_behind_power_line_network()
+
+    # WHEN IPOPT fails to converge (not: proves infeasibility)
+    message = _no_convergence_message(
+        "solve", {"return_status": "Restoration_Failed"}, net
+    )
+
+    # THEN
+    assert "Restoration_Failed" in message
+    assert "solver='scip'" in message
+    assert "diagnose_infeasibility" in message
+
+
+def test_casadi_non_convergence_message_states_status_without_hint_when_infeasible():
+    net = _chp_behind_power_line_network()
+
+    message = _no_convergence_message(
+        "solve", {"return_status": "Infeasible_Problem_Detected"}, net
+    )
+
+    assert "Infeasible_Problem_Detected" in message
+    assert "scip" not in message
+    assert "compound" not in message.lower()
+    assert "diagnose_infeasibility" in message
+
+
+def test_casadi_non_convergence_message_no_hint_without_compounds():
+    message = _no_convergence_message(
+        "solve", {"return_status": "Restoration_Failed"}, None
+    )
+
+    assert "Restoration_Failed" in message
+    assert "scip" not in message
+    assert "flat start" not in message

@@ -14,7 +14,8 @@ optimization class:
   bilinear Darcy-Weisbach.
 * :data:`DEFAULT_SIMULATION_FORMULATION` - the deliberate hybrid
   :class:`~monee.model.network.Network` applies by default (polar-AC NLP +
-  relaxed Weymouth + bilinear Darcy-Weisbach).
+  relaxed Weymouth + bilinear Darcy-Weisbach; continuous backends swap the gas
+  part for the smooth Weymouth, which needs no binary).
 """
 
 from monee.model.branch import (
@@ -345,9 +346,26 @@ NONCONVEX_MIQCQP_FORMULATION = combine(
 EL NLP
 GAS CONVEX MIQCQP
 HEAT NONConvex MIQCQP
+
+The epigraph-relaxed gas part needs a solver that enforces its ``direction``
+binary. Continuous backends substitute the binary-free smooth Weymouth (see
+:func:`monee.solver.casadi.CasADiSolver.solve`); the bundle keeps the
+MIQCQP-shaped form so a default solve stays writable for MIP backends.
 """
 DEFAULT_SIMULATION_FORMULATION = combine(
     EL_NLP_FORMULATION,
     GAS_CONVEX_MIQCQP_FORMULATION,
     HEAT_NONCONVEX_MIQCQP_FORMULATION,
+)
+
+"""
+Binary-free substitutes a continuous back-end swaps in for branches that
+still carry the untouched MIQCQP-shaped defaults (smooth Weymouth for gas,
+smooth Darcy-Weisbach and heat exchangers for water/heat). Applied only to
+default formulations - never to a pinned, solver-requested or network-level
+choice (see monee.solver.casadi._substitute_relaxed_defaults).
+"""
+SMOOTH_SUBSTITUTE_FORMULATION = combine(
+    GAS_NLP_FORMULATION,
+    HEAT_NLP_FORMULATION,
 )

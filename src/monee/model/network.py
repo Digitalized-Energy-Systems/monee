@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import math
 from collections.abc import Iterator
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import networkx as nx
@@ -12,7 +14,9 @@ from .core import (
     GAS_KEY,
     WATER_KEY,
     Branch,
+    BranchModel,
     Child,
+    ChildModel,
     Component,
     Compound,
     CompoundModel,
@@ -20,6 +24,7 @@ from .core import (
     GenericModel,
     Intermediate,
     Node,
+    NodeModel,
     PostProcess,
     Var,
 )
@@ -36,6 +41,65 @@ if TYPE_CHECKING:
         Formulation,
         NetworkFormulation,
     )
+
+
+_CONTAINER_BY_CLASS = (
+    (Node, NodeModel, Node),
+    (Branch, BranchModel, Branch),
+    (Child, ChildModel, Child),
+    (Compound, CompoundModel, Compound),
+)
+
+
+def _kind_and_id(cls, id):
+    """Resolve the ``(kind, id)`` / ``(branch_id,)`` argument forms.
+
+    Only branches carry tuple ids, so a bare tuple cannot collide with the
+    integer node/child/compound counters and needs no kind argument.
+    """
+    if id is not None:
+        return cls, id
+    if isinstance(cls, tuple):
+        return Branch, cls
+    raise TypeError(
+        f"missing the id argument: pass (kind, id), for example "
+        f"(mm.PowerLine, {cls!r}). Only a tuple branch id may be passed alone"
+    )
+
+
+def _container_class(cls):
+    """Normalize *cls* to a container class, accepting model classes too.
+
+    ``deactivate_by_id(PowerLine, id)`` reads naturally and matches the
+    Stepper API, so a model class resolves to the container that holds it.
+    """
+    if isinstance(cls, type):
+        for container_cls, model_cls, resolved in _CONTAINER_BY_CLASS:
+            if issubclass(cls, (container_cls, model_cls)):
+                return resolved
+    raise ValueError(
+        f"{cls!r} is neither a component container class (Node, Branch, Child, "
+        "Compound) nor a model class (PowerLine, PowerLoad, ...)"
+    )
+
+
+@dataclass
+class CheckFinding:
+    """One pre-flight finding from :meth:`Network.check`. The
+    how-to/diagnose_infeasibility docs page explains each category."""
+
+    category: str
+    message: str
+    component: str | None = None
+
+    def __str__(self) -> str:
+        where = f" [{self.component}]" if self.component else ""
+        return f"[{self.category}]{where} {self.message}"
+
+
+def _child_label(child) -> str:
+    base = f"{type(child.model).__name__}({child.id})"
+    return f"{base} '{child.name}'" if child.name else base
 
 
 class Network:
@@ -131,6 +195,7 @@ class Network:
         return self._network_internal
 
     def _set_active(self, cls, id, active):
+        cls = _container_class(cls)
         if cls == Node:
             self.node_by_id(id).active = active
         elif cls == Branch:
@@ -152,16 +217,58 @@ class Network:
         elif cls == Child:
             self.child_by_id(id).active = active
 
-    def deactivate_by_id(self, cls, id):
+    def deactivate_by_id(self, cls, id=None):
+        """Deactivate the component *id* of kind *cls*.
+
+        *cls* is either a container class (:class:`~monee.model.core.Node`,
+        :class:`~monee.model.core.Branch`, :class:`~monee.model.core.Child`,
+        :class:`~monee.model.core.Compound`) or a model class carried by one of
+        them (``mm.PowerLine``, ``mm.PowerLoad``, ...); anything else raises
+        ``ValueError``. Node and child ids are independent counters, so the
+        kind is what disambiguates them::
+
+            net.deactivate_by_id(mm.PowerLine, line_id)
+
+        A branch id is a ``(from_node, to_node, index)`` tuple, which no other
+        component kind uses, so it may also be passed on its own::
+
+            net.deactivate_by_id(line_id)
+        """
+        cls, id = _kind_and_id(cls, id)
         self._set_active(cls, id, False)
 
-    def activate_by_id(self, cls, id):
+    def activate_by_id(self, cls, id=None):
+        """Activate the component *id* of kind *cls*, the inverse of
+        :meth:`deactivate_by_id` and accepting the same argument forms."""
+        cls, id = _kind_and_id(cls, id)
         self._set_active(cls, id, True)
 
     def activate(self, component):
+        """Activate *component*, a container object (:class:`Node`,
+        :class:`Branch`, :class:`Child`, :class:`Compound`) previously
+        obtained from this network; the inverse of :meth:`deactivate`.
+
+        If you only hold an id, use the two-argument form
+        :meth:`activate_by_id` and pass the kind alongside it.
+        """
         self.activate_by_id(type(component), component.id)
 
     def deactivate(self, component):
+        """Deactivate *component*, a container object (:class:`Node`,
+        :class:`Branch`, :class:`Child`, :class:`Compound`) previously
+        obtained from this network. A deactivated component is kept in the
+        network but excluded from solves.
+
+        If you only hold an id, use the two-argument form
+        :meth:`deactivate_by_id` and pass the kind (container class or model
+        class) alongside it::
+
+            net.deactivate_by_id(mm.ElectricStorage, storage_id)
+
+        Node and child ids are independent counters, so the kind argument is
+        required to disambiguate them; only a tuple branch id is unambiguous
+        on its own.
+        """
         self.deactivate_by_id(type(component), component.id)
 
     def all_models(self):
@@ -220,6 +327,9 @@ class Network:
         return child_id in self._child_dict
 
     def remove_child(self, child_id):
+        """Remove the child with id *child_id* (as returned by
+        :meth:`child_to` or found via ``net.childs``) and detach it from its
+        parent node. Raises ``KeyError`` for an unknown id."""
         # Also drop the parent node's reference; otherwise childs_by_ids
         # raises KeyError walking node.child_ids.
         child = self._child_dict.pop(child_id)
@@ -240,6 +350,8 @@ class Network:
         return None
 
     def remove_node(self, node_id):
+        """Remove the node with id *node_id* together with every incident
+        branch and every child attached to it."""
         # nx.remove_node drops all incident edges from the graph but leaves
         # the surviving neighbours' from_branch_ids/to_branch_ids pointing at
         # those now-vanished edges. Detach them first so later
@@ -258,6 +370,8 @@ class Network:
         self._network_internal.remove_node(node_id)
 
     def remove_branch(self, branch_id):
+        """Remove the branch with id *branch_id*, a ``(from_node_id,
+        to_node_id, key)`` tuple as returned by :meth:`branch`."""
         branch: Branch = self.branch_by_id(branch_id)
         self.remove_branch_between(
             branch.from_node_id, branch.to_node_id, key=branch_id[2]
@@ -267,6 +381,8 @@ class Network:
         return compound_id in self._compound_dict
 
     def remove_compound(self, compound_id):
+        """Remove the compound with id *compound_id* and, recursively, all of
+        its subcomponents (nodes, branches, childs, nested compounds)."""
         compound: Compound = self.compound_by_id(compound_id)
         del self._compound_dict[compound_id]
         for subcomponent in compound.subcomponents:
@@ -284,6 +400,9 @@ class Network:
                     self.remove_compound(subcomponent.id)
 
     def remove_branch_between(self, node_one, node_two, key=0):
+        """Remove the branch between *node_one* and *node_two*; *key*
+        (default 0) picks one of several parallel branches and is the third
+        element of the branch id tuple."""
         self._network_internal.remove_edge(node_one, node_two, key)
         self.node_by_id(node_one).remove_branch((node_one, node_two, key))
         self.node_by_id(node_two).remove_branch((node_one, node_two, key))
@@ -608,6 +727,7 @@ class Network:
         formulation=None,
         constraints=None,
         overwrite_id=None,
+        name=None,
         **connected_node_ids,
     ):
         # One collection frame per compound() call: nested calls collect into
@@ -638,6 +758,7 @@ class Network:
             constraints=constraints,
             connected_to=connected_node_ids,
             subcomponents=subcomponents,
+            name=name,
         )
         self._compound_dict[compound_id] = compound
         # A nested compound is a subcomponent of the enclosing one and, like
@@ -676,6 +797,7 @@ class Network:
             row = {
                 "active": container.active,
                 "id": container.id,
+                "name": container.name,
                 "independent": container.independent,
                 "ignored": container.ignored,
             }
@@ -684,10 +806,13 @@ class Network:
             if isinstance(container, Child):
                 row["node_id"] = container.node_id
             dict_list_dict.setdefault(type(container.model).__name__, []).append(row)
-        return {
-            result_type: pandas.DataFrame(dict_list)
-            for result_type, dict_list in dict_list_dict.items()
-        }
+        frames = {}
+        for result_type, dict_list in dict_list_dict.items():
+            frame = pandas.DataFrame(dict_list)
+            if frame["name"].isna().all():
+                frame = frame.drop(columns=["name"])
+            frames[result_type] = frame
+        return frames
 
     def as_dataframe_dict(self):
         return self._as_dataframe_dict(Network._input_value)
@@ -744,7 +869,224 @@ class Network:
         for node in self.nodes:
             node.child_ids = []
 
+    def check(
+        self, dof_preview: bool = True, mode: str = "simulation"
+    ) -> list[CheckFinding]:
+        """Pre-flight lint: cheap structural checks before any solve.
+
+        Looks for a missing slack or grid-forming child per carrier, dead-end
+        junctions carrying only heat children, non-transformer branches
+        between buses of different ``base_kv``, and (via a model assembly
+        without solving) simulation variables that no equation pins. Prints
+        each :class:`CheckFinding` and returns them; an empty list means
+        clean. ``dof_preview=False`` skips the assembly-based squareness
+        preview, leaving only pure graph checks.
+
+        ``mode`` declares what the network is headed into: ``"simulation"``
+        (default) keeps the squareness preview, ``"optimization"`` skips it,
+        because free variables (storage energies, coupler setpoints, ...) are
+        exactly what an optimization problem is expected to bind, so a dof
+        finding is pure noise there. The graph checks run in both modes. The
+        how-to/diagnose_infeasibility docs page explains each category.
+        """
+        if mode not in ("simulation", "optimization"):
+            raise ValueError(
+                f"check: mode must be 'simulation' or 'optimization', got {mode!r}"
+            )
+        findings: list[CheckFinding] = []
+        findings += self._check_missing_slack()
+        findings += self._check_heat_only_dead_ends()
+        findings += self._check_mixed_base_kv()
+        if dof_preview and mode == "simulation":
+            findings += self._check_dof_preview()
+        if findings:
+            for finding in findings:
+                print(finding)
+        else:
+            print("Network.check: no findings.")
+        return findings
+
+    def _check_missing_slack(self) -> list[CheckFinding]:
+        from .child import ExtHydrGrid, ExtPowerGrid, GridFormingMixin
+        from .grid import GasGrid, PowerGrid, WaterGrid
+
+        carrier_names = {
+            PowerGrid: "electrical",
+            GasGrid: "gas",
+            WaterGrid: "water/heat",
+        }
+        node_count: dict[type, int] = {}
+        led: set[type] = set()
+        for node in self.nodes:
+            if not node.active:
+                continue
+            carrier = next((c for c in carrier_names if isinstance(node.grid, c)), None)
+            if carrier is None:
+                continue
+            node_count[carrier] = node_count.get(carrier, 0) + 1
+            for child in self.childs_by_ids(node.child_ids):
+                if child.active and isinstance(
+                    child.model, ExtPowerGrid | ExtHydrGrid | GridFormingMixin
+                ):
+                    led.add(carrier)
+        return [
+            CheckFinding(
+                "missing_slack",
+                f"{count} {carrier_names[carrier]} node(s) but no active "
+                "slack or grid-forming child on any of them; the solver "
+                "excludes every island without one, so this whole carrier "
+                "would be pruned. Add e.g. an ExtPowerGrid / ExtHydrGrid. "
+                "See the how-to/diagnose_infeasibility docs page",
+            )
+            for carrier, count in node_count.items()
+            if carrier not in led
+        ]
+
+    def _check_heat_only_dead_ends(self) -> list[CheckFinding]:
+        from .node import Junction
+
+        port_child_ids = {
+            sub.id
+            for compound in self.compounds
+            for sub in compound.subcomponents
+            if isinstance(sub, Child)
+        }
+        attachment_node_ids = {
+            node_id
+            for compound in self.compounds
+            if compound.active
+            for node_id in compound.connected_to.values()
+        }
+        findings = []
+        for node in self.nodes:
+            if not node.active or not isinstance(node.model, Junction):
+                continue
+            if node.id in attachment_node_ids:
+                continue
+            degree = sum(1 for b in self.branches_connected_to(node.id) if b.active)
+            if degree > 1:
+                continue
+            children = [
+                c
+                for c in self.childs_by_ids(node.child_ids)
+                if c.active and c.id not in port_child_ids
+            ]
+            if not children or any(
+                "mass_flow_kgs" in getattr(c.model, "vars", {}) for c in children
+            ):
+                continue
+            names = ", ".join(_child_label(c) for c in children)
+            findings.append(
+                CheckFinding(
+                    "heat_only_dead_end",
+                    f"junction has degree {degree} and only heat-only "
+                    f"child(ren) {names}; no mass flow can carry the heat, so "
+                    "the solver prunes the junction and its children. Connect "
+                    "a return pipe or add a mass-flow child (Sink / Source). "
+                    "See the how-to/diagnose_infeasibility docs page",
+                    component=f"Junction({node.id})",
+                )
+            )
+        return findings
+
+    def _check_mixed_base_kv(self) -> list[CheckFinding]:
+        from .branch import GenericPowerBranch, Trafo
+
+        findings = []
+        for branch in self.branches:
+            if not branch.active or isinstance(branch.model, Trafo):
+                continue
+            # pandapower imports mark transformer branches via model.kind
+            # ("trafo"/"trafo3w") and fold the ratio into the pu conversion,
+            # so tap stays 1 and the class stays GenericPowerBranch.
+            kind = getattr(branch.model, "kind", None)
+            if isinstance(kind, str) and kind.startswith("trafo"):
+                continue
+            if not (
+                self.has_node(branch.from_node_id) and self.has_node(branch.to_node_id)
+            ):
+                continue
+            kv_from = getattr(
+                self.node_by_id(branch.from_node_id).model, "base_kv", None
+            )
+            kv_to = getattr(self.node_by_id(branch.to_node_id).model, "base_kv", None)
+            if (
+                not isinstance(kv_from, (int, float))
+                or not isinstance(kv_to, (int, float))
+                or math.isclose(kv_from, kv_to, rel_tol=1e-6)
+            ):
+                continue
+            tap = getattr(branch.model, "tap", 1)
+            if (
+                isinstance(branch.model, GenericPowerBranch)
+                and isinstance(tap, (int, float))
+                and not math.isclose(tap, 1.0)
+            ):
+                continue
+            findings.append(
+                CheckFinding(
+                    "mixed_base_kv",
+                    f"connects buses with base_kv {kv_from} and {kv_to} but "
+                    "is not a transformer; per-unit branch parameters are "
+                    "computed from one side's base, so voltages and flows "
+                    "come out silently skewed. Insert a Trafo or align the "
+                    "base_kv values. See the how-to/diagnose_infeasibility "
+                    "docs page",
+                    component=f"{type(branch.model).__name__}({branch.id})",
+                )
+            )
+        return findings
+
+    def _check_dof_preview(self) -> list[CheckFinding]:
+        import warnings
+
+        try:
+            from monee.solver.core import preview_squareness
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                n_vars, n_eqs, unpinned = preview_squareness(self)
+        except ImportError:
+            return []
+        except Exception as e:  # noqa: BLE001
+            return [
+                CheckFinding(
+                    "check_error",
+                    f"DOF preview could not assemble the model: {e}. A solve "
+                    "will likely fail the same way; see the "
+                    "how-to/diagnose_infeasibility docs page",
+                )
+            ]
+        if n_vars == n_eqs and not unpinned:
+            return []
+        if unpinned:
+            shown = ", ".join(unpinned[:10]) + (", ..." if len(unpinned) > 10 else "")
+            detail = f"; variable(s) in no equation: {shown}"
+        else:
+            detail = ""
+        return [
+            CheckFinding(
+                "dof",
+                f"simulation-mode model is not square ({n_vars} variables, "
+                f"{n_eqs} equations){detail}. A simulation on this network "
+                "returns one feasible point, not a unique setpoint. If the "
+                "network is headed into an optimization problem that binds "
+                "these variables, this is expected; call "
+                "check(mode='optimization') to skip this preview. See the "
+                "how-to/diagnose_infeasibility docs page",
+            )
+        ]
+
     def statistics(self):
+        """Count the independent components per model type.
+
+        Returns ``dict[type, int]``: the keys are the model *classes*
+        themselves (``monee.model.node.Bus``, ``monee.model.child.PowerLoad``,
+        ...), not their names, so a report keyed by name has to map them with
+        ``cls.__name__``. Dependent components (a compound's subcomponents)
+        are not counted; deactivated ones are. The concepts/data_model docs
+        page describes the component kinds behind these types.
+        """
         type_to_number = {}
         model_containers = self.nodes + self.childs + self.branches + self.compounds
         for container in model_containers:
@@ -781,6 +1123,11 @@ class Network:
         # ``memo`` makes this the same object that landed in ``new._extensions``.
         if hasattr(self, "islanding_config"):
             new.islanding_config = copy.deepcopy(self.islanding_config, memo)
+        # Importer-provided source-id lookup (e.g. from_pandapower_net); the
+        # whitelist would otherwise drop it from every copy of a converted net.
+        for lookup in ("pp_bus_to_node", "pp_line_to_branch", "pp_trafo_to_branch"):
+            if hasattr(self, lookup):
+                setattr(new, lookup, dict(getattr(self, lookup)))
         # Compound-construction transients - deepcopy preserves consistency
         # if the copy ever lands mid-build. The blacklist is keyed by object
         # identity, so rebuild the keys from the copied objects.

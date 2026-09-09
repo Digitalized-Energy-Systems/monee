@@ -78,6 +78,221 @@ def test_bus_bus_switch_fusion_maps_max_i_ka_overrides():
     assert ratings[frozenset((by_name["B"].id, by_name["D"].id))] == pytest.approx(0.25)
 
 
+@pytest.mark.pptest
+def test_opf_import_keeps_generator_limits_and_costs():
+    import pandapower.networks as pn
+
+    import monee.model as mm
+    from monee.io.from_pandapower import from_pandapower_net
+
+    # GIVEN a case whose gens carry limits and polynomial costs
+    ppn = pn.case9()
+
+    # WHEN converting for a plain power flow
+    with pytest.warns(UserWarning, match="opf=True"):
+        pf_net = from_pandapower_net(ppn)
+
+    # THEN the costs are gone and the gens are fixed voltage-controlled units
+    assert not any(hasattr(c.model, "_cost_coeffs") for c in pf_net.childs)
+
+    # WHEN converting with opf=True
+    opf_net, problem = from_pandapower_net(ppn, opf=True)
+
+    # THEN every gen is dispatchable within its pandapower limits and priced
+    priced = [c for c in opf_net.childs if hasattr(c.model, "_cost_coeffs")]
+    assert len(priced) == len(ppn.gen) + len(ppn.ext_grid)
+    generators = [c for c in priced if isinstance(c.model, mm.PowerGenerator)]
+    assert sorted(c.model.p_mw.min for c in generators) == pytest.approx(
+        [-300.0, -270.0], abs=1e-6
+    )
+    assert sorted(c.model.p_mw.max for c in generators) == pytest.approx(
+        [-10.0, -10.0], abs=1e-6
+    )
+    assert problem.objectives is not None
+
+
+@pytest.mark.pptest
+def test_opf_import_without_costs_raises():
+    import pandapower as pp
+
+    from monee.io.from_pandapower import from_pandapower_net
+
+    net = pp.create_empty_network()
+    b0 = pp.create_bus(net, vn_kv=20.0)
+    b1 = pp.create_bus(net, vn_kv=20.0)
+    pp.create_ext_grid(net, b0)
+    _line(net, b0, b1, 0.4)
+    pp.create_load(net, b1, p_mw=0.1)
+
+    with pytest.raises(ValueError, match="poly_cost"):
+        from_pandapower_net(net, opf=True)
+
+
+@pytest.mark.pptest
+def test_open_line_switch_stub_keeps_pandapower_rating():
+    import pandapower as pp
+
+    from monee.io.from_pandapower import (
+        _apply_max_i_ka_overrides,
+        from_pandapower_net,
+    )
+
+    # GIVEN a line whose far end carries an open switch, which to_mpc
+    # materialises as an auxiliary bus
+    net = pp.create_empty_network()
+    b0 = pp.create_bus(net, vn_kv=20.0, name="A")
+    b1 = pp.create_bus(net, vn_kv=20.0, name="B")
+    b2 = pp.create_bus(net, vn_kv=20.0, name="C")
+    pp.create_ext_grid(net, b0)
+    _line(net, b0, b1, 0.4)
+    line = _line(net, b1, b2, 0.145)
+    _line(net, b2, b0, 0.3)
+    pp.create_switch(net, b2, line, et="l", closed=False)
+    pp.create_load(net, b1, p_mw=0.1, q_mvar=0.02)
+
+    # WHEN
+    monee_net = from_pandapower_net(net)
+
+    # THEN the stub branch carries the pandapower rating, not the MATPOWER
+    # 'unlimited' sentinel
+    real_nodes = set(monee_net.pp_bus_to_node.values())
+    stubs = [
+        b
+        for b in monee_net.branches
+        if (b.from_node_id in real_nodes) != (b.to_node_id in real_nodes)
+    ]
+    assert len(stubs) == 1
+    assert stubs[0].model.max_i_ka == pytest.approx(0.145)
+
+    # AND an override that matches nothing at all is reported instead of dropped
+    with pytest.warns(UserWarning, match="no imported branch matches"):
+        _apply_max_i_ka_overrides(monee_net, {(99, 98, 0): 0.5}, real_nodes)
+
+
+@pytest.mark.pptest
+def test_branch_kind_identifies_trafo_lines_and_switch_stub():
+    import pandapower as pp
+
+    from monee.io.from_pandapower import from_pandapower_net
+
+    net = pp.create_empty_network()
+    mv0 = pp.create_bus(net, vn_kv=20.0, name="MV0")
+    mv1 = pp.create_bus(net, vn_kv=20.0, name="MV1")
+    mv2 = pp.create_bus(net, vn_kv=20.0, name="MV2")
+    lv0 = pp.create_bus(net, vn_kv=0.4, name="LV0")
+    pp.create_ext_grid(net, mv0)
+    _line(net, mv0, mv1, 0.27)
+    switched_line = _line(net, mv1, mv2, 0.145)
+    _line(net, mv2, mv0, 0.3)
+    pp.create_switch(net, mv2, switched_line, et="l", closed=False)
+    pp.create_transformer_from_parameters(
+        net,
+        hv_bus=mv1,
+        lv_bus=lv0,
+        sn_mva=0.16,
+        vn_hv_kv=20.0,
+        vn_lv_kv=0.4,
+        vkr_percent=1.2,
+        vk_percent=4.0,
+        pfe_kw=0.0,
+        i0_percent=0.0,
+        max_loading_percent=100.0,
+    )
+    pp.create_load(net, lv0, p_mw=0.1, q_mvar=0.02)
+
+    monee_net = from_pandapower_net(net)
+
+    by_kind = {}
+    for branch in monee_net.branches:
+        by_kind.setdefault(branch.model.kind, []).append(branch)
+    assert len(by_kind["line"]) == 2
+    assert len(by_kind["switch-stub"]) == 1
+    assert len(by_kind["trafo"]) == 1
+
+    trafo = by_kind["trafo"][0]
+    assert trafo.model.max_i_ka == pytest.approx(0.16 / (math.sqrt(3) * 20.0))
+
+    frame = monee_net.as_result_dataframe_dict()["GenericPowerBranch"]
+    assert sorted(frame["kind"]) == ["line", "line", "switch-stub", "trafo"]
+
+
+@pytest.mark.pptest
+def test_branch_names_and_element_lookups_cover_switch_split_lines():
+    import pandapower as pp
+
+    from monee.io.from_pandapower import from_pandapower_net
+
+    net = pp.create_empty_network()
+    mv0 = pp.create_bus(net, vn_kv=20.0, name="MV0")
+    mv1 = pp.create_bus(net, vn_kv=20.0, name="MV1")
+    mv2 = pp.create_bus(net, vn_kv=20.0, name="MV2")
+    lv0 = pp.create_bus(net, vn_kv=0.4, name="LV0")
+    pp.create_ext_grid(net, mv0)
+    _line(net, mv0, mv1, 0.27, name="Line A")
+    switched_line = _line(net, mv1, mv2, 0.145, name="Line B")
+    _line(net, mv2, mv0, 0.3, name="Line C")
+    pp.create_switch(net, mv2, switched_line, et="l", closed=False)
+    trafo = pp.create_transformer_from_parameters(
+        net,
+        hv_bus=mv1,
+        lv_bus=lv0,
+        sn_mva=0.16,
+        vn_hv_kv=20.0,
+        vn_lv_kv=0.4,
+        vkr_percent=1.2,
+        vk_percent=4.0,
+        pfe_kw=0.0,
+        i0_percent=0.0,
+        max_loading_percent=100.0,
+        name="Trafo T",
+    )
+    pp.create_load(net, lv0, p_mw=0.1, q_mvar=0.02)
+
+    monee_net = from_pandapower_net(net)
+
+    branch_by_id = {b.id: b for b in monee_net.branches}
+    assert set(monee_net.pp_line_to_branch) == {0, 1, 2}
+    names_by_line = {
+        idx: branch_by_id[bid].name for idx, bid in monee_net.pp_line_to_branch.items()
+    }
+    assert names_by_line == {0: "Line A", 1: "Line B", 2: "Line C"}
+
+    split_branch = branch_by_id[monee_net.pp_line_to_branch[1]]
+    assert split_branch.model.kind == "switch-stub"
+    assert split_branch.model.max_i_ka == pytest.approx(0.145)
+
+    trafo_branch = branch_by_id[monee_net.pp_trafo_to_branch[trafo]]
+    assert trafo_branch.model.kind == "trafo"
+    assert trafo_branch.name == "Trafo T"
+
+    frame = monee_net.as_result_dataframe_dict()["GenericPowerBranch"]
+    assert set(frame["name"].dropna()) == {"Line A", "Line B", "Line C", "Trafo T"}
+
+    copied = monee_net.copy()
+    assert copied.pp_line_to_branch == monee_net.pp_line_to_branch
+    assert copied.pp_trafo_to_branch == monee_net.pp_trafo_to_branch
+
+
+@pytest.mark.pptest
+def test_bus_to_node_mapping_is_exposed_and_survives_copy():
+    from monee.io.from_pandapower import from_pandapower_net
+
+    # GIVEN a net whose buses are fused, so the id is neither the bus index
+    # nor the row position plus one
+    net, (b0, b1, b2, b3) = _switch_fusion_net()
+
+    # WHEN
+    monee_net = from_pandapower_net(net)
+
+    # THEN the real mapping is available on the network
+    mapping = monee_net.pp_bus_to_node
+    node_by_id = {n.id: n for n in monee_net.nodes}
+    assert mapping[b1] == mapping[b2]
+    assert node_by_id[mapping[b3]].name == "D"
+    assert mapping[b3] != b3 + 1
+    assert monee_net.copy().pp_bus_to_node == mapping
+
+
 def _line(net, from_bus, to_bus, max_i_ka, r=0.1, **kwargs):
     import pandapower as pp
 

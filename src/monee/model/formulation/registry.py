@@ -16,6 +16,7 @@ Resolution order per component (most specific wins):
 4. :data:`~monee.model.formulation.bundles.DEFAULT_SIMULATION_FORMULATION`.
 """
 
+import warnings
 from collections.abc import Sequence
 
 from .bundles import (
@@ -98,7 +99,107 @@ def resolve_formulation(spec) -> NetworkFormulation | None:
     )
 
 
-def attach_formulations(network, formulation=None, simulation: bool = False) -> None:
+_INTEGRALITY_CLASSES: frozenset | None = None
+
+
+def _integrality_classes() -> frozenset:
+    """Formulation classes whose equations need their integer Vars enforced.
+
+    Derived from the MILP/MIQCQP bundles minus everything the binary-free NLP
+    bundles also use, so a formulation shared by both families never counts.
+    """
+    global _INTEGRALITY_CLASSES
+    if _INTEGRALITY_CLASSES is None:
+        discrete = {
+            type(f)
+            for bundle in (
+                CONVEX_MIQCQP_FORMULATION,
+                NONCONVEX_MIQCQP_FORMULATION,
+                GAS_CONVEX_MIQCQP_FORMULATION,
+                GAS_NONCONVEX_MIQCQP_FORMULATION,
+                EL_MISOCP_FORMULATION,
+                EL_NONCONVEX_MIQCQP_FORMULATION,
+                HEAT_CONVEX_MILP_FORMULATION,
+                HEAT_NONCONVEX_MIQCQP_FORMULATION,
+                make_gas_milp_pwl_formulation(),
+                make_heat_nonconvex_pwl_formulation(),
+            )
+            for _, f in bundle.items()
+        }
+        smooth = {
+            type(f)
+            for bundle in (
+                SMOOTH_NLP_FORMULATION,
+                EL_NLP_FORMULATION,
+                GAS_NLP_FORMULATION,
+                HEAT_NLP_FORMULATION,
+            )
+            for _, f in bundle.items()
+        }
+        _INTEGRALITY_CLASSES = frozenset(discrete - smooth)
+    return _INTEGRALITY_CLASSES
+
+
+def _integrality_pinned(component) -> bool:
+    """True when the component's discrete formulation pins its integer
+    ``direction`` through its own equality constraints, so a continuous
+    relaxation changes nothing: active heat exchangers always pin the flow
+    direction, and a unidirectional :class:`~monee.model.branch.WaterPipe`
+    under the bilinear Darcy-Weisbach formulation adds ``direction == 0``.
+    The relaxation warning still fires for any discrete formulation that
+    leaves a direction binary free (bidirectional water pipes, gas pipes)."""
+    from .milp.heat import FixedFlowHeatExchangerFormulation
+    from .miqcqp.nonconvex.heat import BilinearDarcyWeisbachBranchFormulation
+
+    f = component.formulation
+    if isinstance(f, FixedFlowHeatExchangerFormulation):
+        return True
+    return type(f) is BilinearDarcyWeisbachBranchFormulation and bool(
+        getattr(component.model, "unidirectional", False)
+    )
+
+
+def warn_relaxed_integrality(network, backend_name: str = "the selected back-end"):
+    """Warn about components whose formulation needs integrality *backend_name*
+    cannot enforce, and return them.
+
+    A continuous back-end (CasADi/IPOPT, GEKKO's IPOPT default) treats an
+    integer Var as continuous, so a MILP/MIQCQP formulation silently converges
+    on a fractional ``direction`` - a physically meaningless blend of both flow
+    directions reported as a successful solve. Components whose direction is
+    pinned by the formulation itself (see :func:`_integrality_pinned`) have
+    nothing to relax and are not reported.
+    """
+    discrete = _integrality_classes()
+    affected = [
+        component
+        for component in network.all_components()
+        if type(component.formulation) in discrete
+        and not _integrality_pinned(component)
+    ]
+    if affected:
+        named = ", ".join(
+            f"{type(c.model).__name__}({getattr(c, 'id', '?')})" for c in affected[:5]
+        )
+        more = f" and {len(affected) - 5} more" if len(affected) > 5 else ""
+        warnings.warn(
+            f"{backend_name} relaxes integer variables, but {len(affected)} "
+            f"component(s) carry a formulation that needs them enforced: "
+            f"{named}{more}. Results can be physically meaningless (fractional "
+            "flow directions). Solve with a MIQCQP/MINLP back-end (e.g. "
+            "solver='scip' or 'gurobi') or pass a binary-free formulation "
+            "(e.g. formulation='smooth_nlp' / 'heat_nlp' / 'gas_nlp').",
+            stacklevel=2,
+        )
+    return affected
+
+
+def attach_formulations(
+    network,
+    formulation=None,
+    simulation: bool = False,
+    supports_integrality: bool = True,
+) -> None:
     """Attach the effective formulation to every component of *network* and
     declare its variables (``ensure_var``).
 
@@ -107,6 +208,8 @@ def attach_formulations(network, formulation=None, simulation: bool = False) -> 
     injection. *formulation* is any spec accepted by
     :func:`resolve_formulation`; it overrides the network-level
     ``apply_formulation`` choice but not per-component pinned formulations.
+    Back-ends that cannot enforce integrality pass
+    ``supports_integrality=False`` to get :func:`warn_relaxed_integrality`.
     """
     solver_nf = resolve_formulation(formulation)
 
@@ -131,3 +234,5 @@ def attach_formulations(network, formulation=None, simulation: bool = False) -> 
             effective.ensure_var(
                 component.model, simulation=simulation, grid=component.grid
             )
+    if not supports_integrality:
+        warn_relaxed_integrality(network)

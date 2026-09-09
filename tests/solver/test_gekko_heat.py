@@ -396,9 +396,12 @@ def test_heat_exchanger():
     assert math.isclose(
         result.dataframes["Junction"]["t_k"][0], 383.17457358, abs_tol=0.01
     )
-    assert math.isclose(
-        result.dataframes["Junction"]["pressure_pa"][0], 999997.65278, abs_tol=0.01
-    )
+    # The heat exchanger carries no pressure equation, so the absolute level on
+    # the junction-0/1 side is a free degree of freedom; only the Darcy drop
+    # along the pipe is determined.
+    pressures = result.dataframes["Junction"]["pressure_pa"]
+    assert math.isclose(pressures[0] - pressures[1], -1.4801, abs_tol=0.01)
+    assert math.isclose(pressures[2] - pressures[3], -2.8896, abs_tol=0.01)
     assert len(result.dataframes) == 6
 
 

@@ -25,6 +25,25 @@ def smooth_abs(signed, eps, sqrt_impl=math.sqrt):
     return sqrt_impl(signed * signed + eps * eps)
 
 
+SMOOTHING_EPS_FLOW_FRACTION = 1e-4
+
+
+def scaled_smoothing_eps(eps, flow_scale, fraction=SMOOTHING_EPS_FLOW_FRACTION):
+    r"""Cap the smoothing width at *fraction* of a branch's flow capacity [kg/s].
+
+    :func:`smooth_abs` puts a floor of :math:`\varepsilon` under :math:`|m|`, which leaves the
+    drop term a spurious :math:`friction \cdot \varepsilon \cdot m` slope around zero flow. As soon
+    as :math:`\varepsilon` reaches a percent or so of what a branch actually carries that floor
+    is physics rather than smoothing, and IPOPT stalls on the resulting nearly
+    rank-deficient pressure rows (``Error_In_Step_Computation``). Tying the width
+    to each branch's own capacity keeps it negligible on narrow low-flow pipes,
+    where a fixed kg/s value is not.
+    """
+    if not flow_scale or flow_scale <= 0:
+        return eps
+    return min(eps, fraction * flow_scale)
+
+
 def weymouth_pressure(
     psq_pu_i,
     psq_pu_j,

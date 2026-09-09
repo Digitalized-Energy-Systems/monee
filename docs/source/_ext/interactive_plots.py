@@ -66,7 +66,7 @@ BAR_LINE = "#222222"
 BAR_LINE_WIDTH = 1.1
 
 C_BLACK = "rgba(0,0,0,0)"
-C_GRIDCOLOR = "rgsba(80,80,80,0.12)"
+C_GRIDCOLOR = "rgba(80,80,80,0.12)"
 
 
 def _bar_marker(color, pattern=None):
@@ -251,9 +251,18 @@ def _solve_storage(capacity_mwh, p_max_mw, load, price, dt_h=1.0):
         dt_h=dt_h,
         terminal_state={(bat_id, "e_mwh"): capacity_mwh / 2},
     )
-    disp = [float(x) for x in result.get_result_for_id(bat_id, "p_mw").values]
-    soc = [float(x) for x in result.get_result_for_id(bat_id, "e_mwh").values]
-    imp = [-float(x) for x in result.get_result_for_id(ext_id, "p_mw").values]
+    disp = [
+        float(x)
+        for x in result.get_result_for_id(bat_id, "p_mw", mm.ElectricStorage).values
+    ]
+    soc = [
+        float(x)
+        for x in result.get_result_for_id(bat_id, "e_mwh", mm.ElectricStorage).values
+    ]
+    imp = [
+        -float(x)
+        for x in result.get_result_for_id(ext_id, "p_mw", mm.ExtPowerGrid).values
+    ]
     bill = sum(p * i * dt_h for p, i in zip(price, imp))
     return disp, soc, imp, bill
 
@@ -365,7 +374,10 @@ def build_storage_prescribed(out_path):
     td = TimeseriesData()
     td.add_child_series(bat_id, "p_mw", dispatch)
     result = run_timeseries(net, td)
-    soc = [float(x) for x in result.get_result_for_id(bat_id, "e_mwh").values]
+    soc = [
+        float(x)
+        for x in result.get_result_for_id(bat_id, "e_mwh", mm.ElectricStorage).values
+    ]
     steps = list(range(len(dispatch)))
     colors = [C_CHG if v >= 0 else C_DIS for v in dispatch]
 
@@ -442,7 +454,10 @@ def build_storage_gas(out_path):
     td_g.add_child_series(tank_id, "mass_flow_kgs", dispatch)
     result_g = run_timeseries(net_g, td_g)
     stored = [
-        float(x) for x in result_g.get_result_for_id(tank_id, "m_stored_kg").values
+        float(x)
+        for x in result_g.get_result_for_id(
+            tank_id, "m_stored_kg", mm.GasStorage
+        ).values
     ]
     steps = list(range(len(dispatch)))
     colors = [
@@ -545,8 +560,14 @@ def build_concepts_multi_period(out_path):
         terminal_state={(bat, "e_mwh"): 2.0},
     )
 
-    soc = [float(x) for x in result.get_result_for_id(bat, "e_mwh").values]
-    disp = [float(x) for x in result.get_result_for_id(bat, "p_mw").values]
+    soc = [
+        float(x)
+        for x in result.get_result_for_id(bat, "e_mwh", mm.ElectricStorage).values
+    ]
+    disp = [
+        float(x)
+        for x in result.get_result_for_id(bat, "p_mw", mm.ElectricStorage).values
+    ]
     steps = list(range(len(LOAD)))
     dispatch_colors = [C_CHG if v >= 0 else C_DIS for v in disp]
 
@@ -625,20 +646,20 @@ def build_concepts_multi_period(out_path):
 def build_temporal_extensions_1(out_path):
     """LTC thermal inertia: same network solved with and without
     LumpedThermalCapacitance; junction temperatures for a supply step-change."""
-    supply_temp = [1.0, 1.0, 1.0, 1.0, 0.8, 0.8, 0.8, 0.8]
+    supply_temp = [356.0, 356.0, 356.0, 356.0, 340.0, 340.0, 340.0, 340.0]
 
     def build_net(with_ltc):
         net = mx.create_multi_energy_network()
         j_supply = mx.create_water_junction(net)
         j_mid = mx.create_water_junction(net)
         j_load = mx.create_water_junction(net)
-        mx.create_ext_hydr_grid(net, j_supply)
-        mx.create_water_sink(net, j_load, mass_flow_kgs=0.5)
+        ext = mx.create_ext_hydr_grid(net, j_supply)
+        mx.create_water_sink(net, j_load, mass_flow_kgs=5.0)
         mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.3, length_m=500)
         mx.create_water_pipe(net, j_mid, j_load, diameter_m=0.2, length_m=300)
         if with_ltc:
             net.add_extension(LumpedThermalCapacitance())
-        return net, j_supply, j_mid, j_load
+        return net, ext, j_supply, j_mid, j_load
 
     fig = make_subplots(
         rows=1,
@@ -653,13 +674,13 @@ def build_temporal_extensions_1(out_path):
         ("load (j2)", "load", C_ACCENT),
     ]
     for col, with_ltc in zip((1, 2), (False, True)):
-        net, j_supply, j_mid, j_load = build_net(with_ltc)
+        net, ext, j_supply, j_mid, j_load = build_net(with_ltc)
         td = TimeseriesData()
-        td.add_node_series(j_supply, "t_pu", supply_temp)
+        td.add_child_series(ext, "t_k", supply_temp)
         result = run_timeseries(net, td)
-        t_supply_s = result.get_result_for_id(j_supply, "t_pu")
-        t_mid_s = result.get_result_for_id(j_mid, "t_pu")
-        t_load_s = result.get_result_for_id(j_load, "t_pu")
+        t_supply_s = result.get_result_for_id(j_supply, "t_pu", mm.Junction)
+        t_mid_s = result.get_result_for_id(j_mid, "t_pu", mm.Junction)
+        t_load_s = result.get_result_for_id(j_load, "t_pu", mm.Junction)
         steps = list(range(len(t_supply_s)))
         node_values = {
             "supply": [float(v) for v in t_supply_s.values],
@@ -689,8 +710,8 @@ def build_temporal_extensions_1(out_path):
     _base_layout(fig, "Thermal inertia: supply step-change at t = 4", height=480)
     fig.update_xaxes(title_text="Timestep  [h]", row=1, col=1)
     fig.update_xaxes(title_text="Timestep  [h]", row=1, col=2)
-    fig.update_yaxes(title_text="Temperature  [pu]", range=[0.75, 1.05], row=1, col=1)
-    fig.update_yaxes(range=[0.75, 1.05], row=1, col=2)
+    fig.update_yaxes(title_text="Temperature  [pu]", range=[0.94, 1.01], row=1, col=1)
+    fig.update_yaxes(range=[0.94, 1.01], row=1, col=2)
     return _write(fig, out_path, height_px=480)
 
 
@@ -717,9 +738,9 @@ def build_temporal_extensions_2(out_path):
 
     result_lp, pipe_id, j0 = build_and_run(with_linepack=True)
     result_nolp, _, _ = build_and_run(with_linepack=False)
-    src_lp = result_lp.get_result_for_id(j0, "mass_flow_kgs")
-    src_nolp = result_nolp.get_result_for_id(j0, "mass_flow_kgs")
-    lp_kg = result_lp.get_result_for_id(pipe_id, "linepack_kg")
+    src_lp = result_lp.get_result_for_id(j0, "mass_flow_kgs", mm.Junction)
+    src_nolp = result_nolp.get_result_for_id(j0, "mass_flow_kgs", mm.Junction)
+    lp_kg = result_lp.get_result_for_id(pipe_id, "linepack_kg", mm.GasPipe)
     lp0 = float(lp_kg.values[0])
     steps = list(range(len(DEMAND)))
     feed_lp = [-float(v) for v in src_lp.values]
@@ -954,8 +975,14 @@ def build_howto_multi_period_1(out_path):
         terminal_state={(bat, "e_mwh"): 2.0},
     )
 
-    soc = [float(x) for x in result.get_result_for_id(bat, "e_mwh").values]
-    disp = [float(x) for x in result.get_result_for_id(bat, "p_mw").values]
+    soc = [
+        float(x)
+        for x in result.get_result_for_id(bat, "e_mwh", mm.ElectricStorage).values
+    ]
+    disp = [
+        float(x)
+        for x in result.get_result_for_id(bat, "p_mw", mm.ElectricStorage).values
+    ]
     hours = list(range(len(LOAD)))
     bar_colors = [C_CHG if v >= 0 else C_DIS for v in disp]
 
@@ -1154,7 +1181,8 @@ def build_howto_multi_period_linepack(out_path):
     td_lp.add_child_series_by_name("consumer", "mass_flow_kgs", DEMAND)
     result = run_multi_period(net_lp, td_lp, dt_h=1.0)
     lp_vals = [
-        float(x) for x in result.get_result_for_id(pipe_id, "linepack_kg").values
+        float(x)
+        for x in result.get_result_for_id(pipe_id, "linepack_kg", mm.GasPipe).values
     ]
     lp0 = lp_vals[0]
     steps = list(range(len(DEMAND)))

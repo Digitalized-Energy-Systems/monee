@@ -2,6 +2,7 @@ import os
 
 import pytest
 
+import monee.express as mx
 import monee.model as mm
 from monee.io.native import (
     FORMAT_VERSION,
@@ -627,3 +628,325 @@ def test_unserializable_public_attribute_raises():
 def test_preprocess_dict_delegates_to_decode():
     sample = {"a": 1, "b": "x"}
     assert preprocess_dict(sample) == _decode_values(sample)
+
+
+def _create_all_couplers_network():
+    """One network containing every registered compound and coupler type."""
+    net = mm.Network(mm.create_power_grid("power"))
+    gas_grid = mm.create_gas_grid("gas", type="lgas")
+    water_grid = mm.create_water_grid("heat")
+
+    el = [
+        net.node(
+            mm.Bus(base_kv=1),
+            child_ids=[
+                net.child(mm.ExtPowerGrid(p_mw=0.1, q_mvar=0, vm_pu=1, va_degree=0))
+            ],
+        )
+    ]
+    el += [net.node(mm.Bus(base_kv=1)) for _ in range(4)]
+    for node in el[1:]:
+        net.branch(
+            mm.PowerLine(length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, parallel=1),
+            el[0],
+            node,
+        )
+
+    gas = [
+        net.node(mm.Junction(), child_ids=[net.child(mm.ExtHydrGrid())], grid=gas_grid)
+    ]
+    gas += [net.node(mm.Junction(), grid=gas_grid) for _ in range(4)]
+    for node in gas[1:]:
+        net.branch(
+            mm.GasPipe(
+                diameter_m=0.3, length_m=100, temperature_ext_k=300, roughness_m=0.01
+            ),
+            gas[0],
+            node,
+        )
+
+    heat = [
+        net.node(
+            mm.Junction(), child_ids=[net.child(mm.ExtHydrGrid())], grid=water_grid
+        )
+    ]
+    heat += [net.node(mm.Junction(), grid=water_grid) for _ in range(3)]
+    for node in heat[1:]:
+        net.branch(mm.WaterPipe(diameter_m=0.2, length_m=100), heat[0], node)
+
+    net.compound(
+        mm.PowerToHeat(
+            heat_energy_mw=0.1, diameter_m=0.1, temperature_ext_k=293, efficiency=0.9
+        ),
+        power_node_id=el[1],
+        heat_node_id=heat[1],
+        heat_return_node_id=heat[2],
+    )
+    net.compound(
+        mm.CHP(
+            diameter_m=0.1,
+            efficiency_power=0.4,
+            efficiency_heat=0.45,
+            mass_flow_setpoint_kgs=0.01,
+        ),
+        power_node_id=el[2],
+        heat_node_id=heat[1],
+        heat_return_node_id=heat[2],
+        gas_node_id=gas[1],
+    )
+    net.compound(
+        mm.GasToHeat(
+            heat_energy_mw=0.2, diameter_m=0.1, temperature_ext_k=293, efficiency=0.85
+        ),
+        gas_node_id=gas[2],
+        heat_node_id=heat[1],
+        heat_return_node_id=heat[2],
+    )
+    net.compound(
+        mm.CHPHG(
+            efficiency_power=0.35, efficiency_heat=0.5, mass_flow_setpoint_kgs=0.02
+        ),
+        power_node_id=el[3],
+        heat_node_id=heat[3],
+        gas_node_id=gas[3],
+    )
+    net.branch(
+        mm.PowerToGas(efficiency=0.7, mass_flow_setpoint_kgs=0.05), el[4], gas[4]
+    )
+    net.branch(mm.GasToPower(efficiency=0.6, p_mw_setpoint=0.3), gas[4], el[4])
+    net.branch(mm.PowerToHeatHG(heat_energy_mw=0.15, efficiency=0.95), el[4], heat[3])
+    net.branch(mm.GasToHeatHG(heat_energy_mw=0.25, efficiency=0.8), gas[4], heat[3])
+    return net
+
+
+def _model_of(components, model_cls):
+    matching = [c.model for c in components if type(c.model) is model_cls]
+    assert len(matching) == 1
+    return matching[0]
+
+
+def test_roundtrip_every_coupler_type(tmp_path):
+    # GIVEN
+    pn = _create_all_couplers_network()
+    path = tmp_path / "couplers.json"
+
+    # WHEN
+    write_omef_network(str(path), pn)
+    out = load_to_network(str(path))
+
+    # THEN structure survives
+    assert len(out.nodes) == len(pn.nodes)
+    assert len(out.branches) == len(pn.branches)
+    assert len(out.childs) == len(pn.childs)
+    assert len(out.compounds) == len(pn.compounds)
+
+    # THEN key attributes survive
+    p2h = _model_of(out.compounds, mm.PowerToHeat)
+    assert p2h.heat_energy_mw == 0.1
+    assert p2h.efficiency == 0.9
+    assert p2h.load_p_mw == pytest.approx(0.1 / 0.9)
+
+    chp = _model_of(out.compounds, mm.CHP)
+    assert chp.efficiency_power == 0.4
+    assert chp.efficiency_heat == 0.45
+    assert chp.mass_flow_setpoint_kgs == 0.01
+
+    g2h = _model_of(out.compounds, mm.GasToHeat)
+    assert g2h.heat_energy_mw == -0.2
+    assert g2h.efficiency == 0.85
+
+    chp_hg = _model_of(out.compounds, mm.CHPHG)
+    assert chp_hg.efficiency_power == 0.35
+    assert chp_hg.efficiency_heat == 0.5
+
+    p2g = _model_of(out.branches, mm.PowerToGas)
+    assert p2g.efficiency == 0.7
+    assert p2g.gas_mass_flow_kgs == -0.05
+
+    g2p = _model_of(out.branches, mm.GasToPower)
+    assert g2p.efficiency == 0.6
+    assert g2p.el_mw == -0.3
+
+    p2h_hg = _model_of(out.branches, mm.PowerToHeatHG)
+    assert p2h_hg.heat_energy_mw == 0.15
+    assert p2h_hg.efficiency == 0.95
+    assert p2h_hg.load_p_mw == pytest.approx(0.15 / 0.95)
+
+    g2h_hg = _model_of(out.branches, mm.GasToHeatHG)
+    assert g2h_hg.heat_energy_mw == -0.25
+    assert g2h_hg.efficiency == 0.8
+
+
+def _docs_quick_look_network():
+    net = mx.create_multi_energy_network()
+    bus_0 = mx.create_bus(net)
+    bus_1 = mx.create_bus(net)
+    mx.create_line(net, bus_0, bus_1, length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+    mx.create_ext_power_grid(net, bus_0)
+    mx.create_power_load(net, bus_1, p_mw=0.1, q_mvar=0.0)
+
+    j_supply = mx.create_water_junction(net)
+    j_mid = mx.create_water_junction(net)
+    j_return = mx.create_water_junction(net)
+    mx.create_ext_hydr_grid(net, j_supply)
+    mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.12, length_m=100)
+    mx.create_sink(net, j_return, mass_flow_kgs=1)
+
+    mx.create_p2h(
+        net, bus_1, j_mid, j_return, heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9
+    )
+    return net
+
+
+def test_roundtrip_docs_quick_look_network(tmp_path):
+    # GIVEN
+    pn = _docs_quick_look_network()
+    path = tmp_path / "quick_look.json"
+
+    # WHEN
+    write_omef_network(str(path), pn)
+    out = load_to_network(str(path))
+
+    # THEN
+    assert len(out.nodes) == len(pn.nodes)
+    assert len(out.branches) == len(pn.branches)
+    assert len(out.childs) == len(pn.childs)
+    p2h = _model_of(out.compounds, mm.PowerToHeat)
+    assert p2h.heat_energy_mw == 0.1
+    assert p2h.load_p_mw == pytest.approx(0.1 / 0.9)
+
+
+def test_roundtrip_preserves_adjacency_and_branch_order():
+    # GIVEN a network whose compounds interleave branches with plain ones
+    from monee.network import create_urban_district_net
+
+    pn = create_urban_district_net()
+
+    # WHEN
+    out = _roundtrip(pn)
+
+    # THEN global branch order and per-node adjacency order survive
+    assert [b.id for b in out.branches] == [b.id for b in pn.branches]
+    for orig_node in pn.nodes:
+        loaded = out.node_by_id(orig_node.id)
+        assert loaded.from_branch_ids == orig_node.from_branch_ids
+        assert loaded.to_branch_ids == orig_node.to_branch_ids
+
+
+def test_serialization_independent_of_solve_state():
+    # GIVEN
+    import monee
+
+    pn = _stub_bus_network()
+    before = network_to_native_dict(pn)
+
+    # WHEN solving in place
+    monee.run_energy_flow(pn, formulation="smooth_nlp")
+
+    # THEN the default encoding is unchanged by the solve
+    assert network_to_native_dict(pn) == before
+
+    # THEN the opt-in encoding carries the solved operating point
+    checkpoint = network_to_native_dict(pn, include_solve_state=True)
+    assert checkpoint != before
+    live_vm = pn.node_by_id(1).model.vm_pu.value
+    encoded_vm = next(n for n in checkpoint["nodes"] if n["id"] == 1)["values"][
+        "vm_pu"
+    ]["value"]
+    assert encoded_vm == live_vm
+
+
+def test_loaded_solved_network_starts_from_declared_values(tmp_path):
+    # GIVEN a solved network saved with the default (solve-independent) encoding
+    import monee
+
+    pn = _stub_bus_network()
+    declared_vm = pn.node_by_id(1).model.vm_pu.value
+    monee.run_energy_flow(pn, formulation="smooth_nlp")
+    assert pn.node_by_id(1).model.vm_pu.value != declared_vm
+    path = tmp_path / "solved.json"
+    write_omef_network(str(path), pn)
+
+    # WHEN
+    out = load_to_network(str(path))
+
+    # THEN the loaded network re-solves from the declared start, not the solution
+    assert out.node_by_id(1).model.vm_pu.value == declared_vm
+
+
+def _stub_bus_network():
+    import monee
+
+    net = monee.Network(mm.create_power_grid("power"))
+    b0 = net.node(
+        mm.Bus(base_kv=20), child_ids=[net.child(mm.ExtPowerGrid(p_mw=0.1, q_mvar=0))]
+    )
+    b1 = net.node(
+        mm.Bus(base_kv=20), child_ids=[net.child(mm.PowerLoad(p_mw=0.1, q_mvar=0))]
+    )
+    b2 = net.node(mm.Bus(base_kv=20))
+    line = dict(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1)
+    net.branch(mm.PowerLine(**line), b0, b1)
+    net.branch(mm.PowerLine(**line), b1, b2)
+    return net
+
+
+def test_postprocess_nan_survives_roundtrip():
+    # GIVEN a network with a dead-end stub whose bus is pruned to NaN
+    import math
+
+    import monee
+
+    net = _stub_bus_network()
+    r1 = monee.run_energy_flow(net, formulation="smooth_nlp")
+
+    # WHEN
+    out = _roundtrip(net)
+    r2 = monee.run_energy_flow(out, formulation="smooth_nlp")
+
+    # THEN the pruned bus reports NaN in both, and live values match
+    va1 = list(r1.dataframes["Bus"]["va_degree"])
+    va2 = list(r2.dataframes["Bus"]["va_degree"])
+    assert math.isnan(va1[2]) and math.isnan(va2[2])
+    assert va1[:2] == pytest.approx(va2[:2], abs=1e-10)
+
+
+def test_solve_save_load_solve_roundtrip_end_to_end(tmp_path):
+    # GIVEN
+    import monee
+
+    net = _docs_quick_look_network()
+
+    # WHEN build -> solve -> save -> load -> solve -> save
+    r1 = monee.run_energy_flow(net, formulation="smooth_nlp")
+    path_1 = tmp_path / "first.json"
+    write_omef_network(str(path_1), net)
+
+    out = load_to_network(str(path_1))
+    r2 = monee.run_energy_flow(out, formulation="smooth_nlp")
+    path_2 = tmp_path / "second.json"
+    write_omef_network(str(path_2), out)
+
+    # THEN the two serializations are byte-identical
+    assert path_1.read_bytes() == path_2.read_bytes()
+
+    # THEN the two solves agree
+    for frame_name, frame in r1.dataframes.items():
+        other = r2.dataframes[frame_name]
+        left = frame.select_dtypes("number").fillna(0.0)
+        right = other.select_dtypes("number").fillna(0.0)
+        assert ((left - right).abs().max(axis=None) or 0.0) == pytest.approx(
+            0.0, abs=1e-8
+        ), frame_name
+
+
+def test_unknown_type_error_names_both_causes():
+    from monee.io.native import _resolve_model_type
+
+    with pytest.raises(PersistenceException) as excinfo:
+        _resolve_model_type("NotRegisteredBranch")
+
+    message = str(excinfo.value)
+    assert "never imported in this process" in message
+    assert "not decorated with @model" in message
+    assert "concepts/data_model" in message

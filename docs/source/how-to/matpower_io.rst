@@ -90,6 +90,36 @@ Know these conventions before you optimise:
    current limits. Set realistic ``max_i_ka`` values on the branch models
    before running any optimisation that is constrained by line loading.
 
+Reading a case as an optimal power flow
+---------------------------------------
+
+:func:`~monee.io.matpower.read_matpower_case` builds a power flow: generators
+keep their ``Pg`` setpoint and the ``gencost`` matrix is ignored. For an
+economic dispatch use :func:`~monee.io.matpower.read_matpower_opf_case`, which
+needs a case carrying ``gencost`` and returns the network together with an
+:class:`~monee.problem.core.OptimizationProblem`:
+
+.. code-block:: python
+
+    import monee
+    from monee.io.matpower import read_matpower_opf_case
+
+    net, problem = read_matpower_opf_case("case9.m", max_loading=1.0)
+    result = monee.run_energy_flow_optimization(net, problem)
+
+Every in-service generator becomes dispatchable within ``PMIN`` to ``PMAX`` and
+``QMIN`` to ``QMAX`` and carries its polynomial cost, the bus voltages are
+bounded by ``VMIN`` to ``VMAX`` including the slack, and ``max_loading`` caps
+branch loading (per unit of ``RATE_A``, ``None`` to drop the limits) on an
+apparent-power basis by default, or on the imported current limit with
+``limit_basis="current"``. Piecewise-linear ``gencost`` is only supported for
+two breakpoints, that is a linear cost; other piecewise rows are warned about
+and their generators stay dispatchable at zero cost.
+
+A pandapower net takes the same route through
+:func:`~monee.io.from_pandapower.from_pandapower_net` with ``opf=True``; see
+:doc:`convert_from_pandapower`.
+
 ----
 
 Saving and loading the native format
@@ -170,7 +200,10 @@ MATPOWER importer) decode to a :class:`~monee.model.core.Var`.
      (linepack, LTC, islanding configuration),
    * non-default formulations applied with
      :meth:`~monee.model.network.Network.apply_formulation`; the defaults are
-     re-derived on load.
+     re-derived on load,
+   * importer lookups attached to the network object, such as the
+     ``pp_bus_to_node`` mapping of
+     :func:`~monee.io.from_pandapower.from_pandapower_net`.
 
    Re-register constraints, objectives, and extensions and re-apply your
    formulation after :func:`~monee.io.native.load_to_network`.

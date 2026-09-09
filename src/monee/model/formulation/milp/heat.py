@@ -12,7 +12,7 @@ Heating side as a convex relaxation:
 
 This is a relaxation - the bilinear is not pinned, the objective must drive
 ``H_out`` toward the surface. Tighten via ``WaterGrid.t_pu_min_env`` /
-``t_pu_max_env``. Hydraulics omitted (paper §2.1); pipes are unidirectional.
+``t_pu_max_env``. Hydraulics omitted (paper section 2.1); pipes are unidirectional.
 
 Boundary children contribute :math:`c \cdot m \cdot \tau_{node} \cdot t_{ref,k}` using the node's own :math:`\tau`.
 
@@ -54,6 +54,13 @@ def _reversed_flow(branch_model) -> bool:
     return bool(getattr(branch_model, REVERSE_ATTR, False))
 
 
+def _regulation_upper(model) -> float:
+    reg = getattr(model, "regulation", 1)
+    if isinstance(reg, Var):
+        return 1.0 if reg.max is None else float(reg.max)
+    return float(reg)
+
+
 class FixedFlowHeatExchangerFormulation(BranchFormulation):
     r"""Active heat exchanger driven by a prescribed (design) mass flow.
 
@@ -89,7 +96,11 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
         if isinstance(model.mass_flow_design_kgs, Var):
             model.mass_flow_mag_kgs = Var(m_seed, min=0)
         else:
-            model.mass_flow_mag_kgs = Var(m_seed, min=0, max=model.mass_flow_design_kgs)
+            model.mass_flow_mag_kgs = Var(
+                m_seed,
+                min=0,
+                max=model.mass_flow_design_kgs * max(1.0, _regulation_upper(model)),
+            )
 
         q_seed = q_design or 0.0
         if model.q_mw_set <= 0 or isinstance(model.q_mw_set, Var):
@@ -98,6 +109,13 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
         elif model.q_mw_set > 0:
             model._he_is_generator = False
             model.q_mw_delivered = Var(max(q_seed, 0.0), min=0, name="q_mw_delivered")
+        model._he_sim_square = bool(simulation)
+
+    def prescribed_flow_kgs(self, branch):
+        """Through-flow imposed on a fixed-flow exchanger: the design flow
+        scaled by ``regulation``. A part-loaded exchanger throttles its water,
+        it does not keep the full flow at a narrower temperature spread."""
+        return branch.mass_flow_design_kgs * branch.regulation
 
     def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
         if branch._he_is_generator:
@@ -135,11 +153,17 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
             ]
             balance_flow_kgs = branch.mass_flow_mag_kgs
         else:
+            prescribed_kgs = self.prescribed_flow_kgs(branch)
             flow_eqs = [
-                branch.mass_flow_mag_kgs == branch.mass_flow_design_kgs,
-                branch.mass_flow_neg_kgs == branch.mass_flow_design_kgs * branch.on_off,
+                branch.mass_flow_mag_kgs == prescribed_kgs,
+                branch.mass_flow_neg_kgs == prescribed_kgs * branch.on_off,
             ]
-            balance_flow_kgs = branch.mass_flow_design_kgs
+            balance_flow_kgs = prescribed_kgs
+            if isinstance(prescribed_kgs, (int, float)) and prescribed_kgs == 0:
+                # At zero flow t_out_pu drops out of the energy balance; keep
+                # the design flow as its coefficient so the outlet temperature
+                # stays determined (the duty is pinned to zero regardless).
+                balance_flow_kgs = branch.mass_flow_design_kgs
 
         eqs = flow_eqs + [
             branch.mass_flow_pos_kgs == 0,
@@ -150,7 +174,14 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
             == branch.t_in_pu * (balance_flow_kgs * cp_mw_per_kgs_k * grid.t_ref_k)
             - branch.q_mw_delivered,
         ]
-        if branch._he_is_generator:
+        # A pure simulation has no objective driving the delivered-duty
+        # inequality tight; for a fixed-duty exchanger the equality keeps the
+        # model square. Dynamic-flow exchangers (SubHE) keep the inequality:
+        # pinning the delivered duty there removes the relief that lets IPOPT
+        # leave the zero-flow corner.
+        if getattr(branch, "_he_sim_square", False) and not is_dynamic_mf:
+            eqs.append(branch.q_mw_delivered == branch.q_mw * branch.on_off)
+        elif branch._he_is_generator:
             eqs.append(branch.q_mw_delivered >= branch.q_mw * branch.on_off)
         else:
             eqs.append(branch.q_mw_delivered <= branch.q_mw * branch.on_off)
@@ -332,7 +363,7 @@ class McCormickHeatBranchFormulation(BranchFormulation):
         model.H_out_mw = Var(0, name="H_out_mw")
         model.H_in_mw = Var(0, name="H_in_mw")
         model.mass_flow_mag_kgs = Var(0, min=0, name="mass_flow_mag_kgs")
-        # §2.1 fixed flow direction: one flow half only (m \ge 0); pinning the
+        # section 2.1 fixed flow direction: one flow half only (m \ge 0); pinning the
         # binary and the unused half to Const drops them from the LP. Forward
         # flow rides mass_flow_neg_kgs (direction 0), reverse mass_flow_pos_kgs.
         if _reversed_flow(model):
@@ -458,11 +489,19 @@ class McCormickHeatExchangerFormulation(FixedFlowHeatExchangerFormulation):
         model.H_in_mw = Var(0, name="H_in_mw")
         model.direction = Const(0)
 
+    def prescribed_flow_kgs(self, branch):
+        # A regulation Var would turn the H-space balance bilinear and break
+        # the MILP, so only a numeric regulation scales the flow here.
+        if isinstance(branch.regulation, (int, float)):
+            return super().prescribed_flow_kgs(branch)
+        return branch.mass_flow_design_kgs
+
     def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
         scale_mw = C_WATER * grid.t_ref_k / 1e6
         eqs = self._he_equations(branch, grid, from_node_model)
         eqs += [
-            branch.H_out_mw == scale_mw * branch.mass_flow_design_kgs * branch.t_in_pu,
+            branch.H_out_mw
+            == scale_mw * self.prescribed_flow_kgs(branch) * branch.t_in_pu,
             branch.H_in_mw == branch.H_out_mw - branch.q_mw_delivered,
         ]
         return eqs
@@ -528,7 +567,7 @@ def orient_unidirectional_water_pipes(net) -> list:
     formulation; returns the branch ids marked for reversal.
 
     :class:`McCormickHeatBranchFormulation` fixes each pipe's flow to the stored
-    ``from -> to`` orientation (paper §2.1, ``mass_flow_pos_kgs = Const(0)``).
+    ``from -> to`` orientation (paper section 2.1, ``mass_flow_pos_kgs = Const(0)``).
     That orientation is the network's *design* flow. Once a failure removes a
     junction's inbound pipe, the junction can only be re-fed by reversing the
     pipes below it - which the formulation forbids, so its nodal mass balance

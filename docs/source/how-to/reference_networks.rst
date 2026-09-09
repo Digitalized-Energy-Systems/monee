@@ -69,7 +69,6 @@ Load and run an energy-flow calculation on the urban district network:
     print(result.get(mm.GasPipe)[["mass_flow_kgs"]].shape)
 
 .. testoutput::
-   :options: +SKIP
 
    (5, 1)
    (4, 1)
@@ -116,6 +115,15 @@ overlay generators under the hood:
   benchmark (with PV and wind DER) converted to monee and overlaid with gas
   and heat grids, a P2G, a CHP, and one open backup line.  Requires
   ``pandapower``.
+
+Both are built from the older single-pipe builders
+:func:`~monee.network.mes.create_gas_net_for_power` and
+:func:`~monee.network.mes.create_heat_net_for_power`, with hand-tuned pipe
+geometry.  Neither runs
+:func:`~monee.network.mes.generate_supply_return_mes_based_on_power_net`, so
+they carry one heat pipe per branch and no separate return network.  For a
+generated supply and return MES on the same CIGRE MV import, see
+:doc:`generate_mes`.
 
 ----
 

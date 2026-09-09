@@ -23,8 +23,10 @@ Choosing a generator
    * - :func:`~monee.network.mes.generate_supply_return_mes_based_on_power_net`
      - Seedable
      - Recommended. Deterministic gas and heat overlays plus seedable
-       coupling placement, with a supply/return DHS suited to the McCormick
-       and smooth NLP formulations.
+       coupling placement, with a supply/return DHS. Its ``node_based_heat_loads``
+       variant is shaped for the McCormick DHS relaxation, which is the only
+       formulation that reads the envelope hints it writes; the branch-based
+       default is the one to pair with the smooth NLP formulation.
 
 All generators work on a copy of the input power network. The original is
 never modified.
@@ -192,12 +194,24 @@ In this mode the builder additionally:
 Automatic pipe sizing
 ---------------------
 
-By default every pipe gets the flat ``default_diameter_m`` (0.12 m). On large
-radial networks this is physically infeasible: the trunk pipes near the slack
-must carry the whole network's flow, exceeding the velocity cap while the
-Darcy pressure drop (proportional to :math:`1/D^5`) blows up. Enable
-``auto_diameter=True`` to size each supply pipe (and the closing pipe) from
-the cumulative downstream consumer demand instead:
+``auto_diameter`` is on by default, so every supply pipe (and the closing
+pipe) is sized for the flow it has to carry rather than getting the flat
+``default_diameter_m`` of 0.12 m. Two criteria are applied per pipe and the
+wider of the two wins:
+
+- velocity: the pipe must carry its cumulative downstream design flow without
+  exceeding the design velocity;
+- pressure: the Darcy drop, proportional to :math:`1/D^5`, must keep the whole
+  worst slack-to-leaf path inside a share of the grid's reference pressure.
+
+The design flow of a pipe is the larger of the cumulative downstream consumer
+demand and the cumulative downstream HX-Gen injection, because a generator
+pushes its own flow back up the tree.
+
+The velocity criterion on its own is not enough on grids with long branches.
+A CIGRE MV overlay sized at 5 m/s stays under the velocity cap everywhere and
+still drops far below the Junction ``pressure_pu`` floor of 0.5, which is why
+that example used to come back ``Infeasible_Problem_Detected``.
 
 .. list-table::
    :header-rows: 1
@@ -206,7 +220,8 @@ the cumulative downstream consumer demand instead:
    * - Keyword argument
      - Description
    * - ``auto_diameter``
-     - Enable capacity-based sizing (default ``False``).
+     - Enable demand-based sizing (default ``True``). Set ``False`` for the
+       flat ``default_diameter_m`` everywhere.
    * - ``auto_diameter_v_mps``
      - Design velocity; defaults to the heat grid's ``v_max_mps``.
    * - ``auto_diameter_headroom``
@@ -215,6 +230,14 @@ the cumulative downstream consumer demand instead:
    * - ``auto_min_diameter_m``
      - Floor for the sized diameter; defaults to ``default_diameter_m`` so
        leaf pipes are never thinned below the flat default.
+   * - ``auto_diameter_pressure_budget_pu``
+     - Share of the grid reference pressure the worst supply path may spend
+       (default ``0.25``). ``None`` sizes on velocity alone.
+
+Sizing also raises the heat grid's ``max_mass_flow_kgs`` to admit the trunk
+design flow. That grid-level cap is a per-branch bound of its own, so leaving
+it at the 200 kg/s default would make the sized diameters moot on any overlay
+whose trunk carries more than that.
 
 .. note::
 
@@ -335,39 +358,86 @@ multi-energy power flow:
     print(result.dataframes["Bus"][["vm_pu"]])
 
 .. testoutput::
-   :options: +SKIP
 
           vm_pu
     0  1.000000
-    1  0.999997
-    2  0.999994
-    3  0.999992
-    4  0.999989
+    1  0.999988
+    2  0.999978
+    3  0.999972
+    4  0.999970
 
-For a larger starting point, import a standard electrical test case first,
-for example the CIGRE MV grid via pandapower, or a simbench grid:
+For a larger starting point, start from a standard electrical test case.
+:func:`~monee.network.mes.create_mv_multi_cigre` imports the CIGRE MV grid
+through :func:`~monee.io.from_pandapower.from_pandapower_net` and overlays it
+with hand-tuned pipe geometry and power scaling. It does not call the wrapper
+above: it uses the older single-pipe builders
+:func:`~monee.network.mes.create_gas_net_for_power` and
+:func:`~monee.network.mes.create_heat_net_for_power` (one heat pipe per
+branch, no separate return network) and then places its generators, P2G and
+CHP by hand. Treat it as a fixed benchmark case rather than as an example of
+the recommended generator. It solves in a few seconds:
 
-.. code-block:: python
+.. testcode::
+
+    from monee import run_energy_flow
+    from monee.network import create_mv_multi_cigre
+
+    mes = create_mv_multi_cigre()
+    result = run_energy_flow(mes)
+    print(result.success)
+
+.. testoutput::
+
+    True
+
+monee also ships a second fixed MES case,
+:func:`~monee.network.mes.create_monee_benchmark_net`, a 7-bus, 120 kV
+multi-energy grid with backup lines. It is built from the same older
+single-pipe builders as ``create_mv_multi_cigre``.
+
+To generate a supply and return MES on the same CIGRE MV import yourself, hand
+the converted network to the wrapper. The demand-based sizing described above
+is on by default, so no ``heat_kwargs`` are needed to make it solve:
+
+.. testcode::
 
     import pandapower.networks as ppn
+
+    from monee import run_energy_flow
     from monee.io.from_pandapower import from_pandapower_net
-    from monee.io.from_simbench import obtain_simbench_net
+    from monee.network import generate_supply_return_mes_based_on_power_net
 
-    pn = from_pandapower_net(ppn.create_cigre_network_mv(with_der="pv_wind"))
-    # or: pn = obtain_simbench_net("1-MV-urban--0-no_sw")
+    power_net = from_pandapower_net(ppn.create_cigre_network_mv(with_der="pv_wind"))
+    mes = generate_supply_return_mes_based_on_power_net(power_net, coupling_density=0.2)
+    print(run_energy_flow(mes, formulation="smooth_nlp").success)
 
-    mes = generate_supply_return_mes_based_on_power_net(
-        pn,
-        coupling_density=0.2,
-        heat_kwargs={"node_based_heat_loads": True, "auto_diameter": True},
-        coupling_kwargs={"use_hg_variants": True, "seed": 42},
-    )
+.. testoutput::
 
-monee also ships two pre-generated MES cases built with this machinery:
-:func:`~monee.network.mes.create_monee_benchmark_net` (a fixed 7-bus,
-120 kV multi-energy grid with backup lines) and
-:func:`~monee.network.mes.create_mv_multi_cigre` (CIGRE MV with gas, heat,
-P2G, and CHP).
+    True
+
+.. note::
+
+   The pandapower converter does not carry line lengths across, so the layer
+   builders fall back on the geodesic distance between the bus positions. On
+   grids whose bus coordinates are a schematic drawing rather than geographic
+   ones, CIGRE MV among them, that fallback overstates every segment by an
+   order of magnitude or two. The overlay still solves, because the pressure
+   criterion widens the pipes until it does, but the resulting diameters are
+   not a design you would build. Pass ``heat_kwargs={"length_scale": ...}`` or
+   an explicit ``default_length`` when the derived lengths look wrong, the way
+   :func:`~monee.network.mes.create_mv_multi_cigre` does with
+   ``length_scale=0.001``.
+
+.. warning::
+
+   With ``auto_diameter=False`` every pipe keeps the flat
+   ``default_diameter_m`` of 0.12 m, which carries only a few kg/s at the
+   design velocity. An MV feeder overlaid that way asks for pressure drops far
+   outside the junction bounds and the solve comes back infeasible; the
+   generator warns when the design flow outgrows the flat diameter. Either
+   leave ``auto_diameter`` on, or lower ``heat_load_share`` so the heat demand
+   matches the pipes you asked for. The gas tree takes the same
+   ``auto_diameter`` switch.
 
 ----
 

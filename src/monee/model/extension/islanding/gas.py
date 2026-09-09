@@ -5,7 +5,11 @@ from __future__ import annotations
 from monee.model.core import ChildModel, Const, Var, model
 from monee.model.grid import GasGrid
 
-from .core import GridFormingMixin, PressureGatedIslandingMode
+from .core import (
+    GridFormingMixin,
+    PressureGatedIslandingMode,
+    warn_if_leadership_unstamped,
+)
 
 
 @model
@@ -32,7 +36,7 @@ class GridFormingSource(ChildModel, GridFormingMixin):
         # Pin only when leading an island without an ext grid (stamped by
         # IslandingMode.stamp_gf_leadership); a second absolute pressure pin
         # in the same hydraulic island over-determines the drop equations.
-        if not getattr(self, "_gf_leading", True):
+        if not self._gf_leading:
             return
         node_model.pressure_pu = Const(self._pressure_pu)
         node_model.pressure_squared_pu = Const(self._pressure_pu**2)
@@ -43,15 +47,16 @@ class GridFormingSource(ChildModel, GridFormingMixin):
         # A former only needs a free balancing Var while it IS the island
         # reference. Where an ext grid leads the component, stamp_gf_leadership
         # marks EVERY former non-leading, overwrite() pins nothing, and this
-        # returning [] leaves mass_flow_kgs appearing in the node balance alone —
+        # returning [] leaves mass_flow_kgs appearing in the node balance alone -
         # a degenerate free injection that no equation and no objective pin
         # (plain energy flow carries no objective). The LP then returns an
         # arbitrary split: on the simbench MES a 38-unit promoted fleet
         # delivered 0.0013 of its 0.0118 kg/s while the slack covered the rest.
         # With a nominal, a non-leading former holds the setpoint of the Source
-        # it was promoted from — which is what it physically is until an island
+        # it was promoted from - which is what it physically is until an island
         # forms. None keeps the fully-free Var (previous behaviour).
-        if self._nominal_mass_flow_kgs is None or getattr(self, "_gf_leading", True):
+        warn_if_leadership_unstamped(self)
+        if self._nominal_mass_flow_kgs is None or self._gf_leading:
             return []
         return [self.mass_flow_kgs == self._nominal_mass_flow_kgs]
 

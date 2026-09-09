@@ -181,6 +181,11 @@ result = run_energy_flow(net)
 print(result.dataframes["Bus"][["id", "vm_pu", "va_degree"]])
 ```
 
+`mx.create_multi_energy_network()` is an alias for `mm.Network()`, so the two
+entry points you will see across these pages are the same object. The docs
+use the express form in examples that stay inside `monee.express`, and
+`mm.Network()` where `monee.model` is imported anyway.
+
 ---
 
 ## Where to go next

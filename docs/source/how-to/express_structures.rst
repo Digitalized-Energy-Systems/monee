@@ -44,6 +44,12 @@ slack bus, and run the energy flow:
     (5, 1)
     4
 
+``mm.Network()`` and :func:`~monee.express.create_multi_energy_network` are
+interchangeable: the second is a plain alias returning the same empty network.
+This page writes ``mm.Network()`` because it imports :mod:`monee.model`
+anyway; pages that stay inside the express API, such as :doc:`../quickstart`
+and :doc:`storage`, prefer ``mx.create_multi_energy_network()``.
+
 ----
 
 Builders and their defaults
@@ -77,6 +83,45 @@ second builder on the same network if you need different parameters.
      - same as ``water_structure``, but ``unidirectional=True``
        (see `District heating structures`_ below)
 
+``grid=None`` means the network's default grid for that carrier:
+:class:`~monee.model.PowerGrid` ``sn_mva=1`` for ``el_structure``,
+:class:`~monee.model.WaterGrid` at ``t_ref_k=356`` K for ``water_structure``
+and ``dhs_structure``, and ``create_gas_grid("gas")`` for ``gas_structure``,
+which is L-gas at 300 K with ``pressure_ref_pa=1e6``, that is 10 bar absolute.
+Node pressures are reported in per unit of that reference, so a gas structure
+left at the default runs a 10 bar network. To model a medium-pressure network
+instead, pass the grid explicitly:
+
+.. testcode::
+
+   import monee.model as mm
+   import monee.express as mx
+
+   net_mp = mm.Network()
+   gas_mp = mx.gas_structure(
+       net_mp,
+       diameter_m=0.15,
+       length_m=400,
+       grid=mm.create_gas_grid(
+           "mp",
+           pressure_ref_pa=1.5e5,
+           pressure_ambient_pa=mm.STANDARD_ATMOSPHERE_PA,
+       ),
+   )
+   seg = gas_mp.line(3)
+   print(net_mp.grids[-1].pressure_ref_pa)
+
+.. testoutput::
+
+   150000.0
+
+Build the grid with its operating pressure rather than assigning
+``pressure_ref_pa`` afterwards: the compressibility is derived in
+``__post_init__``, so a later assignment leaves it stale.
+``pressure_ambient_pa`` switches node pressures from absolute (the default) to
+gauge. See :doc:`../concepts/data_model` for the full list of per carrier
+constants.
+
 The builders delegate to the regular express creators
 (:func:`~monee.express.create_bus` and
 :func:`~monee.express.create_line`,
@@ -101,16 +146,31 @@ All single-carrier builders (``ElStructure``, ``GasStructure``,
     A line of ``n`` nodes (``n >= 3``) plus one closing branch from the
     last node back to the first.
 
-``.star(arms, *, start_from=None, **load_kwargs)``
+``.star(arms, *, start_from=None, hub_loads=False, **load_kwargs)``
     A hub node with one radial arm per entry of ``arms``, where each entry
     is the arm length in nodes (excluding the hub), e.g. ``[2, 3, 2]``.
+    The hub is treated as a pure branching or feed-in point: by default it
+    gets no load children, only the arm nodes do. Pass ``hub_loads=True``
+    to attach the load setpoints to the hub as well.
 
 Passing ``start_from=<node id>`` composes a new shape onto an existing
 node. That node becomes the first node of the line or ring (or the hub of
 the star), no new node is created in its place, and the per-node loads are
 not re-attached to it.
 
-The ``load_kwargs`` attach a child to every newly created node:
+.. warning::
+
+   ``el_structure`` never changes an existing bus: its ``base_kv`` applies
+   only to buses the builder creates. Growing a shape from a ``start_from``
+   bus whose ``base_kv`` differs from the builder's therefore produces a
+   mixed-base network, which skews the per-unit line parameters and can
+   depress voltages while the solve still reports success. The builder
+   emits a ``UserWarning`` naming both ``base_kv`` values when this
+   happens; fix it by creating the bus with the matching ``base_kv`` or by
+   constructing the builder with the bus's ``base_kv``.
+
+The ``load_kwargs`` attach a child to every newly created node (star hubs
+excluded unless ``hub_loads=True``):
 
 .. list-table::
    :header-rows: 1
@@ -128,6 +188,12 @@ The ``load_kwargs`` attach a child to every newly created node:
    * - Water
      - ``sink_mass_flow``, ``heat_load_q_mw``
      - ``source_mass_flow``, ``heat_generator_q_mw``
+
+A keyword outside the carrier's row is a typo, and the shape methods raise
+``TypeError`` naming the accepted keys rather than quietly attaching nothing:
+``gas_structure(...).line(3, sink_mass_flow_kgs=0.02)`` fails instead of
+building three junctions with no sink on them. The accepted set per builder is
+also readable at runtime as ``GasStructure.LOAD_KWARGS`` and its siblings.
 
 Pass generator and source magnitudes as positive numbers. The underlying
 express creators negate them internally, exactly as
@@ -170,6 +236,45 @@ the end of the middle arm:
     True
     9
 
+Feeder with a load-free head bus
+--------------------------------
+
+``load_kwargs`` attach a child to every node the shape creates, including the
+one you then hand to ``attach_ext_grid``, so ``s.line(5, load_p_mw=0.25)``
+puts a load on the slack bus as well. The standard feeder layout, an external
+grid at the head bus and loads on the rest, is a two-shape composition: create
+the head bus on its own, then grow the loaded feeder from it. ``start_from``
+does not re-attach the load kwargs to the node it starts from:
+
+.. testcode::
+
+    import monee.model as mm
+    import monee.express as mx
+    from monee import run_energy_flow
+
+    net = mm.Network()
+    s = mx.el_structure(net, length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+
+    head = s.line(1)               # one bus, no load kwargs
+    s.attach_ext_grid(head.first)
+
+    # 4 new buses with a load each, chained onto the head bus.
+    feeder = s.line(5, start_from=head.first, load_p_mw=0.25)
+
+    result = run_energy_flow(net)
+    print(len(feeder), len(feeder.children))
+    print(len(result.dataframes["Bus"]), len(result.dataframes["PowerLoad"]))
+
+.. testoutput::
+
+    5 4
+    5 4
+
+``len(feeder)`` counts the head bus, which the segment lists in ``.nodes``
+and reports as ``.first``, but ``feeder.children`` holds only the four loads
+the call created. The same idiom works for a gas or water structure fed at a
+junction that carries no sink.
+
 ----
 
 Segment handles
@@ -206,6 +311,73 @@ can keep wiring without tracking node ids by hand:
    be refined afterwards with the regular express API. For example,
    attach a CHP to ``seg.last`` or convert a load on ``star.hub`` into a
    controllable demand.
+
+Parameter studies: editing what a structure built
+-------------------------------------------------
+
+A reinforcement or sensitivity study reuses one built topology and varies a
+few components. Resolve the id a handle stores to its component with the
+network lookups, then edit the ``.model``:
+
+* ``net.node_by_id(seg.nodes[i])``
+* ``net.branch_by_id(seg.branches[i])``
+* ``net.child_by_id(seg.children[i])``
+
+Each returns the container object; the physical parameters live on its
+``.model``. Children are removed with ``net.remove_child(child_id)`` (see
+:doc:`../concepts/conventions` for the full set of removal methods):
+
+.. testcode::
+
+    import monee.model as mm
+    import monee.express as mx
+    from monee import run_energy_flow
+
+    net = mm.Network()
+    g = mx.gas_structure(net, diameter_m=0.3, length_m=200)
+    seg = g.ring(6, sink_mass_flow=0.1)
+    g.attach_ext_grid(seg.nodes[0])
+
+    # Reinforce one pipe ...
+    net.branch_by_id(seg.branches[0]).model.diameter_m = 0.25
+
+    # ... raise one consumer ...
+    net.child_by_id(seg.children[1]).model.mass_flow_kgs = 0.35
+
+    # ... and drop the sink at the feed-in junction.
+    net.remove_child(seg.children[0])
+
+    result = run_energy_flow(net)
+    print(len(result.dataframes["Sink"]))
+    print(round(result.dataframes["Sink"]["mass_flow_kgs"].max(), 2))
+
+.. testoutput::
+
+    5
+    0.35
+
+What is safe to change after construction:
+
+* Constructor arguments of node, branch and child models are stored as plain
+  attributes and nothing is derived from them at construction, so assigning a
+  new value before the next solve is enough: ``diameter_m``, ``length_m``,
+  ``roughness_m`` and ``on_off`` on pipes, ``r_ohm_per_m``, ``x_ohm_per_m``
+  and ``parallel`` on lines, and the setpoints and ``regulation`` on children.
+* Attributes that hold solver state are not inputs. A pipe's
+  ``mass_flow_kgs``, ``velocity_mps`` and ``friction``, and a bus's
+  ``vm_pu``, carry start values that every solve overwrites, so writing them
+  changes the starting point at most. Setpoints of the same name on children
+  (a ``Sink``'s ``mass_flow_kgs``, a ``PowerLoad``'s ``p_mw``) are ordinary
+  numbers and are the ones to edit.
+* Grid objects are the exception, because they derive constants in
+  ``__post_init__``: a ``GasGrid``'s compressibility follows from
+  ``pressure_ref_pa`` and ``t_k``, a ``WaterGrid``'s density and viscosity
+  from ``t_ref_k``. Build a new grid with the operating point you want, as
+  under `Builders and their defaults`_, rather than assigning those fields on
+  an existing one.
+
+To sweep a parameter without carrying solved values between runs, build the
+variants from ``net.copy()`` and solve each copy.
 
 ----
 
@@ -266,9 +438,12 @@ are named ``<name>_supply`` and ``<name>_return``.
 .. note::
 
    ``dhs_structure`` creates unidirectional pipes by default, oriented from
-   the first node towards the last. On a *ring* the loop closes itself, so
-   the plant can sit on any node pair. On a *line*, water leaving the heat
-   exchangers must be able to flow towards the plant's return connection:
+   the first node towards the last. A *ring* is the exception: its pipes are
+   always created bidirectional, whatever ``unidirectional`` the builder was
+   given, because a closed loop splits the flow at the plant and at least one
+   pipe then carries water against the ring orientation. On a *line*, water
+   leaving the heat exchangers must be able to flow towards the plant's return
+   connection:
    attach it at ``seg.return_.last`` (not ``seg.return_.first``), or pass
    ``unidirectional=False`` to the builder so the solver picks flow
    directions freely.

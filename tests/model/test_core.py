@@ -1,3 +1,5 @@
+import pytest
+
 import monee.model as mm
 from monee.model.core import GenericModel, Node, component_list, model
 
@@ -59,3 +61,34 @@ def test_node_base():
 
     assert node.from_branch_ids == ["from_branch"]
     assert node.to_branch_ids == ["to_branch"]
+
+
+def test_unknown_kwargs_warn_and_are_kept_in_ext_data():
+    with pytest.warns(UserWarning, match=r"PowerLoad ignored unknown keyword"):
+        load = mm.PowerLoad(p_mw=1.0, q_mvar=0.0, cost=10.0, typo_kwarg=1)
+    assert load._ext_data == {"cost": 10.0, "typo_kwarg": 1}
+    assert "cost" not in load.vars
+
+
+def test_known_kwargs_do_not_warn():
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        mm.PowerLoad(p_mw=1.0, q_mvar=0.0)
+        mm.Junction()
+
+
+def test_consume_hydr_grid_documents_its_input_only_columns():
+    child = mm.ConsumeHydrGrid()
+
+    assert isinstance(child.mass_flow_kgs, mm.Var)
+    # pressure_pu / t_k are plain inputs echoed back into the result tables,
+    # never solved values.
+    assert child.pressure_pu == 1
+    assert child.t_k == 293
+
+    doc = mm.ConsumeHydrGrid.__doc__
+    assert "inputs echoed back" in doc
+    assert "junction table" in doc
+    assert "express_structures" in doc

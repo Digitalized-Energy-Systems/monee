@@ -9,6 +9,7 @@ handling, parity with :func:`run_timeseries`, and the StepState extension.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import math
 
 import pytest
@@ -116,6 +117,39 @@ def test_Stepper_overrides_unknown_attr_raises():
     stepper = Stepper(net)
     with pytest.raises(AttributeError, match="attribute"):
         stepper.step(dt_h=1.0, data_overrides={(load_id, "bogus_attr"): 0.5})
+
+
+def test_Stepper_overrides_on_inactive_component_warn():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net)
+    stepper.deactivate(load_id, mm.PowerLoad)
+
+    with pytest.warns(UserWarning, match="inactive component"):
+        sr = stepper.step(dt_h=1.0, data_overrides={(load_id, "p_mw"): 0.9})
+
+    assert sr.failed is False
+
+
+def test_Stepper_unbound_timeseries_data_warns_at_construction():
+    td = TimeseriesData()
+    td.add_child_series_by_name("typo_load", "p_mw", [0.2, 0.4])
+
+    with pytest.warns(UserWarning, match="typo_load"):
+        Stepper(_power_net(), timeseries_data=td)
+
+
+def test_Stepper_ts_index_out_of_range_raises():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [0.2, 0.4])
+
+    stepper = Stepper(net, timeseries_data=td)
+    with pytest.raises(ValueError, match="ts_index 5 is out of range"):
+        stepper.step(dt_h=1.0, ts_index=5)
+    with pytest.raises(ValueError, match="out of range"):
+        stepper.step(dt_h=1.0, ts_index=-1)
 
 
 def test_Stepper_ts_index_applies_profile():
@@ -277,6 +311,38 @@ def test_Stepper_to_timeseries_result():
     # Should expose the same get_result_for API as the timeseries runner.
     p_series = res.get_result_for(mm.PowerLine, "p_from_mw")
     assert len(p_series) == 3
+
+
+def test_Stepper_get_missing_attribute_raises():
+    net = _power_net()
+    load_id = child_id_by_type(net, mm.PowerLoad)
+    stepper = Stepper(net)
+    stepper.step(dt_h=1.0)
+
+    with pytest.raises(AttributeError, match="no_such_attr.*how-to/stepper"):
+        stepper.get(load_id, "no_such_attr")
+
+
+def test_Stepper_to_timeseries_result_window_index_under_max_history():
+    import pandas as pd
+
+    stepper = Stepper(_power_net(), max_history=2)
+    for _ in range(4):
+        stepper.step(dt_h=1.0)
+
+    idx_window = pd.date_range("2024-01-01", periods=2, freq="h")
+    res = stepper.to_timeseries_result(datetime_index=idx_window)
+    vm = res.get_result_for(mm.Bus, "vm_pu")
+    assert list(vm.index) == list(idx_window)
+
+    idx_full = pd.date_range("2024-01-01", periods=4, freq="h")
+    res_full = stepper.to_timeseries_result(datetime_index=idx_full)
+    vm_full = res_full.get_result_for(mm.Bus, "vm_pu")
+    assert list(vm_full.index) == list(idx_full[2:])
+
+    idx_bad = pd.date_range("2024-01-01", periods=3, freq="h")
+    with pytest.raises(ValueError, match="retained window"):
+        stepper.to_timeseries_result(datetime_index=idx_bad)
 
 
 def test_Stepper_repr_shows_progress():
@@ -1081,3 +1147,86 @@ def test_Stepper_failed_step_drops_hint_for_retry():
 
     assert seen == [False, True, False, True]
     assert stepper._solver._warm_start_hint is False  # never left armed
+
+
+def test_Stepper_carry_failed_dt_false_keeps_every_step_at_its_own_dt():
+    stepper = Stepper(_power_net(), on_step_error="skip", carry_failed_dt=False)
+    stepper.step(dt_h=1.0)
+
+    real_solve = stepper._solver.solve
+    stepper._solver.solve = _raising_solve
+    failed = stepper.step(dt_h=2.0)
+    stepper._solver.solve = real_solve
+
+    sr = stepper.step(dt_h=1.0)
+    assert math.isclose(stepper.state.dt_h, 1.0)
+    assert failed.dt_h == 2.0 and failed.effective_dt_h == 2.0
+    assert sr.dt_h == 1.0 and sr.effective_dt_h == 1.0
+    assert math.isclose(sr.t_h, 3.0)
+
+
+def test_Stepper_carried_dt_is_reported_on_the_step_result_and_logged(caplog):
+    stepper = Stepper(_power_net(), on_step_error="skip")
+
+    real_solve = stepper._solver.solve
+    stepper._solver.solve = _raising_solve
+    stepper.step(dt_h=2.0)
+    stepper._solver.solve = real_solve
+
+    with caplog.at_level(logging.WARNING, logger="monee.simulation.stepper"):
+        sr = stepper.step(dt_h=1.0)
+
+    assert sr.dt_h == 1.0
+    assert math.isclose(sr.effective_dt_h, 3.0)
+    assert math.isclose(sr.t_h, 2.0)
+    assert "instead of the requested" in caplog.text
+
+
+def _two_load_net():
+    """Bus 1 carries two loads, so its aggregate differs from either child."""
+    net = mm.Network()
+    b1 = mx.create_bus(net, base_kv=20.0)
+    b2 = mx.create_bus(net, base_kv=20.0)
+    mx.create_ext_power_grid(net, b1)
+    load_a = mx.create_power_load(net, b2, p_mw=0.4, q_mvar=0.0)
+    load_b = mx.create_power_load(net, b2, p_mw=0.3, q_mvar=0.0)
+    mx.create_line(
+        net, b1, b2, length_m=500, r_ohm_per_m=2e-4, x_ohm_per_m=4e-4, parallel=1
+    )
+    return net, load_a, load_b
+
+
+def test_stepper_get_prefers_child_over_node_aggregate():
+    net, load_a, load_b = _two_load_net()
+    stepper = Stepper(net)
+    stepper.step(dt_h=1.0)
+
+    # load_a's id collides with bus 1, whose aggregate p_mw is 0.7
+    assert math.isclose(stepper.get(load_a, "p_mw"), 0.4, rel_tol=1e-9)
+    assert math.isclose(stepper.get(load_b, "p_mw"), 0.3, rel_tol=1e-9)
+    # the node aggregate stays reachable by addressing the node explicitly
+    assert math.isclose(
+        stepper.get(load_a, "p_mw", component_type=mm.Bus), 0.7, rel_tol=1e-6
+    )
+    assert math.isclose(stepper.get((mm.PowerLoad, load_a), "p_mw"), 0.4, rel_tol=1e-9)
+
+
+def test_stepper_get_unknown_id_raises():
+    stepper = Stepper(_power_net())
+    with pytest.raises(KeyError, match="not found in the network"):
+        stepper.get(99999, "p_mw")
+    stepper.step(dt_h=1.0)
+    with pytest.raises(KeyError, match="not found in the network"):
+        stepper.get(99999, "p_mw")
+
+
+def test_stepper_history_supports_get_result_for_id():
+    net, load_a, _ = _two_load_net()
+    stepper = Stepper(net)
+    stepper.step(dt_h=1.0, data_overrides={((mm.PowerLoad, load_a), "p_mw"): 0.4})
+    stepper.step(dt_h=1.0, data_overrides={((mm.PowerLoad, load_a), "p_mw"): 0.6})
+
+    series = stepper.to_timeseries_result().get_result_for_id(
+        load_a, "p_mw", mm.PowerLoad
+    )
+    assert [round(v, 9) for v in series] == [0.4, 0.6]

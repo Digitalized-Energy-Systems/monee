@@ -105,10 +105,12 @@ component of the requested type.
     Voltage columns (one per bus): 2
     Step rows:                     8
 
-**Net import from the external grid:**
+**Net exchange with the external grid:**
 
-During the early-afternoon steps the PV covers or exceeds the household demand,
-so the external grid import approaches zero or turns slightly negative (export).
+``ExtPowerGrid.p_mw`` follows the load convention seen from the network, so a
+negative value is an import and a positive one an export. During the
+early-afternoon steps the PV covers and then exceeds the household demand, so
+the import shrinks towards zero and finally flips positive.
 
 .. testcode::
 
@@ -117,18 +119,19 @@ so the external grid import approaches zero or turns slightly negative (export).
     print(ext_df.iloc[:, 0].round(3).to_string())
 
 .. testoutput::
-   :options: +SKIP
 
-    0    0.100
-    1    0.100
-    2    0.050
-    3   -0.100
-    4   -0.200
-    5    0.050
-    6    0.300
-    7    0.250
+    0   -0.100
+    1   -0.100
+    2   -0.050
+    3    0.100
+    4    0.199
+    5   -0.050
+    6   -0.303
+    7   -0.252
 
-Negative values indicate that excess PV is exported back to the grid.
+Steps 3 and 4 are the only ones where excess PV is exported back to the grid.
+The evening peak imports slightly more than the 0.30 MW and 0.25 MW of demand
+because the line losses ride on top of it.
 
 Solar feeder: bus voltage and grid import vary as rooftop PV ramps up and down across the day.
 
@@ -156,13 +159,14 @@ Monitoring with a step hook
 
 A :class:`~monee.simulation.StepHook` lets you inject logic before or after
 each step.  Here a hook logs a warning whenever the voltage at the home bus
-falls below 0.97 pu, a simple under-voltage alert.
+falls below 0.99 pu, a simple under-voltage alert that fires during the
+evening demand peak.
 
 .. testcode::
 
     from monee.simulation import StepHook
 
-    VOLTAGE_THRESHOLD = 0.97  # pu
+    VOLTAGE_THRESHOLD = 0.99  # pu
 
     class VoltageMonitor(StepHook):
         """Warn when the residential bus voltage dips below the threshold."""
@@ -173,14 +177,13 @@ falls below 0.97 pu, a simple under-voltage alert.
             bus_df = step_result.result.get(mm.Bus)
             min_vm = bus_df["vm_pu"].min()
             if min_vm < VOLTAGE_THRESHOLD:
-                print(f"  Step {step}: voltage dip to {min_vm:.4f} pu")
+                print(f"Step {step}: voltage dip to {min_vm:.4f} pu")
 
     ts_result2 = run_timeseries(net, td, step_hooks=[VoltageMonitor()])
 
 .. testoutput::
-   :options: +SKIP
 
-      Step 6: voltage dip to 0.9687 pu
+    Step 6: voltage dip to 0.9893 pu
 
 .. note::
 

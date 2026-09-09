@@ -1,5 +1,10 @@
 import copy
-from abc import ABC, abstractmethod
+import functools
+import inspect
+import os
+import sys
+import warnings
+from abc import ABC, ABCMeta, abstractmethod
 
 EL_KEY = "electricity"
 GAS_KEY = "gas"
@@ -280,18 +285,262 @@ class PostProcess:
         return new
 
 
-class GenericModel(ABC):
+def store_unknown_kwargs(model, kwargs):
+    """Warn about keywords no model attribute claims and return them unchanged.
+
+    They are still kept in ``_ext_data`` for one deprecation cycle, but nothing
+    ever reads that dict and ``vars``/``values`` skip it, so a typo or a
+    misremembered option (``cost=``) is otherwise lost without a trace.
+    """
+    if kwargs:
+        warnings.warn(
+            f"{type(model).__name__} ignored unknown keyword argument(s) "
+            f"{sorted(kwargs)}: they are not part of the model state and are "
+            "neither solved nor serialized. Passing them will become an error.",
+            stacklevel=3,
+        )
+    return kwargs
+
+
+class UnknownAttributeWarning(UserWarning):
+    """Category of the warning emitted when a plain value is assigned to a
+    public attribute a model does not declare, e.g.
+    ``PowerGenerator(...).p_mw_max = 5``.
+
+    It fires when all of the following hold: the target is a
+    :class:`GenericModel` whose construction has finished; the write comes from
+    outside monee itself; the name has no leading underscore; the name is not
+    already in the instance ``__dict__``, not a class attribute (so a property
+    setter never triggers it), not a parameter of the model's ``__init__`` (an
+    optional one such as ``cost`` stays settable) and not registered through
+    :func:`register_optional_attributes`; and the assigned value is a plain
+    scalar, string, sequence or mapping.
+
+    It therefore stays silent for: any write during ``__init__`` or during a
+    :meth:`CompoundModel.create`; assignment of a :class:`Var`,
+    :class:`Const`, :class:`Intermediate` or :class:`PostProcess`, which
+    declares new solver state on purpose (this is how formulations add their
+    own variables); and any attribute of a model rebuilt from a saved network
+    file, which is restored without running ``__init__`` and so is never armed.
+
+    Silence it with
+    ``warnings.filterwarnings("ignore", category=UnknownAttributeWarning)``,
+    or turn the whole guard off with ``set_attribute_guard("off")``. The
+    concepts/data_model docs page explains which attributes are settable.
+    """
+
+
+ATTRIBUTE_GUARD_MODES = ("warn", "error", "off")
+
+_ATTR_GUARD = os.environ.get("MONEE_ATTRIBUTE_GUARD", "warn").strip().lower()
+if _ATTR_GUARD not in ATTRIBUTE_GUARD_MODES:
+    warnings.warn(
+        f"MONEE_ATTRIBUTE_GUARD={_ATTR_GUARD!r} is not one of "
+        f"{list(ATTRIBUTE_GUARD_MODES)}; falling back to 'warn'.",
+        stacklevel=2,
+    )
+    _ATTR_GUARD = "warn"
+
+_LOCK_KEY = "_attrs_locked"
+# Ellipsis, not True: the native format skips private attributes it cannot
+# encode, so the marker never reaches a saved file, and ``copy`` treats it as
+# atomic so model copies stay cheap.
+_ARMED = ...
+
+# Values that are inert unless an equation reads them; a Var/Const/Intermediate
+# /PostProcess or a back-end symbol is a deliberate state declaration instead.
+_PLAIN_VALUE_TYPES = (int, float, complex, bool, str, bytes, list, tuple, dict, set)
+
+# Attributes the library itself writes onto a model after construction and reads
+# back with getattr/hasattr, keyed by the model class name that owns them.
+_OPTIONAL_ATTRIBUTES: dict[str, set[str]] = {
+    "GenericPowerBranch": {"kind"},
+}
+
+_optional_cache: dict[type, frozenset] = {}
+
+_building = 0
+
+
+def register_optional_attributes(model_class, *names: str) -> None:
+    """Declare *names* as attributes of *model_class* that may be assigned after
+    construction, so the unknown-attribute guard stays quiet about them.
+
+    For attributes a library reads back with ``getattr``/``hasattr`` instead of
+    declaring them in ``__init__``. Constructor parameters are exempt already.
+    """
+    class_name = model_class if isinstance(model_class, str) else model_class.__name__
+    _OPTIONAL_ATTRIBUTES.setdefault(class_name, set()).update(names)
+    _optional_cache.clear()
+
+
+def _optional_attribute_names(cls) -> frozenset:
+    cached = _optional_cache.get(cls)
+    if cached is not None:
+        return cached
+    names: set[str] = set()
+    for klass in cls.__mro__:
+        names |= _OPTIONAL_ATTRIBUTES.get(klass.__name__, set())
+    try:
+        names |= {
+            p
+            for p in inspect.signature(cls.__init__).parameters
+            if p not in ("self", "kwargs", "args")
+        }
+    except (TypeError, ValueError):
+        pass
+    result = frozenset(names)
+    _optional_cache[cls] = result
+    return result
+
+
+def attribute_guard() -> str:
+    """Current mode of the unknown-attribute guard: ``warn``, ``error`` or ``off``."""
+    return _ATTR_GUARD
+
+
+def set_attribute_guard(mode: str) -> str:
+    """Set the unknown-attribute guard mode and return the previous one.
+
+    ``warn`` (default) emits :class:`UnknownAttributeWarning`, ``error`` is the
+    strict mode that raises :class:`AttributeError` so CI fails on it (also
+    reachable without code as ``MONEE_ATTRIBUTE_GUARD=error``), ``off`` removes
+    the hook from the model base class so attribute writes run at plain-object
+    speed again. See the concepts/data_model docs page.
+    """
+    global _ATTR_GUARD
+    if mode not in ATTRIBUTE_GUARD_MODES:
+        raise ValueError(
+            f"unknown attribute guard mode {mode!r}; expected one of "
+            f"{list(ATTRIBUTE_GUARD_MODES)}"
+        )
+    previous, _ATTR_GUARD = _ATTR_GUARD, mode
+    _install_attribute_guard(mode != "off")
+    return previous
+
+
+def _settable_attribute_names(model) -> list[str]:
+    cls = type(model)
+    names = {k for k in model.__dict__ if k[0] != "_"}
+    names |= {n for n in _optional_attribute_names(cls) if n[0] != "_"}
+    for klass in cls.__mro__:
+        for name, member in vars(klass).items():
+            if name[0] != "_" and isinstance(member, property) and member.fset:
+                names.add(name)
+    return sorted(names)
+
+
+def _written_by_monee() -> bool:
+    """True when the assignment that reached the guard came from monee itself.
+
+    monee's own layers write attributes a model class cannot declare: a
+    formulation adds its variables, an importer marks a branch, the timeseries
+    driver pushes the objective parameters the caller named. The guard reports
+    what the caller wrote, so library writes are out of scope.
+    """
+    try:
+        # 0 here, 1 _report_unknown_attribute, 2 _guarded_setattr, 3 the write.
+        module = sys._getframe(3).f_globals.get("__name__", "")
+    except ValueError:
+        return False
+    return module == "monee" or module.startswith("monee.")
+
+
+def _report_unknown_attribute(model, name, value) -> None:
+    if _ATTR_GUARD == "off" or _building or name[0] == "_":
+        return
+    if not isinstance(value, _PLAIN_VALUE_TYPES) and value is not None:
+        return
+    cls = type(model)
+    if hasattr(cls, name) or name in _optional_attribute_names(cls):
+        return
+    if _written_by_monee():
+        return
+    message = (
+        f"{type(model).__name__} does not declare the attribute {name!r}: the "
+        f"assignment stores an inert field that no equation reads, so the "
+        f"solve silently ignores it. Settable attributes of this model: "
+        f"{_settable_attribute_names(model)}. Use a leading underscore "
+        f"(_{name}) for your own metadata. The concepts/data_model docs page "
+        f"explains which attributes are settable after construction."
+    )
+    if _ATTR_GUARD == "error":
+        raise AttributeError(message)
+    warnings.warn(message, UnknownAttributeWarning, stacklevel=3)
+
+
+def _arming_call(cls, *args, **kwargs):
+    # type.__call__ rather than super(): ABCMeta adds no __call__ of its own,
+    # and this runs once per model construction.
+    instance = type.__call__(cls, *args, **kwargs)
+    instance.__dict__[_LOCK_KEY] = _ARMED
+    return instance
+
+
+def _suspending_guard(func):
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        global _building
+        _building += 1
+        try:
+            return func(*args, **kwargs)
+        finally:
+            _building -= 1
+
+    wrapper._suspends_guard = True
+    return wrapper
+
+
+def _guarded_setattr(self, name, value) -> None:
+    instance_dict = self.__dict__
+    if name in instance_dict:
+        # A name already in the instance dict cannot be shadowing a data
+        # descriptor, because descriptor writes never reach this branch.
+        instance_dict[name] = value
+        return
+    if _LOCK_KEY in instance_dict:
+        _report_unknown_attribute(self, name, value)
+    object.__setattr__(self, name, value)
+
+
+def _install_attribute_guard(enabled: bool) -> None:
+    """Attach or detach the guard hooks so ``off`` costs nothing at all: without
+    them ``__setattr__`` and instantiation fall back to their C slots."""
+    if enabled:
+        _ModelMeta.__call__ = _arming_call
+        GenericModel.__setattr__ = _guarded_setattr
+        return
+    for holder, hook in ((_ModelMeta, "__call__"), (GenericModel, "__setattr__")):
+        if hook in vars(holder):
+            delattr(holder, hook)
+
+
+class _ModelMeta(ABCMeta):
+    """Arms the unknown-attribute guard once the outermost ``__init__`` returns.
+
+    The arming hook is installed on this metaclass by
+    :func:`_install_attribute_guard`, not declared in the body, so turning the
+    guard off restores plain ``type.__call__`` instantiation.
+    """
+
+
+class GenericModel(ABC, metaclass=_ModelMeta):
     """
     Base class for all component models (nodes, branches, children, compounds).
 
     Public attributes (no leading ``_``) form the solver-visible state. Use
     :class:`Var` for decision variables, :class:`Const` for pinned setpoints,
     plain scalars for parameters.
+
+    Once ``__init__`` has returned, assigning a plain value to a public name the
+    model does not declare emits :class:`UnknownAttributeWarning` (see
+    :func:`set_attribute_guard`); names with a leading underscore are free for
+    caller metadata.
     """
 
     def __init__(self, **kwargs) -> None:
         super().__init__()
-        self._ext_data = kwargs
+        self._ext_data = store_unknown_kwargs(self, kwargs)
 
     @property
     def vars(self):
@@ -308,6 +557,9 @@ class GenericModel(ABC):
         return _deepcopy_skip_immutables(self, memo)
 
 
+_install_attribute_guard(_ATTR_GUARD != "off")
+
+
 class NodeModel(GenericModel):
     """Abstract base class for node models (buses, junctions). Subclasses define nodal equations."""
 
@@ -321,7 +573,18 @@ class NodeModel(GenericModel):
 
 
 class BranchModel(GenericModel):
-    """Abstract base class for network branches (lines, pipes). Subclasses define branch equations."""
+    """Abstract base class for network branches (lines, pipes). Subclasses define branch equations.
+
+    Custom subclasses must call ``super().__init__()``: it provides the
+    ``on_off`` default (1 = in service) that the nodal balances multiply every
+    branch flow with. See the branch author contract in
+    ``docs/source/concepts/data_model.rst`` for the attributes formulations
+    expect on a branch.
+    """
+
+    def __init__(self, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.on_off = 1
 
     @abstractmethod
     def equations(self, grid, from_node_model, to_node_model, **kwargs):
@@ -364,7 +627,18 @@ class CompoundModel(GenericModel):
 
     Subclasses implement :meth:`create` to add sub-components to the network,
     and may override :meth:`equations` for coupling constraints.
+
+    ``create`` is a second construction phase: it derives sizing state and
+    records the ids of the sub-components it added, so the unknown-attribute
+    guard stays quiet for the duration of the call. Writes outside ``create``
+    are guarded like any other model's.
     """
+
+    def __init_subclass__(cls, **kwargs) -> None:
+        super().__init_subclass__(**kwargs)
+        create = cls.__dict__.get("create")
+        if create is not None and not getattr(create, "_suspends_guard", False):
+            cls.create = _suspending_guard(create)
 
     @abstractmethod
     def create(self, network):
@@ -375,6 +649,13 @@ class CompoundModel(GenericModel):
 
     def minimize(self, _network, **kwargs):
         return []
+
+    def sync(self):
+        """Push attributes changed after :meth:`create` onto the sub-components.
+
+        A compound's own attributes are only build-time seeds; without this hook
+        a timeseries or override written to the compound never reaches the model
+        that carries the equations. Default: no-op."""
 
 
 class MultiGridCompoundModel(CompoundModel):

@@ -95,8 +95,8 @@ Build the network
    j_mid    = mx.create_water_junction(net)
    j_load   = mx.create_water_junction(net)
 
-   mx.create_ext_hydr_grid(net, j_supply)
-   mx.create_water_sink(net, j_load, mass_flow_kgs=0.5)
+   ext = mx.create_ext_hydr_grid(net, j_supply)
+   mx.create_water_sink(net, j_load, mass_flow_kgs=5.0)
    mx.create_water_pipe(net, j_supply, j_mid,
                         diameter_m=0.3, length_m=500)
    mx.create_water_pipe(net, j_mid, j_load,
@@ -116,10 +116,12 @@ Define a supply-temperature step-change
 
 .. testcode::
 
-   # Supply temperature drops from nominal (1.0 pu) to 0.8 pu at step 4
+   # Supply temperature drops from 356 K to 340 K at step 4.  The step goes on
+   # the ext grid, not on j_supply: the ext grid pins its junction's
+   # temperature, so a series registered on the junction itself is refused.
    td = TimeseriesData()
-   td.add_node_series(j_supply, "t_pu",
-                      [1.0, 1.0, 1.0, 1.0, 0.8, 0.8, 0.8, 0.8])
+   td.add_child_series(ext, "t_k",
+                       [356.0, 356.0, 356.0, 356.0, 340.0, 340.0, 340.0, 340.0])
 
 Comparison: with vs. without LTC
 
@@ -140,9 +142,10 @@ LTC thermal inertia, supply step-change at step 4.
    .. image:: /_static/interactive/temporal_extensions_1.png
       :width: 100%
 
-Without ``LumpedThermalCapacitance`` all three temperatures jump to 0.8
-simultaneously at step 4.  With it, ``j_mid`` and ``j_load`` respond
-gradually, reflecting the thermal mass of the water stored in the pipes.
+Without ``LumpedThermalCapacitance`` all three temperatures jump to the new
+supply level simultaneously at step 4.  With it, ``j_mid`` and ``j_load``
+decay towards it over the following steps and have not settled by the end of
+the horizon, reflecting the thermal mass of the water stored in the pipes.
 
 .. tip::
 
@@ -199,6 +202,32 @@ The anchor for each junction is resolved with this precedence:
    The default anchored mode is required for the NLP solvers
    (GEKKO/IPOPT).  ``first_step_steady_state=True`` is supported on MIP
    backends only; use it exclusively with a MIP-capable Pyomo solver.
+
+Choosing the horizon
+--------------------
+
+The inertia equation gives each junction a first-order time constant of
+roughly
+
+.. math::
+
+   \tau \;\approx\; \frac{\rho \cdot V_\text{node}}{\dot{m}}
+
+the time the through-flow needs to exchange the water mass stored at the
+junction.  For realistic district-heating pipes this is measured in hours:
+the walkthrough's middle junction stores about 22 cubic metres of water
+(half of the 500 m, 0.3 m pipe plus half of the 300 m, 0.2 m pipe) and is
+flushed at 5 kg/s,
+so :math:`\tau \approx 1.2` h, which is why its temperature has not settled
+eight one-hour steps after the supply step-change.
+
+Any metric read off the response (settling time, decay rate, the temperature
+reached after a disturbance) therefore needs a horizon of a few :math:`\tau`
+of the slowest junction of interest; a horizon shorter than that reports the
+warm-up or the still-decaying transient instead of the response.  Estimate
+:math:`\tau` from the pipe volumes and the expected mass flows before
+choosing ``steps`` and ``dt_h``, and lengthen the horizon (or start from a
+``default_t_init`` at the operating point) until the metric stops changing.
 
 ----
 

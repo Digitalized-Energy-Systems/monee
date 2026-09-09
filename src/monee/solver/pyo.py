@@ -42,6 +42,7 @@ from .core import (
     prepare_solve_network,
     sanitize_component_name,
     snap_to_bounds,
+    validate_result,
     warn_false_equation,
     withdraw_vars,
 )
@@ -65,9 +66,13 @@ PER_SOLVER_OPTIONS = {
     # Dual presolve reductions make SCIP spuriously prove infeasibility on the
     # ill-conditioned MISOCP load-shedding models (verified: identical model
     # optimal with these off and with Gurobi, 'infeasible' with them on).
+    # limits/gap mirrors Gurobi's MIPGap default so exploratory MILPs return
+    # the incumbent instead of grinding on the last epsilon of the proof;
+    # override per call via solver_options (0.0 restores exact proving).
     "scip": {
         "misc/allowstrongdualreds": False,
         "misc/allowweakdualreds": False,
+        "limits/gap": 1e-4,
         "limits/time": 300,
     },
 }
@@ -147,6 +152,12 @@ class PyscipoptSolver:
 
             status = sm.getStatus()
             has_solution = sm.getNSols() > 0
+            if status == "gaplimit":
+                _log.info(
+                    "SCIP stopped at the configured relative gap (limits/gap); "
+                    "the incumbent is reported as optimal within tolerance. "
+                    "See the concepts/solvers docs page."
+                )
             if has_solution:
                 # Strip whitespace from SCIP variable names: on Windows the
                 # pyomo-written .col label file has CRLF line endings, so
@@ -180,9 +191,20 @@ class PyscipoptSolver:
         elif status == "unbounded":
             solver_status, tc = SolverStatus.warning, TerminationCondition.unbounded
         elif has_solution:
-            # A limit was hit (time/node/gap) but SCIP has a feasible incumbent;
-            # _classify_solve_result treats this as a usable witness solution.
-            solver_status, tc = SolverStatus.aborted, TerminationCondition.maxTimeLimit
+            if status == "gaplimit":
+                # The incumbent meets the configured relative gap (limits/gap):
+                # converged within tolerance, not an abort. Reported as
+                # ok/optimal like Gurobi does at MIPGap, so scripts can tell a
+                # tolerance stop from a real time limit.
+                solver_status, tc = SolverStatus.ok, TerminationCondition.optimal
+            else:
+                # A limit was hit (time/node/...) but SCIP has a feasible
+                # incumbent; _classify_solve_result treats this as a usable
+                # witness solution.
+                solver_status, tc = (
+                    SolverStatus.aborted,
+                    TerminationCondition.maxTimeLimit,
+                )
         else:
             # Limit hit with no incumbent -> report as infeasible so the caller
             # surfaces a diagnostic rather than reading unset Vars as a solution.
@@ -225,12 +247,12 @@ class PyomoPWLImpl:
 def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
     """Map a Pyomo solve outcome to ``(success, report, status_str, tc_str)``.
 
-    OK → silent; infeasible → error + MIS report; other non-OK (limits with a
-    feasible incumbent) → warning, treated as success.
+    OK -> silent; infeasible -> error + MIS report; other non-OK (limits with a
+    feasible incumbent) -> warning, treated as success.
 
     The status/tc strings let downstream consumers identify *which* non-ok
     outcome a "success" actually came from (e.g. a Gurobi time-limit abort
-    that returned a witness incumbent — the MC pipeline drops those
+    that returned a witness incumbent - the MC pipeline drops those
     samples rather than averaging them in).
     """
     status = result.solver.status
@@ -283,14 +305,25 @@ def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
 
 
 class PyomoSolver(SolverInterface):
-    """Pyomo-backed solver. ``solver_name`` is overridable per :meth:`solve`."""
+    """Pyomo-backed solver. ``solver_name`` is overridable per :meth:`solve`.
 
-    def __init__(self, solver_name: str = "scip"):
+    ``solver_options`` are merged over the module presets
+    (``DEFAULT_SOLVER_OPTIONS`` then ``PER_SOLVER_OPTIONS``) for every solve of
+    this instance; :meth:`solve` accepts a per-call ``solver_options`` merged
+    over those in turn. A value of ``None`` removes the key, so a preset such
+    as the SCIP time limit can be dropped per call."""
+
+    def __init__(self, solver_name: str = "scip", solver_options: dict | None = None):
         self._backend_name = "pyomo"
         self._solver_name = solver_name
+        self.solver_options = dict(solver_options) if solver_options else {}
         # Per-solve simulation flag (set at the top of solve()); read by the
         # equation-building passes to drop operational flow limits.
         self._simulation: bool = False
+        # Appended to every named constraint component. Multi-period assembly
+        # reuses one solver instance across periods on a single ConcreteModel,
+        # where equal names would make setattr silently drop earlier periods.
+        self._name_suffix: str = ""
 
     @staticmethod
     def inject_pyomo_vars_attr(  # NOSONAR
@@ -318,7 +351,7 @@ class PyomoSolver(SolverInterface):
 
     @staticmethod
     def withdraw_pyomo_vars_attr(target: GenericModel):  # NOSONAR
-        """Pyomo Var → :class:`Var`. Restores ``integer``, snaps bound-noise to
+        """Pyomo Var -> :class:`Var`. Restores ``integer``, snaps bound-noise to
         bounds, replaces NaN/None with 0 so the next solve's warmstart survives."""
         for key, value in target.__dict__.items():
             if isinstance(value, pyo.Var):
@@ -366,7 +399,7 @@ class PyomoSolver(SolverInterface):
     def _add_equations(self, pm, exprs, name_prefix=None):
         for i, e in enumerate(exprs):
             if name_prefix is not None:
-                name = self._sanitize_name(f"{name_prefix}_eq_{i}")
+                name = self._sanitize_name(f"{name_prefix}{self._name_suffix}_eq_{i}")
             else:
                 name = None
             self._add_equation(pm, e, name=name)
@@ -424,11 +457,16 @@ class PyomoSolver(SolverInterface):
         simulation: bool = False,
         formulation=None,
         solver_name: str | None = None,
+        solver_options: dict | None = None,
+        strict: bool = False,
         **kwargs,
     ):
         # Parameter names/order mirror SolverInterface.solve so that a caller
         # passing draw_debug= (per the ABC) works on both backends. ``debug=``
-        # is accepted as a legacy alias; ``solver_name`` is a Pyomo-only extra.
+        # is accepted as a legacy alias; ``solver_name`` and ``solver_options``
+        # (per-call options merged over the instance and module presets, None
+        # values removing preset keys) are Pyomo-only extras forwarded by the
+        # top-level ``run_*`` helpers.
         debug = draw_debug or kwargs.pop("debug", False)
         self._simulation = simulation
         if solver_name is None:
@@ -455,6 +493,10 @@ class PyomoSolver(SolverInterface):
             simulation=simulation,
             exclude_unconnected_nodes=exclude_unconnected_nodes,
         )
+
+        # Read back by diagnose_infeasibility to translate constraint names
+        # into component terms on a failed solve.
+        pm._monee_network = network
 
         nodes = network.nodes
         apply_child_overwrites(network, nodes, ignored_nodes)
@@ -525,9 +567,15 @@ class PyomoSolver(SolverInterface):
         )
 
         solver = self._make_solver(solver_name)
-        for k, v in DEFAULT_SOLVER_OPTIONS.items():
-            solver.options[k] = v
-        for k, v in _effective_solver_options(solver_name).items():
+        merged_options = {
+            **DEFAULT_SOLVER_OPTIONS,
+            **_effective_solver_options(solver_name),
+            **self.solver_options,
+            **(solver_options or {}),
+        }
+        for k, v in merged_options.items():
+            if v is None:
+                continue
             solver.options[k] = v
 
         solve_kwargs = {"tee": debug}
@@ -565,6 +613,9 @@ class PyomoSolver(SolverInterface):
         obj_val = pyo.value(pm.obj, exception=False)
         if obj_val is None:
             obj_val = float("nan")
+        user_objective = None
+        if success and pm.user_obj_exprs:
+            user_objective = pyo.value(sum(pm.user_obj_exprs), exception=False)
 
         solver_result = SolverResult(
             network,
@@ -578,12 +629,26 @@ class PyomoSolver(SolverInterface):
             infeasibility_report=report if not success else None,
             backend_used=self._backend_name,
             solver_used=solver_name,
+            user_objective=user_objective,
+            aux_objective=(
+                None if user_objective is None else obj_val - user_objective
+            ),
         )
-        return solver_result
+        return validate_result(
+            network,
+            solver_result,
+            ignored_nodes=ignored_nodes,
+            simulation=simulation,
+            strict=strict,
+        )
 
     @staticmethod
     def _lex_cap_slack(s_star: float, solver_options: dict) -> float:
-        return lex_cap_slack(s_star, solver_options.get("MIPGap", 0.0))
+        gap = max(
+            float(solver_options.get("MIPGap") or 0.0),
+            float(solver_options.get("limits/gap") or 0.0),
+        )
+        return lex_cap_slack(s_star, gap)
 
     @staticmethod
     def _attach_combined_obj(pm, active: bool = True):
@@ -597,8 +662,8 @@ class PyomoSolver(SolverInterface):
             pm.obj.deactivate()
 
     def _solve_lexicographic(self, pm, solver, solver_name, solve_kwargs):
-        """Two-phase lex: minimise ``Σ user`` then ``Σ aux`` under
-        ``Σ user ≤ S* + slack``. Combined ``pm.obj`` attached (deactivated)
+        """Two-phase lex: minimise ``sum user`` then ``sum aux`` under
+        ``sum user <= S* + slack``. Combined ``pm.obj`` attached (deactivated)
         for backwards-compatible ``pyo.value(pm.obj)``."""
         pm.obj_user = pyo.Objective(expr=sum(pm.user_obj_exprs), sense=pyo.minimize)
         pm.obj_aux = pyo.Objective(expr=sum(pm.aux_obj_exprs), sense=pyo.minimize)
@@ -734,6 +799,7 @@ class PyomoSolver(SolverInterface):
                     sqrt_impl=sqrt_impl,
                     log_impl=log_impl,
                     exp_impl=exp_impl,
+                    simulation=self._simulation,
                 )
             )
 
@@ -754,7 +820,9 @@ class PyomoSolver(SolverInterface):
                 for expr in child.minimize(grid, node.model, sqrt_impl=sqrt_impl):
                     pm.aux_obj_exprs.append(expr)
                 child_eqs = filter_bool_eqs(
-                    as_iter(child.equations(grid, node.model)),
+                    as_iter(
+                        child.equations(grid, node.model, simulation=self._simulation)
+                    ),
                     context=f"child_{child.id}",
                 )
                 self._process_intermediate_eqs(pm, child.model, child_eqs)

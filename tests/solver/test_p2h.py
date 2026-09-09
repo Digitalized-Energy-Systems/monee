@@ -11,6 +11,7 @@ def _build_p2h_network(
     heat_mw=0.020,
     efficiency=1.0,
     diameter_m=0.15,
+    regulation=1,
 ):
     """Two-grid (power + heat/water) network with one P2H unit."""
     pn = mm.Network(mm.create_water_grid("heat"))
@@ -50,7 +51,7 @@ def _build_p2h_network(
     )
 
     pn.compound(
-        mm.PowerToHeat(heat_mw, diameter_m, 300, efficiency),
+        mm.PowerToHeat(heat_mw, diameter_m, 300, efficiency, regulation=regulation),
         power_node_id=p2,
         heat_node_id=w2,
         heat_return_node_id=w1,
@@ -193,6 +194,35 @@ def test_p2h_absolute_values():
     # el_mw = heat_mw / efficiency; heat_mw = -heat_mw (injection)
     cn = result.dataframes["PowerToHeatControlNode"]
     assert math.isclose(cn["el_mw"].iloc[0], expected_el, rel_tol=1e-4)
+    assert math.isclose(cn["heat_mw"].iloc[0], -heat_mw, rel_tol=1e-4)
+
+
+def test_p2h_partial_regulation_result_columns():
+    """el_mw reports the realized draw at partial regulation, load_p_mw the
+    setpoint, and heat_mw the generator-signed realized output."""
+    heat_mw, eff, reg = 0.020, 0.8, 0.5
+    net = _build_p2h_network(heat_mw=heat_mw, efficiency=eff, regulation=reg)
+
+    result = ms.GEKKOSolver().solve(net)
+
+    assert result.success
+    cn = result.dataframes["PowerToHeatControlNode"]
+    setpoint_el = heat_mw / eff
+    assert math.isclose(cn["load_p_mw"].iloc[0], setpoint_el, rel_tol=1e-9)
+    assert math.isclose(cn["el_mw"].iloc[0], reg * setpoint_el, rel_tol=1e-4)
+    assert math.isclose(cn["heat_mw"].iloc[0], -reg * heat_mw, rel_tol=1e-4)
+
+
+def test_p2h_heat_mw_sign_convention():
+    """Positive heat_energy_mw input reports as negative heat_mw (injection)."""
+    heat_mw = 0.020
+    net = _build_p2h_network(heat_mw=heat_mw, efficiency=1.0)
+
+    result = ms.GEKKOSolver().solve(net)
+
+    assert result.success
+    cn = result.dataframes["PowerToHeatControlNode"]
+    assert heat_mw > 0
     assert math.isclose(cn["heat_mw"].iloc[0], -heat_mw, rel_tol=1e-4)
 
 

@@ -103,6 +103,130 @@ The ``vars`` property returns the public attributes as a dictionary; the
 ``values`` property additionally unwraps ``Var``/``Const``/``Intermediate``/
 ``PostProcess`` instances to their current numeric values.
 
+The wrapping persists on a solved network: on the ``result.network``
+returned by :func:`monee.run_energy_flow` and
+:func:`monee.run_energy_flow_optimization`, every attribute that entered the
+solve as a decision variable is still a ``Var``, with the optimum written to
+its ``.value``; an attribute the problem never promoted stays a plain
+number, so the same attribute name can be a float on one component and a
+``Var`` on another. A ``Var`` neither formats nor casts as a number
+(``f"{v:.2f}"`` and ``float(v)`` both raise ``TypeError``), so read
+``v.value``, or call :func:`monee.model.value`, which unwraps
+``Var``/``Const``/``Intermediate`` and passes plain numbers through
+unchanged. The result dataframes (``result.dataframes`` and
+``result.get(ModelType)``) contain the unwrapped floats already, so prefer
+them for reporting.
+
+.. note::
+
+   A model constructor only understands the keywords its own signature
+   declares. Any other keyword is not model state: it is neither solved nor
+   exported, so passing one (a typo, or an option the model does not have)
+   emits a warning naming the ignored keys and will become an error in a
+   future release. To attach your own quantity to a component, declare it as
+   an attribute on a model subclass rather than passing it as a keyword.
+
+.. _settable-attributes:
+
+Which attributes are settable after construction
+------------------------------------------------
+
+A model's public attributes stay writable after it is built, and the solver
+reads whatever value is on the object when the solve starts. Three groups
+behave differently, so the group decides what a write actually does.
+
+Settable, and read by the equations
+   Every attribute the model declares in its ``__init__``, plus any parameter
+   its constructor accepts even when the default left it unset (a
+   :class:`~monee.model.child.PowerGenerator` created without ``cost`` still
+   takes ``model.cost = 12.0`` for the economic dispatch objective). Writing a
+   plain number here is the normal way to change a setpoint or a parameter
+   between solves::
+
+       gen = net.child_by_id(gen_id).model
+       gen.p_mw = -0.8          # generation, load convention
+       gen.cost = 12.0
+
+   On a model whose attribute is already a :class:`~monee.model.core.Var`
+   (a slack, a promoted control variable), assign to ``model.attr.value``
+   instead: replacing the ``Var`` with a float removes the decision variable
+   from the model.
+
+Baked into ``Var`` bounds at build time
+   A constructor argument that only sizes a variable is copied into that
+   variable's bounds when the model is built, and the bounds are what the
+   solver enforces. Rewriting the argument later moves nothing, because
+   nothing reads it again. An
+   :class:`~monee.model.storage.ElectricStorage` built with ``e_mwh_max=2``
+   carries that limit as ``e_mwh.max``, so a bigger battery is::
+
+       storage.e_mwh.max = 4.0
+
+   Where the sizing argument is a documented capacity, the model exposes a
+   property that rewrites the bounds for you, for example
+   :attr:`~monee.model.extension.islanding.el.GridFormingGenerator.p_mw_max`,
+   which is settable and re-bounds ``p_mw`` symmetrically. Everything else
+   needs the ``Var`` itself. :doc:`../how-to/diagnose_infeasibility` explains
+   how to see the bounds a solve actually used.
+
+Private metadata, invisible to the solver
+   Any name starting with an underscore is yours. It is skipped by ``vars``
+   and ``values``, never injected as a variable and never exported to a result
+   frame, which makes it the place for study bookkeeping::
+
+       load._priority_weight = 3
+       load._feeder = "F12"
+
+Assigning a plain value to any other public name creates an inert field: it is
+stored on the object, it shows up in ``vars``, and no equation ever reads it,
+so the solve returns a perfectly clean result computed without it. monee warns
+on that write with
+:class:`~monee.model.core.UnknownAttributeWarning`, naming the attribute, the
+model class and the attributes that model does have. ``gen.p_mw_maximum = 5.0``
+reports:
+
+.. code-block:: text
+
+   UnknownAttributeWarning: PowerGenerator does not declare the attribute
+   'p_mw_maximum': the assignment stores an inert field that no equation reads,
+   so the solve silently ignores it. Settable attributes of this model:
+   ['cost', 'p_mw', 'q_mvar', 'regulation']. Use a leading underscore
+   (_p_mw_maximum) for your own metadata.
+
+Assigning a :class:`~monee.model.core.Var`, :class:`~monee.model.core.Const`,
+:class:`~monee.model.core.Intermediate` or
+:class:`~monee.model.core.PostProcess` to a new name is how a formulation
+declares extra solver state, so it is always accepted.
+
+:func:`~monee.model.core.set_attribute_guard` selects what happens on such a
+write, and the environment variable ``MONEE_ATTRIBUTE_GUARD`` sets the same
+mode without touching the code:
+
+.. list-table::
+   :header-rows: 1
+   :widths: 16 84
+
+   * - Mode
+     - Effect
+   * - ``warn``
+     - Default. Emits :class:`~monee.model.core.UnknownAttributeWarning`, which
+       the standard :mod:`warnings` filters silence or promote per module.
+   * - ``error``
+     - Strict mode: raises ``AttributeError`` at the assignment, so a study or
+       a CI job fails on the typo instead of publishing the number computed
+       without it.
+   * - ``off``
+     - Removes the hook from the model base class, restoring plain attribute
+       writes. Use it only for a hot loop that assigns millions of attributes.
+
+If your own subclass or tooling writes a public attribute the class cannot
+declare in ``__init__``, register it once with
+:func:`~monee.model.core.register_optional_attributes` and the guard stays
+quiet about that name on that class. A :class:`~monee.model.core.CompoundModel`
+may record the ids and sizing it derives during
+:meth:`~monee.model.core.CompoundModel.create` without registering anything:
+``create`` is a second construction phase and is exempt for its duration.
+
 .. warning::
 
    The comparison operators on :class:`~monee.model.core.Var` (``<``, ``<=``,
@@ -173,6 +297,47 @@ The same applies to :class:`~monee.model.child.Source` (``mass_flow_kgs``) and
 :class:`~monee.model.child.HeatGenerator` (``q_mw``). Storage models follow
 the same convention: positive = charging (consuming from the network),
 negative = discharging.
+
+.. _data-model-slack-sign:
+
+Sign of the slack
+-----------------
+
+External grids are children too, so they follow the same rule seen from the
+network: :attr:`~monee.model.child.ExtPowerGrid.p_mw` is positive when the
+network exports into the external grid and negative when it imports. A
+network that draws 1 MW from its substation reports ``p_mw = -1.0`` (plus
+losses). Anything that bounds the slack therefore reads "import" as the lower
+bound: ``max_import_mw=X`` becomes ``p_mw >= -X``, a hand-written constraint
+capping the import at 0.6 MW is ``model.p_mw >= -0.6``, and the
+``bounds_ext_el`` tuple of
+:func:`~monee.problem.min_load_shedding.create_min_load_shedding_problem` caps
+the import at ``X`` MW with ``bounds_ext_el=(-X, 0)``. The same holds for
+:class:`~monee.model.child.ExtHydrGrid` and its ``mass_flow_kgs``. Writing the
+bound the other way round does not fail, it silently forbids importing at all.
+
+Sign on branches
+----------------
+
+Branches are pairwise, so their sign says which way the flow runs rather than
+whether it is consumption, and the two branch families do not agree.
+
+Hydraulic branches (:class:`~monee.model.branch.GasPipe`,
+:class:`~monee.model.branch.WaterPipe`, pumps, valves and heat exchangers)
+split the flow into two non-negative variables and report
+``mass_flow_kgs = mass_flow_pos_kgs - mass_flow_neg_kgs``. Flow from the
+from-node to the to-node lives in ``mass_flow_neg_kgs``, so ``mass_flow_kgs``
+(and ``velocity_mps``, which shares its sign) is negative for from-node to
+to-node flow and positive for the reverse. A pipe feeding a sink downstream of
+the external grid therefore reports a negative mass flow. This is what the
+outflow-positive nodal balance expects; take the magnitude with ``abs()`` when
+reporting throughput, and read the direction off the sign only.
+
+Power branches use the opposite convention. ``p_from_mw`` and ``p_to_mw`` are
+both the power flowing into the branch at their end, so ``p_from_mw`` is
+positive for from-node to to-node flow while ``p_to_mw`` is negative, and the
+two add up to the branch losses. A 1 MW load fed over one line reports
+``p_from_mw = 1.0825``, ``p_to_mw = -1.0``, hence 0.0825 MW of loss.
 
 Units are encoded in attribute-name suffixes:
 
@@ -247,6 +412,71 @@ Subclass :class:`~monee.model.core.BranchModel` and implement
 For multi-carrier branches (e.g. a gas-to-power unit), use
 :class:`~monee.model.core.MultiGridBranchModel`.
 
+Branch author contract
+----------------------
+
+Formulations and the nodal balances look up branch variables by name, so a
+custom branch has to declare a small set of expected attributes:
+
+- Call ``super().__init__()`` in your ``__init__``. It provides ``on_off``
+  (default 1, in service), which the nodal balances multiply into every flow
+  term of the branch.
+- A branch between electrical buses declares the terminal Vars ``p_from_mw``,
+  ``q_from_mvar``, ``p_to_mw`` and ``q_to_mvar``; the bus power balance reads
+  them unconditionally.
+- A branch between hydraulic junctions (water or gas) declares the
+  non-negative flow split ``mass_flow_pos_kgs`` and ``mass_flow_neg_kgs``.
+  Flow from the from node to the to node is carried by ``mass_flow_neg_kgs``
+  and ``mass_flow_pos_kgs`` carries the reverse direction, so the signed
+  report ``mass_flow_kgs = mass_flow_pos_kgs - mass_flow_neg_kgs`` is
+  negative for forward flow.
+- Heat participation is opt in: a hydraulic branch that also declares
+  ``t_from_pu`` and ``t_to_pu`` enters the nodal heat balance.
+- Every other name is optional; the balances skip keys a branch does not
+  declare.
+- When a :class:`~monee.model.formulation.core.BranchFormulation` is attached
+  to the branch type, the model's own ``equations()`` is still called and both
+  sets of equations are collected. A formulated model should return ``[]``
+  from ``equations()`` (or only equations the formulation does not emit).
+
+A minimal working gas branch, a linear valve with a fixed forward direction:
+
+.. testcode::
+
+    import monee
+    import monee.model as mm
+    from monee import mx
+
+    @mm.model
+    class LinearValve(mm.BranchModel):
+        def __init__(self, **kwargs):
+            super().__init__(**kwargs)
+            self.mass_flow_pos_kgs = mm.Var(0.0, min=0, name="mass_flow_pos_kgs")
+            self.mass_flow_neg_kgs = mm.Var(0.1, min=0, name="mass_flow_neg_kgs")
+
+        def equations(self, grid, from_node_model, to_node_model, **kwargs):
+            return [
+                self.mass_flow_pos_kgs == 0,
+                from_node_model.pressure_squared_pu
+                - to_node_model.pressure_squared_pu
+                == 0.01 * self.mass_flow_neg_kgs,
+            ]
+
+    net = mm.Network()
+    gas = mx.gas_structure(net, diameter_m=0.3, length_m=500)
+    seg = gas.line(3, sink_mass_flow=0.05)
+    gas.attach_ext_grid(seg.first)
+    net.remove_branch_between(seg.nodes[1], seg.nodes[2])
+    net.branch(LinearValve(), seg.nodes[1], seg.nodes[2])
+
+    result = monee.run_energy_flow(net, formulation="smooth_nlp")
+    row = result.get(LinearValve).iloc[0]
+    print(f"valve flow: {row.mass_flow_neg_kgs:.3f} kg/s")
+
+.. testoutput::
+
+    valve flow: 0.050 kg/s
+
 Children
 ========
 
@@ -296,6 +526,8 @@ passed to ``create()`` with the suffix stripped:
     net = mm.Network()
 
     power_node = net.node(mm.Bus(base_kv=1), grid=mm.EL)
+    # Water flows heat_node -> heat_return_node through the internal heat
+    # exchanger and is heated on the way, so heat_return_node is the hot outlet.
     heat_node = net.node(mm.Junction(), grid=mm.WATER)
     heat_return_node = net.node(mm.Junction(), grid=mm.WATER)
 
@@ -364,8 +596,30 @@ instance to the constructor (``Network(el_model=...)``,
   ``max_mass_flow_kgs`` bound.
 - :class:`~monee.model.GasGrid`: gas domain; construct via
   :func:`~monee.model.create_gas_grid` ``(name, type="lgas")``, which fills
-  in the physical constants for the chosen gas type (including
-  ``higher_heating_value_kwh_per_kg`` in kWh/kg).
+  in the physical constants for the chosen gas type. Both types share the
+  operating point ``t_k=300`` K, ``t_ref_k=356`` K and ``pressure_ref_pa=1e6``,
+  that is 10 bar absolute, which is the base ``pressure_pu`` is relative to.
+  They differ in the fluid: ``lgas`` (the default) has
+  ``molar_mass=0.0181138902`` kg/mol and
+  ``higher_heating_value_kwh_per_kg=11.79011`` kWh/kg, ``methane`` has
+  ``0.0165`` kg/mol and ``15.3`` kWh/kg; the compressibility is derived from
+  the two and is 0.9736 for lgas. To run a network at a different operating
+  pressure, build the grid with that pressure rather than editing the field
+  afterwards, so the derived compressibility follows:
+  ``mm.create_gas_grid("mp", pressure_ref_pa=1.5e5)``. Pass
+  ``pressure_ambient_pa=mm.STANDARD_ATMOSPHERE_PA`` to state node pressures as
+  gauge instead of absolute. ``pressure_squared_pu_min`` /
+  ``pressure_squared_pu_max`` (0.7 to 1.3 by default) are the operational
+  pressure limits of the junctions on the grid. They are stated in SQUARED
+  per unit, the state the gas formulations solve in, so a 0.9 to 1.1 pressure
+  band is ``0.81`` to ``1.21``. An optimization run applies them to every
+  junction ``pressure_squared_pu`` variable whose bound the model has not
+  already overridden; a plain simulation keeps the wide 0 to 3 range, so a
+  square solve is never cut off by an operational limit. To tighten the limits
+  for one problem only, use
+  ``prob.bounds((p_min ** 2, p_max ** 2), attributes=["pressure_squared_pu"])``
+  or :func:`~monee.problem.create_min_load_shedding_problem`
+  ``(bounds_pressure=...)``.
 
 ----
 
@@ -392,6 +646,124 @@ Use :class:`~monee.model.Network` to assemble the graph:
    interface. The express functions set sensible defaults and handle multi-energy
    bookkeeping automatically.
 
+Component ids
+-------------
+
+``node()``, ``child()`` and ``compound()`` return integer ids drawn from
+independent counters per container kind, so the same integer routinely names
+both a node and a child: above, the load is child ``0`` while the first bus
+is node ``0``. Keep external references such as co-simulation wiring tables
+as ``(kind, id)`` pairs rather than bare integers, and use the kind argument
+of the id-addressed APIs (the first argument of
+``activate_by_id``/``deactivate_by_id``, or ``component_type=`` on the
+stepper) to disambiguate; :doc:`../how-to/stepper` documents the resolution
+rules for the stepper's id forms.
+
+A branch has no counter of its own: its id is the tuple
+``(from_node_id, to_node_id, key)``, where ``key`` counts parallel branches
+between the same node pair starting at ``0``. The ``id`` column of a branch
+result dataframe holds exactly this tuple, so a row's endpoints are recovered
+by unpacking it (``from_id, to_id, key = row["id"]``). Child result frames
+carry their attachment point in a separate ``node_id`` column.
+
+Result queries are id-addressed too, and they see the same collision: an
+external grid attached to the first bus is child ``0`` while that bus is node
+``0``, so ``get_result_for_id(0, "p_mw")`` matches both the ``Bus`` and the
+``ExtPowerGrid`` table. The lookup then raises a ``ValueError`` naming the
+candidate tables instead of guessing. Pass the model class to pick one
+(``get_result_for_id`` is the timeseries and multi period form, ``result[id,
+ModelType]`` the snapshot one):
+
+.. code-block:: python
+
+    p_ext = result.get_result_for_id(ext_id, "p_mw", mm.ExtPowerGrid)
+    row   = result[ext_id, mm.ExtPowerGrid]
+
+The gas side works the same way, with :class:`~monee.model.child.ExtHydrGrid`
+against :class:`~monee.model.node.Junction`:
+
+.. code-block:: python
+
+    m_ext = result.get_result_for_id(gas_ext_id, "mass_flow_kgs", mm.ExtHydrGrid)
+
+Passing ``model_type`` is always safe, so the how-to examples use it wherever
+the queried id belongs to a child.
+
+.. _result-frame-index:
+
+Where the id lives in a result frame
+------------------------------------
+
+A snapshot result frame (``result.dataframes[...]`` and
+``result.get(ModelType)``, from :func:`monee.run_energy_flow` and
+:func:`monee.run_energy_flow_optimization`) is indexed positionally: its index
+is a plain ``RangeIndex`` counting rows, and the component id sits in the ``id``
+column. Node ids skip numbers as soon as a network mixes node types (buses and
+junctions draw from one counter but land in separate frames), so the row number
+and the node id part company on the first multi energy network, and
+``df.loc[node_id]`` then reads a different component without any error. Select
+rows by id in one of two ways:
+
+.. code-block:: python
+
+    buses = result.get(mm.Bus)
+    row   = buses[buses["id"] == node_id].iloc[0]   # mask on the id column
+
+    by_id = result.get(mm.Bus, index="id")          # rows indexed by id
+    row   = by_id.loc[node_id]
+
+``index="id"`` returns a copy of the same frame with the same columns (the
+``id`` column is kept) under an index built from the ids, so it joins directly
+against an id map such as ``net.pp_bus_to_node``; see
+:doc:`../how-to/convert_from_pandapower`. Only the view is new: the stored
+frame and the default ``get(ModelType)`` keep the positional index they always
+had. For a branch frame, whose ids are tuples, the id-indexed view is a
+``MultiIndex`` with the levels ``from_node_id``, ``to_node_id`` and ``key``, so
+``by_id.loc[(4, 7, 0)]`` returns the row and ``by_id.loc[4]`` returns every
+branch leaving node 4. A tuple id cannot be used as a label on a plain index at
+all: ``buses.set_index("id").loc[(4, 7, 0)]`` raises an ``IndexingError``,
+because pandas reads the tuple as one key per axis.
+
+Timeseries and multi period results turn this around. There a frame spans the
+run, so rows are steps or periods and the columns are the component ids:
+``result.get_result_for(mm.Bus, "vm_pu")[node_id]`` is a column lookup, which
+is why ``[node_id]`` works there and ``loc[node_id]`` misleads on a snapshot.
+:doc:`../how-to/timeseries` covers the timeseries side.
+
+Names and other container attributes
+------------------------------------
+
+The ``name=`` keyword of the ``create_*`` functions, and of
+``node()``/``branch()``/``child()``, lands on the Component container, not on
+the model object. Bookkeeping lives on the container (``id``, ``name``,
+``grid``, ``active``, ``node_id`` for a child, ``from_node_id`` and
+``to_node_id`` for a branch, ``position`` for a node); the physics lives on
+``.model`` (``p_mw``, ``vm_pu``, ``mass_flow_kgs``, and the other ``Var`` and
+``Const`` attributes). ``component.model.name`` therefore raises an
+``AttributeError``: a model object has no name of its own.
+
+.. testcode::
+
+    import monee.express as mx
+
+    net_named = mx.create_multi_energy_network()
+    bus = mx.create_bus(net_named)
+    load_id = mx.create_power_load(net_named, bus, p_mw=0.1, q_mvar=0.0,
+                                   name="hp_feeder")
+
+    load = net_named.child_by_id(load_id)
+    print(load.name, type(load.model).__name__)
+
+.. testoutput::
+
+    hp_feeder PowerLoad
+
+A result frame carries the container ``name`` in a ``name`` column next to
+``id`` as soon as one component of that type was named, so a solved run can be
+read back by name as well. Names are also the key used by
+``TimeseriesData.add_child_series_by_name`` and its branch and compound
+siblings (see :doc:`../how-to/timeseries`).
+
 Network conveniences
 --------------------
 
@@ -399,7 +771,11 @@ Beyond the builder methods, :class:`~monee.model.Network` offers:
 
 - ``activate(component)`` / ``deactivate(component)`` (and the ``*_by_id``
   variants): switch components in and out of the solve; compound-aware, i.e.
-  deactivating a compound deactivates all of its subcomponents.
+  deactivating a compound deactivates all of its subcomponents. The first
+  argument of ``activate_by_id`` / ``deactivate_by_id`` is the kind of the
+  component, either a container class (``mm.Node``, ``mm.Branch``,
+  ``mm.Child``, ``mm.Compound``) or a model class carried by one of them
+  (``mm.PowerLine``, ``mm.PowerLoad``); anything else raises a ``ValueError``.
 - Per-component ``constraints=`` keyword on ``node()``/``branch()``/
   ``child()``/``compound()``: a list of callables receiving the model plus
   the same context as ``equations()``; plus network-level

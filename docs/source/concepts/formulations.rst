@@ -189,6 +189,67 @@ remain importable but are deprecated.
       Supports branch currents (``i_from_ka``/``i_to_ka``) and line-loading
       limits.
 
+      The decision variable on a bus is ``vm_pu_squared`` (the lifted
+      ``W = |V|²``), bounded by the grid's ``vm_pu_min²`` to ``vm_pu_max²``;
+      ``vm_pu`` is a reporting Intermediate. See the decision-variable table
+      below before setting your own bounds.
+
+      The branch pi-model charging admittance
+      (``g_fr_pu``/``b_fr_pu``/``g_to_pu``/``b_to_pu``, populated by the
+      MATPOWER and CIM importers) is modelled as a shunt injection linear in
+      ``vm_pu_squared``, so the cone, the voltage drop and the loss equations
+      all act on the series flows. ``current_pu_squared`` and the reported
+      ``i_from_ka``/``i_to_ka``/``loading_*_pu`` are therefore series
+      quantities and exclude the charging current. A transformer phase shift
+      (``branch.shift``) has no representation in a magnitude-only branch-flow
+      model and is ignored; only the magnitude ratio ``tap`` enters.
+
+      Checking the cone gap: the SOC constrains the series flows, and the
+      branch result frame reports them directly as ``p_series_from_mw`` and
+      ``q_series_from_mvar`` (plus the ``_to`` pair). In per unit
+      (divide by ``sn_mva``), a tight relaxation satisfies
+
+      .. math::
+
+         \frac{W_i}{tap^2} \cdot \ell \;-\; (P^{ser}_{ij})^2 - (Q^{ser}_{ij})^2
+         \;\approx\; 0
+
+      with :math:`W_i` the from-bus ``vm_pu_squared`` and :math:`\ell` the
+      branch ``current_pu_squared``. On case9 the residual stays below
+      ``1e-6`` on every resistive branch. On a branch with ``br_r_pu == 0``
+      the residual is solver-dependent instead: the only term that prices
+      :math:`\ell` is the loss term :math:`r \cdot \ell`, so a zero-resistance
+      branch (an idealised transformer, which is how case9 models all three of
+      its) has nothing pulling its cone tight and the solver stops as soon as
+      its relative MIP gap is met. Both mixed-integer presets ship a ``1e-4``
+      gap (SCIP ``limits/gap``, Gurobi ``MIPGap``), under which the case9
+      residual on branch ``(3, 6, 0)`` reads ``3.77`` while every resistive
+      branch stays at ``1e-8``; passing
+      ``solver_options={"limits/gap": 0.0}`` brings that branch back to
+      ``-2.5e-8``. monee reports such a residual as a ``relaxation`` finding in
+      ``result.warnings`` saying the branch neither certifies nor refutes
+      exactness, because ``i_from_ka``, ``i_to_ka`` and the ``loading`` columns
+      derive from :math:`\ell` and are not physical there either. Read
+      exactness off the resistive branches, or re-solve at a zero gap.
+
+      Do not evaluate the cone with the terminal flows
+      ``p_from_mw``/``q_from_mvar``: on a branch with charging admittance the
+      pi-shunt injection is included in the terminals and the gap reads
+      spuriously negative. The series correction, if you need it by hand, is
+      :math:`P^{ser}_{ij} = P_{ij} - g_{fr} W_i / tap^2` and
+      :math:`Q^{ser}_{ij} = Q_{ij} + b_{fr} W_i / tap^2`.
+
+      A tight cone certifies only the SOC constraint itself. On a meshed
+      network the branch-flow relaxation additionally drops the cycle
+      consistency of the voltage angles, so every branch residual can sit
+      near zero while the MISOCP objective is still below the true AC
+      optimum: on case9 with swapped generator costs, residuals of
+      ``7.6e-7`` coexist with an objective 1.45 percent under the NLP value.
+      On radial networks a tight cone is the standard exactness certificate;
+      on meshed grids, cross-check the objective and the dispatch against an
+      NLP solve (``EL_FORMULATION`` with IPOPT) before claiming the
+      relaxation solved the AC problem.
+
       *Best for:* large-scale optimal power flow where global optimality or
       mixed-integer decisions are needed.
 
@@ -197,6 +258,10 @@ remain importable but are deprecated.
       The branch-flow model with the SOC pinned to equality
       ``P² + Q² = (W/tap²)·ell``, exact AC power flow in the lifted
       variables, a non-convex MIQCQP for global solvers (SCIP, Gurobi).
+
+      It subclasses the MISOCP branch formulation, so the decision variables,
+      the pi-shunt handling, the series-current reporting and the phase-shift
+      limitation described above all apply unchanged.
 
       *Best for:* exact mixed-integer AC studies without trigonometric terms.
 
@@ -243,6 +308,17 @@ remain importable but are deprecated.
       ``"nonlinear"`` (smooth laminar-turbulent friction blend with a
       Reynolds closure).
 
+      ``smoothing_eps`` is a solver-conditioning knob, not physics. Because
+      ``√(m² + ε²)`` puts a floor of ``ε`` under the flow magnitude, an ``ε``
+      that is an appreciable fraction of what a pipe actually carries turns
+      into a spurious pressure drop and stalls IPOPT with
+      ``Error_In_Step_Computation``. Each branch therefore caps the value at
+      ``1e-4`` times its own capacity
+      (:func:`~monee.model.phys.nonlinear.smooth.scaled_smoothing_eps`), so
+      narrow low-flow pipes get a proportionally narrower width. If a solve
+      still reports a step-computation failure, lowering ``smoothing_eps`` by
+      one or two orders of magnitude is the first thing to try.
+
       *Best for:* GEKKO IPOPT/APOPT solves, especially full multi-energy
       systems where the MISOCP-shaped default stalls IPOPT.
 
@@ -278,7 +354,8 @@ remain importable but are deprecated.
       temperature upwinding written in multiplied form (no direction binary,
       no division by the flow magnitude), and active/passive heat-exchanger
       formulations with their binaries pinned to constants. Same
-      ``friction_model`` options as the smooth gas formulation.
+      ``friction_model`` options and the same per-branch ``smoothing_eps``
+      scaling as the smooth gas formulation.
 
       *Best for:* GEKKO IPOPT/APOPT solves of heat networks and full MES.
 
@@ -344,6 +421,46 @@ remain importable but are deprecated.
 
 ----
 
+Which attribute is the decision variable
+========================================
+
+A formulation is free to lift a quantity into a different variable and leave the
+familiar attribute behind as a reporting Intermediate. That matters as soon as
+you write your own bounds or constraints: an Intermediate carries no ``min`` or
+``max`` the solver reads, so a bound placed there would be silently inert.
+
+.. list-table::
+   :header-rows: 1
+   :widths: 30 34 36
+
+   * - Formulation
+     - Decision variable
+     - Reported only (Intermediate)
+   * - ``EL_NLP_FORMULATION``
+     - ``Bus.vm_pu``, ``Bus.va_radians``
+     - ``Bus.vm_pu_squared`` (simulation solves)
+   * - ``EL_MISOCP_FORMULATION``,
+       ``EL_NONCONVEX_MIQCQP_FORMULATION``
+     - ``Bus.vm_pu_squared``,
+       ``GenericPowerBranch.current_pu_squared``
+     - ``Bus.vm_pu``, ``i_from_ka``, ``i_to_ka``,
+       ``loading_from_pu``, ``loading_to_pu``
+   * - Gas and heat MIQCQP formulations
+     - ``mass_flow_pos_kgs``, ``mass_flow_neg_kgs``, ``direction``
+     - ``mass_flow_kgs``
+   * - Gas and heat NLP formulations
+     - ``mass_flow_kgs``, ``mass_flow_mag_kgs``
+     - none
+
+:meth:`~monee.problem.core.OptimizationProblem.bounds` follows this table for
+you where the two names are paired: a bound on ``vm_pu`` under a branch-flow
+formulation is redirected onto ``vm_pu_squared`` as ``lo²`` to ``hi²``. When no
+paired variable exists the bound is reported as ineffective on the
+``monee.problem.core`` logger rather than dropped in silence. The built-in
+problems use ``bounds_vm`` and never need the redirect.
+
+----
+
 Choosing a formulation
 ======================
 
@@ -396,6 +513,23 @@ integer variables.
    * - Custom MILP model
      - Pyomo + MILP solver
      - custom formulation
+   * - Heat or water solve on the default back-end
+     - CasADi (IPOPT)
+     - ``HEAT_NLP_FORMULATION``
+
+.. warning::
+
+   A continuous back-end cannot enforce integrality. CasADi/IPOPT (the default)
+   and GEKKO's IPOPT mode treat the ``direction`` binary of the MIQCQP and MILP
+   families as a continuous variable in 0 to 1, so it can settle near 0.5 and
+   each pipe inlet temperature becomes a blend of both end temperatures, with
+   the solve still reported as successful. A CasADi solve emits a warning
+   naming the affected components. Take either exit: solve with a back-end that
+   branches on the binaries (``solver="scip"`` or ``solver="gurobi"``), or pass
+   a binary-free formulation (``formulation="heat_nlp"``, ``"gas_nlp"`` or
+   ``"smooth_nlp"``). The gas default is substituted automatically on the
+   CasADi path; the heat default is not, because its temperature upwinding has
+   no drop-in continuous equivalent for every heat-exchanger variant.
 
 See :doc:`solvers` for guidance on picking the right solver back-end.
 
@@ -479,9 +613,11 @@ constraints) and optionally ``minimize`` (return auxiliary objective terms):
         def equations(self, branch, grid, from_node_model, to_node_model, **kwargs):
             sqrt = kwargs["sqrt_impl"]  # solver-injected math implementation
             eqs = [
+                # from->to flow rides mass_flow_neg_kgs, so mass_flow_kgs is
+                # negative there and the drop carries a minus sign.
                 from_node_model.vars["pressure_pu"]
                 - to_node_model.vars["pressure_pu"]
-                == branch.resistance * branch.mass_flow_kgs
+                == -branch.resistance * branch.mass_flow_kgs
             ]
             if not kwargs.get("simulation", False):
                 # Operational limits would unbalance a square simulation

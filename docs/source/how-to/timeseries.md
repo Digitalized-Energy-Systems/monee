@@ -55,6 +55,13 @@ td2.add_child_series_by_name("demand",    "p_mw",  [0.4, 0.8, 1.2])
 td2.add_branch_series_by_name("main_pipe","on_off", [1, 0, 1])
 td2.add_compound_series_by_name("boiler", "regulation", [1.0, 0.5, 1.0])
 ```
+
+A `name=` value lands on the Component container, not on the model object, so
+read it back from the container (`net.child_by_id(load_id).name`) or from the
+`name` column a result frame carries once a component of that type was named.
+`component.model.name` raises an
+`AttributeError`, because the model carries only the physics attributes; see
+{doc}`../concepts/data_model` for the full container/model split.
 :::
 
 :::{tab-item} By id
@@ -91,6 +98,23 @@ td = TimeseriesData.from_dataframe(df, component_type="child", component_name="d
 
 ::::
 
+### Series must target settable inputs
+
+A series drives a model attribute as an input, so it should target a plain
+float attribute (such as `PowerLoad.p_mw`) or a `Const`. A series registered
+on a solver `Var` attribute does not act as an input in a simulation run: the
+solver owns the value, the series only pins the Var through its bounds, and
+the model stays non-square, so every step reports a dof finding.
+`run_timeseries` warns once at run start in that case, naming the attribute
+and listing the component's settable inputs. Declare the attribute as a plain
+float for simulation runs, or pass an optimization problem that controls the
+Var.
+
+The common case is a heat demand profile: a heat exchanger's `q_mw` is a
+solved output, so drive `regulation` (variable flow) or `q_mw_set` (constant
+flow) instead. {ref}`Part-load control <dh-part-load>` in the district
+heating guide shows both patterns end to end.
+
 ### Merging
 
 ```{testcode}
@@ -115,7 +139,57 @@ For duplicate `(component, attribute)` pairs the conflict rules are:
 - `td_a.extend(td_b)` merges in place: the receiver (`td_a`) wins.
 - `td_a + td_b` builds a new object: the left operand (`td_a`) wins.
 
-Both raise a `ValueError` if the two objects have different series lengths.
+Objects of unequal length merge by truncating every series (on both sides) to
+the shorter length, with a single warning naming both lengths. So a
+short study profile merges directly into a year-long imported object without
+tiling it first; call `head(n)` or `slice(start, stop)` beforehand to choose
+the window yourself and silence the warning.
+
+### Windowing
+
+`slice(start, stop)` and `head(n)` return a new `TimeseriesData` with every
+registered series cut to the same positional window. Use them to fit a long
+profile (a year of quarter hours, say) to a shorter study, or to make two
+objects of different lengths mergeable:
+
+```{testcode}
+from monee.simulation import TimeseriesData
+
+year = TimeseriesData()
+year.add_child_series_by_name("demand", "p_mw",
+                              [0.4 + 0.01 * i for i in range(96)])
+
+day = year.head(24)          # steps 0 to 23
+window = year.slice(24, 48)  # steps 24 to 47
+print(day.length, window.length)
+```
+
+```{testoutput}
+24 24
+```
+
+### Length checks against the run horizon
+
+The step count of a run must fit the registered series:
+
+- `steps` larger than the series length raises a `ValueError` up front.
+- `steps` smaller than the series length runs the requested window: an
+  explicit `steps=` is a deliberate truncation, so the run only logs a note
+  (at INFO level) that the rows past `steps` are ignored. Use `head(steps)` or
+  `slice(start, stop)` when you want the truncation visible in the data
+  itself. A length mismatch created by merging unequal series still warns at
+  merge time.
+- A `Stepper` raises a `ValueError` when `step(ts_index=...)` points past the
+  end of the registered series.
+
+### Series that bind to nothing
+
+A registered id or name that matches no component of the network would
+otherwise be silently ignored for the whole run. `run_timeseries`,
+`run_multi_period`, `run_mpc` and the `Stepper` constructor therefore report
+every unmatched key once, up front, as a `UserWarning`. To turn the check into
+an error, call `td.validate_bound(net)` yourself before the run; it raises a
+`KeyError` listing the unmatched keys.
 
 ---
 
@@ -134,8 +208,20 @@ p  = result.get_result_for(mm.PowerLoad, "p_mw")
 :::{tab-item} By component id
 ```python
 # pandas Series: one value per successful step
-s = result.get_result_for_id(load.id, "p_mw")
+s = result.get_result_for_id(load.id, "p_mw", mm.PowerLoad)
+
+# external grids collide with the node they sit on: child 0 vs node 0
+p_ext = result.get_result_for_id(ext_id, "p_mw", mm.ExtPowerGrid)
+m_ext = result.get_result_for_id(gas_ext_id, "mass_flow_kgs", mm.ExtHydrGrid)
 ```
+
+Component ids are handed out per category, so the same number addresses one
+node, one child and one branch. Pass the model class (or `result[id, mm.PowerLoad]`
+for the full row) whenever an id is shared; a lookup that matches several result
+tables raises a `ValueError` naming them and the `model_type=` form that picks
+one. Passing the class is always safe, so these examples do it everywhere the
+queried id belongs to a child. The class is the model class, not the container:
+`mm.ExtPowerGrid` for an electrical slack and `mm.ExtHydrGrid` for a gas one.
 :::
 
 :::{tab-item} Datetime index
@@ -150,6 +236,68 @@ print(vm.index)  # DatetimeIndex
 :::
 
 ::::
+
+:::{admonition} Timeseries frames are keyed by id along the columns
+:class: warning
+
+A timeseries frame spans the run, so its rows are the steps and its *columns*
+are the component ids: `result.get_result_for(mm.Bus, "vm_pu")[node_id]` is a
+column lookup and gives that bus over time.
+
+A snapshot frame is laid out the other way round. The per step
+`SolverResult` frames (`result.step_results[i].result.get(mm.Bus)`, and the
+frames from `run_energy_flow`) have one row per component under a positional
+`RangeIndex`, with the id in an `id` column, so `df.loc[node_id]` there selects
+a row number and quietly returns a different bus. Ask for the id-indexed view
+when you want to join a snapshot frame against an id map:
+
+```python
+step_df = result.step_results[0].result.get(mm.Bus, index="id")
+vm_at_node = step_df.loc[node_id, "vm_pu"]
+```
+
+The same holds for `result.raw`, which is a list of `SolverResult` objects.
+See {doc}`../concepts/data_model` for the two index modes and for branch ids,
+which are `(from_node_id, to_node_id, key)` tuples.
+:::
+
+---
+
+## Step timing: dt_h and datetime_index
+
+`dt_h` sets a constant inter-step interval in hours (default 1.0), seen by
+inter-step dynamics as `step_state.dt_h`. A `datetime_index` overrides it
+with per-step intervals derived from consecutive timestamps, and labels the
+result rows.
+
+The convention: a label marks the end of the interval it integrates over.
+Step `k` integrates over `index[k] - index[k - 1]` hours; the first step has
+no predecessor and borrows the first difference, so `dt_0 = index[1] -
+index[0]`. The same rule is used by `run_multi_period`, and the `Stepper`
+follows it in reverse when you build an index from its per-step `dt_h`
+values (see {doc}`stepper`).
+
+An irregular grid works directly. Here the first four steps are quarter
+hours and the last two are full hours:
+
+```{testcode}
+import pandas as pd
+
+idx = pd.DatetimeIndex(
+    ["2024-01-01 00:15", "2024-01-01 00:30", "2024-01-01 00:45",
+     "2024-01-01 01:00", "2024-01-01 02:00", "2024-01-01 03:00"]
+)
+result_irregular = run_timeseries(net, td, datetime_index=idx)
+print(len(result_irregular.raw))
+```
+
+```{testoutput}
+6
+```
+
+Step 0 and step 1 both integrate over 0.25 h (step 0 borrows the first
+difference), steps 4 and 5 over 1.0 h each. The index must be strictly
+increasing and cover at least `steps` entries.
 
 ---
 
@@ -246,8 +394,18 @@ or write inter-step values directly.
 ## Inter-step coupling: ramp constraints
 
 Implement `inter_temporal_equations` to add constraints that link consecutive
-steps.  The previous step's solved values are provided via
-`temporal_state.get(component_id, attribute)`:
+steps. On a model class (any `ChildModel`, `BranchModel`, or node model) the
+hook has the signature
+
+```python
+def inter_temporal_equations(self, temporal_state, component_id, **kwargs):
+    ...
+```
+
+and returns a list of equations. Network-wide extensions implement a
+different, aspect-level variant instead; see
+{doc}`../concepts/network_aspects`. The previous step's solved values are
+provided via `temporal_state.get(component_id, attribute)`:
 
 ```{testcode}
 from monee.model.core import Var, model
@@ -279,6 +437,32 @@ class RampGenerator(ChildModel):
 solves.  The same model works in both contexts without any changes; see
 {doc}`multi_period` for the multi-period workflow.
 ```
+
+### Prescribed replay semantics
+
+A registered series overrides the attribute it targets at the start of every
+step. That attribute is then no longer decided by the solve, so any constraint
+that depends only on it is decided before the solve too. Two rules follow.
+
+Constraints over solver variables are enforced. A `Var` attribute (`p_mw` on
+`RampGenerator` above) is still solved for, so its `equations` and its
+`inter_temporal_equations` bind the step exactly as they would without a
+series, and a profile the model cannot follow makes the step fail.
+
+Constraints over prescribed values alone are overridden, not enforced. When
+every term of an `inter_temporal_equations` entry is a prescribed value or a
+value replayed from the previous step, the constraint is a constant. The solve
+cannot repair it, so the backends drop it and the step still succeeds with the
+prescribed trajectory. monee reports the dropped constraint instead of leaving
+it silent: the step's `SolverResult.warnings` gains a `temporal` entry naming
+the component, the equation index and the step, and the run emits one Python
+warning per affected step. Passing `strict=True` to `run_timeseries` turns the
+finding into a `ValidationError`, the same way a strict solve reports its own
+validation findings (see {doc}`diagnose_infeasibility`).
+
+If you want a profile to be checked against a ramp limit rather than to
+override it, declare the attribute as a `Var` and drive the profile through an
+objective or a bound instead of a prescribed series.
 
 ---
 
@@ -347,6 +531,9 @@ size and per-step data overrides. See {doc}`stepper` for the full workflow.
 | `td.length` | Inferred step count |
 | `td_a + td_b` | Merge two `TimeseriesData` objects (left wins on conflicts) |
 | `td.extend(other)` | In-place merge |
+| `td.slice(start, stop)` | New object with every series cut to `[start, stop)` |
+| `td.head(n)` | New object with the first `n` steps of every series |
+| `td.validate_bound(net)` | Raise `KeyError` for series that match no component |
 
 ### run_timeseries
 
@@ -361,19 +548,27 @@ size and per-step data overrides. See {doc}`stepper` for the full workflow.
 | `on_step_error='raise'` | `'raise'` (default) or `'skip'` to record failures and continue |
 | `progress_callback=None` | Callable `(step, steps)` invoked after each step |
 | `datetime_index=None` | `pandas.DatetimeIndex` labelling result rows and setting `step_state.dt_h` per step |
+| `dt_h=None` | Constant inter-step interval in hours (default 1.0); ignored when `datetime_index` is given |
+| `simulation=True` | Square steady-state simulation, the default without an `optimization_problem`, so a single step matches `run_energy_flow`. Pass `False` for the optimize-the-feasibility-problem path |
+| `**solver_kwargs` | Forwarded to `solver.solve(...)`, e.g. `formulation="smooth_nlp"` |
 
 ### Results
 
 | Symbol | Description |
 |---|---|
 | `result.get_result_for(ModelClass, attr)` | DataFrame: rows are steps, columns are component ids |
-| `result.get_result_for_id(id, attr)` | Series: one value per successful step |
-| `result[component_id]` | DataFrame of all attributes for one component |
+| `result.get_result_for_id(id, attr, model_type=None)` | Series: one value per successful step; `model_type` picks the category when the id is shared |
+| `result[component_id]` | DataFrame of all attributes for one component; use `result[id, ModelClass]` when the id is shared |
 | `result.failed_steps` | List of step indices that failed to converge |
 | `result.step_results` | List of `StepResult` objects (incl. failed/skipped steps) |
 | `result.raw` | List of successful `SolverResult` objects (backward compat) |
 
 Failed and skipped steps are excluded from all DataFrame queries.
+
+A per step `SolverResult` frame is indexed the other way round from the tables
+above: rows are components under a positional index, with the id in an `id`
+column. Use `solver_result.get(ModelClass, index="id")` to index those rows by
+component id.
 
 ### StepResult
 
@@ -384,6 +579,7 @@ Failed and skipped steps are excluded from all DataFrame queries.
 | `failed` | `True` if the solve raised an exception |
 | `skipped` | `True` if the solve was not attempted (e.g. `solve_flag=False`) |
 | `error` | The exception that caused the failure, or `None` |
+| `dt_h` / `effective_dt_h` / `t_h` | Step interval, integrated interval and clock time; set by the {class}`~monee.simulation.Stepper`, `None` here |
 
 ### StepHook
 

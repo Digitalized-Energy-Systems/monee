@@ -27,8 +27,8 @@ class LumpedThermalCapacitance(NetworkAspect):
     """LTC extension. Nodes with a GridFormingMixin child are excluded.
 
     First-step anchor precedence (anchored mode, the default - required for NLP
-    solvers like GEKKO/IPOPT): ``t_init_overrides[node_id]`` → ``default_t_init``
-    → the junction's own ``t_pu`` Var initialiser. Pass ``default_t_init`` near
+    solvers like GEKKO/IPOPT): ``t_init_overrides[node_id]`` -> ``default_t_init``
+    -> the junction's own ``t_pu`` Var initialiser. Pass ``default_t_init`` near
     the operating mean to skip the warm-up transient.
 
     ``first_step_steady_state=True`` drops the first-step inertia term (emits
@@ -223,7 +223,7 @@ class LumpedThermalCapacitance(NetworkAspect):
                     terms.append(mneg * bvars["t_to_pu"] - mpos * t_n)
 
         for child in network.childs_by_ids(node.child_ids):
-            # Inactive/ignored childs never get solver vars injected — their
+            # Inactive/ignored childs never get solver vars injected - their
             # raw model Vars would poison the expression (Var/float TypeError).
             if not child.active or getattr(child, "ignored", False):
                 continue
@@ -241,7 +241,7 @@ class LumpedThermalCapacitance(NetworkAspect):
                 else:
                     terms.append(-m_ext * t_n)
             if "q_mw_heat" in cvars:
-                # Load convention: positive = heat OUT → negate.
+                # Load convention: positive = heat OUT -> negate.
                 q = cvars["q_mw_heat"] * cvars.get("regulation", 1)
                 terms.append(-q / scale_mw_per_kgs)
 

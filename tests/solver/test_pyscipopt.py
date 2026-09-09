@@ -72,7 +72,7 @@ def test_build_result_unbounded():
 
 
 def test_build_result_limit_with_incumbent_is_usable():
-    """A limit (time/node/gap) that still produced a feasible incumbent maps to
+    """A limit (time/node/...) that still produced a feasible incumbent maps to
     aborted+maxTimeLimit, which ``_classify_solve_result`` treats as success."""
     # GIVEN / WHEN
     result = PyscipoptSolver._build_result("timelimit", has_solution=True)
@@ -80,6 +80,27 @@ def test_build_result_limit_with_incumbent_is_usable():
     # THEN
     assert result.solver.status == SolverStatus.aborted
     assert result.solver.termination_condition == TerminationCondition.maxTimeLimit
+
+
+def test_build_result_gaplimit_is_optimal_within_tolerance():
+    """A gap-limit stop means the incumbent meets the configured relative gap:
+    reported ok/optimal (converged within tolerance), distinguishable from a
+    real timeout's aborted/maxTimeLimit."""
+    # GIVEN / WHEN
+    result = PyscipoptSolver._build_result("gaplimit", has_solution=True)
+
+    # THEN
+    assert result.solver.status == SolverStatus.ok
+    assert result.solver.termination_condition == TerminationCondition.optimal
+
+
+def test_build_result_gaplimit_without_incumbent_is_infeasible():
+    # GIVEN / WHEN
+    result = PyscipoptSolver._build_result("gaplimit", has_solution=False)
+
+    # THEN
+    assert result.solver.status == SolverStatus.warning
+    assert result.solver.termination_condition == TerminationCondition.infeasible
 
 
 def test_build_result_limit_without_incumbent_is_infeasible():
@@ -171,6 +192,55 @@ def test_bridge_solves_misocp_load_shedding(monkeypatch):
     vm = result.dataframes["Bus"]["vm_pu"]
     assert vm.notna().all()
     assert (vm > 0).all()
+
+
+def test_scip_preset_ships_a_default_relative_gap():
+    """The SCIP preset carries limits/gap so exploratory MILPs stop at the
+    incumbent instead of grinding on the optimality proof."""
+    assert pyo_mod.PER_SOLVER_OPTIONS["scip"]["limits/gap"] == 1e-4
+
+
+def test_solver_result_importable_from_monee_solver():
+    from monee.solver import SolverResult
+    from monee.solver.core import SolverResult as core_solver_result
+
+    assert SolverResult is core_solver_result
+
+
+@requires_pyscipopt
+def test_solver_options_reach_scip_through_public_chain(monkeypatch):
+    """Per-call solver_options passed to run_energy_flow_optimization reach the
+    SCIP bridge, merged over instance options and the module preset; a None
+    value removes a preset key."""
+    # GIVEN
+    monkeypatch.setattr(pyo_mod, "_classic_scip_available", lambda: False)
+    seen: dict = {}
+    orig_solve = PyscipoptSolver.solve
+
+    def spy(self, model, **kwargs):
+        seen.update(self.options)
+        return orig_solve(self, model, **kwargs)
+
+    monkeypatch.setattr(PyscipoptSolver, "solve", spy)
+    net = create_urban_district_net()
+    net.apply_formulation(EL_MISOCP_FORMULATION)
+    solver = PyomoSolver("scip", solver_options={"limits/gap": 0.02})
+
+    # WHEN
+    import monee
+
+    result = monee.run_energy_flow_optimization(
+        net,
+        _shedding_problem(),
+        solver=solver,
+        solver_options={"limits/gap": 0.01, "limits/time": None},
+    )
+
+    # THEN: per-call wins over instance, instance over preset; None removes.
+    assert result.success
+    assert seen["limits/gap"] == 0.01
+    assert "limits/time" not in seen
+    assert seen["misc/allowstrongdualreds"] is False
 
 
 @requires_pyscipopt

@@ -37,6 +37,33 @@ def ensure_velocity_report(model, grid):
         model.velocity_mps = velocity_post_process(model, grid.fluid_density_kg_per_m3)
 
 
+_PSQ_SIMULATION_BOUNDS = (0, 3)
+# Bounds the junction models declare themselves (node.Junction, multi.py control
+# nodes) plus the ones a previous attach left behind: anything else on the
+# incoming Var is a user-set limit and wins over the grid's.
+_PSQ_DEFAULT_MIN = (0, 0.5, None)
+_PSQ_DEFAULT_MAX = (2, 3, None)
+
+
+def _psq_bounds(model, simulation, grid):
+    """Pressure-squared Var bounds: the grid's operational limits in
+    optimization mode, the wide simulation range otherwise (a square solve must
+    never be cut off by an operational limit)."""
+    lo, hi = _PSQ_SIMULATION_BOUNDS
+    if simulation or grid is None:
+        return lo, hi
+    existing = getattr(model, "pressure_squared_pu", None)
+    if isinstance(existing, Var) and existing.min not in _PSQ_DEFAULT_MIN:
+        lo = existing.min
+    else:
+        lo = getattr(grid, "pressure_squared_pu_min", lo)
+    if isinstance(existing, Var) and existing.max not in _PSQ_DEFAULT_MAX:
+        hi = existing.max
+    else:
+        hi = getattr(grid, "pressure_squared_pu_max", hi)
+    return lo, hi
+
+
 class GasNodeFormulation(NodeFormulation):
     r"""Gas junction working in pressure-squared space.
 
@@ -53,7 +80,8 @@ class GasNodeFormulation(NodeFormulation):
     def ensure_var(self, model, simulation=False, grid=None):
         model.pressure_pa = PostProcess(lambda v: float("nan"))
         model.pressure_pu = Intermediate(1)
-        model.pressure_squared_pu = Var(1, min=0, max=3, name="pressure_sq_pu")
+        lo, hi = _psq_bounds(model, simulation, grid)
+        model.pressure_squared_pu = Var(1, min=lo, max=hi, name="pressure_sq_pu")
 
         if simulation:
             t = getattr(model, "t_pu", None)

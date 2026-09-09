@@ -259,6 +259,12 @@ class HeatExchanger(BranchModel):
     positive one a generator. Prefer the sign-normalizing
     :class:`HeatExchangerLoad` / :class:`HeatExchangerGenerator` aliases or
     ``monee.express.create_heat_exchanger`` (which takes positive = consumption).
+
+    ``regulation`` scales the duty and the through-flow together, so the design
+    temperature spread is kept at part load and ``regulation = 0`` is
+    hydraulically equivalent to an absent branch. The exception is a
+    ``regulation`` Var under the McCormick MILP formulation, which keeps the
+    design flow so that the H-space balance stays linear.
     """
 
     def __init__(
@@ -503,7 +509,7 @@ class GasPipe(BranchModel):
 @model
 class GasCompressor(BranchModel):
     """
-    Ideal compressor - fixed pressure ratio, unidirectional (suction → discharge).
+    Ideal compressor - fixed pressure ratio, unidirectional (suction -> discharge).
     Forward flow lives in ``mass_flow_neg_kgs`` to match GasPipe's Weymouth convention.
     """
 

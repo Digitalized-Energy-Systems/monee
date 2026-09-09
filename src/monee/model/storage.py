@@ -57,6 +57,7 @@ class _SocStorage(ChildModel):
         self.efficiency_charge = efficiency_charge
         self.efficiency_discharge = efficiency_discharge
         setattr(self, self._DISPATCH, float(dispatch_initial))
+        self._controllable = False
         self._init_extra_state()
         setattr(self, self._SOC, Var(soc_initial, min=0, max=soc_max, name=self._SOC))
         self._lossy = (
@@ -73,6 +74,7 @@ class _SocStorage(ChildModel):
 
     def make_controllable(self):
         """Promote the dispatch (and loss-split vars if lossy) into solver Vars."""
+        self._controllable = True
         current = getattr(self, self._DISPATCH)
         val = float(current) if isinstance(current, (int, float)) else 0.0
         setattr(
@@ -99,9 +101,11 @@ class _SocStorage(ChildModel):
             )
 
     def equations(self, grid, node, **kwargs):
-        # Lossy split only applies in optimisation mode (dispatch is a Var).
+        # Lossy split only applies once make_controllable() promoted the
+        # dispatch; by equation-assembly time the backend has already replaced
+        # the Var with its own symbol, so the type is not a usable test.
         dispatch = getattr(self, self._DISPATCH)
-        if self._lossy and isinstance(dispatch, Var):
+        if self._lossy and self._controllable:
             return [
                 dispatch == getattr(self, self._CHARGE) - getattr(self, self._DISCHARGE)
             ]
@@ -210,7 +214,7 @@ class GasStorage(_SocStorage):
 
     SoC update: ``m_stored_kg(t) = m_stored_kg(t-1) + dt_s * mass_flow_kgs(t)``.
     Lossy: ``mass_flow_kgs = flow_charge_kgs - flow_discharge_kgs`` with
-    ``η_c * charge - discharge / η_d`` in the SoC update.
+    ``eta_c * charge - discharge / eta_d`` in the SoC update.
     """
 
     _DISPATCH = "mass_flow_kgs"

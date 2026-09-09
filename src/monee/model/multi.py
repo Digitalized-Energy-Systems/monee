@@ -1,5 +1,5 @@
 from .branch import HeatExchanger
-from .child import NoVarChildModel, PowerGenerator, PowerLoad, Sink
+from .child import NoVarChildModel, PowerGenerator, Sink
 from .core import (
     MultiGridBranchModel,
     MultiGridCompoundModel,
@@ -24,7 +24,7 @@ _NOMINAL_DT_K = 25.0
 
 
 def _heat_flow_init_kgs(heat_mw) -> float:
-    """Expected heat-side mass flow for a heat setpoint at the nominal Î”T.
+    """Expected heat-side mass flow for a heat setpoint at the nominal dT.
 
     APOPT stalls on small-setpoint compounds when every flow Var starts at the
     generic 1.0 placeholder, orders of magnitude from the optimum."""
@@ -39,6 +39,15 @@ def _num_or(value, default: float) -> float:
 
 def _carries(grids, grid_cls) -> bool:
     return type(grids) is grid_cls or (type(grids) is dict and grid_cls in grids)
+
+
+#: Private Vars of :class:`GenericTransferBranch` per carrier; the ones no
+#: carrier of a given branch claims are dropped before variable injection.
+_CARRIER_PRIVATE_VARS = {
+    WaterGrid: ("_mass_flow_pos", "_mass_flow_neg", "_t_from_pu", "_t_to_pu"),
+    GasGrid: ("_mass_flow_pos", "_mass_flow_neg"),
+    PowerGrid: ("_p_mw", "_q_mvar"),
+}
 
 
 @model
@@ -59,6 +68,23 @@ class GenericTransferBranch(MultiGridBranchModel):
 
     def is_cp(self):
         return False
+
+    def drop_unused_vars(self, grids):
+        """Remove the private Vars of the carriers this branch does not have.
+
+        Called by ``monee.solver.core.inject_vars`` in simulation mode, just
+        before injection (and so before :meth:`init` aliases the surviving
+        ones): every attribute that is still a Var at that point becomes a
+        backend variable, and the ones no carrier aliases appear in no equation,
+        adding 2 to 4 phantom degrees of freedom per coupler branch."""
+        used = set()
+        for grid_cls, names in _CARRIER_PRIVATE_VARS.items():
+            if _carries(grids, grid_cls):
+                used.update(names)
+        for names in _CARRIER_PRIVATE_VARS.values():
+            for name in names:
+                if name not in used:
+                    self.__dict__.pop(name, None)
 
     def init(self, grids):
         if _carries(grids, WaterGrid):
@@ -135,6 +161,12 @@ class _RegulatedCompound:
     def _zero_controls(self):
         self._control_node.regulation = 0
 
+    def sync(self):
+        if not self._active:
+            return
+        if is_plain_number(self._control_node.regulation):
+            self._control_node.regulation = self.regulation
+
 
 class _GasRegulatedCompound(_RegulatedCompound):
     """:class:`_RegulatedCompound` that additionally zeroes/restores the
@@ -145,6 +177,11 @@ class _GasRegulatedCompound(_RegulatedCompound):
             self._control_node.gas_mass_flow_kgs = self.mass_flow_setpoint_kgs
         super()._restore_controls()
 
+    def sync(self):
+        if self._active and is_plain_number(self._control_node.gas_mass_flow_kgs):
+            self._control_node.gas_mass_flow_kgs = self.mass_flow_setpoint_kgs
+        super().sync()
+
     def _zero_controls(self):
         self._control_node.gas_mass_flow_kgs = 0
         super()._zero_controls()
@@ -152,6 +189,14 @@ class _GasRegulatedCompound(_RegulatedCompound):
 
 @model
 class GasToHeatControlNode(MultiGridNodeModel, Junction):
+    """Control node of the :class:`GasToHeat` compound.
+
+    Result columns: ``gas_mass_flow_kgs`` is the input setpoint (echoed
+    unchanged; the served draw is setpoint times ``regulation``), while
+    ``heat_mw`` is the realized heat output in generator sign (negative =
+    injection into the heat grid). See docs/source/concepts/multi_energy.rst
+    for the per-coupler sign table."""
+
     def __init__(
         self, gas_mass_flow_kgs, efficiency_heat, hhv, regulation=1, **kwargs
     ) -> None:
@@ -231,6 +276,17 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
 
 @model
 class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
+    """Control node of the :class:`PowerToHeat` compound.
+
+    Result columns: ``load_p_mw`` is the electric nameplate setpoint
+    (``heat_energy_mw / efficiency``, an input echoed unchanged), ``el_mw``
+    is the realized electric draw ``load_p_mw * regulation`` (positive =
+    consumption), and ``heat_mw`` is the realized heat output in generator
+    sign (negative = injection into the heat grid), so a positive
+    ``heat_energy_mw`` setpoint appears as ``heat_mw = -regulation *
+    heat_energy_mw``. See docs/source/concepts/multi_energy.rst for the
+    per-coupler sign table."""
+
     def __init__(
         self, load_p_mw, load_q_mvar, efficiency, regulation=1, **kwargs
     ) -> None:
@@ -240,7 +296,9 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         self.efficiency = efficiency
         self.regulation = regulation
 
-        self.el_mw = load_p_mw
+        self.load_p_mw = load_p_mw
+        el_mw_init = load_p_mw if isinstance(load_p_mw, (int, float)) else 1e-3
+        self.el_mw = Var(el_mw_init, name="p2h_el_mw")
         # Initialize at the setpoint solution (see GasToHeatControlNode).
         heat_mw_init = (
             -efficiency * load_p_mw if isinstance(load_p_mw, (int, float)) else -1e-3
@@ -269,9 +327,14 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
             power_eqs = self.calc_signed_power_values(
                 [],
                 power_to_branches,
-                [PowerLoad(self.el_mw, self.load_q_mvar, regulation=self.regulation)],
+                [
+                    PowerGenerator(
+                        self.load_p_mw, self.load_q_mvar, regulation=self.regulation
+                    )
+                ],
             )
             return [
+                self.el_mw == 0,
                 self.heat_mw == 0,
                 sum(power_eqs[0]) == 0,
                 sum(power_eqs[1]) == 0,
@@ -279,10 +342,18 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
                 self.t_k == self.t_pu * grid[1].t_ref_k,
             ]
 
+        # GenericTransferBranch aliases both ends to one signed value, so the bus
+        # sees whatever this balance assigns the branch: the electric draw has to
+        # enter here with the generator sign (as in CHPControlNode) for the bus to
+        # import it.
         power_eqs = self.calc_signed_power_values(
             [],
             power_to_branches,
-            [PowerLoad(self.el_mw, self.load_q_mvar, regulation=self.regulation)],
+            [
+                PowerGenerator(
+                    self.load_p_mw, self.load_q_mvar, regulation=self.regulation
+                )
+            ],
         )
         heat_eqs = self.calc_signed_mass_flow(heat_from_branches, heat_to_branches, [])
         heat_energy_eqs = self.calc_signed_heat_flow(
@@ -291,7 +362,8 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         return [
             junction_mass_flow_balance(heat_eqs),
             junction_mass_flow_balance(heat_energy_eqs),
-            sub_he.q_mw == -self.efficiency * self.el_mw * self.regulation,
+            self.el_mw == self.load_p_mw * self.regulation,
+            sub_he.q_mw == -self.efficiency * self.load_p_mw * self.regulation,
             self.heat_mw == sub_he.q_mw,
             sum(power_eqs[0]) == 0,
             sum(power_eqs[1]) == 0,
@@ -305,7 +377,13 @@ class SubHE(HeatExchanger):
 
 @model
 class CHPControlNode(MultiGridNodeModel, Junction, Bus):
-    """Control node for a CHP unit; couples power, heat, and gas domains."""
+    """Control node for a CHP unit; couples power, heat, and gas domains.
+
+    Result columns: ``gas_mass_flow_kgs`` is the input setpoint (echoed
+    unchanged; the served draw is setpoint times ``regulation``), while
+    ``el_mw`` and ``heat_mw`` are realized outputs in generator sign
+    (negative = injection). See docs/source/concepts/multi_energy.rst for
+    the per-coupler sign table."""
 
     def __init__(
         self,
@@ -842,7 +920,7 @@ class CHPHG(_GasRegulatedCompound, MultiGridCompoundModel):
 
 @model
 class GasToHeatHG(MultiGridBranchModel):
-    """Two-endpoint Gasâ†’Heat coupling (gas withdrawal at from-end, q_mw_heat
+    """Two-endpoint Gas->Heat coupling (gas withdrawal at from-end, q_mw_heat
     injection at to-end). Junction heat balance picks up ``q_mw_heat`` directly."""
 
     def __init__(self, heat_energy_mw, efficiency, regulation=1) -> None:
@@ -879,7 +957,7 @@ class GasToHeatHG(MultiGridBranchModel):
 
 @model
 class PowerToHeatHG(MultiGridBranchModel):
-    """Two-endpoint Powerâ†’Heat coupling (p_from_mw at from-end, q_mw_heat at
+    """Two-endpoint Power->Heat coupling (p_from_mw at from-end, q_mw_heat at
     to-end). Junction heat balance picks up ``q_mw_heat`` directly."""
 
     def __init__(

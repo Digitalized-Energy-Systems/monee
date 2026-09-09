@@ -6,10 +6,11 @@
 
 from __future__ import annotations
 
+import logging
 from abc import ABC
 
 from monee.model.child import ExtHydrGrid, ExtPowerGrid, GridFormingMixin
-from monee.model.core import Intermediate, Var
+from monee.model.core import Intermediate, Var, is_plain_number
 from monee.model.extension.core import NetworkAspect
 from monee.model.network import Network
 from monee.model.phys.islanding import (
@@ -50,6 +51,35 @@ def _real_carrier_components(network: Network, grid_type) -> list[set]:
     return list(components.values())
 
 
+def capacity_limited_island_nodes(network: Network, mode: IslandingMode) -> set:
+    """Ids of the carrier nodes whose real-topology component is anchored only
+    by capacity-limited grid-forming units.
+
+    These are the components where energisation is a real decision: no ext grid
+    can absorb an arbitrary imbalance, so the anchor's capacity decides how much
+    of the component can stay live. A component reached by an ext grid, or one
+    whose formers carry no finite bound, is left out - nothing there needs the
+    branch-energisation gating (see docs/source/concepts/islanding.md)."""
+    limited: set = set()
+    for component in _real_carrier_components(network, mode.carrier_grid_type):
+        ext_led = False
+        has_limited_former = False
+        for nid in component:
+            node = network.node_by_id(nid)
+            for child in network.childs_by_ids(node.child_ids):
+                if not child.active:
+                    continue
+                if isinstance(child.model, ExtPowerGrid | ExtHydrGrid):
+                    ext_led = True
+                elif isinstance(
+                    child.model, GridFormingMixin
+                ) and mode.former_is_capacity_limited(child.model):
+                    has_limited_former = True
+        if has_limited_former and not ext_led:
+            limited |= component
+    return limited
+
+
 def node_leads_island(network: Network, node, mode: IslandingMode) -> bool:
     """True if *node* carries the reference child of its island: an ext grid, or
     a grid-forming child stamped as leading by :meth:`IslandingMode.prepare`."""
@@ -58,9 +88,28 @@ def node_leads_island(network: Network, node, mode: IslandingMode) -> bool:
             continue
         if isinstance(child.model, ExtPowerGrid | ExtHydrGrid):
             return True
-        if getattr(child.model, "_gf_leading", True):
+        if child.model._gf_leading:
             return True
     return False
+
+
+def warn_if_leadership_unstamped(child_model) -> None:
+    """Warn once when a grid-forming child reaches equation assembly without any
+    islanding config having stamped its leadership: it cannot form an island,
+    so it pins no reference and holds its nominal setpoint."""
+    if "_gf_leading" in vars(child_model) or getattr(
+        child_model, "_gf_unstamped_warned", False
+    ):
+        return
+    child_model._gf_unstamped_warned = True
+    logging.warning(
+        "%s is solved without a registered islanding configuration: it cannot "
+        "lead an island, pins no voltage/pressure reference and holds its "
+        "nominal setpoint. Call enable_islanding() for its carrier (the config "
+        "is not restored by the native JSON IO, so re-register it after "
+        "loading a network from disk).",
+        type(child_model).__name__,
+    )
 
 
 def _collect_islanding_state(network: Network, mode: IslandingMode, ignored_nodes: set):
@@ -105,7 +154,7 @@ def _collect_islanding_state(network: Network, mode: IslandingMode, ignored_node
 
 def _branch_inflow_outflow(node, c_fwd_vars, c_rev_vars, network):
     """Return (inflow, outflow) connectivity-flow terms for *node*.
-    c_fwd flows from→to; c_rev flows to→from."""
+    c_fwd flows from->to; c_rev flows to->from."""
     inflow, outflow = [], []
     for branch_id, c_fwd in c_fwd_vars.items():
         branch = network.branch_by_id(branch_id)
@@ -175,6 +224,16 @@ class IslandingMode(NetworkAspect, ABC):
 
     def is_grid_forming(self, child) -> bool:
         return isinstance(child.model, GridFormingMixin) and child.active
+
+    def former_is_capacity_limited(self, child_model) -> bool:
+        """True when a grid-forming child's injection carries a finite bound, so
+        it cannot balance an arbitrary amount of load. Read before solver
+        variable injection, while the injections are still monee Vars."""
+        for attr in self.gated_child_attrs:
+            val = getattr(child_model, attr, None)
+            if isinstance(val, Var) and (val.min is not None or val.max is not None):
+                return True
+        return False
 
     def prepare_common(self, network: Network) -> None:
         """Shared prepare steps: leadership stamping always; injection gating
@@ -246,7 +305,7 @@ class IslandingMode(NetworkAspect, ABC):
         r""":math:`regulation \le e` for every controllable child, under an
         optimization problem only.
 
-        ``prepare_common`` deliberately skips ``gate_fixed_injections`` there —
+        ``prepare_common`` deliberately skips ``gate_fixed_injections`` there -
         the child's injection is already an optimisation Var, so pinning it to
         ``setpoint * e`` would fight the shedding formulation. But that left
         ``e`` tied to no load AND priced by no objective (the energisation
@@ -257,7 +316,7 @@ class IslandingMode(NetworkAspect, ABC):
         simbench MES, 30 nodes de-energised inside the component that still had
         its ext grid, 27 loads (2 of them tier 1) held at regulation 1.0.
 
-        Both are in [0, 1] with ``e`` binary, so this is linear — no bilinear
+        Both are in [0, 1] with ``e`` binary, so this is linear - no bilinear
         term, no McCormick. It makes de-energising cost exactly the served
         credit, which is the correct economics and removes the degeneracy.
         """
@@ -272,7 +331,10 @@ class IslandingMode(NetworkAspect, ABC):
                 if self.is_grid_forming(child):
                     continue
                 reg = getattr(child.model, "regulation", None)
-                if not isinstance(reg, Var):
+                # Extension equations run AFTER backend variable injection, so a
+                # promoted regulation is the backend's own variable object here,
+                # never monee's Var. Only a still-plain number is not gateable.
+                if reg is None or is_plain_number(reg):
                     continue
                 eqs.append(reg <= e)
         return eqs
@@ -348,10 +410,16 @@ class IslandingMode(NetworkAspect, ABC):
             setattr(
                 branch.model, f"c_{prefix}_rev", Var(0, min=0, name=f"c_{prefix}_rev")
             )
+        self._prepare_branches(network)
 
     def _prepare_node(self, node) -> None:
         """Hook for extra per-node prepare steps (electricity claims bus-angle
         management here); no-op by default."""
+
+    def _prepare_branches(self, network: Network) -> None:
+        """Hook for network-wide branch preparation, run after the per-branch
+        connectivity Vars exist (electricity promotes ``on_off`` to a decision
+        Var here); no-op by default."""
 
     def equations(self, network: Network, ignored_nodes: set) -> list:
         gf_nodes, regular_nodes, e_vars, c_fwd_vars, c_rev_vars, c_src_vars = (

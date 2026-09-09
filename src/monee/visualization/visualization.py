@@ -34,7 +34,7 @@ from monee.visualization.result_visualization import (
 
 _SKIP_ATTRS: frozenset[str] = frozenset({"active", "independent", "ignored"})
 
-# Pyomo-like solver objects – hide these from hover text (they carry no useful
+# Pyomo-like solver objects - hide these from hover text (they carry no useful
 # design-time information for the user).
 _SOLVER_TYPES = (Var, Intermediate, IntermediateEq, PostProcess)
 
@@ -120,7 +120,7 @@ def _branch_label(int_branch) -> str:
     if d is not None:
         try:
             mm_val = float(d) * 1000
-            parts.append(f"⌀{mm_val:.0f}mm")
+            parts.append(f"D{mm_val:.0f}mm")
         except (TypeError, ValueError):
             pass
 
@@ -137,7 +137,7 @@ def _branch_label(int_branch) -> str:
         r = getattr(model, "r_ohm_per_m", None)
         if r is not None and length is not None:
             try:
-                parts.append(f"{float(r) * float(length):.3g} Ω")
+                parts.append(f"{float(r) * float(length):.3g} Ohm")
             except (TypeError, ValueError):
                 pass
 
@@ -189,7 +189,7 @@ def _branch_hover(int_branch, from_id, to_id) -> str:
 
     lines = [
         header,
-        f"<span style='color:{_DIM_COLOR}'>{from_id} → {to_id}</span>",
+        f"<span style='color:{_DIM_COLOR}'>{from_id} -> {to_id}</span>",
         _sep(),
     ]
     for k, v in _model_params(model).items():
@@ -221,7 +221,7 @@ def plot_network(  # NOSONAR
     Args:
         network: The :class:`~monee.model.Network` to visualise.
         title: Figure title.  Defaults to ``"Network"``.
-        show_children: Show attached child components (loads, generators, …)
+        show_children: Show attached child components (loads, generators, ...)
             in the parent node's hover tooltip.
         use_monee_positions: Use stored ``node.position`` coordinates instead
             of the automatic graph layout.
@@ -236,7 +236,7 @@ def plot_network(  # NOSONAR
     pos = _compute_layout(graph, use_monee_positions)
     marker_px = _adaptive_marker_px(graph, pos)
 
-    # Node data – collected per grid type
+    # Node data - collected per grid type
     grid_data: dict[str, dict] = {
         g: {"x": [], "y": [], "hover": [], "labels": []}
         for g in ("power", "water", "gas", "cp")
@@ -404,7 +404,7 @@ def plot_network(  # NOSONAR
         )
     )
 
-    # Assemble – render order: edges → midpoints → glow → markers → legend
+    # Assemble - render order: edges -> midpoints -> glow -> markers -> legend
     all_traces = (
         edge_traces + [midpoint_trace] + glow_traces + marker_traces + legend_entries
     )

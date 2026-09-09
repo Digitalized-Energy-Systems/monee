@@ -4,6 +4,16 @@ import monee.model as md
 from monee.model.grid import KGPS_KWHPERKG_TO_MW
 from monee.problem.utils import cp_input_rated_mw
 
+# Matches _SERVED_ABS_TOL in monee.solver.core: 1e-4 MW (0.1 kW) covers the
+# O(1e-6..1e-10) constraint noise IPOPT leaves on served loads.
+CURTAILMENT_NOISE_FLOOR_MW = 1e-4
+
+
+def _clip_noise(curtailed: float) -> float:
+    if -CURTAILMENT_NOISE_FLOOR_MW < curtailed < 0:
+        return 0.0
+    return curtailed
+
 
 class PerformanceMetric(ABC):
     @abstractmethod
@@ -54,8 +64,26 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
         ]
 
     def calc(  # NOSONAR
-        self, network, inv=False, include_ext_grid=True, include_coupling_points=False
+        self, network, inv=False, include_ext_grid=False, include_coupling_points=False
     ):
+        """Curtailed demand of the solved *network* as ``(power, heat, gas)`` in MW.
+
+        Ignored or inactive loads count at their full rating, regulated loads at
+        ``upper - value * regulation``, and a heat exchanger at the gap between
+        its setpoint and the duty it reached. Components in
+        ``(-CURTAILMENT_NOISE_FLOOR_MW, 0)`` are clipped to ``0.0`` (solver
+        noise); a negative value at or below the floor passes through, since it
+        signals a real accounting problem rather than tolerance noise.
+
+        ``include_ext_grid=True`` additionally counts every external grid that
+        *feeds in* as curtailed demand: the islanding view, where import is the
+        power an islanded network would have had to shed. On a grid-connected
+        network that adds the whole substation import to the power component,
+        so leave it False unless you are ranking islanding scenarios.
+        ``include_coupling_points=True`` adds coupling-point curtailment on the
+        input carrier, mirroring the option of the load-shedding problem.
+        ``inv=True`` returns the three components negated.
+        """
         relevant_components = self.get_relevant_components(network)
         power_load_curtailed = 0
         heat_load_curtailed = 0
@@ -134,6 +162,10 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                     power_load_curtailed += loss
                 elif carrier == "gas":
                     gas_load_curtailed += loss
+
+        power_load_curtailed = _clip_noise(power_load_curtailed)
+        heat_load_curtailed = _clip_noise(heat_load_curtailed)
+        gas_load_curtailed = _clip_noise(gas_load_curtailed)
 
         if inv:
             return (-power_load_curtailed, -heat_load_curtailed, -gas_load_curtailed)

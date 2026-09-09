@@ -198,3 +198,44 @@ def test_lgas_vs_methane_molar_mass_is_live():
     assert p_lgas > p_methane
     assert math.isclose(p_lgas, 999863.356, abs_tol=1.0)
     assert math.isclose(p_methane, 999849.361, abs_tol=1.0)
+
+
+def _analytic_weymouth_drop_pa(net, mass_flow_kgs, pipe):
+    """Closed-form Weymouth drop over a single pipe fed at the reference
+    pressure, from the grid's own gas properties."""
+    import monee.model.phys.core.hydraulics as hydraulics
+
+    grid = net.branches[0].grid
+    r_specific = grid.universal_gas_constant / grid.molar_mass
+    c_squared = (
+        math.pi**2
+        * pipe.diameter_m**5
+        / (16 * pipe.length_m * r_specific * grid.t_k * grid.compressibility)
+    )
+    friction = hydraulics.friction_at_high_re(pipe.diameter_m, pipe.roughness_m)
+    p0 = grid.pressure_ref_pa
+    return p0 - math.sqrt(p0**2 - friction * mass_flow_kgs**2 / c_squared)
+
+
+def test_default_solve_matches_analytic_weymouth():
+    # GIVEN a single pipe carrying 0.12 kg/s, solved with the shipped defaults
+    # (CasADi/IPOPT, default formulation).
+    from monee import run_energy_flow
+
+    pn = mm.Network()
+    gas = mm.create_gas_grid("gas", type="lgas")
+    pipe = mm.GasPipe(diameter_m=0.15, length_m=400, temperature_ext_k=300)
+    g0 = pn.node(mm.Junction(), grid=gas, child_ids=[pn.child(mm.ExtHydrGrid())])
+    g1 = pn.node(
+        mm.Junction(), grid=gas, child_ids=[pn.child(mm.Sink(mass_flow_kgs=0.12))]
+    )
+    pn.branch(pipe, g0, g1)
+
+    result = run_energy_flow(pn)
+
+    # THEN the pressure drop is the Weymouth drop, not a relaxation optimum:
+    # the epigraph-relaxed formulation on a continuous solver used to report
+    # roughly three times this value.
+    drop = 1e6 - result.dataframes["Junction"]["pressure_pa"][1]
+    expected = _analytic_weymouth_drop_pa(pn, 0.12, pipe)
+    assert math.isclose(drop, expected, rel_tol=0.01)

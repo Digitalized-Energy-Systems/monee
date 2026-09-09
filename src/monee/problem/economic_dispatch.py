@@ -25,13 +25,20 @@ def create_economic_dispatch_problem(  # NOSONAR
     check_lp=True,
     debug=False,
 ):
-    """Economic dispatch OPF minimising ``Σ cost · p_gen``. Set each generator's
-    ``cost`` (currency/MW) directly or per-period via TimeseriesData.add_objective_data.
+    """Economic dispatch OPF minimising ``Sigma cost * p_gen``. Set each generator's
+    ``cost`` (currency/MW) at creation (``mx.create_power_generator(..., cost=...)``),
+    directly on the model, or per-period via TimeseriesData.add_objective_data.
 
     ``ext_grid_cost_default=None`` (the default) leaves the external grid out of
     the objective entirely: slack import is free, so the optimum degenerates to
     importing everything and dispatching no local generation. Pass a cost to
-    price the exchange.
+    price the exchange: ``ExtPowerGrid.p_mw`` follows the load convention
+    (import negative, export positive), so import is charged at ``cost`` and
+    export is credited at the same price.
+
+    ``ext_grid_bounds`` bounds ``ExtPowerGrid.p_mw`` in the same load
+    convention: import into the network is negative and export positive, so
+    capping the import at X MW is ``ext_grid_bounds=(-X, 0)``.
 
     ``bounds_lp`` only supports a zero lower bound: line loading is capped at
     ``bounds_lp[1]``, and a non-zero minimum loading is rejected."""
@@ -66,14 +73,20 @@ def create_economic_dispatch_problem(  # NOSONAR
 
     objectives = Objectives()
 
-    objectives.select(lambda m: isinstance(m, PowerGenerator)).calculate(
+    objectives.select(
+        lambda m: isinstance(m, PowerGenerator),
+        looked_for="PowerGenerator components (dispatch cost objective)",
+    ).calculate(
         lambda models: sum(_cost_or(m, gen_cost_default) * (-m.p_mw) for m in models)
     )
 
     if include_ext_grid:
-        objectives.select(lambda m: isinstance(m, ExtPowerGrid)).calculate(
+        objectives.select(
+            lambda m: isinstance(m, ExtPowerGrid),
+            looked_for="ExtPowerGrid components (exchange cost objective)",
+        ).calculate(
             lambda models: sum(
-                _cost_or(m, ext_grid_cost_default) * m.p_mw for m in models
+                _cost_or(m, ext_grid_cost_default) * (-m.p_mw) for m in models
             )
         )
 
@@ -82,7 +95,7 @@ def create_economic_dispatch_problem(  # NOSONAR
     constraints = Constraints()
 
     if check_lp:
-        constraints.select_types(GenericPowerBranch).equation(
+        constraints.select_types(GenericPowerBranch, optional=True).equation(
             lambda model: line_loading_limit(model, "from", bounds_lp[1])
         ).equation(lambda model: line_loading_limit(model, "to", bounds_lp[1]))
 
@@ -108,7 +121,8 @@ def create_economic_dispatch_problem(  # NOSONAR
                 isinstance(comp.model, PowerGenerator)
                 and comp.active
                 and (not comp.ignored)
-            )
+            ),
+            looked_for="PowerGenerator components (ramp_limit)",
         ).temporal_equation(_gen_ramp)
 
     problem.constraints = constraints

@@ -14,13 +14,29 @@ def _require_positive(cls_name, magnitude, param_name, value):
         )
 
 
+def _is_series_pinned(value) -> bool:
+    """True if a timeseries already fixed this attribute for the current step."""
+    if isinstance(value, Var):
+        return value.min is not None and value.min == value.max
+    # The build-once CasADi timeseries driver installs its parameter symbol
+    # before the child overwrites run.
+    return type(value).__name__ == "CasSym"
+
+
 class GridFormingMixin:
     """
     Marker: this child can serve as the slack/reference for an islanded sub-network.
 
     Carriers must implement ``overwrite()`` to pin their reference variable.
     Islanding keeps components containing a ``GridFormingMixin`` child in the solve.
+
+    ``_gf_leading`` says whether this child is the reference of its island. Only
+    :meth:`IslandingMode.stamp_gf_leadership` ever sets it, so the class default
+    is False: without a registered islanding config nothing leads, and a
+    reference pin applied anyway would over-constrain an ext-led component.
     """
+
+    _gf_leading = False
 
 
 class NoVarChildModel(ChildModel):
@@ -32,13 +48,18 @@ class NoVarChildModel(ChildModel):
 
 @model
 class PowerGenerator(NoVarChildModel):
-    """Fixed-setpoint active/reactive generator. Constructor takes positive magnitudes; sign is internal."""
+    """Fixed-setpoint active/reactive generator. Constructor takes positive magnitudes; sign is internal.
 
-    def __init__(self, p_mw, q_mvar, **kwargs) -> None:
+    ``cost`` (currency/MW) is read by the economic dispatch objective; leave it
+    unset to fall back to the problem's ``gen_cost_default``."""
+
+    def __init__(self, p_mw, q_mvar, cost=None, **kwargs) -> None:
         _require_positive("PowerGenerator", "generation magnitude", "p_mw", p_mw)
         super().__init__(**kwargs)
         self.p_mw = -p_mw
         self.q_mvar = -q_mvar
+        if cost is not None:
+            self.cost = cost
 
 
 @model
@@ -83,8 +104,14 @@ class VoltageControlledGenerator(ChildModel):
 class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
     """
     External slack-bus connection. Pins vm_pu and va_degree, leaves p_mw/q_mvar
-    as free Vars absorbing the island's imbalance. Load convention: positive
-    p_mw = import.
+    as free Vars absorbing the island's imbalance.
+
+    Load convention, like every other child: positive ``p_mw`` is consumption
+    seen from the network, i.e. an *export* into the external grid, while an
+    *import* into the network shows up as a negative ``p_mw``. Consequently
+    ``max_import_mw`` bounds ``p_mw`` from below at ``-max_import_mw`` and
+    ``max_export_mw`` bounds it from above; a constraint capping the import at
+    ``X`` MW reads ``p_mw >= -X``.
 
     ``regulate_vm`` controls the voltage magnitude. When ``True`` (the default,
     power-flow semantics) the bus |V| is held at ``vm_pu``. When ``False`` it is
@@ -102,6 +129,7 @@ class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
         max_import_mw=None,
         max_export_mw=None,
         regulate_vm=True,
+        cost=None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -115,6 +143,8 @@ class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
         self.vm_pu = vm_pu
         self.va_degree = va_degree
         self.regulate_vm = regulate_vm
+        if cost is not None:
+            self.cost = cost
 
     def overwrite(self, node_model, grid):
         """Pin the bus angle (always) and, when this slack regulates voltage, the
@@ -219,13 +249,38 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
     """
     External hydraulic slack source. Pins pressure (and optionally temperature),
     leaves mass_flow_kgs as a free Var. Load convention: negative mass_flow_kgs = injection.
+
+    The class serves both carriers: a gas external grid created via
+    ``monee.express.create_gas_ext_grid`` is also an ``ExtHydrGrid`` (the name
+    refers to the shared hydraulic slack role, not to water specifically).
+
+    On a water loop this slack acts as an unlimited backup heat plant: it
+    supplies or absorbs whatever mass flow at its pinned feed temperature the
+    heat balance needs, so a fuel-starved or deactivated heat source elsewhere
+    is silently compensated instead of causing curtailment. Cap it with
+    ``max_import_kgs`` / ``max_export_kgs`` here, or with ``bounds_ext_heat``
+    on the load-shedding problem, when backup supply should be limited. The
+    concepts/multi_energy docs page explains the semantics.
+
+    ``mass_flow_kgs`` only seeds the free Var. ``max_import_kgs`` (positive
+    magnitude) bounds it from below at ``-max_import_kgs``, ``max_export_kgs``
+    from above; both default to None (unbounded). The caps are re-read at every
+    solve, so mutating them on an existing model takes effect on the next
+    solve. ``pin_temperature=True`` (the default) pins the junction
+    temperature to ``t_k``; ``t_k=None`` (the default) resolves at solve time
+    to the grid's own operating temperature (``grid.t_k``, e.g. 300 K for the
+    default gas grid; a water grid falls back to ``t_ref_k``, 356 K). Before
+    2026-09 a gas slack defaulted to the 356 K heat-network value; pass
+    ``t_k=356`` to restore that. ``free_pressure_bounds`` replaces the
+    pressure pin: given a ``(lo, hi)`` tuple in pu, the node pressure stays a
+    Var bounded to that band instead of being fixed at ``pressure_pu``.
     """
 
     def __init__(
         self,
         mass_flow_kgs=-1,
         pressure_pu=1,
-        t_k=356,
+        t_k=None,
         max_import_kgs=None,
         max_export_kgs=None,
         pin_temperature=True,
@@ -233,18 +288,36 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
+        self.max_import_kgs = max_import_kgs
+        self.max_export_kgs = max_export_kgs
+        lo = None if max_import_kgs is None else -abs(max_import_kgs)
         self.mass_flow_kgs = Var(
             mass_flow_kgs,
-            min=None if max_import_kgs is None else -max_import_kgs,
+            min=lo,
             max=max_export_kgs,
             name="ext_grid_mass_flow",
         )
+        self._applied_import_bound = lo
+        self._applied_export_bound = max_export_kgs
         self.pressure_pu = pressure_pu
         self.t_k = t_k
         self.pin_temperature = pin_temperature
         self.free_pressure_bounds = free_pressure_bounds
 
+    def _refresh_exchange_bounds(self):
+        if not isinstance(self.mass_flow_kgs, Var):
+            return
+        lo = None if self.max_import_kgs is None else -abs(self.max_import_kgs)
+        hi = self.max_export_kgs
+        if lo != self._applied_import_bound:
+            self.mass_flow_kgs.min = lo
+            self._applied_import_bound = lo
+        if hi != self._applied_export_bound:
+            self.mass_flow_kgs.max = hi
+            self._applied_export_bound = hi
+
     def overwrite(self, node_model, grid):
+        self._refresh_exchange_bounds()
 
         if self.free_pressure_bounds is not None:
             lo, hi = self.free_pressure_bounds
@@ -259,6 +332,16 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
             node_model.pressure_pu = Const(self.pressure_pu)
             node_model.pressure_squared_pu = Const(self.pressure_pu**2)
         if self.pin_temperature:
+            if _is_series_pinned(getattr(node_model, "t_pu", None)):
+                name = getattr(self, "name", None) or type(self).__name__
+                raise ValueError(
+                    f"The node temperature is fixed by a timeseries, but "
+                    f"{name} pins it too (pin_temperature=True); the pin would "
+                    "discard the series. Register the series on the ext grid's "
+                    "'t_k' instead, or pass pin_temperature=False."
+                )
+            if self.t_k is None:
+                self.t_k = getattr(grid, "t_k", None) or grid.t_ref_k
             node_model.t_pu = Const(self.t_k / grid.t_ref_k)
             node_model.t_k = Const(self.t_k)
 
@@ -274,6 +357,12 @@ class ConsumeHydrGrid(NoVarChildModel):
     too would over-determine such islands). ``pressure_pu`` / ``t_k`` are
     stored as descriptive setpoints only. ``overwrite`` bounds the free mass
     flow to the grid's ``max_mass_flow_kgs`` where no explicit bound is set.
+
+    Result tables mix both kinds of column for this class: ``mass_flow_kgs``
+    is solved, while ``pressure_pu`` and ``t_k`` are inputs echoed back
+    unchanged (``t_k=293`` is the constructor default, not a computed
+    temperature). Read the solved state of the node this child sits on from
+    the junction table instead. See the how-to/express_structures docs page.
     """
 
     def __init__(self, mass_flow_kgs=0.1, pressure_pu=1, t_k=293, **kwargs) -> None:

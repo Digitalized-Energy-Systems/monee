@@ -171,3 +171,59 @@ def test_run_energy_flow_threads_formulation_kwarg():
         net, solver="scip", formulation="el_misocp", simulation=False
     )
     assert result.success
+
+
+def _small_heat_net():
+    net = mm.Network()
+    j0 = mx.create_water_junction(net)
+    j1 = mx.create_water_junction(net)
+    mx.create_water_pipe(net, j0, j1, diameter_m=0.15, length_m=100)
+    mx.create_water_ext_grid(net, j0, t_k=360.0)
+    mx.create_water_sink(net, j1, mass_flow_kgs=1.0)
+    return net
+
+
+def test_relaxed_integrality_warns_and_names_the_components():
+    # GIVEN the default heat formulation, which needs its direction binary.
+    net = _small_heat_net()
+
+    # WHEN attaching it for a back-end that cannot enforce integrality
+    with pytest.warns(UserWarning, match="WaterPipe"):
+        attach_formulations(net, supports_integrality=False)
+
+
+def test_binary_free_formulation_does_not_warn(recwarn):
+    # GIVEN / WHEN
+    attach_formulations(_small_heat_net(), "heat_nlp", supports_integrality=False)
+
+    # THEN
+    assert not [w for w in recwarn if "relaxes integer variables" in str(w.message)]
+
+
+def test_integrality_check_is_silent_for_a_capable_backend(recwarn):
+    # GIVEN / WHEN
+    attach_formulations(_small_heat_net())
+
+    # THEN
+    assert not [w for w in recwarn if "relaxes integer variables" in str(w.message)]
+
+
+def test_pinned_direction_components_do_not_warn(recwarn):
+    # GIVEN unidirectional pipes and a heat exchanger: every direction binary
+    # is pinned by the formulation's own equalities, nothing is relaxed.
+    net = mm.Network()
+    j0 = mx.create_water_junction(net)
+    j1 = mx.create_water_junction(net)
+    j2 = mx.create_water_junction(net)
+    mx.create_water_pipe(
+        net, j0, j1, diameter_m=0.15, length_m=100, unidirectional=True
+    )
+    mx.create_heat_exchanger(net, j1, j2, q_mw=0.01)
+    mx.create_water_ext_grid(net, j0, t_k=360.0)
+    mx.create_water_sink(net, j2, mass_flow_kgs=1.0)
+
+    # WHEN
+    attach_formulations(net, supports_integrality=False)
+
+    # THEN
+    assert not [w for w in recwarn if "relaxes integer variables" in str(w.message)]

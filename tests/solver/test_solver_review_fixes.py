@@ -388,8 +388,13 @@ def test_casadi_solver_options_are_honoured():
     from monee.solver.casadi import CasADiSolveError, CasADiSolver
 
     net, _ = _el_net(EL_NLP_FORMULATION)
+    # Batch solver-ergonomics item S1: the cap failure is reported on the
+    # result; strict=True keeps the raise.
+    assert (
+        CasADiSolver(solver_options={"ipopt.max_iter": 1}).solve(net).success is False
+    )
     with pytest.raises(CasADiSolveError):
-        CasADiSolver(solver_options={"ipopt.max_iter": 1}).solve(net)
+        CasADiSolver(solver_options={"ipopt.max_iter": 1}).solve(net, strict=True)
 
     net2, _ = _el_net(EL_NLP_FORMULATION)
     assert CasADiSolver().solve(net2).success

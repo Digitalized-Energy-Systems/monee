@@ -16,7 +16,7 @@ Sector constants and the sector-complete bundles
 :data:`NONCONVEX_MIQCQP_FORMULATION`) live in :mod:`.bundles`.
 
 The pre-restructure names (``AC_NETWORK_FORMULATION``,
-``NL_WEYMOUTH_NETWORK_FORMULATION``, ``make_mccormick_dhs_formulation``, …)
+``NL_WEYMOUTH_NETWORK_FORMULATION``, ``make_mccormick_dhs_formulation``, ...)
 remain importable from here but emit a :class:`DeprecationWarning`.
 """
 

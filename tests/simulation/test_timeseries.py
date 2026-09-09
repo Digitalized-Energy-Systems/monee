@@ -1,10 +1,13 @@
 """Tests for monee.simulation.timeseries."""
 
+import logging
 import math
+import warnings
 
 import pandas
 import pytest
 
+import monee.express as mx
 import monee.model as mm
 from monee import run_energy_flow
 from monee.model import Network, Var
@@ -191,6 +194,88 @@ def test_add_combines_two_timeseries_data():
     assert 2 in combined._child_id_to_series
 
 
+def test_extend_unequal_lengths_truncates_to_shorter_and_warns():
+    # GIVEN
+    td_long = TimeseriesData()
+    td_long.add_child_series(1, "p_mw", [1.0, 2.0, 3.0, 4.0])
+    td_short = TimeseriesData()
+    td_short.add_child_series(2, "p_mw", [5.0, 6.0])
+
+    # WHEN
+    with pytest.warns(UserWarning, match=r"unequal lengths \(4 and 2\).*head\(2\)"):
+        td_long.extend(td_short)
+
+    # THEN  (both sides truncated, incoming object untouched)
+    assert td_long.length == 2
+    assert td_long._child_id_to_series[1]["p_mw"] == [1.0, 2.0]
+    assert td_long._child_id_to_series[2]["p_mw"] == [5.0, 6.0]
+    assert td_short.length == 2
+
+
+def test_add_unequal_lengths_truncates_and_keeps_operands():
+    # GIVEN
+    td_short = TimeseriesData()
+    td_short.add_child_series(1, "p_mw", [1.0])
+    td_long = TimeseriesData()
+    td_long.add_child_series(2, "p_mw", [2.0, 3.0, 4.0])
+
+    # WHEN
+    with pytest.warns(UserWarning, match="unequal lengths"):
+        combined = td_short + td_long
+
+    # THEN
+    assert combined.length == 1
+    assert combined._child_id_to_series[2]["p_mw"] == [2.0]
+    assert td_long.length == 3
+
+
+@mm.model
+class _FreeVarLoad(mm.ChildModel):
+    def __init__(self, p_mw=1.0, **kwargs):
+        super().__init__(**kwargs)
+        self.p_mw = Var(p_mw, min=0.5, max=3.0, name="p_mw")
+        self.q_mvar = 0.0
+
+    def equations(self, grid, node_model, **kwargs):
+        return []
+
+
+def _free_var_net():
+    net = _el_net()
+    net.child_to(_FreeVarLoad(), node_id=net.nodes[1].id, name="process")
+    return net
+
+
+def test_series_on_var_attribute_warns_up_front_in_simulation_run():
+    # GIVEN
+    net = _free_var_net()
+    td = TimeseriesData()
+    td.add_child_series_by_name("process", "p_mw", [0.75, 0.8])
+
+    # WHEN  (one warning at run start, naming attribute and settable inputs)
+    with pytest.warns(UserWarning, match=r"'p_mw' is a solved variable.*q_mvar"):
+        result = run(net, td, steps=2)
+
+    # THEN  (values are still bound-pinned to the series)
+    assert not result.failed_steps
+    p = result.get_result_for(_FreeVarLoad, "p_mw")
+    assert math.isclose(p.iloc[0, 0], 0.75, rel_tol=1e-9)
+    assert math.isclose(p.iloc[1, 0], 0.8, rel_tol=1e-9)
+
+
+def test_series_on_var_attribute_silent_without_solve():
+    # GIVEN
+    net = _free_var_net()
+    td = TimeseriesData()
+    td.add_child_series_by_name("process", "p_mw", [0.75, 0.8])
+
+    # WHEN / THEN  (dry runs do not warn)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        result = run(net, td, steps=2, solve_flag=False)
+    assert all(sr.skipped for sr in result.step_results)
+
+
 def test_from_dataframe_child_by_id():
     # GIVEN
     df = pandas.DataFrame({"p_mw": [1.0, 2.0, 3.0], "q_mvar": [0.1, 0.2, 0.3]})
@@ -329,7 +414,7 @@ def test_get_result_for_id_returns_series():
     result = run(net, td)
 
     # WHEN
-    s = result.get_result_for_id(load.id, "p_mw")
+    s = result.get_result_for_id(load.id, "p_mw", PowerLoad)
 
     # THEN
     assert not result.failed_steps
@@ -348,7 +433,7 @@ def test_get_result_for_id_values_match_input():
     result = run(net, td)
 
     # WHEN
-    s = result.get_result_for_id(load.id, "p_mw")
+    s = result.get_result_for_id(load.id, "p_mw", PowerLoad)
 
     # THEN
     assert not result.failed_steps
@@ -372,7 +457,7 @@ def test_child_series_by_name_applied():
     assert not result.failed_steps
 
     load_id = net.childs[1].id
-    s = result.get_result_for_id(load_id, "p_mw")
+    s = result.get_result_for_id(load_id, "p_mw", PowerLoad)
     assert math.isclose(s.iloc[0], 0.3, rel_tol=1e-3)
     assert math.isclose(s.iloc[1], 0.6, rel_tol=1e-3)
 
@@ -408,7 +493,7 @@ def test_datetime_index_on_get_result_for_id():
     # THEN
     assert not result.failed_steps
 
-    s = result.get_result_for_id(load.id, "p_mw")
+    s = result.get_result_for_id(load.id, "p_mw", PowerLoad)
     assert list(s.index) == list(idx)
 
 
@@ -750,7 +835,7 @@ def test_result_index_uses_step_numbers_after_skipped_failure(monkeypatch):
     # THEN: rows labelled by step number, not renumbered positionally
     df = result.get_result_for(PowerLoad, "p_mw")
     assert list(df.index) == [0, 2]
-    s = result.get_result_for_id(load_id, "p_mw")
+    s = result.get_result_for_id(load_id, "p_mw", PowerLoad)
     assert list(s.index) == [0, 2]
 
 
@@ -810,3 +895,399 @@ def test_id_data_properties():
     assert td.child_id_data["c1"]["p_mw"] == [1, 2]
     assert td.branch_id_data["b1"]["on_off"] == [1, 0]
     assert td.compound_id_data["cmp1"]["x"] == [3, 4]
+
+
+def _chp_net():
+    """Multi-energy net with a single CHP compound; returns (net, compound_id)."""
+    net = mx.create_multi_energy_network()
+    gas_junction = mx.create_gas_junction(net)
+    mx.create_gas_ext_grid(net, gas_junction)
+    bus = mx.create_bus(net)
+    mx.create_ext_power_grid(net, bus)
+    mx.create_power_load(net, bus, p_mw=1.0, q_mvar=0.0)
+    supply = mx.create_water_junction(net)
+    return_junction = mx.create_water_junction(net)
+    mx.create_ext_hydr_grid(net, supply)
+    mx.create_sink(net, return_junction, mass_flow_kgs=15)
+    chp_id = mx.create_chp(
+        net,
+        bus,
+        supply,
+        return_junction,
+        gas_junction,
+        diameter_m=0.15,
+        efficiency_power=0.35,
+        efficiency_heat=0.45,
+        mass_flow_setpoint_kgs=0.1,
+    )
+    return net, chp_id
+
+
+def _chp_control_node(net):
+    return next(
+        node.model for node in net.nodes if isinstance(node.model, mm.CHPControlNode)
+    )
+
+
+def test_compound_series_reaches_control_node():
+    # GIVEN
+    net, chp_id = _chp_net()
+    td = TimeseriesData()
+    td.add_compound_series(chp_id, "regulation", [1.0, 0.4, 0.0])
+
+    # WHEN
+    td.apply_to_network(net, 1)
+
+    # THEN
+    assert _chp_control_node(net).regulation == 0.4
+
+
+def test_compound_series_does_not_reactivate_deactivated_compound():
+    # GIVEN
+    net, chp_id = _chp_net()
+    net.compound_by_id(chp_id).model.set_active(False)
+    td = TimeseriesData()
+    td.add_compound_series(chp_id, "regulation", [1.0, 0.4, 0.0])
+
+    # WHEN
+    td.apply_to_network(net, 0)
+
+    # THEN
+    assert _chp_control_node(net).regulation == 0
+
+
+def test_compound_series_does_not_clobber_controllable_var():
+    # GIVEN
+    net, chp_id = _chp_net()
+    control_node = _chp_control_node(net)
+    control_node.regulation = Var(1, min=0, max=1, name="regulation")
+    td = TimeseriesData()
+    td.add_compound_series(chp_id, "regulation", [1.0, 0.4, 0.0])
+
+    # WHEN
+    td.apply_to_network(net, 1)
+
+    # THEN
+    assert control_node.regulation is not None
+    assert isinstance(control_node.regulation, Var)
+
+
+def test_unmatched_series_key_is_reported_before_the_first_step():
+    # GIVEN
+    net = _el_net(load_name="load")
+    td = TimeseriesData()
+    td.add_child_series_by_name("typo_load", "p_mw", [1.0, 0.5])
+    td.add_child_series(9999, "p_mw", [1.0, 0.5])
+    td.add_node_series(4242, "vm_pu", [1.0, 1.0])
+
+    # WHEN
+    with pytest.warns(UserWarning) as caught:
+        run(net, td, solve_flag=False)
+
+    # THEN
+    message = " ".join(str(w.message) for w in caught)
+    assert "typo_load" in message
+    assert "9999" in message
+    assert "4242" in message
+
+    # ... and validate_bound itself is strict
+    with pytest.raises(KeyError, match="typo_load"):
+        td.validate_bound(net)
+
+
+def test_matched_series_keys_pass_validation():
+    # GIVEN
+    net = _el_net(load_name="load")
+    td = TimeseriesData()
+    td.add_child_series_by_name("load", "p_mw", [1.0, 0.5])
+    td.add_node_series(0, "vm_pu", [1.0, 1.0])
+
+    # WHEN
+    unbound = td.validate_bound(net)
+
+    # THEN
+    assert unbound == []
+
+
+def test_series_longer_than_explicit_steps_does_not_warn_but_logs(caplog):
+    # GIVEN  (an explicit steps= is a deliberate truncation)
+    net = _el_net(load_name="load")
+    td = TimeseriesData()
+    td.add_child_series_by_name("load", "p_mw", [0.5, 0.6, 0.7, 0.8, 0.9])
+
+    # WHEN / THEN
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with caplog.at_level(logging.INFO, logger="monee.simulation.timeseries"):
+            result = run(net, td, steps=2, solve_flag=False)
+    assert len(result.step_results) == 2
+    notes = [r.getMessage() for r in caplog.records if "length 5" in r.getMessage()]
+    assert notes and "head(2)" in notes[0]
+
+
+def test_series_matching_the_run_length_does_not_warn():
+    # GIVEN
+    net = _el_net(load_name="load")
+    td = TimeseriesData()
+    td.add_child_series_by_name("load", "p_mw", [0.5, 0.6])
+
+    # WHEN / THEN
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        run(net, td, steps=2, solve_flag=False)
+
+
+def test_slice_cuts_every_series_positionally():
+    # GIVEN
+    td = TimeseriesData()
+    td.add_child_series(1, "p_mw", pandas.Series([0.1, 0.2, 0.3, 0.4]))
+    td.add_child_series_by_name("load", "q_mvar", [1.0, 2.0, 3.0, 4.0])
+
+    # WHEN
+    window = td.slice(1, 3)
+
+    # THEN
+    assert window.length == 2
+    assert window._child_id_to_series[1]["p_mw"] == [0.2, 0.3]
+    assert window._child_name_to_series["load"]["q_mvar"] == [2.0, 3.0]
+    # the source object is untouched
+    assert td.length == 4
+
+
+def test_head_truncates_to_the_horizon():
+    # GIVEN
+    td = TimeseriesData()
+    td.add_child_series(1, "p_mw", [0.1, 0.2, 0.3])
+
+    # WHEN
+    head = td.head(2)
+
+    # THEN
+    assert head.length == 2
+    assert head._child_id_to_series[1]["p_mw"] == [0.1, 0.2]
+
+
+def test_slice_out_of_range_raises():
+    # GIVEN
+    td = TimeseriesData()
+    td.add_child_series(1, "p_mw", [0.1, 0.2, 0.3])
+
+    # WHEN / THEN
+    with pytest.raises(ValueError, match="out of range"):
+        td.slice(0, 4)
+    with pytest.raises(ValueError, match="out of range"):
+        td.slice(2, 2)
+    with pytest.raises(ValueError, match="no series registered"):
+        TimeseriesData().slice(0, 1)
+
+
+def _shadowing_net():
+    """Bus ids and child ids both start at 0, so every child id shadows a bus."""
+    net = _el_net(load_p_mw=0.6)
+    return net, net.childs[1]
+
+
+def test_get_result_for_id_refuses_an_id_shared_by_two_categories():
+    # GIVEN
+    net, load = _shadowing_net()
+    result = run(net, steps=1)
+
+    # WHEN / THEN
+    with pytest.raises(ValueError, match="Bus, PowerLoad"):
+        result.get_result_for_id(load.id, "p_mw")
+    with pytest.raises(ValueError, match="Bus, PowerLoad"):
+        result[load.id]
+    with pytest.raises(ValueError, match="Bus, PowerLoad"):
+        result.step_results[0].result[load.id]
+
+
+def test_model_type_selects_the_component_behind_a_shared_id():
+    # GIVEN
+    net, load = _shadowing_net()
+    result = run(net, steps=1)
+
+    # WHEN
+    series = result.get_result_for_id(load.id, "p_mw", model_type=PowerLoad)
+    row = result[load.id, PowerLoad]
+    solver_row = result.step_results[0].result[load.id, PowerLoad]
+
+    # THEN
+    assert math.isclose(series.iloc[0], 0.6)
+    assert "base_kv" not in row.columns
+    assert math.isclose(row["p_mw"].iloc[0], 0.6)
+    assert math.isclose(solver_row["p_mw"], 0.6)
+
+
+def test_ambiguous_id_error_shows_the_model_type_form_and_the_docs_page():
+    # GIVEN
+    net, load = _shadowing_net()
+    result = run(net, steps=1)
+
+    # WHEN
+    with pytest.raises(ValueError) as attr_exc:
+        result.get_result_for_id(load.id, "p_mw")
+    with pytest.raises(ValueError) as row_exc:
+        result[load.id]
+
+    # THEN
+    attr_msg = str(attr_exc.value)
+    assert "model_type=" in attr_msg
+    assert f"get_result_for_id({load.id!r}, 'p_mw', mm.PowerLoad)" in attr_msg
+    assert "concepts/data_model" in attr_msg
+    assert f"result[{load.id!r}, mm.PowerLoad]" in str(row_exc.value)
+
+
+def test_ambiguous_gas_ext_grid_id_names_ext_hydr_grid():
+    # GIVEN a gas ext grid child sharing id 0 with the first junction
+    net = _gas_net()
+    result = run(net, steps=1)
+
+    # WHEN
+    with pytest.raises(ValueError) as exc:
+        result.get_result_for_id(0, "mass_flow_kgs")
+
+    # THEN
+    msg = str(exc.value)
+    assert "Junction" in msg
+    assert "mm.ExtHydrGrid" in msg
+    series = result.get_result_for_id(0, "mass_flow_kgs", mm.ExtHydrGrid)
+    assert math.isclose(abs(series.iloc[0]), 0.1, abs_tol=1e-6)
+
+
+def test_single_step_matches_run_energy_flow():
+    # GIVEN
+    from monee.network import create_urban_district_net
+
+    # WHEN
+    flow = run_energy_flow(create_urban_district_net(), formulation="smooth_nlp")
+    ts = run(create_urban_district_net(), steps=1, formulation="smooth_nlp")
+
+    # THEN
+    expected = flow.dataframes["Junction"].set_index("id")["t_k"]
+    actual = ts.get_result_for(Junction, "t_k").iloc[0]
+    for node_id, t_k in expected.items():
+        assert math.isclose(float(actual[node_id]), float(t_k), rel_tol=1e-4), (
+            f"Junction {node_id}: energy flow {t_k}, timeseries {actual[node_id]}"
+        )
+
+
+def test_named_compound_series_reaches_control_node():
+    # GIVEN a CHP created with name=; register the series by that name
+    net = mx.create_multi_energy_network()
+    gas_junction = mx.create_gas_junction(net)
+    mx.create_gas_ext_grid(net, gas_junction)
+    bus = mx.create_bus(net)
+    mx.create_ext_power_grid(net, bus)
+    supply = mx.create_water_junction(net)
+    return_junction = mx.create_water_junction(net)
+    mx.create_ext_hydr_grid(net, supply)
+    mx.create_sink(net, return_junction, mass_flow_kgs=15)
+    mx.create_chp(
+        net,
+        bus,
+        supply,
+        return_junction,
+        gas_junction,
+        diameter_m=0.15,
+        efficiency_power=0.35,
+        efficiency_heat=0.45,
+        mass_flow_setpoint_kgs=0.1,
+        name="chp_a",
+    )
+    td = TimeseriesData()
+    td.add_compound_series_by_name("chp_a", "regulation", [1.0, 0.4, 0.0])
+
+    # WHEN
+    assert td.unbound_keys(net) == []
+    td.apply_to_network(net, 1)
+
+    # THEN
+    assert _chp_control_node(net).regulation == 0.4
+
+
+@mm.model
+class _RampLimitedProcess(mm.ChildModel):
+    """Custom child whose own inter-temporal constraint limits |dp| to 1 MW."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.p_mw = 0.5
+        self.q_mvar = 0.0
+
+    def equations(self, grid, node_model, **kwargs):
+        return []
+
+    def inter_temporal_equations(self, temporal_state, component_id, **kwargs):
+        previous = temporal_state.get(component_id, "p_mw")
+        if previous is None:
+            return []
+        return [self.p_mw - previous <= 1.0, previous - self.p_mw <= 1.0]
+
+
+def _ramp_net():
+    net = mx.create_multi_energy_network()
+    b0 = mx.create_bus(net)
+    b1 = mx.create_bus(net)
+    mx.create_line(net, b0, b1, length_m=800, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+    mx.create_ext_power_grid(net, b0)
+    process_id = mx.create_el_child(net, _RampLimitedProcess(), node_id=b1, name="proc")
+    return net, process_id
+
+
+def test_prescribed_replay_violating_inter_temporal_equation_warns():
+    # GIVEN a profile whose jumps exceed the model's own 1 MW/h ramp limit
+    net, process_id = _ramp_net()
+    td = TimeseriesData()
+    td.add_child_series_by_name("proc", "p_mw", [0.5, 3.0, 0.5, 3.0])
+
+    # WHEN
+    with pytest.warns(UserWarning, match="violate inter-temporal constraints"):
+        result = run(net, td, dt_h=1.0)
+
+    # THEN the violation is reported per step, naming model and step
+    entries = [
+        warning
+        for step_result in result.step_results
+        for warning in step_result.result.warnings
+        if warning.category == "temporal"
+    ]
+    assert [entry.component for entry in entries] == [str(process_id)] * 3
+    assert all("_RampLimitedProcess" in entry.message for entry in entries)
+    assert {"step 1", "step 2", "step 3"} == {
+        entry.message.split(":")[0] for entry in entries
+    }
+
+
+def test_prescribed_replay_respecting_inter_temporal_equation_is_clean():
+    # GIVEN a profile within the ramp limit
+    net, _ = _ramp_net()
+    td = TimeseriesData()
+    td.add_child_series_by_name("proc", "p_mw", [0.5, 1.0, 1.5, 1.0])
+
+    # WHEN
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", UserWarning)
+        result = run(net, td, dt_h=1.0)
+
+    # THEN
+    assert result.failed_steps == []
+    assert not [
+        warning
+        for step_result in result.step_results
+        for warning in step_result.result.warnings
+        if warning.category == "temporal"
+    ]
+
+
+def test_prescribed_replay_violation_raises_under_strict():
+    # GIVEN the violating profile and strict=True
+    from monee.solver.core import ValidationError
+
+    net, _ = _ramp_net()
+    td = TimeseriesData()
+    td.add_child_series_by_name("proc", "p_mw", [0.5, 3.0])
+
+    # WHEN / THEN
+    with pytest.raises(ValidationError) as excinfo:
+        run(net, td, dt_h=1.0, strict=True)
+    assert any(w.category == "temporal" for w in excinfo.value.warnings)

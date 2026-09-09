@@ -129,3 +129,54 @@ Reproduce locally:
 python benchmarks/backend_comparison.py            # run + plot
 python benchmarks/backend_comparison.py --plot-only
 ```
+
+## How this compares to a dedicated power-flow tool
+
+A recurring question is how a monee power flow compares to pandapower's
+Newton-Raphson on the same grid. The honest answer has two halves, and the
+first one is that the popular single-number ratio is close to meaningless.
+
+On CIGRE MV (15 buses) a warm `pp.runpp` and a warm `monee.run_energy_flow`
+both land in the tens of milliseconds. Measured as five batches of 15 repeats
+after three discarded warm-ups, each batch in a fresh process, pandapower's
+median ran 12.7 to 18.1 ms and monee's 19.3 to 32.2 ms, so the ratio came out
+anywhere between 1.1 and 2.5 times across batches. Within one batch the spread
+is tight (standard deviation under 10 percent); it is the batch-to-batch
+variation that dominates. At this size both numbers are per-call fixed cost, so
+a ratio measured once tells you nothing.
+
+The second half is that the ratio is not a constant, because the two tools
+scale differently over this range. On mv_oberrhein (179 buses) pandapower's
+median barely moves, 11.8 ms, while monee's goes to 341 ms, a factor of 29.
+pandapower's time at these sizes is mostly its own pandas bookkeeping;
+monee's grows with the model it assembles.
+
+What drives monee's time is not the numerics. Splitting a CIGRE MV call with
+the CasADi back end's own timers (`last_build_s`, `last_solve_s`):
+
+| Phase | CIGRE MV, 15 buses | Share |
+|---|---|---|
+| Python-side work: network copy, symbolic equation assembly, result frames | 15.4 ms | 78 percent |
+| CasADi `nlpsol` construction (graph to derivative functions) | 3.5 ms | 18 percent |
+| The IPOPT solve itself | 0.8 ms | 4 percent |
+
+So a monee power flow spends about 4 percent of its wall clock in the solver.
+The rest is building a fresh symbolic model, which monee does on every
+`run_energy_flow` call because each call may see a changed network.
+
+That points at the fix, which is already in the library: when you solve the
+same topology repeatedly, use {doc}`../how-to/timeseries` instead of a loop of
+`run_energy_flow`. The CasADi timeseries path builds the `nlpsol` once and
+re-solves it with the time-varying inputs as parameters. On CIGRE MV, 12 steps
+took 378 ms as 12 separate calls (31.5 ms per step) against 87 ms as one
+`run_timeseries` (7.2 ms per step), a 4.4 times speedup from amortising the
+build alone.
+
+```{note}
+monee is a multi-energy modelling and optimisation framework, not a
+power-flow-only engine. A single-sector power flow is the case where it carries
+the most overhead it does not need, and it is also the case a dedicated tool
+already solves well. Reach for monee when the network is coupled, the model is
+an optimisation, or the run is a series; use `run_timeseries` when it is a
+series of solves on one topology.
+```

@@ -2,6 +2,8 @@
 compound() reentrancy and exception safety, grid flattening, and error paths
 of the builder/removal API."""
 
+import inspect
+
 import pytest
 
 import monee.model as mm
@@ -275,3 +277,87 @@ def test_statistics_counts_independent_models():
     stats = net.statistics()
     assert isinstance(stats, dict)
     assert stats.get(mm.PowerLoad, 0) >= 1
+
+
+def test_deactivate_by_id_accepts_model_classes():
+    net = _el_net_with_load()
+    bus_id = net.nodes[0].id
+    load_id = net.childs[0].id
+    other_bus = net.node(mm.Bus(base_kv=1), grid=mm.EL)
+    line_id = net.branch(
+        mm.PowerLine(length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, parallel=1),
+        bus_id,
+        other_bus,
+    )
+
+    net.deactivate_by_id(mm.PowerLine, line_id)
+    net.deactivate_by_id(mm.PowerLoad, load_id)
+    net.deactivate_by_id(mm.Bus, bus_id)
+    assert net.branch_by_id(line_id).active is False
+    assert net.child_by_id(load_id).active is False
+    assert net.node_by_id(bus_id).active is False
+
+    net.activate_by_id(mm.PowerLine, line_id)
+    assert net.branch_by_id(line_id).active is True
+
+
+def test_deactivate_by_id_accepts_bare_tuple_branch_id():
+    net = _el_net_with_load()
+    other_bus = net.node(mm.Bus(base_kv=1), grid=mm.EL)
+    line_id = net.branch(
+        mm.PowerLine(length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, parallel=1),
+        net.nodes[0].id,
+        other_bus,
+    )
+    assert isinstance(line_id, tuple)
+
+    net.deactivate_by_id(line_id)
+    assert net.branch_by_id(line_id).active is False
+
+    net.activate_by_id(line_id)
+    assert net.branch_by_id(line_id).active is True
+
+
+def test_deactivate_by_id_without_id_rejects_non_tuple():
+    net = _el_net_with_load()
+    with pytest.raises(TypeError, match="missing the id argument"):
+        net.deactivate_by_id(net.childs[0].id)
+
+
+def test_statistics_documents_class_keys():
+    doc = inspect.getdoc(mm.Network.statistics)
+    assert doc is not None
+    assert "dict[type, int]" in doc
+    stats = _el_net_with_load().statistics()
+    assert all(isinstance(key, type) for key in stats)
+
+
+def test_deactivate_by_id_rejects_unknown_class():
+    net = _el_net_with_load()
+    with pytest.raises(ValueError, match="neither a component container class"):
+        net.deactivate_by_id(str, net.childs[0].id)
+
+
+def test_result_frames_gain_name_column_only_where_named():
+    net = mm.Network(mm.PowerGrid(name="power", sn_mva=1))
+    bus_id = net.node(mm.Bus(base_kv=1), grid=mm.EL)
+    net.child_to(mm.PowerLoad(1.0, 0.0), bus_id, name="load_a")
+    net.child_to(mm.PowerLoad(0.5, 0.0), bus_id)
+
+    frames = net.as_result_dataframe_dict()
+
+    load_df = frames["PowerLoad"]
+    assert "name" in load_df.columns
+    assert set(load_df["name"]) == {"load_a", None}
+    assert "name" not in frames["Bus"].columns
+
+
+def test_compound_accepts_and_stores_name():
+    net = mm.Network(mm.PowerGrid(name="power", sn_mva=1))
+    junction_id = net.node(mm.Junction(), grid=mm.WATER_KEY)
+    compound_id = net.compound(
+        _AppendixCompound(),
+        name="appendix",
+        connect_node_id=junction_id,
+    )
+    assert net.compound_by_id(compound_id).name == "appendix"

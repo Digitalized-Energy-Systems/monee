@@ -26,7 +26,11 @@ bounds_pressure = (
     BOUND_GAS[1] * (1 + BOUND_GAS[2]),
 )
 
-bounds_ext_el = (0, 100)
+# The benchmark net is a net importer: its dispatchable generation cannot cover
+# the electrical demand. (0, 100) forbids the import and forces load shedding -
+# it only looked feasible while the non-leading GridFormingGenerator supplied
+# free, unpriced power.
+bounds_ext_el = (-100, 100)
 bounds_ext_gas = (0, 100)
 # The benchmark net's water slack needs ~15 kg/s circulation for its heat
 # demand; the problem default of (-10, 10) makes the model provably
@@ -217,3 +221,62 @@ def test_monee_visu():
 
 def test_single_period_solver_protocol_importable():
     assert isinstance(SinglePeriodSolverProtocol, type)
+
+
+class _CapturedModel(Exception):
+    def __init__(self, pm):
+        super().__init__("assembled model captured")
+        self.pm = pm
+
+
+def _named_constraints(steps: int):
+    import pyomo.environ as pyo
+
+    import monee.express as mx
+    from monee.simulation import TimeseriesData, run_multi_period
+    from monee.simulation.multi_period import PyomoMultiPeriodSolver
+
+    net = mx.create_multi_energy_network()
+    b0 = mx.create_bus(net)
+    b1 = mx.create_bus(net)
+    mx.create_line(net, b0, b1, length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
+    mx.create_ext_power_grid(net, b0)
+    mx.create_power_load(net, b1, p_mw=0.1, q_mvar=0.0, name="load")
+
+    td = TimeseriesData()
+    td.add_child_series_by_name("load", "p_mw", [0.1, 0.5, 0.9][:steps])
+
+    def _fake_factory(*_args, **_kwargs):
+        class _Solver:
+            def solve(self, pm, **_kw):
+                raise _CapturedModel(pm)
+
+        return _Solver()
+
+    original = pyo.SolverFactory
+    pyo.SolverFactory = _fake_factory
+    try:
+        run_multi_period(
+            net, td, steps=steps, dt_h=1.0, solver=PyomoMultiPeriodSolver()
+        )
+    except _CapturedModel as captured:
+        return [
+            o.name
+            for o in captured.pm.component_objects(pyo.Constraint)
+            if o.name != "cons"
+        ]
+    finally:
+        pyo.SolverFactory = original
+    raise AssertionError("the assembled model never reached the solver")
+
+
+def test_multi_period_constraint_names_are_period_scoped():
+    per_period = len(_named_constraints(1))
+
+    assert per_period > 0
+    for steps in (2, 3):
+        names = _named_constraints(steps)
+        assert len(names) == steps * per_period
+        assert len(set(names)) == len(names)
+        for t in range(steps):
+            assert any(f"_t{t}_eq_" in name for name in names)

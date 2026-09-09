@@ -21,7 +21,7 @@ Battery dispatch: 6-hour horizon
    net = mx.create_multi_energy_network()
    bus0 = mx.create_bus(net)
    bus1 = mx.create_bus(net)
-   mx.create_ext_power_grid(net, bus0)
+   ext_grid_id = mx.create_ext_power_grid(net, bus0)
    mx.create_line(net, bus0, bus1,
                   length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
    mx.create_power_load(net, bus1, p_mw=0.0, q_mvar=0.0, name="load")
@@ -60,13 +60,19 @@ Solve and inspect:
    print("SoC  [MWh]:", soc.round(2).tolist())
    print("Disp [MW]:", disp.round(2).tolist())
 
+.. skipped: without a cost term every feasible dispatch is optimal here, so
+   the printed schedule is solver dependent (degenerate optimum).
+
 .. testoutput::
    :options: +SKIP
 
    SoC  [MWh]: [...]
    Disp [MW]: [...]
 
-The solver shifts charging to off-peak hours to serve the midday peak.
+Without an objective the problem only enforces feasibility, and serving the
+whole profile from the grid is feasible, so the solver is free to leave the
+battery idle. A cost on the grid import, as in the time-varying pricing
+section below, is what actually makes the storage shift energy between hours.
 
 .. only:: html
 
@@ -151,18 +157,20 @@ Jointly optimize a CHP unit serving both electrical and heat demand:
                         name="el_load")
 
    # Gas + heat
-   j_gas    = mx.create_gas_junction(net_mes)
-   j_supply = mx.create_water_junction(net_mes)
-   j_return = mx.create_water_junction(net_mes)
+   # The CHP heats the water flowing j_cold -> j_hot, so j_hot is the
+   # supply side of the loop and the plant reference sits on the cold one.
+   j_gas  = mx.create_gas_junction(net_mes)
+   j_cold = mx.create_water_junction(net_mes)
+   j_hot  = mx.create_water_junction(net_mes)
    mx.create_gas_ext_grid(net_mes, j_gas)
-   mx.create_ext_hydr_grid(net_mes, j_supply)
-   mx.create_water_sink(net_mes, j_return, mass_flow_kgs=0.0, name="heat_load")
+   mx.create_ext_hydr_grid(net_mes, j_cold)
+   mx.create_water_sink(net_mes, j_hot, mass_flow_kgs=0.0, name="heat_load")
 
    mx.create_chp(net_mes,
                  power_node_id=bus_load,
                  gas_node_id=j_gas,
-                 heat_node_id=j_supply,
-                 heat_return_node_id=j_return,
+                 cold_node_id=j_cold,
+                 hot_node_id=j_hot,
                  diameter_m=0.1,
                  efficiency_power=0.35,
                  efficiency_heat=0.45,
@@ -303,17 +311,22 @@ Register per-period prices with ``add_objective_data``. The objective
 lambda reads ``model.price``, which ``TimeseriesData`` sets before each
 period's equations are assembled.
 
-.. code-block:: python
+``ExtPowerGrid.p_mw`` follows the load convention: import into the network
+is negative ``p_mw``, export is positive. The cost of imported energy is
+therefore ``-price * p_mw``. Pricing ``+p_mw`` instead rewards import, and
+the solver charges the battery during the most expensive hours.
+
+.. testcode::
 
    from monee.problem.core import OptimizationProblem, Objectives
    from monee.simulation import TimeseriesData, run_multi_period
    import monee.model as mm
 
-   td = TimeseriesData()
-   td.add_child_series_by_name("load", "p_mw",
-                                [0.4, 0.5, 1.4, 1.8, 1.5, 0.4])
+   td_price = TimeseriesData()
+   td_price.add_child_series_by_name("load", "p_mw",
+                                     [0.4, 0.5, 1.4, 1.8, 1.5, 0.4])
    # Time-of-use price: cheap off-peak, expensive mid-day
-   td.add_objective_data(ext_grid_id, "price", [30, 35, 80, 90, 70, 30])
+   td_price.add_objective_data(ext_grid_id, "price", [30, 35, 80, 90, 70, 30])
 
    prob = OptimizationProblem()
    prob.controllable_storages()
@@ -322,11 +335,25 @@ period's equations are assembled.
    obj.select(
        lambda m: isinstance(m, mm.ExtPowerGrid)
    ).calculate(
-       lambda models: sum(m.price * m.p_mw for m in models)
+       # import is negative p_mw (load convention), so cost = -price * p_mw
+       lambda models: sum(-m.price * m.p_mw for m in models)
    )
    prob.objectives = obj
 
-   result = run_multi_period(net, td, optimization_problem=prob, dt_h=1.0)
+   result = run_multi_period(net, td_price,
+                             optimization_problem=prob, dt_h=1.0)
+
+   disp = result.get_result_for_id(bat, "p_mw", mm.ElectricStorage)
+   print("Battery [MW]:", (disp.round(2) + 0.0).tolist())
+   print("Cost:", round(result.objective, 2))
+
+.. testoutput::
+
+   Battery [MW]: [1.0, 0.0, -1.0, -1.0, -1.0, 0.0]
+   Cost: 216.52
+
+The battery charges (positive ``p_mw`` under the load convention) during
+the cheap first hour and discharges through the expensive midday peak.
 
 ----
 
@@ -517,13 +544,21 @@ OptimizationProblem
    * - ``prob.controllable_cps(["regulation"])``
      - Let the solver freely modulate CHP, P2H, P2G coupling points
    * - ``prob.controllable(attrs, component_condition=...)``
-     - General-purpose: free any attribute on matching components
+     - General-purpose: free any attribute on matching components. Write the
+       condition in the two-argument form, which works identically on all
+       selectors: ``lambda model, component: isinstance(model, PowerLoad)``
    * - ``prob.bounds((lo, hi), component_condition, attributes)``
-     - Override min/max bounds of specific ``Var`` attributes
+     - Override min/max bounds of specific ``Var`` attributes. This condition
+       is called with ``(model, grid)``
    * - ``prob.objectives``
-     - Set / get the ``Objectives`` object for the solver objective function
+     - Set / get the ``Objectives`` object for the solver objective function.
+       ``objectives.select(...)`` takes the same two-argument predicate
+       ``lambda model, component: ...``
    * - ``prob.constraints``
-     - Set / get the ``Constraints`` object for additional constraints
+     - Set / get the ``Constraints`` object for additional constraints.
+       ``constraints.select(...)`` takes the same two-argument predicate
+       (use ``constraints.select_types(PowerLoad)`` to select by model type),
+       while the equations it takes are called with the model
 
 PeriodState
 -----------

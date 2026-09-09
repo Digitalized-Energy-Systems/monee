@@ -89,7 +89,12 @@ from monee.simulation import (
     NetworkChange,
 )
 from monee.solver import GEKKOSolver, PyomoSolver
-from monee.solver.core import persist_solution, compute_bound_violations
+from monee.solver.core import (
+    persist_solution,
+    compute_bound_violations,
+    ResultWarning,
+    ValidationError,
+)
 from monee.visualization import plot_network, plot_result
 
 
@@ -124,17 +129,35 @@ def enable_islanding(
     return config
 
 
-def run_energy_flow(net: mm.Network, solver=None, simulation: bool = True, **kwargs):
+def run_energy_flow(
+    net: mm.Network,
+    solver=None,
+    simulation: bool = True,
+    copy: bool = False,
+    **kwargs,
+):
     """
     Performs a basic energy flow analysis on a network without applying optimization constraints.
 
     This function provides a straightforward assessment of energy flows within a network, making it useful for initial feasibility checks, diagnostics, or scenarios where optimization is not required. Use this function when you need quick insights into network behavior or as a baseline before introducing optimization-based analyses. It fits into workflows involving network validation, troubleshooting, or preliminary studies. Internally, the function delegates to `run_energy_flow_optimization` with the optimization problem set to `None`, utilizing the same solver infrastructure but bypassing optimization logic.
 
+    Warning:
+        By default this MUTATES the input network: the solved values are
+        written back into ``net``'s Vars after the solve, so the input doubles
+        as the warm start for the next solve (:class:`monee.Stepper` and
+        :func:`monee.run_timeseries` rely on this). Pass ``copy=True`` to
+        solve an internal ``net.copy()`` instead and leave the input
+        untouched; the solved values are then only available on
+        ``result.network``. See the concepts/solvers docs page.
+
     Args:
         net (mm.Network): The network to analyze, represented as an `mm.Network` instance. The network must be fully defined, including all necessary nodes and parameters.
         solver (optional): The solver to use for the energy flow computation. If not specified, a default compatible solver is chosen. The solver must support the network's structure.
         simulation (bool): When ``True`` (default), solve as a square steady-state simulation (GEKKO IMODE=1, falling back to IMODE=3 if the model is not square). Pass ``False`` to force the optimize-the-feasibility-problem path. Ignored by backends without a simulation mode (e.g. Pyomo). Check ``result.mode_used`` to see which path actually ran.
-        **kwargs: Additional keyword arguments for solver configuration or analysis tuning. Refer to the solver's documentation for supported options.
+        copy (bool): When ``False`` (default), solved values are written back
+            into ``net`` in place (warm-start contract above). ``True`` solves
+            a copy and leaves ``net`` untouched.
+        **kwargs: Additional keyword arguments for solver configuration or analysis tuning, forwarded to the backend ``solve``. Notably ``strict=True`` raises :class:`monee.ValidationError` when the post-solve result validation attaches warnings (the permissive default only records them on ``result.warnings``); see the how-to/diagnose_infeasibility docs page.
 
     Returns:
         Any: The result of the energy flow analysis, typically including calculated flow values and status information. The exact structure depends on the solver and network configuration.
@@ -155,23 +178,39 @@ def run_energy_flow(net: mm.Network, solver=None, simulation: bool = True, **kwa
             result = run_energy_flow(my_network, max_iter=500, tol=1e-5)
     """
     return run_energy_flow_optimization(
-        net, None, solver=solver, simulation=simulation, **kwargs
+        net, None, solver=solver, simulation=simulation, copy=copy, **kwargs
     )
 
 
 def run_energy_flow_optimization(
-    net: mm.Network, optimization_problem: mp.OptimizationProblem, solver=None, **kwargs
+    net: mm.Network,
+    optimization_problem: mp.OptimizationProblem,
+    solver=None,
+    copy: bool = False,
+    **kwargs,
 ):
     """
     Executes an energy flow optimization on a given network using a specified optimization problem and solver.
 
     This function determines the optimal distribution of energy flows within a network, subject to constraints and objectives defined by the provided optimization problem. Use this function when you need to solve power grid management, load balancing, or energy distribution planning tasks. It is typically integrated into simulation, planning, or real-time control workflows for energy systems. The function delegates the optimization process to a solver, which processes the network and problem definition to compute the optimal solution.
 
+    Warning:
+        By default this MUTATES the input network: the solved values are
+        written back into ``net``'s Vars after the solve, so the input doubles
+        as the warm start for the next solve (:class:`monee.Stepper` and
+        :func:`monee.run_timeseries` rely on this). Pass ``copy=True`` to
+        solve an internal ``net.copy()`` instead and leave the input
+        untouched; the solved values are then only available on
+        ``result.network``. See the concepts/solvers docs page.
+
     Args:
         net (mm.Network): The network to optimize. Must be a fully specified `mm.Network` object with all nodes, edges, and parameters defined.
         optimization_problem (mp.OptimizationProblem): The optimization problem instance, specifying constraints and objectives for the energy flow.
         solver (optional): The solver to use for optimization. If None, a default compatible solver is selected. Must support the problem's formulation.
-        **kwargs: Additional keyword arguments for solver configuration or optimization tuning. Refer to the solver's documentation for supported options.
+        copy (bool): When ``False`` (default), solved values are written back
+            into ``net`` in place (warm-start contract above). ``True`` solves
+            a copy and leaves ``net`` untouched.
+        **kwargs: Additional keyword arguments for solver configuration or optimization tuning, forwarded to the backend ``solve``. Notably ``strict=True`` raises :class:`monee.ValidationError` when the post-solve result validation attaches warnings (the permissive default only records them on ``result.warnings``); see the how-to/diagnose_infeasibility docs page.
 
     Returns:
         Any: The optimization result, which may include optimal energy flows, solution status, and additional diagnostic information. The exact structure depends on the solver and problem definition.
@@ -191,6 +230,8 @@ def run_energy_flow_optimization(
         Use the default solver with additional options:
             result = run_energy_flow_optimization(my_network, my_problem, max_iter=1000, tol=1e-6)
     """
+    if copy:
+        net = net.copy()
     return solve(net, optimization_problem, solver, **kwargs)
 
 
@@ -204,9 +245,9 @@ def solve_load_shedding_problem(  # NOSONAR
     bounds_pressure: tuple = (0.9, 1.1),
     bounds_t: tuple = (0.9, 1.1),
     max_line_loading=1.5,
-    bounds_ext_el: tuple = (-3, 3),
-    bounds_ext_gas: tuple = (-10, 10),
-    bounds_ext_heat: tuple = (-10, 10),
+    bounds_ext_el: tuple | None = None,
+    bounds_ext_gas: tuple | None = None,
+    bounds_ext_heat: tuple | None = None,
     regulation_ramp_limit=None,
     include_storages=False,
     include_ext_grids=True,
@@ -242,9 +283,16 @@ def solve_load_shedding_problem(  # NOSONAR
         bounds_pressure (tuple): Per-unit pressure bounds (min, max) for the gas subsystem.
         bounds_t (tuple): Per-unit temperature bounds (min, max) for the thermal subsystem.
         max_line_loading: Line-loading cap enforced when ``check_lp`` is True.
-        bounds_ext_el (tuple): External electrical-grid exchange bounds (min, max).
-        bounds_ext_gas (tuple): External gas-grid exchange bounds (min, max).
-        bounds_ext_heat (tuple): External heat-grid exchange bounds (min, max).
+        bounds_ext_el (tuple | None): External electrical-grid exchange bounds
+            (min, max) on ``ExtPowerGrid.p_mw``, load convention: import is
+            negative, export positive, so an import cap of X MW is ``(-X, 0)``.
+            Defaults to ``None`` (unconstrained).
+        bounds_ext_gas (tuple | None): External gas-grid exchange bounds
+            (min, max) on ``ExtHydrGrid.mass_flow_kgs``, load convention as
+            above. Defaults to ``None`` (unconstrained).
+        bounds_ext_heat (tuple | None): External heat-grid exchange bounds
+            (min, max) on ``ExtHydrGrid.mass_flow_kgs``, load convention as
+            above. Defaults to ``None`` (unconstrained).
         regulation_ramp_limit: Optional per-step regulation ramp limit.
         include_storages (bool): Make storages controllable. Defaults to False.
         include_ext_grids (bool): Constrain external-grid exchange. Defaults to True.

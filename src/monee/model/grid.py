@@ -148,6 +148,16 @@ def create_gas_grid(
 ):
     """Return a :class:`GasGrid` populated from ``GAS_GRID_ATTRS[type]``.
 
+    Both gas types share the operating point ``t_k=300`` K, ``t_ref_k=356`` K,
+    ``pressure_ref_pa=1e6`` (10 bar ABSOLUTE, the base of ``pressure_pu``),
+    ``nominal_pressure_pu=1``, ``max_mass_flow_kgs=20`` and the operational band
+    ``pressure_squared_pu_min=0.7`` / ``pressure_squared_pu_max=1.3``. They
+    differ in the fluid: ``lgas`` (the default, N2/CO2-diluted natural gas) has
+    ``molar_mass=0.0181138902`` kg/mol and
+    ``higher_heating_value_kwh_per_kg=11.79011``; ``methane`` has ``0.0165``
+    kg/mol and ``15.3`` kWh/kg. The compressibility is derived from those
+    (0.9736 for lgas at 10 bar and 300 K).
+
     ``t_ref_k`` / ``pressure_ref_pa`` override the reference condition so the
     derived compressibility tracks the grid's actual operating pressure. Pass
     them here rather than mutating the grid afterwards, so ``__post_init__``
@@ -188,4 +198,7 @@ def create_water_grid(
 
 
 def create_power_grid(name, sn_mva=1):
+    """Return a :class:`PowerGrid`. ``sn_mva`` is the per-unit apparent-power
+    base used to scale the flow equations (default 1 MVA); imported grids
+    usually carry a larger base such as 100 MVA."""
     return PowerGrid(name, sn_mva=sn_mva)

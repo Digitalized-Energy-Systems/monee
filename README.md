@@ -137,7 +137,7 @@ mx.create_line(net, bus_ext, bus_b, length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=
 mx.create_ext_power_grid(net, bus_ext)
 mx.create_power_load(net, bus_a, p_mw=0.1, q_mvar=0.0)
 
-# Two dispatchable generators with different marginal costs (currency/MW)
+# Two dispatchable generators with different marginal costs (currency/MW).
 mx.create_power_generator(net, bus_a, p_mw=0.15, q_mvar=0.0, cost=10.0)  # cheap
 mx.create_power_generator(net, bus_b, p_mw=0.15, q_mvar=0.0, cost=40.0)  # expensive
 
@@ -151,6 +151,9 @@ result = monee.run_energy_flow_optimization(net, problem, solver="ipopt")
 # The cheap generator carries the load; the expensive one stays near zero.
 # (generation uses the load convention, so dispatched power is negative)
 print(result.get(mm.PowerGenerator)[["p_mw"]])
+#            p_mw
+# 0 -9.000072e-02
+# 1  6.969836e-09
 ```
 
 For resilience studies, `create_min_load_shedding_problem` instead minimises
@@ -207,7 +210,7 @@ class MyGasPipeFormulation(BranchFormulation):
         # One signed mass-flow decision variable plus a geometric resistance the
         # equation references; neutralise the Vars this linear model does not use.
         branch.mass_flow_kgs = Var(0.1, name="mass_flow_kgs")
-        branch.resistance = Const(1e-3 * branch.length_m / branch.diameter_m**2)
+        branch.resistance = Const(1e-7 * branch.length_m / branch.diameter_m**2)
         branch.direction = Const(1)
         for unused in (
             "velocity_mps",
@@ -223,9 +226,13 @@ class MyGasPipeFormulation(BranchFormulation):
         m = branch.mass_flow_kgs
         mag = kwargs["sqrt_impl"](m * m)  # |m|, so it works in either flow direction
         return [
+            # from->to flow rides mass_flow_neg_kgs, i.e. m < 0, so the drop
+            # needs the minus sign to fall along the flow.
             from_node_model.pressure_pu - to_node_model.pressure_pu
-            == branch.resistance * m,
-            # the nodal balance consumes the positive / negative flow split
+            == -branch.resistance * m,
+            # The nodal balance consumes the positive / negative flow split, and
+            # it fixes the reported sign: mass_flow_kgs = pos - neg is negative
+            # when the fluid runs from the from-node to the to-node.
             branch.mass_flow_pos_kgs == 0.5 * (mag + m),
             branch.mass_flow_neg_kgs == 0.5 * (mag - m),
         ]
@@ -283,9 +290,11 @@ objectives.select(
 )
 problem.objectives = objectives
 
-# Constraint: cap the substation import
+# Constraint: cap the substation import at 0.6 MW.
+# ExtPowerGrid.p_mw follows the load convention: import is negative, export
+# positive, so an import cap is a *lower* bound.
 constraints = Constraints()
-constraints.select_types(mm.ExtPowerGrid).equation(lambda model: model.p_mw <= 0.6)
+constraints.select_types(mm.ExtPowerGrid).equation(lambda model: model.p_mw >= -0.6)
 problem.constraints = constraints
 
 result = run_energy_flow_optimization(net, problem)

@@ -85,7 +85,6 @@ forward at whatever pace you like:
    print(c.t_h)
 
 .. testoutput::
-   :options: +SKIP
 
    1.25
 
@@ -110,7 +109,11 @@ Constructing a Stepper
        initial_state=None,           # {(component_id, attr): float}
        on_step_error="raise",        # or "skip"
        max_history=None,             # retain only the last N steps
-       warm_start=True,              # previous solution seeds each solve
+       record_changes=True,          # record topology change events
+       max_changes=None,             # retain only the last N change events
+       copy_base=True,               # step on a copy, not the caller's net
+       warm_start=None,              # None follows the backend
+       carry_failed_dt=True,         # roll a skipped step's dt into the next
        **solver_kwargs,              # forwarded to every solver.solve(...)
    )
 
@@ -135,6 +138,23 @@ The constructor mirrors :func:`~monee.run_timeseries`:
   ``max_history=8`` is generous. ``step_count`` and ``t_h`` keep counting
   across dropped steps; :meth:`~monee.simulation.Stepper.to_timeseries_result`
   then covers only the retained window.
+* ``record_changes`` (default ``True``) keeps a log of the structural changes
+  seen at each step: components added, removed, activated or deactivated,
+  whether by an explicit Stepper mutation, by an applied input network, or by
+  islanding decided during the solve. Read it as
+  :attr:`~monee.simulation.Stepper.changes` (a list of
+  :class:`~monee.simulation.NetworkChange` records with ``step``, ``t_h``,
+  ``kind``, ``component_type``, ``component_id``, ``name`` and ``source``) or
+  as a DataFrame via :meth:`~monee.simulation.Stepper.changes_df`. Pass
+  ``record_changes=False`` for a run that never changes topology and does not
+  want the bookkeeping.
+* ``max_changes`` caps that log the way ``max_history`` caps the step history,
+  dropping the oldest events first. It is independent of ``max_history``:
+  changes survive the trimming of the steps they happened in.
+* ``copy_base`` and ``carry_failed_dt`` are covered below: ``copy_base=False``
+  steps on the caller's live network instead of a copy, and
+  ``carry_failed_dt`` decides whether a skipped step's interval is rolled into
+  the next successful one.
 
 The Stepper never mutates the base network: every step works on a fresh
 ``net.copy()``. After a successful solve the result network is pushed into
@@ -253,6 +273,38 @@ solve, non-negative values are absolute step indices. It returns ``None``
 (or the ``initial_state`` fallback) when no solve has written the attribute
 yet, or when the requested step has been dropped under ``max_history``.
 
+``get`` accepts the same id forms as ``data_overrides`` keys: a bare id, a
+``(type, id)`` tuple, or a bare id plus ``component_type=``. Node and child
+ids are independent counters, so a bare id can be shared by a bus and a
+child. Resolution is attribute aware: only components whose model carries
+the requested attribute are considered, so a shared bare id resolves to the
+bus for ``vm_pu`` and to the load for ``p_mw`` without further hints. When
+several matching components carry the attribute, the child wins over the
+node; the nodal aggregate is then returned only when the node is addressed
+explicitly, for example ``c.get(1, "p_mw", component_type=mm.Bus)``. An id
+that matches no component raises ``KeyError``; an id whose matching models
+all lack the attribute raises ``AttributeError``, mirroring the
+``data_overrides`` validation, so a misspelled attribute surfaces as a
+wiring bug instead of a silent ``None``; and an id that stays ambiguous
+(for example a child and a compound sharing it, both carrying the
+attribute) raises ``ValueError`` asking for a disambiguated form.
+
+A compound coupler's realized operating point (for example a CHP's
+``el_mw`` and ``heat_mw``) lives on its control node model, not on the
+compound model itself, which only carries the build inputs (setpoints,
+efficiencies, ``regulation``). Read it from the control node's own id:
+
+.. code-block:: python
+
+   chp = net.compound_by_id(chp_id)
+   cn = next(
+       n for n in chp.subcomponents if isinstance(n.model, mm.CHPControlNode)
+   )
+   el = c.get(cn.id, "el_mw", component_type=mm.CHPControlNode)
+
+or query whole runs by the control node model class, for example
+``c.to_timeseries_result().get_result_for(mm.CHPControlNode, "el_mw")``.
+
 For tabular post-processing of whole runs, prefer the ``StepResult`` returned
 by each ``step`` call or :meth:`~monee.simulation.Stepper.to_timeseries_result`.
 
@@ -279,6 +331,28 @@ clock and the Stepper's clock stay in sync even across failed steps:
 Failed steps are excluded from the DataFrame queries of
 :meth:`~monee.simulation.Stepper.to_timeseries_result` but remain
 inspectable via the result's ``failed_steps`` property.
+
+The interval of a failed step is not thrown away: by default it is carried
+into the next successful step, which then integrates over
+``dt_h + backlog`` so that no time goes missing from a storage state of
+charge or a linepack.  The step is logged at WARNING level and reports both
+intervals:
+
+.. code-block:: python
+
+   c = Stepper(net, on_step_error="skip")
+   c.step(1.0)                       # fails
+   r = c.step(1.0)                   # integrates 2 h
+   r.dt_h, r.effective_dt_h, r.t_h   # (1.0, 2.0, 2.0)
+
+Two consequences to plan for.  The carried interval is integrated against
+the setpoints of the new step, which were never requested for the failed
+one, so a battery told to charge at 0.3 MW for 1 h gains 0.6 MWh.  And the
+longer interval multiplies the setpoint against the storage bounds, so after
+a streak of failures a step at rated power can turn infeasible on its own
+capacity limit.  A host that owns the clock and wants every step integrated
+over exactly the ``dt_h`` it passed constructs the Stepper with
+``carry_failed_dt=False``; ``t_h`` advances by the raw ``dt_h`` either way.
 
 ----
 
@@ -324,12 +398,38 @@ After the run, wrap the accumulated history in the standard
 
    ts_result = c.to_timeseries_result()
    vm = ts_result.get_result_for(mm.Bus, "vm_pu")     # rows=steps, cols=ids
-   p  = ts_result.get_result_for_id(load_id, "p_mw")  # one Series
+   p  = ts_result.get_result_for_id(load_id, "p_mw", mm.PowerLoad)
 
    # Optionally label rows with real timestamps:
    import pandas as pd
    idx = pd.date_range("2024-01-01", periods=c.step_count, freq="h")
    ts_result = c.to_timeseries_result(datetime_index=idx)
+
+The Stepper's headline feature is a variable step size, so the index is
+rarely a fixed-frequency range. Build it from the per-step ``dt_h`` values
+instead, following the same convention as :func:`~monee.run_timeseries`:
+a label marks the end of the interval it integrates over (and the first
+step's interval is the first difference). With a start time ``t0`` the label
+of step ``k`` is ``t0`` plus the cumulative sum of ``dt_h`` up to and
+including step ``k``:
+
+.. code-block:: python
+
+   import numpy as np
+
+   dts = [0.25] * 16 + [1.0] * 16          # the dt_h passed to each step()
+   # or reconstruct from the retained history:
+   # dts = [sr.dt_h for sr in c.history]
+   t0 = pd.Timestamp("2024-01-01")
+   idx = t0 + pd.to_timedelta(np.cumsum(dts), unit="h")
+   ts_result = c.to_timeseries_result(datetime_index=idx)
+
+Under ``max_history`` the result covers only the retained window, and
+``datetime_index`` may take either of two lengths: one entry per taken step
+(``c.step_count``, absolute labels; entries for dropped steps are simply
+never used) or one entry per retained step (``len(c.history)``, labels for
+the window, like the ``dts`` reconstructed from ``c.history`` above). Any
+other length raises a ``ValueError`` naming both accepted forms.
 
 Everything documented in :doc:`timeseries` for result querying
 (:meth:`~monee.simulation.TimeseriesResult.get_result_for`,

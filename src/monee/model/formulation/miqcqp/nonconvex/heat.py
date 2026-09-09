@@ -38,6 +38,10 @@ def _hydraulic_epigraph_eqs(
         branch.mass_flow_mag_kgs <= f_max_local,
         branch.mass_flow_pos_kgs_squared <= f_max_local**2 * branch.on_off,
         branch.mass_flow_neg_kgs_squared <= f_max_local**2 * branch.on_off,
+        # McCormick cut of m^2 over [0, f_max]: without it the epigraph var can
+        # stay at its cap while the flow itself is pinned to 0.
+        branch.mass_flow_pos_kgs_squared <= f_max_local * branch.mass_flow_pos_kgs,
+        branch.mass_flow_neg_kgs_squared <= f_max_local * branch.mass_flow_neg_kgs,
         # density is not modelled as temperature-dependent
         owfmodel.darcy_weisbach_equation(
             from_node_model.vars["pressure_pu"],
@@ -124,7 +128,7 @@ class PwlDarcyWeisbachBranchFormulation(BranchFormulation):
 
     Opt-in alternative to :class:`BilinearDarcyWeisbachBranchFormulation` for
     laminar-heavy networks (Re < 2300) where the turbulent asymptote
-    under-estimates pressure drop by 5–50\ :math:`\times`. Two PWLs (one per direction)
+    under-estimates pressure drop by 5-50\ :math:`\times`. Two PWLs (one per direction)
     preserve bidirectional flow gated by ``direction``. The hydraulics turn
     MILP-shaped, but the temperature bilinears keep the model a non-convex
     MIQCQP.

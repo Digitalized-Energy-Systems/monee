@@ -48,6 +48,21 @@ square solve runs as ``IMODE=1`` and reports ``"simulation"`` (falling back to
 name, pass ``run_energy_flow(net, solver="ipopt")`` or ``solver="gurobi"``. See
 :doc:`concepts/solvers` for the available back-ends.
 
+Check your network before solving: ``net.check()`` runs a pre-flight lint
+(missing slack, dead end junctions, mixed ``base_kv``, unpinned variables)
+and prints what it finds; an empty return means clean. When the network is
+headed into an optimisation problem, call ``net.check(mode="optimization")``:
+free variables such as storage energies are exactly what the problem will
+bind, so the unpinned-variable preview is skipped there. Then check your result
+before reading numbers: ``result.termination_condition`` says whether the
+solver actually converged, ``result.violations`` and ``result.warnings`` are
+non-empty when a solved value sits outside its declared bounds or a
+post-solve validation check flagged something, and ``result.mode_used`` says
+which solve path ran. When any of them surprises you, start at
+:doc:`how-to/troubleshooting` and :doc:`how-to/diagnose_infeasibility`. The
+signs, units and defaults behind every solved value are collected on
+:doc:`concepts/conventions`.
+
 Inspecting the result
 ---------------------
 
@@ -76,6 +91,12 @@ Access individual columns by name:
 
     print(bus_df[["id", "vm_pu", "va_degree"]])
 
+Sign cheat for hydraulic results: a negative ``mass_flow_kgs`` on a pipe means
+flow running from the from node to the to node, and a negative
+``mass_flow_kgs`` on an ``ExtHydrGrid`` means the network imports from it. Take ``abs()`` for
+throughput and read direction off the sign only. All signs and units are
+collected on :doc:`concepts/conventions`.
+
 ----
 
 Multi-energy networks
@@ -101,16 +122,17 @@ connects an electricity grid to a district heating grid through a power-to-heat
     mx.create_power_load(net, bus_1, p_mw=0.1, q_mvar=0.0)
 
     # District heating grid (hot-water pipes)
-    j_supply = mx.create_water_junction(net)  # supply header
-    j_mid    = mx.create_water_junction(net)  # junction after pipe
-    j_return = mx.create_water_junction(net)  # return header
+    j_cold = mx.create_water_junction(net)  # cold header, plant reference
+    j_mid  = mx.create_water_junction(net)  # junction after pipe
+    j_hot  = mx.create_water_junction(net)  # heated outlet of the P2H
 
-    mx.create_ext_hydr_grid(net, j_supply)
-    mx.create_water_pipe(net, j_supply, j_mid, diameter_m=0.12, length_m=100)
-    mx.create_sink(net, j_return, mass_flow_kgs=1)
+    mx.create_ext_hydr_grid(net, j_cold)
+    mx.create_water_pipe(net, j_cold, j_mid, diameter_m=0.12, length_m=100)
+    mx.create_sink(net, j_hot, mass_flow_kgs=1)
 
-    # Couple the two grids
-    mx.create_p2h(net, bus_1, j_mid, j_return,
+    # Couple the two grids. The water is heated on its way from j_mid to
+    # j_hot, so the second junction is the hot one.
+    mx.create_p2h(net, bus_1, cold_node_id=j_mid, hot_node_id=j_hot,
                   heat_energy_mw=0.1, diameter_m=0.1, efficiency=0.9)
 
     result = run_energy_flow(net)
@@ -163,12 +185,15 @@ load-shedding formulation and also supports custom objectives and constraints:
     )
 
     result = run_energy_flow_optimization(opt_net, problem)
-    print(f"Objective: {result.objective:.4f}")
+    print(f"Objective: {max(0.0, result.objective):.4f}")
+
+Nothing needs shedding here, so the objective is zero. The ``max(0.0, ...)``
+clip removes interior-point noise of about 1e-9 that would otherwise flip the
+sign of the printed zero.
 
 .. testoutput::
-   :options: +SKIP
 
-    Objective: ...
+    Objective: 0.0000
 
 See :doc:`tutorials/01_optimization_basics` and :doc:`how-to/load_shedding`
 for end-to-end worked examples.
@@ -211,6 +236,9 @@ subclass the appropriate model base class and implement ``equations``:
            from_node_id=node_id, to_node_id=node_load, grid=mm.EL)
     print(run_energy_flow(pn))
 
+.. skipped: p_mw is a free degree of freedom that no equation pins, so the
+   printed operating point is back-end dependent (see the paragraph below).
+
 .. testoutput::
    :options: +SKIP
 
@@ -218,24 +246,34 @@ subclass the appropriate model base class and implement ``equations``:
 
       Bus  (2 instances)
       ────────────────────────────────────────────────────────────────────
-       id  base_kv  vm_pu  vm_pu_squared  va_radians  va_degree      p_mw     q_mvar
-        0        1      1              1   1.887e-05          0 -0.003774 -1.424e-07
-        1        1      1              1  -1.887e-05  -0.001081  0.003773          0
+       id  ignored  base_kv  vm_pu  vm_pu_squared  va_radians  va_degree    p_mw     q_mvar
+        0    False        1      1              1           0          0 -0.3059 -0.0009353
+        1    False        1 0.9969         0.9939   -0.003059    -0.1753   0.305          0
 
       FlexibleLoad  (1 instance)
       ────────────────────────────────────────────────────────────────────
-       id  regulation     p_mw  q_mvar  node_id
-        0           1 0.003773       0        1
+       id  ignored  regulation  p_mw  q_mvar  node_id
+        0    False           1 0.305       0        1
 
       ExtPowerGrid  (1 instance)
       ────────────────────────────────────────────────────────────────────
-       id  regulation      p_mw     q_mvar  vm_pu  va_degree  node_id
-        1           1 -0.003774 -1.424e-07      1          0        0
+       id  ignored  regulation    p_mw     q_mvar  vm_pu  va_degree  regulate_vm  node_id
+        1    False           1 -0.3059 -0.0009353      1          0         True        0
 
       PowerLine  (1 instance)
       ────────────────────────────────────────────────────────────────────
-             id  tap  shift  br_r_pu  br_x_pu  g_fr_pu  b_fr_pu  g_to_pu  b_to_pu  max_i_ka  backup  on_off  p_from_mw  q_from_mvar  i_from_ka  loading_from_pu   p_to_mw  q_to_mvar   i_to_ka  loading_to_pu  length_m  r_ohm_per_m  x_ohm_per_m  parallel
-      (0, 1, 0)    1      0  0.01  0.01     0     0     0     0      3.19   False       1   0.003774    1.424e-07  8.222e-06             2.577e-06 -0.003773          0 8.221e-06           2.577e-06       100       0.0001       0.0001         1
+             id  ignored  on_off  tap  shift  br_r_pu  br_x_pu  g_fr_pu  b_fr_pu  g_to_pu  b_to_pu  max_i_ka max_s_mva  backup  p_from_mw  q_from_mvar  i_from_ka  loading_from_pu  p_to_mw  q_to_mvar  i_to_ka  loading_to_pu  length_m  r_ohm_per_m  x_ohm_per_m  parallel
+      (0, 1, 0)    False       1    1      0     0.01     0.01        0        0        0        0      3.19      None   False     0.3059    0.0009353     0.1766          0.05537   -0.305          0   0.1766        0.05537       100       0.0001       0.0001         1
+
+``p_mw`` here is a decision variable that no equation determines: the model
+only bounds it from above, so in simulation mode it is a free degree of freedom
+and the printed value is whichever feasible point the solver landed on, not a
+setpoint. The run says so, with a warning that the model is not square, and a
+different back-end will print a different number. Give a custom model a fixed
+setpoint as a plain float or a :class:`~monee.model.Const`, and keep
+:class:`~monee.model.Var` for quantities an equation pins or an optimisation
+problem drives. See :doc:`concepts/solvers` for the squaring rules in
+simulation mode.
 
 The :func:`~monee.model.core.model` decorator (``@mm.model``) registers the
 class in monee's component registry. Registration lets the model round-trip

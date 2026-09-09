@@ -28,7 +28,9 @@ deviation from full service, subject to operational bounds on voltage
    * - ``bounds_pressure``
      - Normalised pressure at gas junctions (per unit)
    * - ``bounds_ext_el`` / ``bounds_ext_gas``
-     - Active power / mass-flow range at external grid connections
+     - Active power / mass-flow range at external grid connections, in the
+       load convention: import is negative, export positive. To cap the
+       import at X, pass ``(-X, 0)``. Default ``None``: unconstrained.
 
 ----
 
@@ -53,7 +55,13 @@ One-call interface
         bounds_ext_gas=(-2.0, 2.0),
     )
 
-    print(f"Objective (shed load cost): {result.objective:.4f}")
+    print(f"Solver objective: {result.objective:.4f}")
+
+.. note::
+
+   ``result.objective`` is the solver's objective value, which is dominated by
+   the weighted shed energy but is not a shed-energy meter. See
+   :ref:`objective-semantics` below before comparing it across scenarios.
 
 The result is a :class:`~monee.solver.core.SolverResult` with the solved
 network and DataFrames for each model type. The bound and check arguments are
@@ -81,7 +89,7 @@ different bounds) use
     bus_1 = mx.create_bus(net)
     mx.create_line(net, bus_0, bus_1, 100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
     mx.create_ext_power_grid(net, bus_0)
-    mx.create_power_load(net, bus_1, p_mw=0.4, q_mvar=0.0)
+    mx.create_power_load(net, bus_1, p_mw=0.4, q_mvar=0.0, name="campus_load")
 
     # Create and customise the load-shedding problem
     problem = create_min_load_shedding_problem(
@@ -136,9 +144,19 @@ Key parameters of ``create_min_load_shedding_problem``:
      - Disable individual bound checks for carriers not present in the network.
    * - ``bounds_ext_el`` / ``bounds_ext_gas`` / ``bounds_ext_heat``
      - Exchange range at external grids: active power in MW for electricity,
-       mass flow in kg/s for gas and heat. Defaults: ``(-3, 3)`` /
-       ``(-10, 10)`` / ``(-10, 10)``. Only applied when
-       ``include_ext_grids=True``.
+       mass flow in kg/s for gas and heat. Default for all three: ``None``,
+       meaning the exchange is unconstrained. Only applied when
+       ``include_ext_grids=True``. The bounds sit directly on
+       ``ExtPowerGrid.p_mw`` and ``ExtHydrGrid.mass_flow_kgs``, which follow
+       the load convention: a network importing 2 MW reports ``p_mw = -2.0``.
+       So an import cap of X is the lower bound, ``bounds_ext_el=(-X, 0)``,
+       and the mirror image ``(0, X)`` forbids importing at all. That mistake
+       does not fail the solve, it sheds every load the local generation
+       cannot cover, so the problem builder warns for any non-negative lower
+       bound paired with a positive upper one. ``(0, 0)``, the deliberate
+       "no exchange at all" island case, is left alone. Any explicit bound
+       tighter than the network's intact import will force shedding, which
+       is why the default constrains nothing.
    * - ``include_ext_grids``
      - Make external grids controllable, bound their exchange, and add a
        quadratic slack that nudges exchange toward zero, weighted at
@@ -255,6 +273,49 @@ carriers. The conversion conventions are:
   physical shortfall from a narrow temperature spread that a pure
   ``(1 - regulation)`` proxy would miss.
 
+.. _objective-semantics:
+
+What ``result.objective`` is, and is not
+----------------------------------------
+
+``result.objective`` is the value the solver reported for its own objective,
+not a shed-energy meter. Two things separate the two.
+
+Inactive and ignored components are left out of the objective entirely. A
+component switched off with ``deactivate_by_id``, and every component dropped
+by ``exclude_unconnected_nodes=True`` after a contingency islands it, has no
+Vars registered with the backend, so its unserved demand contributes nothing.
+The paradox is that the worse the contingency, the lower the objective can go:
+a fault that islands a whole feeder scores better than one that merely strains
+it, because the islanded demand has left the sum. The ``regulation`` values in
+the result dataframes report those loads as ``0.0``, which is the honest
+picture, but the scalar does not.
+
+The formulation's own tightening terms are added to the same solver objective.
+The convex epigraph relaxations of the gas and heat formulations keep
+themselves tight with small auxiliary objective terms, which the backend sums
+into the reported value alongside the shed term. They are tiny compared with
+shed energy, but they are not always positive, so a network at zero
+curtailment can report a small nonzero or slightly negative objective rather
+than an exact ``0.0``.
+
+Both effects make the scalar unsafe for ranking scenarios against each other.
+For that, compute the shed energy from the solved network instead:
+
+.. code-block:: python
+
+    from monee.problem import calc_general_resilience_performance
+
+    shed_power, shed_heat, shed_gas = calc_general_resilience_performance(
+        result.network
+    )
+
+:func:`~monee.problem.calc_general_resilience_performance` walks the solved
+network, so it counts a deactivated or excluded load at its full rating and
+returns MW-equivalents per carrier that are comparable across contingencies.
+Within a single solve the objective is still the right thing to watch, since
+it is what the optimiser minimised.
+
 ----
 
 Interpreting the result
@@ -262,20 +323,73 @@ Interpreting the result
 
 After solving, the ``regulation`` attribute of each controllable component
 shows how much of its nominal setpoint was served. A value of ``1.0`` means
-fully served; ``0.0`` means completely shed.
+fully served; ``0.0`` means completely shed. Read the values from the result
+dataframes, which contain plain floats:
 
-.. code-block:: python
+.. testcode::
+
+    import monee.model as mm
+
+    loads = result.get(mm.PowerLoad)
+    for name, reg in zip(loads["name"], loads["regulation"]):
+        print(f"{name}: regulation = {reg:.2f}")
+
+.. testoutput::
+
+    campus_load: regulation = 1.00
+
+On the solved network itself (``result.network``), every attribute the
+problem promoted to a decision variable stays a
+:class:`~monee.model.core.Var` object, which does not format or cast as a
+number (``f"{reg:.2f}"`` and ``float(reg)`` both raise ``TypeError``);
+attributes that were never promoted remain plain floats. Read the solved
+number from the ``.value`` attribute, or call :func:`monee.model.value`,
+which unwraps ``Var`` and passes plain floats through unchanged; see
+:doc:`../concepts/data_model` for the full contract.
+
+.. testcode::
 
     for child in result.network.childs:
         reg = getattr(child.model, "regulation", None)
         if reg is not None:
-            print(f"{child.name or child.id}: regulation = {reg:.2f}")
+            print(f"{child.name or child.id}: regulation = {mm.value(reg):.2f}")
+
+.. testoutput::
+
+    0: regulation = 1.00
+    campus_load: regulation = 1.00
 
 .. note::
 
    A ``regulation`` value between 0 and 1 indicates partial load curtailment.
    Inspect the ``dataframes`` dict for per-component voltage, pressure, and
    temperature to understand why curtailment was needed.
+
+Heat exchangers with a fixed ``regulation`` are a special case, because their
+duty is stated as an inequality (``q_mw_delivered <= q_mw``) that only an
+objective term pulls tight. A user objective can outweigh that pull and leave
+an exchanger delivering less than its setpoint while the solve still reports
+success. Such a shortfall is listed in ``result.violations`` under the key
+``<Type>.<id>.q_mw_delivered_shortfall``, together with a warning on the
+``monee.solver.core`` logger:
+
+.. code-block:: python
+
+    for key, magnitude in result.violations.items():
+        if key.endswith("q_mw_delivered_shortfall"):
+            print(f"{key}: {magnitude:.4f} MW unmet")
+
+The magnitude is the unmet duty in MW. If you see one, either add
+``q_mw_delivered == q_mw_set`` as an explicit constraint or scale your
+objective coefficients so the duty pull is not outbid. Exchangers whose
+``regulation`` is a decision variable are not reported: there the shortfall is
+the shedding decision you asked for.
+
+The check also covers the internal ``SubHE`` exchanger of coupling compounds
+(CHP, GasToHeat, PowerToHeat). Its duty is not a fixed setpoint but the
+solved ``q_mw`` that the control node's coupling equation prescribes, so a
+compound heat side that delivers less than that value appears in
+``result.violations`` as ``SubHE.<id>.q_mw_delivered_shortfall``.
 
 ----
 
@@ -293,7 +407,7 @@ network: it returns curtailed MW per carrier as a
 
     power_mw, heat_mw, gas_mw = GeneralResiliencePerformanceMetric().calc(
         result.network,
-        include_ext_grid=True,
+        include_ext_grid=False,
         include_coupling_points=False,
     )
 
@@ -308,7 +422,16 @@ or, equivalently, via the convenience wrapper
 
 Ignored or inactive loads (e.g. excluded by ``exclude_unconnected_nodes``)
 count at their full rating; regulated loads count at
-``upper - value * regulation``. Gas curtailment is converted to MW with the
+``upper - value * regulation``; a heat exchanger counts at the gap between its
+setpoint and the duty it reached. Gas curtailment is converted to MW with the
 same ``3.6 * higher_heating_value_kwh_per_kg`` convention as the objective. Pass
 ``include_coupling_points=True`` to also account coupling-point curtailment
 on the input carrier, mirroring the corresponding problem option.
+
+``include_ext_grid`` (False by default) adds a fourth term that is easy to
+misread: every external grid that feeds the network is counted as unserved
+demand, at its full import. That is the islanding view, where import stands for
+the load an islanded network would have had to shed, so it is what you want
+when ranking islanding scenarios. On a grid-connected network it inflates the
+power component by the whole substation import, and the number no longer equals
+the sum of the per-load shed.

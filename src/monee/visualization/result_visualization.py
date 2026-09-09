@@ -10,7 +10,7 @@ import plotly.graph_objects as go
 
 from monee.solver.core import SolverResult
 
-# Theme  –  clean light mode
+# Theme  -  clean light mode
 _BG = "#ffffff"  # pure white canvas
 _PANEL = "#f6f8fa"  # hover tooltip background
 _BORDER = "#d0d7de"  # subtle border / separator
@@ -18,7 +18,7 @@ _FONT_COLOR = "#1f2328"  # near-black primary text
 _DIM_COLOR = "#656d76"  # secondary / label text
 _FONT = "Inter, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif"
 
-# Traffic-light palette – readable on white
+# Traffic-light palette - readable on white
 _TL_GREEN = "#22c55e"  # emerald
 _TL_YELLOW = "#eab308"  # amber
 _TL_RED = "#ef4444"  # red
@@ -26,10 +26,10 @@ _TL_GRAY = "#94a3b8"  # slate
 
 # Per-grid accent colours for node borders
 _ACCENT: dict[str, str] = {
-    "power": "#2563eb",  # blue      – electricity
-    "water": "#dc2626",  # red       – heat / water
-    "gas": "#0891b2",  # cyan      – gas
-    "cp": "#9333ea",  # purple    – control point
+    "power": "#2563eb",  # blue      - electricity
+    "water": "#dc2626",  # red       - heat / water
+    "gas": "#0891b2",  # cyan      - gas
+    "cp": "#9333ea",  # purple    - control point
 }
 
 # Node shapes follow the existing visualization.py conventions
@@ -53,10 +53,18 @@ _SKIP: frozenset[str] = frozenset(
 
 
 def _write_figure(fig: go.Figure, path: str, **kwargs) -> None:
-    """Export *fig* to *path* via plotly's static image engine (kaleido)."""
+    """Export *fig* to *path*: interactive HTML for ``.html``/``.htm``,
+    otherwise plotly's static image engine (kaleido)."""
+    if path.lower().endswith((".html", ".htm")):
+        html_kwargs = dict(kwargs)
+        for dim in ("width", "height"):
+            if dim in html_kwargs:
+                html_kwargs[f"default_{dim}"] = html_kwargs.pop(dim)
+        fig.write_html(path, **html_kwargs)
+        return
     try:
         fig.write_image(path, **kwargs)
-    except (ImportError, ValueError) as e:
+    except ImportError as e:
         raise ImportError(
             "Static image export requires the optional 'kaleido' package. "
             "Install it with 'pip install monee[plot]' or 'pip install kaleido'."
@@ -128,7 +136,7 @@ def _grid_type(grid) -> str:
 
 
 def _node_result_map(result: SolverResult) -> dict:
-    """node_id → result-row dict for all node types (Bus, Junction, …)."""
+    """node_id -> result-row dict for all node types (Bus, Junction, ...)."""
     m: dict = {}
     for type_name, df in result.dataframes.items():
         if df.empty or "id" not in df.columns:
@@ -143,7 +151,7 @@ def _node_result_map(result: SolverResult) -> dict:
 
 
 def _branch_result_map(result: SolverResult) -> dict:
-    """branch_id (from, to, key) → result-row dict for all branch types.
+    """branch_id (from, to, key) -> result-row dict for all branch types.
 
     Both orderings of the endpoint pair are registered so that undirected
     MultiGraph edge iteration (which may reverse the stored direction) always
@@ -165,7 +173,7 @@ def _branch_result_map(result: SolverResult) -> dict:
 
 
 def _child_by_node_map(result: SolverResult) -> dict:
-    """node_id → list of child result-row dicts attached to that node."""
+    """node_id -> list of child result-row dicts attached to that node."""
     m: dict = {}
     for type_name, df in result.dataframes.items():
         if df.empty or "node_id" not in df.columns:
@@ -182,7 +190,7 @@ def _child_by_node_map(result: SolverResult) -> dict:
 
 def _sep(label: str = "") -> str:
     if not label:
-        return f"<span style='color:{_BORDER}'>{'─' * 26}</span>"
+        return f"<span style='color:{_BORDER}'>{'-' * 26}</span>"
     return f"<span style='color:{_DIM_COLOR};font-size:10px'>{label.upper()}</span>"
 
 
@@ -231,7 +239,7 @@ def _branch_hover(row: dict, from_id, to_id, branch_name: str | None) -> str:
 
     lines = [
         header,
-        f"<span style='color:{_DIM_COLOR}'>{from_id} → {to_id}</span>",
+        f"<span style='color:{_DIM_COLOR}'>{from_id} -> {to_id}</span>",
         _sep(),
     ]
     for k, v in row.items():
@@ -433,7 +441,7 @@ def _figure_layout(title_text: str) -> go.Layout:
     )
 
 
-# Graph layout  –  spread out nodes for readability
+# Graph layout  -  spread out nodes for readability
 
 
 def _compute_layout(graph: nx.Graph, use_monee_positions: bool) -> dict:
@@ -477,20 +485,20 @@ def plot_result(  # NOSONAR
 
     **Node coloring** (traffic-light):
 
-    * Electrical buses: green when ``vm_pu ∈ [0.95, 1.05]``, yellow for
+    * Electrical buses: green when ``vm_pu in [0.95, 1.05]``, yellow for
       ``[0.90, 0.95)`` or ``(1.05, 1.10]``, red otherwise.
     * Gas / water junctions: neutral gray with the current ``pressure_pu``
       as an inline label.
 
     **Branch coloring** (traffic-light):
 
-    * Power lines / transformers: green ``< 70 %``, yellow ``70–90 %``,
-      red ``≥ 90 %`` loading.
+    * Power lines / transformers: green ``< 70 %``, yellow ``70-90 %``,
+      red ``>= 90 %`` loading.
     * Hydraulic pipes: green, labeled with mass flow (kg/s).
     * Multi-grid (CP) branches: dotted.
 
     Hover over any node or branch to see the full result table for that
-    component.  Children (loads, generators, ext-grids, …) are listed in
+    component.  Children (loads, generators, ext-grids, ...) are listed in
     their parent node's hover text when *show_children* is ``True``.
 
     Args:
@@ -498,9 +506,10 @@ def plot_result(  # NOSONAR
         title: Figure title.  Defaults to ``"Network Result"``.
         show_children: Include child components in parent-node hover text.
         use_monee_positions: Use stored ``node.position`` coordinates.
-        write_to: Optional path to export the figure (PDF / PNG / SVG).
-            Static export needs the optional ``kaleido`` package
-            (``pip install monee[plot]``).
+        write_to: Optional path to export the figure. A ``.html`` path
+            writes an interactive page via ``fig.write_html``; PDF / PNG /
+            SVG paths use static export, which needs the optional
+            ``kaleido`` package (``pip install monee[plot]``).
 
     Returns:
         A :class:`plotly.graph_objects.Figure`.
@@ -513,7 +522,7 @@ def plot_result(  # NOSONAR
     child_map = _child_by_node_map(result) if show_children else {}
     pos = _compute_layout(graph, use_monee_positions)
 
-    # Node data – collected per grid type
+    # Node data - collected per grid type
     grid_data: dict[str, dict] = {
         g: {"x": [], "y": [], "tl_colors": [], "hover": [], "labels": []}
         for g in ("power", "water", "gas", "cp")
@@ -546,7 +555,7 @@ def plot_result(  # NOSONAR
         if not d["x"]:
             continue
 
-        # Soft glow – wide semi-transparent shape renders beneath the marker
+        # Soft glow - wide semi-transparent shape renders beneath the marker
         glow_traces.append(
             go.Scatter(
                 x=d["x"],
@@ -587,7 +596,7 @@ def plot_result(  # NOSONAR
         )
 
     # Branch traces
-    # Lines are grouped by (color, is_cp) – one Scatter per color group.
+    # Lines are grouped by (color, is_cp) - one Scatter per color group.
     # A midpoint-marker trace carries per-branch hover text + inline labels.
     color_groups: dict[tuple, list] = {}
 
@@ -612,7 +621,7 @@ def plot_result(  # NOSONAR
         hover = (
             _branch_hover(row, from_node, to_node, bname)
             if row
-            else f"{from_node} → {to_node}"
+            else f"{from_node} -> {to_node}"
         )
 
         x0, y0 = pos[from_node]
@@ -645,9 +654,9 @@ def plot_result(  # NOSONAR
             name=name,
         )
         for color, name in (
-            (_TL_GREEN, "OK  (< 70 % / vm ±5 %)"),
-            (_TL_YELLOW, "Warning  (70–90 % / vm ±10 %)"),
-            (_TL_RED, "Critical  (≥ 90 % / vm > ±10 %)"),
+            (_TL_GREEN, "OK  (< 70 % / vm +/-5 %)"),
+            (_TL_YELLOW, "Warning  (70-90 % / vm +/-10 %)"),
+            (_TL_RED, "Critical  (>= 90 % / vm > +/-10 %)"),
         )
     ]
     tl_legend.append(
@@ -660,7 +669,7 @@ def plot_result(  # NOSONAR
         )
     )
 
-    # Assemble  –  render order: edges → midpoints → glow → markers → legend
+    # Assemble  -  render order: edges -> midpoints -> glow -> markers -> legend
     all_traces = (
         edge_traces + [midpoint_trace] + glow_traces + marker_traces + tl_legend
     )
