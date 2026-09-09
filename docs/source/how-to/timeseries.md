@@ -398,8 +398,7 @@ steps. On a model class (any `ChildModel`, `BranchModel`, or node model) the
 hook has the signature
 
 ```python
-def inter_temporal_equations(self, temporal_state, component_id, **kwargs):
-    ...
+def inter_temporal_equations(self, temporal_state, component_id, **kwargs): ...
 ```
 
 and returns a list of equations. Network-wide extensions implement a
