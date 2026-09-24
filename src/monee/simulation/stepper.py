@@ -246,7 +246,7 @@ class Stepper:
     )
 
     def __init__(
-        self,
+        self,  # NOSONAR
         net: Network,
         *,
         solver=None,
@@ -366,51 +366,19 @@ class Stepper:
         ``dt_h`` instead. Either way the step is logged at WARNING and the
         StepResult reports ``dt_h`` and ``effective_dt_h``. ``t_h`` always
         advances by the raw ``dt_h``."""
-        if dt_h <= 0:
-            raise ValueError(f"dt_h must be > 0, got {dt_h}")
-        if self._timeseries_data is not None and ts_index is not None:
-            length = self._timeseries_data.length
-            if length is not None and not 0 <= ts_index < length:
-                raise ValueError(
-                    f"ts_index {ts_index} is out of range for the registered "
-                    f"series (length {length}). Register longer series or use "
-                    "TimeseriesData.slice to window them. See the "
-                    "how-to/timeseries docs page."
-                )
-
-        net_copy = self._work_net.copy()
-        if self._timeseries_data is not None and ts_index is not None:
-            self._timeseries_data.apply_to_network(net_copy, ts_index)
-        if data_overrides:
-            _apply_overrides(net_copy, data_overrides)
+        self._check_step_args(dt_h, ts_index)
+        net_copy = self._step_input_net(ts_index, data_overrides)
 
         step_idx = self._step_count
         t_h_at_step = self._t_h
         recording_checkpoint = self._recording_checkpoint()
         topo_changes = self._record_topology_changes(net_copy, step_idx, t_h_at_step)
 
-        solve_dt_h = dt_h + self._carry_dt_h
-        if solve_dt_h != dt_h:
-            _log.warning(
-                "Stepper step %d integrates over %g h instead of the requested "
-                "%g h: %g h carried over from earlier failed step(s). Pass "
-                "carry_failed_dt=False to keep every step at its own dt_h.",
-                step_idx,
-                solve_dt_h,
-                dt_h,
-                self._carry_dt_h,
-            )
+        solve_dt_h = self._solve_dt_h(dt_h, step_idx)
         self._state.dt_h = solve_dt_h
         self._solver.set_warm_start_hint(self._warm_values)
         try:
-            result = self._solver.solve(
-                net_copy,
-                optimization_problem=self._optimization_problem,
-                step_state=self._state,
-                **self._solver_kwargs,
-            )
-            if getattr(result, "success", True) is False:
-                raise _unsuccessful_solve_error(step_idx, result)
+            result = self._solve_step(net_copy, step_idx)
         except Exception as exc:
             # Drop the hint for the retry: if the warm-start solver options
             # caused the failure, the next attempt runs the flat-start ones.
@@ -418,19 +386,9 @@ class Stepper:
             if self._on_step_error == "raise":
                 self._rollback_recording(recording_checkpoint)
                 raise
-            _log.warning("Stepper step %d failed: %s", step_idx, exc)
-            self._carry_dt_h = solve_dt_h if self._carry_failed_dt else 0.0
-            sr = StepResult(
-                step=step_idx,
-                result=None,
-                failed=True,
-                error=exc,
-                dt_h=dt_h,
-                effective_dt_h=solve_dt_h,
-                t_h=t_h_at_step,
+            return self._record_failed_step(
+                exc, step_idx, dt_h, solve_dt_h, t_h_at_step
             )
-            self._record(sr, dt_h)
-            return sr
         finally:
             # A patched/short-circuited solve may not consume the one-shot
             # hint; never leave it armed on a shared solver instance.
@@ -450,6 +408,77 @@ class Stepper:
         sr = StepResult(
             step=step_idx,
             result=result,
+            dt_h=dt_h,
+            effective_dt_h=solve_dt_h,
+            t_h=t_h_at_step,
+        )
+        self._record(sr, dt_h)
+        return sr
+
+    def _check_step_args(self, dt_h: float, ts_index: int | None) -> None:
+        if dt_h <= 0:
+            raise ValueError(f"dt_h must be > 0, got {dt_h}")
+        if self._timeseries_data is None or ts_index is None:
+            return
+        length = self._timeseries_data.length
+        if length is not None and not 0 <= ts_index < length:
+            raise ValueError(
+                f"ts_index {ts_index} is out of range for the registered "
+                f"series (length {length}). Register longer series or use "
+                "TimeseriesData.slice to window them. See the "
+                "how-to/timeseries docs page."
+            )
+
+    def _step_input_net(
+        self, ts_index: int | None, data_overrides: Mapping[tuple, float] | None
+    ):
+        net_copy = self._work_net.copy()
+        if self._timeseries_data is not None and ts_index is not None:
+            self._timeseries_data.apply_to_network(net_copy, ts_index)
+        if data_overrides:
+            _apply_overrides(net_copy, data_overrides)
+        return net_copy
+
+    def _solve_dt_h(self, dt_h: float, step_idx: int) -> float:
+        solve_dt_h = dt_h + self._carry_dt_h
+        if solve_dt_h != dt_h:
+            _log.warning(
+                "Stepper step %d integrates over %g h instead of the requested "
+                "%g h: %g h carried over from earlier failed step(s). Pass "
+                "carry_failed_dt=False to keep every step at its own dt_h.",
+                step_idx,
+                solve_dt_h,
+                dt_h,
+                self._carry_dt_h,
+            )
+        return solve_dt_h
+
+    def _solve_step(self, net_copy, step_idx: int):
+        result = self._solver.solve(
+            net_copy,
+            optimization_problem=self._optimization_problem,
+            step_state=self._state,
+            **self._solver_kwargs,
+        )
+        if getattr(result, "success", True) is False:
+            raise _unsuccessful_solve_error(step_idx, result)
+        return result
+
+    def _record_failed_step(
+        self,
+        exc: Exception,
+        step_idx: int,
+        dt_h: float,
+        solve_dt_h: float,
+        t_h_at_step: float,
+    ) -> StepResult:
+        _log.warning("Stepper step %d failed: %s", step_idx, exc)
+        self._carry_dt_h = solve_dt_h if self._carry_failed_dt else 0.0
+        sr = StepResult(
+            step=step_idx,
+            result=None,
+            failed=True,
+            error=exc,
             dt_h=dt_h,
             effective_dt_h=solve_dt_h,
             t_h=t_h_at_step,

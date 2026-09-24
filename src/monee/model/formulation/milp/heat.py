@@ -277,80 +277,103 @@ class McCormickHeatNodeFormulation(NodeFormulation):
         ltc_owns_node = getattr(node, "_ltc_active", False)
 
         if not ltc_owns_node:
-            # eq. 9c/9d - sender H_out, receiver H_in. A reversed pipe swaps the
-            # two ends: its TO node is the sender.
-            h_out_terms = []
-            h_in_terms = []
-            ends = [(bm, not _reversed_flow(bm)) for bm in from_branch_models]
-            ends += [(bm, _reversed_flow(bm)) for bm in to_branch_models]
-            for bm, node_is_sender in ends:
-                key = "H_out_mw" if node_is_sender else "H_in_mw"
-                if key not in bm.vars:
-                    continue
-                term = bm.vars[key] * bm.vars.get("on_off", 1)
-                (h_out_terms if node_is_sender else h_in_terms).append(term)
-
-            # Load convention: HeatGenerator \to negative q_mw, HeatLoad \to positive.
-            q_child_terms = [
-                cm.vars["q_mw_heat"] * cm.vars.get("regulation", 1)
-                for cm in connected_child_models
-                if "q_mw_heat" in cm.vars
-            ]
-
-            # Branch q_mw (e.g. GasToHeatHG) absorbed at the TO node.
-            q_branch_terms = [
-                bm.vars["q_mw_heat"] * bm.vars.get("on_off", 1)
-                for bm in to_branch_models
-                if "q_mw_heat" in bm.vars
-            ]
-
-            # Use the node's own \tau; fixed-supply inflow children pin \tau via
-            # overwrite(), collapsing the t_pu factor to a constant.
-            boundary_enthalpy_in = [
-                -cm.vars["mass_flow_kgs"]
-                * cm.vars.get("regulation", 1)
-                * scale_mw_per_kgs
-                * node.vars["t_pu"]
-                for cm in connected_child_models
-                if "mass_flow_kgs" in cm.vars and "q_mw_heat" not in cm.vars
-            ]
-
-            if not (
-                h_out_terms
-                or h_in_terms
-                or q_child_terms
-                or q_branch_terms
-                or boundary_enthalpy_in
-            ):
-                warnings.warn(
-                    "Node contributes no enthalpy terms; nodal heat balance skipped."
-                )
-            else:
-                # eq. 9a: \sum H_in + \sum H_boundary - \sum H_out = \sum q_child + \sum q_branch
-                eqs.append(
-                    sum(h_in_terms) + sum(boundary_enthalpy_in) - sum(h_out_terms)
-                    == sum(q_child_terms) + sum(q_branch_terms)
-                )
+            eqs += _nodal_heat_balance(
+                node,
+                from_branch_models,
+                to_branch_models,
+                connected_child_models,
+                scale_mw_per_kgs,
+            )
 
         # |S| = 1 uses the plain envelopes assembled on the branch side.
         if self.num_partitions > 1:
-            tpu_l, tpu_u = _t_pu_env_bounds(grid)
-            S = self.num_partitions
-            tpu_pieces = [getattr(node, f"_t_pu_piece_{s}") for s in range(S)]
-            y_pieces = [getattr(node, f"_piece_y_{s}") for s in range(S)]
-
-            # 18c: \tau_i = \sum \tau_{i,s}
-            eqs.append(node.vars["t_pu"] == sum(tpu_pieces))
-            # 18e: exactly one partition active
-            eqs.append(sum(y_pieces) == 1)
-            # 18f/18g: \tau_{i,s} bracketed to piece s when active, else 0
-            for s in range(S):
-                t_l_s = tpu_l + (tpu_u - tpu_l) * s / S
-                t_u_s = tpu_l + (tpu_u - tpu_l) * (s + 1) / S
-                eqs.append(tpu_pieces[s] >= t_l_s * y_pieces[s])
-                eqs.append(tpu_pieces[s] <= t_u_s * y_pieces[s])
+            eqs += _node_partition_eqs(node, grid, self.num_partitions)
 
         return eqs
+
+
+def _branch_enthalpy_terms(from_branch_models, to_branch_models):
+    # eq. 9c/9d - sender H_out, receiver H_in. A reversed pipe swaps the
+    # two ends: its TO node is the sender.
+    h_out_terms = []
+    h_in_terms = []
+    ends = [(bm, not _reversed_flow(bm)) for bm in from_branch_models]
+    ends += [(bm, _reversed_flow(bm)) for bm in to_branch_models]
+    for bm, node_is_sender in ends:
+        key = "H_out_mw" if node_is_sender else "H_in_mw"
+        if key not in bm.vars:
+            continue
+        term = bm.vars[key] * bm.vars.get("on_off", 1)
+        (h_out_terms if node_is_sender else h_in_terms).append(term)
+    return h_out_terms, h_in_terms
+
+
+def _nodal_heat_balance(
+    node, from_branch_models, to_branch_models, connected_child_models, scale_mw_per_kgs
+):
+    h_out_terms, h_in_terms = _branch_enthalpy_terms(
+        from_branch_models, to_branch_models
+    )
+
+    # Load convention: HeatGenerator \to negative q_mw, HeatLoad \to positive.
+    q_child_terms = [
+        cm.vars["q_mw_heat"] * cm.vars.get("regulation", 1)
+        for cm in connected_child_models
+        if "q_mw_heat" in cm.vars
+    ]
+
+    # Branch q_mw (e.g. GasToHeatHG) absorbed at the TO node.
+    q_branch_terms = [
+        bm.vars["q_mw_heat"] * bm.vars.get("on_off", 1)
+        for bm in to_branch_models
+        if "q_mw_heat" in bm.vars
+    ]
+
+    # Use the node's own \tau; fixed-supply inflow children pin \tau via
+    # overwrite(), collapsing the t_pu factor to a constant.
+    boundary_enthalpy_in = [
+        -cm.vars["mass_flow_kgs"]
+        * cm.vars.get("regulation", 1)
+        * scale_mw_per_kgs
+        * node.vars["t_pu"]
+        for cm in connected_child_models
+        if "mass_flow_kgs" in cm.vars and "q_mw_heat" not in cm.vars
+    ]
+
+    if not (
+        h_out_terms
+        or h_in_terms
+        or q_child_terms
+        or q_branch_terms
+        or boundary_enthalpy_in
+    ):
+        warnings.warn("Node contributes no enthalpy terms; nodal heat balance skipped.")
+        return []
+    # eq. 9a: \sum H_in + \sum H_boundary - \sum H_out = \sum q_child + \sum q_branch
+    return [
+        sum(h_in_terms) + sum(boundary_enthalpy_in) - sum(h_out_terms)
+        == sum(q_child_terms) + sum(q_branch_terms)
+    ]
+
+
+def _node_partition_eqs(node, grid, num_partitions):
+    tpu_l, tpu_u = _t_pu_env_bounds(grid)
+    S = num_partitions
+    tpu_pieces = [getattr(node, f"_t_pu_piece_{s}") for s in range(S)]
+    y_pieces = [getattr(node, f"_piece_y_{s}") for s in range(S)]
+
+    eqs = []
+    # 18c: \tau_i = \sum \tau_{i,s}
+    eqs.append(node.vars["t_pu"] == sum(tpu_pieces))
+    # 18e: exactly one partition active
+    eqs.append(sum(y_pieces) == 1)
+    # 18f/18g: \tau_{i,s} bracketed to piece s when active, else 0
+    for s in range(S):
+        t_l_s = tpu_l + (tpu_u - tpu_l) * s / S
+        t_u_s = tpu_l + (tpu_u - tpu_l) * (s + 1) / S
+        eqs.append(tpu_pieces[s] >= t_l_s * y_pieces[s])
+        eqs.append(tpu_pieces[s] <= t_u_s * y_pieces[s])
+    return eqs
 
 
 class McCormickHeatBranchFormulation(BranchFormulation):
@@ -528,18 +551,7 @@ def _water_mass_roles(net, water_node_ids, fixed_directed=()):
     for child in net.childs:
         if not child.active or child.node_id not in water_node_ids:
             continue
-        model = child.model
-        if isinstance(model, ExtHydrGrid):
-            injectors.add(child.node_id)
-            continue
-        flow = getattr(model, "mass_flow_kgs", None)
-        if not isinstance(flow, (int, float)) or isinstance(flow, bool):
-            continue
-        # Load convention: positive draws, negative injects.
-        if flow > 0:
-            drawers.add(child.node_id)
-        elif flow < 0:
-            injectors.add(child.node_id)
+        _add_child_mass_role(child, ExtHydrGrid, injectors, drawers)
     # An active HE pulls its design flow out of its FROM node, so that junction
     # must be supplied exactly like one hosting a Sink. A PassiveHeatExchanger
     # carries no mass_flow_design_kgs (its flow is free in [0, m_U], so it
@@ -547,11 +559,28 @@ def _water_mass_roles(net, water_node_ids, fixed_directed=()):
     # excludes both.
     for tail, _head, branch in fixed_directed:
         design_kgs = getattr(branch.model, "mass_flow_design_kgs", None)
-        if not isinstance(design_kgs, (int, float)) or isinstance(design_kgs, bool):
-            continue
-        if design_kgs > 0:
+        if _is_plain_number(design_kgs) and design_kgs > 0:
             drawers.add(tail)
     return injectors, drawers
+
+
+def _is_plain_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _add_child_mass_role(child, ext_hydr_grid_cls, injectors, drawers):
+    model = child.model
+    if isinstance(model, ext_hydr_grid_cls):
+        injectors.add(child.node_id)
+        return
+    flow = getattr(model, "mass_flow_kgs", None)
+    if not _is_plain_number(flow):
+        return
+    # Load convention: positive draws, negative injects.
+    if flow > 0:
+        drawers.add(child.node_id)
+    elif flow < 0:
+        injectors.add(child.node_id)
 
 
 def _reachable(sources, out_edges):
@@ -597,6 +626,35 @@ def orient_unidirectional_water_pipes(net) -> list:
     if not water_node_ids:
         return []
 
+    reversible, fixed_directed, undirected, water_pipes = _classify_water_branches(
+        net, water_node_ids
+    )
+
+    injectors, drawers = _water_mass_roles(net, water_node_ids, fixed_directed)
+
+    orientation = {branch.id: (tail, head) for tail, head, branch in reversible}
+    while injectors and drawers:
+        out_edges, adjacency = _water_flow_graph(
+            orientation, reversible, fixed_directed, undirected
+        )
+
+        supplied = _reachable(injectors, out_edges)
+        starved = drawers - supplied
+        if not starved:
+            break
+        path = _shortest_supply_path(supplied, starved, adjacency)
+        if not path:
+            # Severed from every injector in the undirected graph too; no
+            # orientation helps (the solve drops such islands as unconnected).
+            break
+        for branch in path:
+            tail, head = orientation[branch.id]
+            orientation[branch.id] = (head, tail)
+
+    return _mark_reversed_pipes(water_pipes, orientation)
+
+
+def _classify_water_branches(net, water_node_ids):
     reversible, fixed_directed, undirected, water_pipes = [], [], [], []
     for branch in net.branches:
         tail, head = branch.id[0], branch.id[1]
@@ -613,42 +671,31 @@ def orient_unidirectional_water_pipes(net) -> list:
             fixed_directed.append((tail, head, branch))
         else:
             undirected.append((tail, head, branch))
+    return reversible, fixed_directed, undirected, water_pipes
 
-    injectors, drawers = _water_mass_roles(net, water_node_ids, fixed_directed)
 
-    orientation = {branch.id: (tail, head) for tail, head, branch in reversible}
-    while injectors and drawers:
-        out_edges: dict = {}
-        adjacency: dict = {}
-        for _, _, branch in reversible:
-            tail, head = orientation[branch.id]
-            out_edges.setdefault(tail, []).append(head)
-            adjacency.setdefault(tail, []).append((head, branch, False))
-            adjacency.setdefault(head, []).append((tail, branch, True))
-        for tail, head, _branch in fixed_directed:
-            # Forward only: reaching the tail from the head is not realizable
-            # and no flip makes it so.
-            out_edges.setdefault(tail, []).append(head)
-            adjacency.setdefault(tail, []).append((head, None, False))
-        for tail, head, branch in undirected:
-            out_edges.setdefault(tail, []).append(head)
-            out_edges.setdefault(head, []).append(tail)
-            adjacency.setdefault(tail, []).append((head, branch, False))
-            adjacency.setdefault(head, []).append((tail, branch, False))
+def _water_flow_graph(orientation, reversible, fixed_directed, undirected):
+    out_edges: dict = {}
+    adjacency: dict = {}
+    for _, _, branch in reversible:
+        tail, head = orientation[branch.id]
+        out_edges.setdefault(tail, []).append(head)
+        adjacency.setdefault(tail, []).append((head, branch, False))
+        adjacency.setdefault(head, []).append((tail, branch, True))
+    for tail, head, _branch in fixed_directed:
+        # Forward only: reaching the tail from the head is not realizable
+        # and no flip makes it so.
+        out_edges.setdefault(tail, []).append(head)
+        adjacency.setdefault(tail, []).append((head, None, False))
+    for tail, head, branch in undirected:
+        out_edges.setdefault(tail, []).append(head)
+        out_edges.setdefault(head, []).append(tail)
+        adjacency.setdefault(tail, []).append((head, branch, False))
+        adjacency.setdefault(head, []).append((tail, branch, False))
+    return out_edges, adjacency
 
-        supplied = _reachable(injectors, out_edges)
-        starved = drawers - supplied
-        if not starved:
-            break
-        path = _shortest_supply_path(supplied, starved, adjacency)
-        if not path:
-            # Severed from every injector in the undirected graph too; no
-            # orientation helps (the solve drops such islands as unconnected).
-            break
-        for branch in path:
-            tail, head = orientation[branch.id]
-            orientation[branch.id] = (head, tail)
 
+def _mark_reversed_pipes(water_pipes, orientation):
     flipped = []
     for branch in water_pipes:
         stored = orientation.get(branch.id)
@@ -669,7 +716,7 @@ def orient_unidirectional_water_pipes(net) -> list:
 def _shortest_supply_path(supplied, starved, adjacency):
     """The wrong-way pipes on the shortest undirected water path from the
     supplied set to the nearest starved junction."""
-    previous: dict = {node: None for node in supplied}
+    previous: dict = dict.fromkeys(supplied)
     queue = deque(supplied)
     while queue:
         node = queue.popleft()

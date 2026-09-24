@@ -234,14 +234,14 @@ class Network:
 
             net.deactivate_by_id(line_id)
         """
-        cls, id = _kind_and_id(cls, id)
-        self._set_active(cls, id, False)
+        cls, component_id = _kind_and_id(cls, id)
+        self._set_active(cls, component_id, False)
 
     def activate_by_id(self, cls, id=None):
         """Activate the component *id* of kind *cls*, the inverse of
         :meth:`deactivate_by_id` and accepting the same argument forms."""
-        cls, id = _kind_and_id(cls, id)
-        self._set_active(cls, id, True)
+        cls, component_id = _kind_and_id(cls, id)
+        self._set_active(cls, component_id, True)
 
     def activate(self, component):
         """Activate *component*, a container object (:class:`Node`,
@@ -364,7 +364,7 @@ class Network:
         for u, v, key in incident:
             self.remove_branch_between(u, v, key=key)
         node = self.node_by_id(node_id)
-        for child_id in list(node.child_ids):
+        for child_id in tuple(node.child_ids):
             if self.has_child(child_id):
                 self.remove_child(child_id)
         self._network_internal.remove_node(node_id)
@@ -386,18 +386,19 @@ class Network:
         compound: Compound = self.compound_by_id(compound_id)
         del self._compound_dict[compound_id]
         for subcomponent in compound.subcomponents:
-            if isinstance(subcomponent, Node):
-                if self.has_node(subcomponent.id):
-                    self.remove_node(subcomponent.id)
-            elif isinstance(subcomponent, Branch):
-                if self.has_branch(subcomponent.id):
-                    self.remove_branch(subcomponent.id)
-            elif isinstance(subcomponent, Child):
-                if self.has_child(subcomponent.id):
-                    self.remove_child(subcomponent.id)
-            elif isinstance(subcomponent, Compound):
-                if self.has_compound(subcomponent.id):
-                    self.remove_compound(subcomponent.id)
+            self._remove_subcomponent(subcomponent)
+
+    def _remove_subcomponent(self, subcomponent):
+        for cls, has, remove in (
+            (Node, self.has_node, self.remove_node),
+            (Branch, self.has_branch, self.remove_branch),
+            (Child, self.has_child, self.remove_child),
+            (Compound, self.has_compound, self.remove_compound),
+        ):
+            if isinstance(subcomponent, cls):
+                if has(subcomponent.id):
+                    remove(subcomponent.id)
+                return
 
     def remove_branch_between(self, node_one, node_two, key=0):
         """Remove the branch between *node_one* and *node_two*; *key*
@@ -1001,35 +1002,10 @@ class Network:
 
         findings = []
         for branch in self.branches:
-            if not branch.active or isinstance(branch.model, Trafo):
+            kvs = self._mixed_base_kv_pair(branch, Trafo, GenericPowerBranch)
+            if kvs is None:
                 continue
-            # pandapower imports mark transformer branches via model.kind
-            # ("trafo"/"trafo3w") and fold the ratio into the pu conversion,
-            # so tap stays 1 and the class stays GenericPowerBranch.
-            kind = getattr(branch.model, "kind", None)
-            if isinstance(kind, str) and kind.startswith("trafo"):
-                continue
-            if not (
-                self.has_node(branch.from_node_id) and self.has_node(branch.to_node_id)
-            ):
-                continue
-            kv_from = getattr(
-                self.node_by_id(branch.from_node_id).model, "base_kv", None
-            )
-            kv_to = getattr(self.node_by_id(branch.to_node_id).model, "base_kv", None)
-            if (
-                not isinstance(kv_from, (int, float))
-                or not isinstance(kv_to, (int, float))
-                or math.isclose(kv_from, kv_to, rel_tol=1e-6)
-            ):
-                continue
-            tap = getattr(branch.model, "tap", 1)
-            if (
-                isinstance(branch.model, GenericPowerBranch)
-                and isinstance(tap, (int, float))
-                and not math.isclose(tap, 1.0)
-            ):
-                continue
+            kv_from, kv_to = kvs
             findings.append(
                 CheckFinding(
                     "mixed_base_kv",
@@ -1043,6 +1019,36 @@ class Network:
                 )
             )
         return findings
+
+    def _mixed_base_kv_pair(self, branch, trafo_cls, generic_power_branch_cls):
+        if not branch.active or isinstance(branch.model, trafo_cls):
+            return None
+        # pandapower imports mark transformer branches via model.kind
+        # ("trafo"/"trafo3w") and fold the ratio into the pu conversion,
+        # so tap stays 1 and the class stays GenericPowerBranch.
+        kind = getattr(branch.model, "kind", None)
+        if isinstance(kind, str) and kind.startswith("trafo"):
+            return None
+        if not (
+            self.has_node(branch.from_node_id) and self.has_node(branch.to_node_id)
+        ):
+            return None
+        kv_from = getattr(self.node_by_id(branch.from_node_id).model, "base_kv", None)
+        kv_to = getattr(self.node_by_id(branch.to_node_id).model, "base_kv", None)
+        if (
+            not isinstance(kv_from, (int, float))
+            or not isinstance(kv_to, (int, float))
+            or math.isclose(kv_from, kv_to, rel_tol=1e-6)
+        ):
+            return None
+        tap = getattr(branch.model, "tap", 1)
+        if (
+            isinstance(branch.model, generic_power_branch_cls)
+            and isinstance(tap, (int, float))
+            and not math.isclose(tap, 1.0)
+        ):
+            return None
+        return kv_from, kv_to
 
     def _check_dof_preview(self) -> list[CheckFinding]:
         import warnings
@@ -1177,9 +1183,9 @@ def _clean_up_compound(network: Network, compound):
         if not network.has_branch(component.id):
             fully_intact = False
     for component in compound.component_of_type(Compound):
-        if not network.has_compound(component.id):
-            fully_intact = False
-        elif not _clean_up_compound(network, component):
+        if not network.has_compound(component.id) or not _clean_up_compound(
+            network, component
+        ):
             fully_intact = False
     if not fully_intact and network.has_compound(compound.id):
         network.remove_compound(compound.id)
@@ -1248,23 +1254,7 @@ def _steiner_transform(terminals, weight, steiner_method):
     from networkx.algorithms.approximation import steiner_tree
 
     def _transform(g):
-        simple = nx.Graph()
-        for node_id, data in g.nodes(data=True):
-            simple.add_node(node_id, **data)
-        for u, v, key, data in g.edges(keys=True, data=True):
-            w = (
-                float(
-                    weight(
-                        data["internal_branch"],
-                        g.nodes[u]["internal_node"],
-                        g.nodes[v]["internal_node"],
-                    )
-                )
-                if weight is not None
-                else 1.0
-            )
-            if not simple.has_edge(u, v) or w < simple[u][v]["weight"]:
-                simple.add_edge(u, v, weight=w, _mkey=key)
+        simple = _cheapest_edge_projection(g, weight)
 
         present = [t for t in terminals if t in simple]
         result = nx.MultiGraph()
@@ -1282,6 +1272,29 @@ def _steiner_transform(terminals, weight, steiner_method):
         return result
 
     return _transform
+
+
+def _projection_edge_weight(g, u, v, data, weight):
+    if weight is None:
+        return 1.0
+    return float(
+        weight(
+            data["internal_branch"],
+            g.nodes[u]["internal_node"],
+            g.nodes[v]["internal_node"],
+        )
+    )
+
+
+def _cheapest_edge_projection(g, weight):
+    simple = nx.Graph()
+    for node_id, data in g.nodes(data=True):
+        simple.add_node(node_id, **data)
+    for u, v, key, data in g.edges(keys=True, data=True):
+        w = _projection_edge_weight(g, u, v, data, weight)
+        if not simple.has_edge(u, v) or w < simple[u][v]["weight"]:
+            simple.add_edge(u, v, weight=w, _mkey=key)
+    return simple
 
 
 def transform_network(network: Network, graph_transform):

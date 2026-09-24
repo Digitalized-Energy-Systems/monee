@@ -46,6 +46,49 @@ def _clean_pp_name(value):
     return str(value)
 
 
+def _live_bus_ids(net):
+    if "in_service" in net.bus.columns:
+        return {int(b) for b in net.bus.index[net.bus["in_service"].astype(bool)]}
+    return {int(b) for b in net.bus.index}
+
+
+def _resolve_branch_pair(from_bus, to_bus, live_buses, bus_to_node, monee_node_ids):
+    # to_mpc renumbers out-of-service buses with a stale lookup, so their
+    # mapped node id is unreliable (it can even collide with another bus).
+    if int(from_bus) not in live_buses or int(to_bus) not in live_buses:
+        return None
+    f = bus_to_node.get(int(from_bus))
+    t = bus_to_node.get(int(to_bus))
+    if f not in monee_node_ids or t not in monee_node_ids:
+        return None
+    return f, t
+
+
+def _take_parallel_key(seen, f, t):
+    # The monee branch key is the nx.MultiGraph edge key, which counts
+    # parallels per *undirected* node pair.
+    pair = (f, t) if f <= t else (t, f)
+    key = seen.get(pair, 0)
+    seen[pair] = key + 1
+    return key
+
+
+def _in_service_rows(net, table):
+    if not hasattr(net, table) or not len(getattr(net, table)):
+        return
+    for row in getattr(net, table).itertuples():
+        if getattr(row, "in_service", True):
+            yield row
+
+
+def _register_branch(table, row, pair, seen, kinds, meta):
+    f, t = pair
+    bid = (f, t, _take_parallel_key(seen, f, t))
+    kinds[bid] = table
+    meta[bid] = (table, row.Index, _clean_pp_name(getattr(row, "name", None)))
+    return bid
+
+
 def _pp_branch_max_i_ka_overrides(net, bus_to_node, monee_node_ids):
     overrides = {}
     kinds = {}
@@ -55,85 +98,40 @@ def _pp_branch_max_i_ka_overrides(net, bus_to_node, monee_node_ids):
     if not hasattr(net, "bus"):
         return overrides, kinds, meta
 
-    if "in_service" in net.bus.columns:
-        live_buses = {int(b) for b in net.bus.index[net.bus["in_service"].astype(bool)]}
-    else:
-        live_buses = {int(b) for b in net.bus.index}
-
-    def resolve_pair(from_bus, to_bus):
-        # to_mpc renumbers out-of-service buses with a stale lookup, so their
-        # mapped node id is unreliable (it can even collide with another bus).
-        if int(from_bus) not in live_buses or int(to_bus) not in live_buses:
-            return None
-        f = bus_to_node.get(int(from_bus))
-        t = bus_to_node.get(int(to_bus))
-        if f not in monee_node_ids or t not in monee_node_ids:
-            return None
-        return f, t
-
-    def take_parallel_key(f, t):
-        # The monee branch key is the nx.MultiGraph edge key, which counts
-        # parallels per *undirected* node pair.
-        pair = (f, t) if f <= t else (t, f)
-        key = seen.get(pair, 0)
-        seen[pair] = key + 1
-        return key
+    live_buses = _live_bus_ids(net)
 
     skipped_lines = []
-    if hasattr(net, "line") and len(net.line):
-        for row in net.line.itertuples():
-            # to_mpc drops out-of-service lines, so they consume no branch slot.
-            if not getattr(row, "in_service", True):
-                continue
-            pair = resolve_pair(row.from_bus, row.to_bus)
-            if pair is None:
-                skipped_lines.append(row.Index)
-                continue
-            f, t = pair
-            key = take_parallel_key(f, t)
-            max_i_ka = float(row.max_i_ka)
-            parallel = _coerce_positive_int(getattr(row, "parallel", 1))
-            df = _coerce_positive_float(getattr(row, "df", 1.0))
-            overrides[(f, t, key)] = max_i_ka * parallel * df
-            kinds[(f, t, key)] = "line"
-            meta[(f, t, key)] = (
-                "line",
-                row.Index,
-                _clean_pp_name(getattr(row, "name", None)),
-            )
-
-    if hasattr(net, "trafo") and len(net.trafo):
-        for row in net.trafo.itertuples():
-            if not getattr(row, "in_service", True):
-                continue
-            pair = resolve_pair(row.hv_bus, row.lv_bus)
-            if pair is not None:
-                f, t = pair
-                key = take_parallel_key(f, t)
-                kinds[(f, t, key)] = "trafo"
-                meta[(f, t, key)] = (
-                    "trafo",
-                    row.Index,
-                    _clean_pp_name(getattr(row, "name", None)),
-                )
+    # to_mpc drops out-of-service lines, so they consume no branch slot.
+    for row in _in_service_rows(net, "line"):
+        pair = _resolve_branch_pair(
+            row.from_bus, row.to_bus, live_buses, bus_to_node, monee_node_ids
+        )
+        if pair is None:
+            skipped_lines.append(row.Index)
+            continue
+        bid = _register_branch("line", row, pair, seen, kinds, meta)
+        max_i_ka = float(row.max_i_ka)
+        parallel = _coerce_positive_int(getattr(row, "parallel", 1))
+        df = _coerce_positive_float(getattr(row, "df", 1.0))
+        overrides[bid] = max_i_ka * parallel * df
 
     # ppc branch order is line, trafo, trafo3w, impedance; trafo3w arms end on
     # a unique star bus and never collide with these pairs, so counting
     # impedances here keeps the parallel keys aligned with to_mpc.
-    if hasattr(net, "impedance") and len(net.impedance):
-        for row in net.impedance.itertuples():
-            if not getattr(row, "in_service", True):
-                continue
-            pair = resolve_pair(row.from_bus, row.to_bus)
+    for table, from_col, to_col in (
+        ("trafo", "hv_bus", "lv_bus"),
+        ("impedance", "from_bus", "to_bus"),
+    ):
+        for row in _in_service_rows(net, table):
+            pair = _resolve_branch_pair(
+                getattr(row, from_col),
+                getattr(row, to_col),
+                live_buses,
+                bus_to_node,
+                monee_node_ids,
+            )
             if pair is not None:
-                f, t = pair
-                key = take_parallel_key(f, t)
-                kinds[(f, t, key)] = "impedance"
-                meta[(f, t, key)] = (
-                    "impedance",
-                    row.Index,
-                    _clean_pp_name(getattr(row, "name", None)),
-                )
+                _register_branch(table, row, pair, seen, kinds, meta)
 
     if skipped_lines:
         warnings.warn(
@@ -160,19 +158,22 @@ def _trafo3w_terminal_node_ids(net, bus_to_node):
     return terminals
 
 
+def _infer_branch_kind(branch, real_node_ids, trafo3w_terminals):
+    from_real = branch.from_node_id in real_node_ids
+    to_real = branch.to_node_id in real_node_ids
+    if from_real == to_real:
+        return "unknown"
+    real_end = branch.from_node_id if from_real else branch.to_node_id
+    return "trafo3w" if real_end in trafo3w_terminals else "switch-stub"
+
+
 def _apply_branch_kinds(monee_net, kinds, real_node_ids, trafo3w_terminals):
     for branch in monee_net.branches:
         if not hasattr(branch.model, "max_i_ka"):
             continue
         kind = kinds.get((branch.from_node_id, branch.to_node_id, branch.id[2]))
         if kind is None:
-            from_real = branch.from_node_id in real_node_ids
-            to_real = branch.to_node_id in real_node_ids
-            if from_real != to_real:
-                real_end = branch.from_node_id if from_real else branch.to_node_id
-                kind = "trafo3w" if real_end in trafo3w_terminals else "switch-stub"
-            else:
-                kind = "unknown"
+            kind = _infer_branch_kind(branch, real_node_ids, trafo3w_terminals)
         branch.model.kind = kind
 
 
@@ -313,9 +314,7 @@ def _attach_sgens(monee_net, sgens, bus_to_node):
         monee_net.child_to(model, node_id=node.id, name=name)
 
 
-def _name_generators(monee_net, net, bus_to_node, nodes_by_id):
-    if not hasattr(net, "gen") or not len(net.gen) or "name" not in net.gen.columns:
-        return
+def _gen_names_by_node(net, bus_to_node, nodes_by_id):
     names_by_node = {}
     for row in net.gen.itertuples():
         if not getattr(row, "in_service", True):
@@ -324,14 +323,25 @@ def _name_generators(monee_net, net, bus_to_node, nodes_by_id):
         if node is None:
             continue
         names_by_node.setdefault(node.id, []).append(getattr(row, "name", None))
+    return names_by_node
+
+
+def _unnamed_generator_children(monee_net, node):
+    return [
+        child
+        for child in monee_net.childs_by_ids(node.child_ids)
+        if child.name is None
+        and isinstance(child.model, (PowerGenerator, VoltageControlledGenerator))
+    ]
+
+
+def _name_generators(monee_net, net, bus_to_node, nodes_by_id):
+    if not hasattr(net, "gen") or not len(net.gen) or "name" not in net.gen.columns:
+        return
+    names_by_node = _gen_names_by_node(net, bus_to_node, nodes_by_id)
 
     for node_id, names in names_by_node.items():
-        children = [
-            child
-            for child in monee_net.childs_by_ids(nodes_by_id[node_id].child_ids)
-            if child.name is None
-            and isinstance(child.model, (PowerGenerator, VoltageControlledGenerator))
-        ]
+        children = _unnamed_generator_children(monee_net, nodes_by_id[node_id])
         # A gen at the slack bus becomes an ExtPowerGrid, so a count mismatch
         # means the row-to-child order is not trustworthy.
         if len(children) != len(names):

@@ -12,10 +12,11 @@ from dataclasses import dataclass, field
 import pyomo.environ as pyo
 
 _log = logging.getLogger(__name__)
+_MIS_FAILED_MSG = "MIS computation failed: %s"
 
 # Pyomo var name: {cat}_{id}__{attr} or {cat}_{id}_t{period}__{attr}.
 _VAR_NAME_RE = re.compile(
-    r"^(?P<cat>\w+?)_(?P<id>\d+)(?:_t(?P<t>\d+))?__(?P<attr>\w+)$"
+    r"^(?P<cat>[a-z]+)_(?P<id>\d+)(?:_t(?P<t>\d+))?__(?P<attr>\w+)$"
 )
 # Branch ids are (from, to, key) tuples, sanitized to three segments.
 _BRANCH_VAR_NAME_RE = re.compile(
@@ -536,7 +537,7 @@ def _compute_mis_with_reason(
             "found), and the MIS computation needs one; install SCIP, Gurobi "
             "or CPLEX or pass a different solver_name"
         )
-        _log.warning("MIS computation failed: %s", reason)
+        _log.warning(_MIS_FAILED_MSG, reason)
         iis_logger.removeHandler(handler)
         iis_logger.setLevel(original_level)
         return [], [], reason
@@ -546,7 +547,7 @@ def _compute_mis_with_reason(
             compute_infeasibility_explanation(pm, solver=solver)
     except Exception as e:
         reason = _describe_error(e) + _termination_note(solver.terminations, time_limit)
-        _log.warning("MIS computation failed: %s", reason)
+        _log.warning(_MIS_FAILED_MSG, reason)
         mis_lines, relax_lines = _parse_mis_output(log_capture.getvalue())
         return mis_lines, relax_lines, reason
     finally:
@@ -600,7 +601,7 @@ class InfeasibilityReport:
             reverse=True,
         )
 
-    def violation_hotspots(self, limit: int = 10) -> list[dict]:
+    def violation_hotspots(self, limit: int | None = 10) -> list[dict]:
         """Violated constraints collapsed onto the components that own them,
         ranked by how many of a component's equations are violated and then by
         the largest residual. When no minimal infeasible subsystem is available
@@ -722,39 +723,49 @@ class InfeasibilityReport:
         ]
         groups = self._grouped_residuals()
         if len(groups) > 1 or groups[0][0] is not None:
-            counts = ", ".join(
-                f"{carrier or 'other'} {len(rs)}" for carrier, rs in groups
-            )
-            lines.append(f"  By carrier: {counts}.")
-            lines.append(
-                "  Reading guide: these are residuals at the point the solver "
-                "stopped, not causes; read the sections above first. They are "
-                "grouped by carrier, largest first; a violated cap or bound in "
-                "one carrier often shows up as balance residuals in another, so "
-                "check every group before chasing the largest number."
-            )
+            lines.extend(self._carrier_overview_lines(groups))
         first_t = self.first_violated_period()
         if first_t is not None:
             lines.append(f"  First violated period: t={first_t}.")
         for carrier, rs in groups:
             if len(groups) > 1 or carrier is not None:
                 lines.append(f"  --- carrier: {carrier or 'other'} ---")
-            for r in rs[:max_items]:
-                bound_str = ""
-                if r.lower is not None and r.upper is not None and r.lower == r.upper:
-                    bound_str = f"== {r.lower}"
-                elif r.lower is not None and r.upper is not None:
-                    bound_str = f"in [{r.lower}, {r.upper}]"
-                elif r.lower is not None:
-                    bound_str = f">= {r.lower}"
-                elif r.upper is not None:
-                    bound_str = f"<= {r.upper}"
-                lines.append(
-                    f"  {r.display_name or r.index}: body={r.body_value:.6g} "
-                    f"{bound_str} (residual={r.residual:.4g})"
-                )
-            if len(rs) > max_items:
-                lines.append(f"  ... and {len(rs) - max_items} more")
+            lines.extend(self._residual_group_lines(rs, max_items))
+        return lines
+
+    @staticmethod
+    def _carrier_overview_lines(groups) -> list[str]:
+        counts = ", ".join(f"{carrier or 'other'} {len(rs)}" for carrier, rs in groups)
+        return [
+            f"  By carrier: {counts}.",
+            "  Reading guide: these are residuals at the point the solver "
+            "stopped, not causes; read the sections above first. They are "
+            "grouped by carrier, largest first; a violated cap or bound in "
+            "one carrier often shows up as balance residuals in another, so "
+            "check every group before chasing the largest number.",
+        ]
+
+    @staticmethod
+    def _residual_bound_str(r) -> str:
+        if r.lower is not None and r.upper is not None and r.lower == r.upper:
+            return f"== {r.lower}"
+        if r.lower is not None and r.upper is not None:
+            return f"in [{r.lower}, {r.upper}]"
+        if r.lower is not None:
+            return f">= {r.lower}"
+        if r.upper is not None:
+            return f"<= {r.upper}"
+        return ""
+
+    @classmethod
+    def _residual_group_lines(cls, rs, max_items: int) -> list[str]:
+        lines = [
+            f"  {r.display_name or r.index}: body={r.body_value:.6g} "
+            f"{cls._residual_bound_str(r)} (residual={r.residual:.4g})"
+            for r in rs[:max_items]
+        ]
+        if len(rs) > max_items:
+            lines.append(f"  ... and {len(rs) - max_items} more")
         return lines
 
     def summary(self, max_items: int = 10) -> str:
@@ -787,13 +798,13 @@ class InfeasibilityReport:
 
 
 def _translate_mis_line(line: str, index: ComponentIndex) -> str:
-    m = re.match(r"^(lb|ub) of var (\S+)(.*)$", line)
+    m = re.match(r"^(lb|ub) of var (\S+)(\s.*|)$", line)
     if m is not None:
         display, _carrier, _period = index.var_display(m.group(2))
         if display != m.group(2):
             return f"{m.group(1)} of var {m.group(2)} [{display}]{m.group(3)}"
         return line
-    m = re.match(r"^(constraint|variable bound): (\S+)(.*)$", line)
+    m = re.match(r"^(constraint|variable bound): (\S+)(\s.*|)$", line)
     if m is not None:
         raw = m.group(2)
         display, _carrier, _period = index.constraint_display(raw)
@@ -861,7 +872,7 @@ def diagnose_infeasibility(
             )
         except Exception as e:
             report.mis_message = _describe_error(e)
-            _log.warning("MIS computation failed: %s", report.mis_message)
+            _log.warning(_MIS_FAILED_MSG, report.mis_message)
     else:
         report.mis_message = "not requested (compute_mis_flag=False)"
 

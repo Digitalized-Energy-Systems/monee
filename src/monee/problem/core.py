@@ -598,22 +598,7 @@ class OptimizationProblem:
             appliable(network)
         for model, attributes in self._controllable_to_attr.items():
             for attribute_param in attributes:
-                attribute, param = (
-                    attribute_param
-                    if isinstance(attribute_param, tuple)
-                    else (attribute_param, None)
-                )
-                if not hasattr(model, attribute):
-                    continue
-                val = getattr(model, attribute)
-                if type(val) is Var:
-                    continue
-                setattr(
-                    model, attribute, self._promote_to_var(model, attribute, val, param)
-                )
-                if self._debug:
-                    logger.warning("From the model %s", model)
-                    logger.warning("The attribute %s has been replaced", attribute)
+                self._promote_attribute(model, attribute_param)
         for index, (
             min_value,
             max_value,
@@ -622,37 +607,70 @@ class OptimizationProblem:
             optional,
             looked_for,
         ) in enumerate(self._bounds_for_controllables):
-            matched = False
-            for component in network.all_components():
-                if not (
-                    component_condition(component.model, component.grid)
-                    and component.independent
-                ):
-                    continue
-                matched = True
-                if self._debug:
-                    logger.info("From the model %s", component.model)
-                    logger.info("The attributes %s are bounded", attributes)
-                for attribute in attributes:
-                    _bound_attribute(component.model, attribute, min_value, max_value)
-            if not matched and index not in self._bounds_reported:
-                self._bounds_reported.add(index)
-                detail = f" It looked for {looked_for}." if looked_for else ""
-                if optional:
-                    logger.debug(
-                        "bounds() on attributes %r matched no component; skipped "
-                        "(optional selector).%s",
-                        attributes,
-                        detail,
-                    )
-                    continue
-                warnings.warn(
-                    f"bounds() on attributes {attributes!r} matched no component "
-                    f"and has no effect.{detail} The component_condition receives "
-                    "(model, grid). See the tutorials/01_optimization_basics "
-                    "docs page.",
-                    stacklevel=2,
-                )
+            matched = self._bound_matching(
+                network, min_value, max_value, component_condition, attributes
+            )
+            message = self._unmatched_bounds_message(
+                index, matched, attributes, optional, looked_for
+            )
+            if message is not None:
+                warnings.warn(message, stacklevel=2)
+
+    def _promote_attribute(self, model, attribute_param):
+        attribute, param = (
+            attribute_param
+            if isinstance(attribute_param, tuple)
+            else (attribute_param, None)
+        )
+        if not hasattr(model, attribute):
+            return
+        val = getattr(model, attribute)
+        if type(val) is Var:
+            return
+        setattr(model, attribute, self._promote_to_var(model, attribute, val, param))
+        if self._debug:
+            logger.warning("From the model %s", model)
+            logger.warning("The attribute %s has been replaced", attribute)
+
+    def _bound_matching(
+        self, network, min_value, max_value, component_condition, attributes
+    ):
+        matched = False
+        for component in network.all_components():
+            if not (
+                component_condition(component.model, component.grid)
+                and component.independent
+            ):
+                continue
+            matched = True
+            if self._debug:
+                logger.info("From the model %s", component.model)
+                logger.info("The attributes %s are bounded", attributes)
+            for attribute in attributes:
+                _bound_attribute(component.model, attribute, min_value, max_value)
+        return matched
+
+    def _unmatched_bounds_message(
+        self, index, matched, attributes, optional, looked_for
+    ):
+        if matched or index in self._bounds_reported:
+            return None
+        self._bounds_reported.add(index)
+        detail = f" It looked for {looked_for}." if looked_for else ""
+        if optional:
+            logger.debug(
+                "bounds() on attributes %r matched no component; skipped "
+                "(optional selector).%s",
+                attributes,
+                detail,
+            )
+            return None
+        return (
+            f"bounds() on attributes {attributes!r} matched no component "
+            f"and has no effect.{detail} The component_condition receives "
+            "(model, grid). See the tutorials/01_optimization_basics "
+            "docs page."
+        )
 
     def add_to_controllable(
         self, model, attributes: list[str | tuple[str, AttributeParameter]]
@@ -837,20 +855,26 @@ class OptimizationProblem:
         """
 
         def _apply_voltages(network: Network):
-            if vm_min is not None or vm_max is not None:
-                for node in network.nodes:
-                    self._bound_var(getattr(node.model, "vm_pu", None), vm_min, vm_max)
-                    self._bound_var(
-                        getattr(node.model, "vm_pu_squared", None),
-                        None if vm_min is None else vm_min * vm_min,
-                        None if vm_max is None else vm_max * vm_max,
-                    )
-            for child in network.childs:
-                if isinstance(child.model, ExtPowerGrid):
-                    child.model.regulate_vm = False
+            self._apply_bus_voltages(network, vm_min, vm_max)
 
         self._controllable_appliables.append(_apply_voltages)
         return self
+
+    def _apply_bus_voltages(self, network: Network, vm_min, vm_max):
+        if vm_min is not None or vm_max is not None:
+            for node in network.nodes:
+                self._bound_node_voltage(node, vm_min, vm_max)
+        for child in network.childs:
+            if isinstance(child.model, ExtPowerGrid):
+                child.model.regulate_vm = False
+
+    def _bound_node_voltage(self, node, vm_min, vm_max):
+        self._bound_var(getattr(node.model, "vm_pu", None), vm_min, vm_max)
+        self._bound_var(
+            getattr(node.model, "vm_pu_squared", None),
+            None if vm_min is None else vm_min * vm_min,
+            None if vm_max is None else vm_max * vm_max,
+        )
 
     @staticmethod
     def _bound_var(var, lo, hi):

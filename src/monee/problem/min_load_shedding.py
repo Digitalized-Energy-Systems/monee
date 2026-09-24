@@ -155,31 +155,45 @@ def _component_shed(component):
     if reg is None:
         reg = 1.0
     if isinstance(model, PowerLoad):
-        v = _finite(model.p_mw)
-        if v is None:
-            return None
-        return "el", upper(model.p_mw) - v * reg
+        return _tagged_gap("el", _regulated_gap(model.p_mw, reg))
     if isinstance(model, HeatLoad):
-        v = _finite(model.q_mw_heat)
-        if v is None:
-            return None
-        return "heat", upper(model.q_mw_heat) - v * reg
+        return _tagged_gap("heat", _regulated_gap(model.q_mw_heat, reg))
     if isinstance(model, Sink):
-        grid = getattr(component, "grid", None)
-        if not isinstance(grid, GasGrid):
-            return None
-        v = _finite(model.mass_flow_kgs)
-        if v is None:
-            return None
-        gap_kgs = upper(model.mass_flow_kgs) - v * reg
-        return "gas", gap_kgs * _gas_mw_factor(grid)
+        return _sink_shed(component, model, reg)
     if hx_is_consuming(model):
-        q_set = _finite(getattr(model, "q_mw_set", None))
-        q = _finite(getattr(model, "q_mw", None))
-        if q_set is None or q is None:
-            return None
-        return "heat", q_set - q
+        return _consuming_hx_shed(model)
     return None
+
+
+def _regulated_gap(var, reg):
+    v = _finite(var)
+    if v is None:
+        return None
+    return upper(var) - v * reg
+
+
+def _tagged_gap(carrier, gap):
+    if gap is None:
+        return None
+    return carrier, gap
+
+
+def _sink_shed(component, model, reg):
+    grid = getattr(component, "grid", None)
+    if not isinstance(grid, GasGrid):
+        return None
+    gap_kgs = _regulated_gap(model.mass_flow_kgs, reg)
+    if gap_kgs is None:
+        return None
+    return "gas", gap_kgs * _gas_mw_factor(grid)
+
+
+def _consuming_hx_shed(model):
+    q_set = _finite(getattr(model, "q_mw_set", None))
+    q = _finite(getattr(model, "q_mw", None))
+    if q_set is None or q is None:
+        return None
+    return "heat", q_set - q
 
 
 def _slack_import_headroom(component):
@@ -274,57 +288,65 @@ def _shed_headroom_validator(network, result):
     shed_loads: dict[tuple, list] = {}
     headroom: dict[tuple, tuple[float, object]] = {}
     for component in list(network.childs) + list(network.branches):
-        if not component.active or component.ignored:
-            continue
-        load = _component_shed(component)
-        if load is not None:
-            carrier, mw = load
-            if mw > _SHED_HEADROOM_TOL_MW:
-                key = (carrier, _island_key(component, islands))
-                shed[key] = shed.get(key, 0.0) + mw
-                shed_loads.setdefault(key, []).append((mw, component))
-            continue
-        slack = _slack_import_headroom(component)
-        if slack is not None:
-            carrier, room = slack
-            key = (carrier, _island_key(component, islands))
-            if key not in headroom or room > headroom[key][0]:
-                headroom[key] = (room, component)
+        _record_shed_or_headroom(component, islands, shed, shed_loads, headroom)
 
     entries = []
     for key, total in sorted(shed.items(), key=lambda kv: str(kv[0])):
-        carrier = key[0]
-        if key not in headroom:
-            continue
-        room, slack_component = headroom[key]
-        if room <= _SLACK_AT_BOUND_TOL:
-            continue
-        loads = sorted(shed_loads[key], reverse=True, key=lambda t: t[0])
-        named = ", ".join(
-            f"{type(c.model).__name__}({c.id}): {mw:.4g} MW"
-            for mw, c in loads[:_MAX_NAMED_SHED_LOADS]
+        entry = _shed_headroom_entry(
+            key, total, headroom, shed_loads, result, ResultWarning
         )
-        more = (
-            f" and {len(loads) - _MAX_NAMED_SHED_LOADS} more"
-            if len(loads) > _MAX_NAMED_SHED_LOADS
-            else ""
-        )
-        room_str = (
-            "unbounded" if math.isinf(room) else f"{room:.4g} {_SLACK_UNIT[carrier]}"
-        )
-        slack_name = f"{type(slack_component.model).__name__}({slack_component.id})"
-        entries.append(
-            ResultWarning(
-                "shed_headroom",
-                f"{total:.4g} MW of {_CARRIER_LABEL[carrier]} demand is shed "
-                f"({named}{more}) although the carrier slack {slack_name} in "
-                f"the same island still has import headroom ({room_str}). "
-                f"{_shed_headroom_advice(result)}. The how-to/load_shedding "
-                "docs page explains this check",
-                value=total,
-            )
-        )
+        if entry is not None:
+            entries.append(entry)
     return entries
+
+
+def _record_shed_or_headroom(component, islands, shed, shed_loads, headroom):
+    if not component.active or component.ignored:
+        return
+    load = _component_shed(component)
+    if load is not None:
+        carrier, mw = load
+        if mw > _SHED_HEADROOM_TOL_MW:
+            key = (carrier, _island_key(component, islands))
+            shed[key] = shed.get(key, 0.0) + mw
+            shed_loads.setdefault(key, []).append((mw, component))
+        return
+    slack = _slack_import_headroom(component)
+    if slack is not None:
+        carrier, room = slack
+        key = (carrier, _island_key(component, islands))
+        if key not in headroom or room > headroom[key][0]:
+            headroom[key] = (room, component)
+
+
+def _shed_headroom_entry(key, total, headroom, shed_loads, result, warning_cls):
+    carrier = key[0]
+    if key not in headroom:
+        return None
+    room, slack_component = headroom[key]
+    if room <= _SLACK_AT_BOUND_TOL:
+        return None
+    loads = sorted(shed_loads[key], reverse=True, key=lambda t: t[0])
+    named = ", ".join(
+        f"{type(c.model).__name__}({c.id}): {mw:.4g} MW"
+        for mw, c in loads[:_MAX_NAMED_SHED_LOADS]
+    )
+    more = (
+        f" and {len(loads) - _MAX_NAMED_SHED_LOADS} more"
+        if len(loads) > _MAX_NAMED_SHED_LOADS
+        else ""
+    )
+    room_str = "unbounded" if math.isinf(room) else f"{room:.4g} {_SLACK_UNIT[carrier]}"
+    slack_name = f"{type(slack_component.model).__name__}({slack_component.id})"
+    return warning_cls(
+        "shed_headroom",
+        f"{total:.4g} MW of {_CARRIER_LABEL[carrier]} demand is shed "
+        f"({named}{more}) although the carrier slack {slack_name} in "
+        f"the same island still has import headroom ({room_str}). "
+        f"{_shed_headroom_advice(result)}. The how-to/load_shedding "
+        "docs page explains this check",
+        value=total,
+    )
 
 
 def _attach_shed_headroom_validator(network):
@@ -583,8 +605,8 @@ def _calc_objective(model_to_data):
     )
 
 
-def create_min_load_shedding_problem(  # NOSONAR
-    *,
+def create_min_load_shedding_problem(
+    *,  # NOSONAR
     demand_weight=WEIGHT_DEMAND,
     generator_weight=WEIGHT_GENERATOR,
     weight_for_load=None,

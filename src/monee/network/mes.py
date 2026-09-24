@@ -630,8 +630,8 @@ def _add_gas_mesh_pipes(
         )
 
 
-def create_gas_tree_net_for_power(  # NOSONAR
-    power_net: mm.Network,
+def create_gas_tree_net_for_power(
+    power_net: mm.Network,  # NOSONAR
     target_net: mm.Network,
     gas_load_share=3.0,
     gas_gen_share=1.0,
@@ -831,8 +831,8 @@ def create_gas_tree_net_for_power(  # NOSONAR
     return bus_index_to_junction_index
 
 
-def create_heat_supply_return_net_for_power(  # NOSONAR
-    power_net: mm.Network,
+def create_heat_supply_return_net_for_power(
+    power_net: mm.Network,  # NOSONAR
     target_net: mm.Network,
     heat_load_share=1.0,
     heat_gen_share=0.5,
@@ -1369,8 +1369,8 @@ _MIRROR_CREATORS = {
 }
 
 
-def create_coupling_points_for_mes(  # NOSONAR
-    mes_net: mm.Network,
+def create_coupling_points_for_mes(
+    mes_net: mm.Network,  # NOSONAR
     bus_to_gas_junc,
     bus_to_heat_supply_junc,
     heat_return_junc,

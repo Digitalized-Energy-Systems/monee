@@ -86,13 +86,14 @@ def ideal_gas_density_eq(density_var, grid, p_avg_pu, pressure_ambient_pa):
     ) / (grid.universal_gas_constant * grid.t_k)
 
 
-def calc_C_squared(
-    diameter_m, length_m, t_k, compressibility, r_specific=R_specific
-):  # NOSONAR
+def calc_c_squared(diameter_m, length_m, t_k, compressibility, r_specific=R_specific):
     numerator = math.pi**2 * diameter_m**5
     denominator = 16 * length_m * r_specific * t_k * compressibility
     c_squared = numerator / denominator
     return c_squared
+
+
+calc_C_squared = calc_c_squared
 
 
 def pipe_weymouth(
@@ -109,7 +110,7 @@ def pipe_weymouth(
     r_specific=R_specific,
     **kwargs,
 ):
-    return (p_squared_i - p_squared_j) * calc_C_squared(
+    return (p_squared_i - p_squared_j) * calc_c_squared(
         diameter_m,
         length_m,
         t_k,

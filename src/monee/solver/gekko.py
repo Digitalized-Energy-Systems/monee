@@ -91,54 +91,85 @@ def _gekko_max_residual(m) -> float | None:
     report (``infeasibilities.txt``) on failure, so re-evaluate the equations it
     was given against the values it returned.
     """
+    ns = _gekko_eval_namespace(m)
+    worst = 0.0
+    for eq in m._equations:
+        violation = _gekko_equation_violation(eq, ns)
+        if violation is None:
+            return None
+        worst = max(worst, violation)
+    return worst
 
-    def scalar(obj):
-        # GEKKO wraps values in GK_Value, whose payload is either a scalar or a
-        # one-entry trajectory; unwrap until a number comes out.
-        v = obj.value
-        for _ in range(4):
-            if isinstance(v, (int, float)):
-                return float(v)
-            nxt = getattr(v, "value", None)
-            if nxt is None:
-                with contextlib.suppress(TypeError, IndexError, KeyError):
-                    nxt = v[0]
-            if nxt is None or nxt is v:
-                break
-            v = nxt
-        return None
 
+def _gekko_scalar(obj):
+    # GEKKO wraps values in GK_Value, whose payload is either a scalar or a
+    # one-entry trajectory; unwrap until a number comes out.
+    v = obj.value
+    for _ in range(4):
+        if isinstance(v, (int, float)):
+            return float(v)
+        nxt = getattr(v, "value", None)
+        if nxt is None:
+            with contextlib.suppress(TypeError, IndexError, KeyError):
+                nxt = v[0]
+        if nxt is None or nxt is v:
+            break
+        v = nxt
+    return None
+
+
+def _gekko_eval_namespace(m):
     ns = dict(_EVAL_NS)
     for group in (m._variables, m._parameters, m._intermediates, m._constants):
         for obj in group:
-            val = scalar(obj)
+            val = _gekko_scalar(obj)
             if val is not None:
                 ns[obj.name] = val
+    return ns
 
-    worst = 0.0
-    for eq in m._equations:
-        # GEKKO's own rendering of the equations monee handed it: names, numbers
-        # and math calls only, evaluated without builtins.
-        expr = str(eq.value).replace("^", "**")
-        for op in (">=", "<=", "="):
-            if op in expr:
-                break
-        else:
-            return None
-        lhs, _, rhs = expr.partition(op)
-        try:
-            diff = eval(lhs, {"__builtins__": {}}, ns) - eval(  # noqa: S307
-                rhs, {"__builtins__": {}}, ns
-            )
-        except Exception:
-            return None
-        if op == "=":
-            worst = max(worst, abs(diff))
-        elif op == "<=":
-            worst = max(worst, diff)
-        else:
-            worst = max(worst, -diff)
-    return worst
+
+def _gekko_equation_violation(eq, ns):
+    # GEKKO's own rendering of the equations monee handed it: names, numbers
+    # and math calls only, evaluated without builtins.
+    expr = str(eq.value).replace("^", "**")
+    op = next((o for o in (">=", "<=", "=") if o in expr), None)
+    if op is None:
+        return None
+    lhs, _, rhs = expr.partition(op)
+    try:
+        diff = eval(lhs, {"__builtins__": {}}, ns) - eval(  # noqa: S307
+            rhs, {"__builtins__": {}}, ns
+        )
+    except Exception:
+        return None
+    if op == "=":
+        return abs(diff)
+    return diff if op == "<=" else -diff
+
+
+def _withdrawn_var(value, var_meta):
+    orig = var_meta.get(id_(value)) if var_meta is not None else None
+    val = value.VALUE.value[0]
+    if orig is None:
+        # No registry (legacy callers): GEKKO's stored NAME is a
+        # mangled artefact, best-effort only.
+        return Var(
+            value=val,
+            min=value.LOWER,
+            max=value.UPPER,
+            integer=value.NAME.startswith("int_"),
+            name=value.NAME.split("_")[-1],
+        )
+    if orig.integer:
+        val = int(round(val))
+    return Var(
+        value=val,
+        min=value.LOWER,
+        max=value.UPPER,
+        integer=orig.integer,
+        name=orig.name,
+        scale=orig.scale,
+    )
 
 
 # The builtin, aliased because inject_gekko_vars_attr's legacy signature shadows
@@ -252,30 +283,7 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
     def withdraw_gekko_vars_attr(target: GenericModel, var_meta=None):
         for key, value in target.__dict__.items():
             if type(value) is GKVariable:
-                orig = var_meta.get(id_(value)) if var_meta is not None else None
-                val = value.VALUE.value[0]
-                if orig is not None:
-                    if orig.integer:
-                        val = int(round(val))
-                    new_var = Var(
-                        value=val,
-                        min=value.LOWER,
-                        max=value.UPPER,
-                        integer=orig.integer,
-                        name=orig.name,
-                        scale=orig.scale,
-                    )
-                else:
-                    # No registry (legacy callers): GEKKO's stored NAME is a
-                    # mangled artefact, best-effort only.
-                    new_var = Var(
-                        value=val,
-                        min=value.LOWER,
-                        max=value.UPPER,
-                        integer=value.NAME.startswith("int_"),
-                        name=value.NAME.split("_")[-1],
-                    )
-                setattr(target, key, new_var)
+                setattr(target, key, _withdrawn_var(value, var_meta))
             if type(value) is GK_Operators:
                 setattr(target, key, Const(value.VALUE.value))
             if type(value) is GK_Intermediate:

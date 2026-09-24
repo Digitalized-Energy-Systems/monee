@@ -235,8 +235,8 @@ def run_energy_flow_optimization(
     return solve(net, optimization_problem, solver, **kwargs)
 
 
-def solve_load_shedding_problem(  # NOSONAR
-    network: Network,
+def solve_load_shedding_problem(
+    network: Network,  # NOSONAR
     *,
     demand_weight=WEIGHT_DEMAND,
     generator_weight=WEIGHT_GENERATOR,

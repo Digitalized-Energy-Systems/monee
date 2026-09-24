@@ -6,6 +6,8 @@ that runs in both timeseries and multi-period) works unchanged."""
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 
 import pandas
 
@@ -368,6 +370,73 @@ class MultiPeriodResult:
         )
 
 
+@dataclass
+class _TwoPassBackend:
+    """Backend-specific callbacks of :func:`_assemble_two_pass`:
+    ``inject(net_t, ignored_t, t)``, ``process_branches(net_t, ignored_t) ->
+    ctx`` (may collect objective expressions), ``sink_objective(ctx)`` (called
+    between the OXF components and the inter-period equations),
+    ``add_equations(eqs)``, ``add_terminal(var, target)`` and the optional
+    ``begin_period(t)``, invoked before each period's equation pass."""
+
+    inject: Callable
+    process_branches: Callable
+    sink_objective: Callable
+    add_equations: Callable
+    add_terminal: Callable
+    begin_period: Callable | None = None
+
+
+def _prepare_periods(
+    single,
+    network: Network,
+    timeseries_data: TimeseriesData | None,
+    steps: int,
+    optimization_problem,
+    formulation,
+    inject,
+) -> tuple[list[Network], list[set]]:
+    net_copies: list[Network] = []
+    ignored_list: list[set] = []
+    for t in range(steps):
+        _log.debug("Preparing period %d/%d", t + 1, steps)
+        net_t, ignored_t = _prepare_period(
+            network, timeseries_data, t, optimization_problem, formulation
+        )
+        inject(net_t, ignored_t, t)
+        for ext in net_t.extensions:
+            ext.activate_timeseries(net_t, ignored_t)
+        single.mark_temporal_components(net_t, ignored_t)
+        net_copies.append(net_t)
+        ignored_list.append(ignored_t)
+    return net_copies, ignored_list
+
+
+def _add_extension_equations(net_t, ignored_t, period_state, add_equations) -> None:
+    for ext in net_t.extensions:
+        add_equations(ext.inter_period_equations(net_t, ignored_t, period_state))
+        add_equations(ext.inter_temporal_equations(net_t, ignored_t, period_state))
+        add_equations(ext.equations(net_t, ignored_t))
+
+
+def _pin_terminal_state(net_t, terminal_state: dict, add_terminal) -> None:
+    for (comp_id, attr), target in terminal_state.items():
+        var = _find_component_var(net_t, comp_id, attr)
+        if isinstance(var, (int, float)):
+            # A plain constant would make ``var == target`` a Python bool
+            # (a cryptic backend error or a silent tautology); only a
+            # solver variable / expression can be pinned.
+            _log.warning(
+                "terminal_state target (%r, %r) is a constant, not a "
+                "solver variable; the terminal constraint was skipped. "
+                "Make the attribute controllable to pin it.",
+                comp_id,
+                attr,
+            )
+        elif var is not None:
+            add_terminal(var, target)
+
+
 def _assemble_two_pass(
     m,
     single,
@@ -380,48 +449,31 @@ def _assemble_two_pass(
     initial_state: dict | None,
     terminal_state: dict | None,
     formulation,
-    inject,
-    process_branches,
-    sink_objective,
-    add_equations,
-    add_terminal,
-    begin_period=None,
+    backend: _TwoPassBackend,
 ) -> list[Network]:
     """Shared two-pass assembly for the multi-period backends: pass 1 prepares
     per-period network copies and injects backend variables, pass 2 builds
     equations with a :class:`PeriodState` spanning all periods. Backend
-    differences are confined to the callbacks: ``inject(net_t, ignored_t, t)``,
-    ``process_branches(net_t, ignored_t) -> ctx`` (may collect objective
-    expressions), ``sink_objective(ctx)`` (called between the OXF components and
-    the inter-period equations), ``add_equations(eqs)``,
-    ``add_terminal(var, target)`` and the optional ``begin_period(t)``, invoked
-    before each period's equation pass."""
+    differences are confined to the :class:`_TwoPassBackend` callbacks."""
     _log.info("Multi-period %s solve: T=%d periods", label, steps)
 
-    # Pass 1: prepare networks and inject variables for all periods.
-    net_copies: list[Network] = []
-    ignored_list: list[set] = []
+    net_copies, ignored_list = _prepare_periods(
+        single,
+        network,
+        timeseries_data,
+        steps,
+        optimization_problem,
+        formulation,
+        backend.inject,
+    )
 
-    for t in range(steps):
-        _log.debug("Preparing period %d/%d", t + 1, steps)
-        net_t, ignored_t = _prepare_period(
-            network, timeseries_data, t, optimization_problem, formulation
-        )
-        inject(net_t, ignored_t, t)
-        for ext in net_t.extensions:
-            ext.activate_timeseries(net_t, ignored_t)
-        single.mark_temporal_components(net_t, ignored_t)
-        net_copies.append(net_t)
-        ignored_list.append(ignored_t)
-
-    # Pass 2: build per-period equations.
     _log.debug("Assembling equations for %d periods", steps)
     for t in range(steps):
         net_t = net_copies[t]
         ignored_t = ignored_list[t]
 
-        if begin_period is not None:
-            begin_period(t)
+        if backend.begin_period is not None:
+            backend.begin_period(t)
 
         period_state = PeriodState(
             net_copies,
@@ -432,7 +484,7 @@ def _assemble_two_pass(
 
         single.init_branches(net_t.branches)
         single.process_equations_nodes_childs(m, net_t, net_t.nodes, ignored_t)
-        branch_ctx = process_branches(net_t, ignored_t)
+        branch_ctx = backend.process_branches(net_t, ignored_t)
         single.process_equations_compounds(m, net_t, net_t.compounds, ignored_t)
 
         if optimization_problem is not None:
@@ -442,7 +494,7 @@ def _assemble_two_pass(
         else:
             single.process_internal_oxf_components(m, net_t)
 
-        sink_objective(branch_ctx)
+        backend.sink_objective(branch_ctx)
 
         single.process_inter_period_equations(
             m,
@@ -456,27 +508,10 @@ def _assemble_two_pass(
             period_index=t,
         )
 
-        for ext in net_t.extensions:
-            add_equations(ext.inter_period_equations(net_t, ignored_t, period_state))
-            add_equations(ext.inter_temporal_equations(net_t, ignored_t, period_state))
-            add_equations(ext.equations(net_t, ignored_t))
+        _add_extension_equations(net_t, ignored_t, period_state, backend.add_equations)
 
         if terminal_state and t == steps - 1:
-            for (comp_id, attr), target in terminal_state.items():
-                var = _find_component_var(net_t, comp_id, attr)
-                if isinstance(var, (int, float)):
-                    # A plain constant would make ``var == target`` a Python bool
-                    # (a cryptic backend error or a silent tautology); only a
-                    # solver variable / expression can be pinned.
-                    _log.warning(
-                        "terminal_state target (%r, %r) is a constant, not a "
-                        "solver variable; the terminal constraint was skipped. "
-                        "Make the attribute controllable to pin it.",
-                        comp_id,
-                        attr,
-                    )
-                elif var is not None:
-                    add_terminal(var, target)
+            _pin_terminal_state(net_t, terminal_state, backend.add_terminal)
 
     return net_copies
 
@@ -572,11 +607,13 @@ class GekkoMultiPeriodSolver:
             initial_state,
             terminal_state,
             formulation,
-            inject=_inject,
-            process_branches=_process_branches,
-            sink_objective=_sink_objective,
-            add_equations=m.Equations,
-            add_terminal=lambda var, target: m.Equation(var == target),
+            _TwoPassBackend(
+                inject=_inject,
+                process_branches=_process_branches,
+                sink_objective=_sink_objective,
+                add_equations=m.Equations,
+                add_terminal=lambda var, target: m.Equation(var == target),
+            ),
         )
 
         _log.info("Solving multi-period problem (T=%d) ...", steps)
@@ -696,14 +733,18 @@ class PyomoMultiPeriodSolver:
             initial_state,
             terminal_state,
             formulation,
-            inject=_inject,
-            process_branches=lambda net_t, ignored_t: (
-                _single.process_equations_branches(pm, net_t, net_t.branches, ignored_t)
+            _TwoPassBackend(
+                inject=_inject,
+                process_branches=lambda net_t, ignored_t: (
+                    _single.process_equations_branches(
+                        pm, net_t, net_t.branches, ignored_t
+                    )
+                ),
+                sink_objective=lambda _ctx: None,
+                add_equations=lambda eqs: _single._add_equations(pm, eqs),
+                add_terminal=lambda var, target: pm.cons.add(var == target),
+                begin_period=_begin_period,
             ),
-            sink_objective=lambda _ctx: None,
-            add_equations=lambda eqs: _single._add_equations(pm, eqs),
-            add_terminal=lambda var, target: pm.cons.add(var == target),
-            begin_period=_begin_period,
         )
 
         all_exprs = pm.user_obj_exprs + pm.aux_obj_exprs
@@ -889,6 +930,75 @@ def run_multi_period(
     )
 
 
+def _validate_mpc_window_sizes(execution_steps: int, horizon: int) -> None:
+    if execution_steps < 1:
+        raise ValueError(f"execution_steps must be >= 1, got {execution_steps}.")
+    if horizon < 1:
+        raise ValueError(f"horizon must be >= 1, got {horizon}.")
+
+
+def _solve_mpc_window(
+    solver,
+    network: Network,
+    timeseries_data: TimeseriesData | None,
+    dt_h_list: list[float],
+    offset: int,
+    actual_window: int,
+    total_steps: int,
+    optimization_problem,
+    current_initial_state: dict | None,
+    terminal_state: dict | None,
+    formulation,
+):
+    window_td = (
+        _slice_timeseries(timeseries_data, offset, actual_window)
+        if timeseries_data is not None
+        else None
+    )
+    # window_dt already holds the correct per-period durations (derived from
+    # datetime_index by _resolve_dt_h when one was supplied). Drive the
+    # window solve from window_dt alone and pass datetime_index=None, so the
+    # per-window solve does not re-warn about "both dt_h and datetime_index"
+    # and does not discard the computed window_dt.
+    window_dt = dt_h_list[offset : offset + actual_window]
+
+    # A terminal target pins only the *global* horizon end. Forwarding it to
+    # every rolling window would over-constrain intermediate windows (and can
+    # make them infeasible); only the final window reaches the global end.
+    is_final_window = offset + actual_window >= total_steps
+    window_terminal_state = terminal_state if is_final_window else None
+
+    window_result = solver.solve_multi_period(
+        network,
+        timeseries_data=window_td,
+        steps=actual_window,
+        optimization_problem=optimization_problem,
+        dt_h=window_dt,
+        datetime_index=None,
+        initial_state=current_initial_state,
+        terminal_state=window_terminal_state,
+        formulation=formulation,
+    )
+    # Some backends (GEKKO) report failure via success=False instead of
+    # raising; carrying on would seed the next window from garbage state.
+    if not window_result.success:
+        raise RuntimeError(
+            f"run_mpc: window starting at step {offset} (periods "
+            f"{offset}..{offset + actual_window - 1} of {total_steps}) "
+            f"failed - the solver reported an unsuccessful solve. "
+            f"Aborting; state extracted from a failed window would "
+            f"poison all subsequent windows."
+        )
+    return window_result
+
+
+def _accumulate_user_objective(total_user_objective, window_result):
+    if total_user_objective is None:
+        return None
+    window_user = getattr(window_result, "user_objective", None)
+    return None if window_user is None else total_user_objective + window_user
+
+
 def run_mpc(
     network: Network,
     timeseries_data: TimeseriesData | None = None,
@@ -938,10 +1048,7 @@ def run_mpc(
 
     solver = resolve_multi_period_solver(solver, backend=backend)
 
-    if execution_steps < 1:
-        raise ValueError(f"execution_steps must be >= 1, got {execution_steps}.")
-    if horizon < 1:
-        raise ValueError(f"horizon must be >= 1, got {horizon}.")
+    _validate_mpc_window_sizes(execution_steps, horizon)
 
     all_net_copies: list[Network] = []
     total_objective = 0.0
@@ -953,55 +1060,27 @@ def run_mpc(
         remaining = total_steps - offset
         actual_window = min(horizon, remaining)
 
-        window_td = (
-            _slice_timeseries(timeseries_data, offset, actual_window)
-            if timeseries_data is not None
-            else None
-        )
-        # window_dt already holds the correct per-period durations (derived from
-        # datetime_index by _resolve_dt_h when one was supplied). Drive the
-        # window solve from window_dt alone and pass datetime_index=None, so the
-        # per-window solve does not re-warn about "both dt_h and datetime_index"
-        # and does not discard the computed window_dt.
-        window_dt = dt_h_list[offset : offset + actual_window]
-
-        # A terminal target pins only the *global* horizon end. Forwarding it to
-        # every rolling window would over-constrain intermediate windows (and can
-        # make them infeasible); only the final window reaches the global end.
-        is_final_window = offset + actual_window >= total_steps
-        window_terminal_state = terminal_state if is_final_window else None
-
-        window_result = solver.solve_multi_period(
+        window_result = _solve_mpc_window(
+            solver,
             network,
-            timeseries_data=window_td,
-            steps=actual_window,
-            optimization_problem=optimization_problem,
-            dt_h=window_dt,
-            datetime_index=None,
-            initial_state=current_initial_state,
-            terminal_state=window_terminal_state,
-            formulation=formulation,
+            timeseries_data,
+            dt_h_list,
+            offset,
+            actual_window,
+            total_steps,
+            optimization_problem,
+            current_initial_state,
+            terminal_state,
+            formulation,
         )
-        # Some backends (GEKKO) report failure via success=False instead of
-        # raising; carrying on would seed the next window from garbage state.
-        if not window_result.success:
-            raise RuntimeError(
-                f"run_mpc: window starting at step {offset} (periods "
-                f"{offset}..{offset + actual_window - 1} of {total_steps}) "
-                f"failed - the solver reported an unsuccessful solve. "
-                f"Aborting; state extracted from a failed window would "
-                f"poison all subsequent windows."
-            )
 
         n_execute = min(execution_steps, actual_window)
         executed_copies = window_result._net_copies[:n_execute]
         all_net_copies.extend(executed_copies)
         total_objective += window_result.objective
-        if total_user_objective is not None:
-            window_user = getattr(window_result, "user_objective", None)
-            total_user_objective = (
-                None if window_user is None else total_user_objective + window_user
-            )
+        total_user_objective = _accumulate_user_objective(
+            total_user_objective, window_result
+        )
 
         current_initial_state = _extract_terminal_state(executed_copies[-1])
         offset += n_execute

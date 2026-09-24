@@ -34,6 +34,7 @@ in :func:`monee.run_timeseries`.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 
 import pyomo.environ as pyo
@@ -119,11 +120,12 @@ def _solve_error_types() -> tuple[type, ...]:
     """Backend solve exceptions to intercept; CasADi's is optional."""
     from .infeasibility import GekkoSolveError
 
-    try:
+    error_types: list[type] = [GekkoSolveError]
+    with contextlib.suppress(ImportError):
         from .casadi import CasADiSolveError
-    except ImportError:  # pragma: no cover - only without casadi installed
-        return (GekkoSolveError,)
-    return (GekkoSolveError, CasADiSolveError)
+
+        error_types.append(CasADiSolveError)
+    return tuple(error_types)
 
 
 def _numerics_failure(outcome) -> bool:

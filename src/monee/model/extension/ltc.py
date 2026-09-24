@@ -178,84 +178,117 @@ class LumpedThermalCapacitance(NetworkAspect):
         the scalar node ids in ``ignored_nodes`` - check endpoints instead).
         """
         t_n = node.model.t_pu
-        terms = []
         scale_mw_per_kgs = SPECIFIC_HEAT_CAP_WATER * node.grid.t_ref_k / 1e6
-
-        def _branch_ignored(branch) -> bool:
-            return (
-                branch.ignored
-                or branch.from_node_id in ignored_nodes
-                or branch.to_node_id in ignored_nodes
-            )
-
-        for branch in network.branches:
-            if not isinstance(branch.grid, WaterGrid):
-                continue
-            if not branch.active or _branch_ignored(branch):
-                continue
-            bm = branch.model
-            bvars = bm.vars
-            if "mass_flow_pos_kgs" not in bvars or "mass_flow_neg_kgs" not in bvars:
-                continue
-
-            is_mccormick = "H_out_mw" in bvars and "H_in_mw" in bvars
-
-            if branch.from_node_id == node.id:
-                if is_mccormick:
-                    terms.append(-bvars["H_out_mw"] / scale_mw_per_kgs)
-                else:
-                    if "t_from_pu" not in bvars:
-                        continue
-                    on_off = bvars.get("on_off", 1)
-                    mpos = bvars["mass_flow_pos_kgs"] * on_off
-                    mneg = bvars["mass_flow_neg_kgs"] * on_off
-                    terms.append(mpos * bvars["t_from_pu"] - mneg * t_n)
-
-            elif branch.to_node_id == node.id:
-                if is_mccormick:
-                    terms.append(bvars["H_in_mw"] / scale_mw_per_kgs)
-                else:
-                    if "t_to_pu" not in bvars:
-                        continue
-                    on_off = bvars.get("on_off", 1)
-                    mpos = bvars["mass_flow_pos_kgs"] * on_off
-                    mneg = bvars["mass_flow_neg_kgs"] * on_off
-                    terms.append(mneg * bvars["t_to_pu"] - mpos * t_n)
+        terms = _water_branch_terms(
+            network, node.id, t_n, scale_mw_per_kgs, ignored_nodes
+        )
 
         for child in network.childs_by_ids(node.child_ids):
             # Inactive/ignored childs never get solver vars injected - their
             # raw model Vars would poison the expression (Var/float TypeError).
             if not child.active or getattr(child, "ignored", False):
                 continue
-            cm = child.model
-            cvars = cm.vars
-            if "mass_flow_kgs" in cvars:
-                # Well-mixed: m_ext < 0 = injection \to heat IN = -m_ext \cdot t_n.
-                m_ext = cvars["mass_flow_kgs"] * cvars.get("regulation", 1)
-                t_inj_k = getattr(cm, "injection_t_k", None)
-                if t_inj_k is not None:
-                    # Defined-temperature injection (Source(t_k=...)): credit the
-                    # inflow at its own temperature, mirroring
-                    # Junction.calc_signed_heat_flow.
-                    terms.append(-m_ext * (t_inj_k / node.grid.t_ref_k))
-                else:
-                    terms.append(-m_ext * t_n)
-            if "q_mw_heat" in cvars:
-                # Load convention: positive = heat OUT -> negate.
-                q = cvars["q_mw_heat"] * cvars.get("regulation", 1)
-                terms.append(-q / scale_mw_per_kgs)
+            terms.extend(_child_heat_terms(child.model, node, t_n, scale_mw_per_kgs))
 
         # Branch heat_mw (e.g. GasToHeatHG) absorbed at the TO-node.
-        for branch in network.branches:
-            if not branch.active or _branch_ignored(branch):
-                continue
-            bm = branch.model
-            bvars = bm.vars
-            if "q_mw_heat" not in bvars:
-                continue
-            if branch.to_node_id != node.id:
-                continue
-            q = bvars["q_mw_heat"] * bvars.get("on_off", 1)
-            terms.append(-q / scale_mw_per_kgs)
+        terms.extend(
+            _branch_heat_terms(network, node.id, scale_mw_per_kgs, ignored_nodes)
+        )
 
         return sum(terms) if terms else 0
+
+
+def _water_branch_terms(network, node_id, t_n, scale_mw_per_kgs, ignored_nodes):
+    terms = []
+    for branch in network.branches:
+        if not isinstance(branch.grid, WaterGrid):
+            continue
+        if not branch.active or _branch_ignored(branch, ignored_nodes):
+            continue
+        term = _branch_convective_term(
+            branch.model.vars, branch, node_id, t_n, scale_mw_per_kgs
+        )
+        if term is not None:
+            terms.append(term)
+    return terms
+
+
+def _branch_heat_terms(network, node_id, scale_mw_per_kgs, ignored_nodes):
+    terms = []
+    for branch in network.branches:
+        if not branch.active or _branch_ignored(branch, ignored_nodes):
+            continue
+        bvars = branch.model.vars
+        if "q_mw_heat" not in bvars:
+            continue
+        if branch.to_node_id != node_id:
+            continue
+        q = bvars["q_mw_heat"] * bvars.get("on_off", 1)
+        terms.append(-q / scale_mw_per_kgs)
+    return terms
+
+
+def _branch_ignored(branch, ignored_nodes) -> bool:
+    return (
+        branch.ignored
+        or branch.from_node_id in ignored_nodes
+        or branch.to_node_id in ignored_nodes
+    )
+
+
+def _plain_flows(bvars):
+    on_off = bvars.get("on_off", 1)
+    return (
+        bvars["mass_flow_pos_kgs"] * on_off,
+        bvars["mass_flow_neg_kgs"] * on_off,
+    )
+
+
+def _from_side_term(bvars, is_mccormick, t_n, scale_mw_per_kgs):
+    if is_mccormick:
+        return -bvars["H_out_mw"] / scale_mw_per_kgs
+    if "t_from_pu" not in bvars:
+        return None
+    mpos, mneg = _plain_flows(bvars)
+    return mpos * bvars["t_from_pu"] - mneg * t_n
+
+
+def _to_side_term(bvars, is_mccormick, t_n, scale_mw_per_kgs):
+    if is_mccormick:
+        return bvars["H_in_mw"] / scale_mw_per_kgs
+    if "t_to_pu" not in bvars:
+        return None
+    mpos, mneg = _plain_flows(bvars)
+    return mneg * bvars["t_to_pu"] - mpos * t_n
+
+
+def _branch_convective_term(bvars, branch, node_id, t_n, scale_mw_per_kgs):
+    if "mass_flow_pos_kgs" not in bvars or "mass_flow_neg_kgs" not in bvars:
+        return None
+    is_mccormick = "H_out_mw" in bvars and "H_in_mw" in bvars
+    if branch.from_node_id == node_id:
+        return _from_side_term(bvars, is_mccormick, t_n, scale_mw_per_kgs)
+    if branch.to_node_id == node_id:
+        return _to_side_term(bvars, is_mccormick, t_n, scale_mw_per_kgs)
+    return None
+
+
+def _child_heat_terms(cm, node, t_n, scale_mw_per_kgs) -> list:
+    terms = []
+    cvars = cm.vars
+    if "mass_flow_kgs" in cvars:
+        # Well-mixed: m_ext < 0 = injection \to heat IN = -m_ext \cdot t_n.
+        m_ext = cvars["mass_flow_kgs"] * cvars.get("regulation", 1)
+        t_inj_k = getattr(cm, "injection_t_k", None)
+        if t_inj_k is not None:
+            # Defined-temperature injection (Source(t_k=...)): credit the
+            # inflow at its own temperature, mirroring
+            # Junction.calc_signed_heat_flow.
+            terms.append(-m_ext * (t_inj_k / node.grid.t_ref_k))
+        else:
+            terms.append(-m_ext * t_n)
+    if "q_mw_heat" in cvars:
+        # Load convention: positive = heat OUT -> negate.
+        q = cvars["q_mw_heat"] * cvars.get("regulation", 1)
+        terms.append(-q / scale_mw_per_kgs)
+    return terms

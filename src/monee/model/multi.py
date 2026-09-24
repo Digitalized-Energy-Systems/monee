@@ -663,8 +663,8 @@ class GasToHeat(_RegulatedCompound, MultiGridCompoundModel):
     def create(
         self,
         network: Network,
-        gas_node: Node,
-        heat_node: Node,
+        gas_node: Node,  # NOSONAR
+        heat_node: Node,  # NOSONAR
         heat_return_node: Node,  # NOSONAR
     ):
         self._gas_grid = gas_node.grid

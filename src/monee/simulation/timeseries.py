@@ -48,15 +48,23 @@ _log = logging.getLogger(__name__)
 
 _STEP_FAILED_MSG = "Step %d failed: %s"
 
-_SERIES_ATTRS = (
-    "_node_id_to_series",
-    "_child_id_to_series",
-    "_child_name_to_series",
-    "_branch_id_to_series",
-    "_branch_name_to_series",
-    "_compound_id_to_series",
-    "_compound_name_to_series",
+_SERIES_KINDS = (
+    ("node id", "_node_id_to_series", Node, None),
+    ("child id", "_child_id_to_series", Child, None),
+    ("child name", "_child_name_to_series", Child, "name"),
+    ("branch id", "_branch_id_to_series", Branch, None),
+    ("branch name", "_branch_name_to_series", Branch, "name"),
+    ("compound id", "_compound_id_to_series", Compound, None),
+    ("compound name", "_compound_name_to_series", Compound, "name"),
 )
+_SERIES_ATTRS = tuple(attr for _, attr, _, _ in _SERIES_KINDS)
+
+
+def _var_attrs(model, series_dict: dict, key) -> list[str]:
+    if key is None:
+        return []
+    attrs = series_dict.get(key, ())
+    return [attr for attr in attrs if isinstance(getattr(model, attr, None), Var)]
 
 
 def _unsuccessful_solve_error(step: int, result) -> RuntimeError:
@@ -252,15 +260,7 @@ class TimeseriesData:
             self._dispatch[type(comp)](self, comp, timestep)
 
     def _registered(self) -> tuple[tuple[str, dict], ...]:
-        return (
-            ("node id", self._node_id_to_series),
-            ("child id", self._child_id_to_series),
-            ("child name", self._child_name_to_series),
-            ("branch id", self._branch_id_to_series),
-            ("branch name", self._branch_name_to_series),
-            ("compound id", self._compound_id_to_series),
-            ("compound name", self._compound_name_to_series),
-        )
+        return tuple((kind, getattr(self, attr)) for kind, attr, _, _ in _SERIES_KINDS)
 
     def series_labels(self) -> list[str]:
         """Human-readable ``"<kind> <key>"`` labels of all registered series."""
@@ -303,33 +303,20 @@ class TimeseriesData:
     def unbound_keys(self, net: Network) -> list[str]:
         """Registered keys (ids and names) that match no component of *net*,
         as human-readable ``"<kind> <key>"`` labels."""
-        ids: dict[type, set] = {
-            Node: set(),
-            Child: set(),
-            Branch: set(),
-            Compound: set(),
+        present: dict[tuple[type, str | None], set] = {
+            (cat, key_attr): set() for _, _, cat, key_attr in _SERIES_KINDS
         }
-        names: dict[type, set] = {Child: set(), Branch: set(), Compound: set()}
         for comp in net.iter_all_components():
             cat = type(comp)
-            ids[cat].add(comp.id)
+            present[(cat, None)].add(comp.id)
             name = getattr(comp, "name", None)
-            if name is not None and cat in names:
-                names[cat].add(name)
-        registered = (
-            ("node id", self._node_id_to_series, ids[Node]),
-            ("child id", self._child_id_to_series, ids[Child]),
-            ("child name", self._child_name_to_series, names[Child]),
-            ("branch id", self._branch_id_to_series, ids[Branch]),
-            ("branch name", self._branch_name_to_series, names[Branch]),
-            ("compound id", self._compound_id_to_series, ids[Compound]),
-            ("compound name", self._compound_name_to_series, names[Compound]),
-        )
+            if name is not None and (cat, "name") in present:
+                present[(cat, "name")].add(name)
         return [
             f"{kind} {key!r}"
-            for kind, series_dict, present in registered
-            for key in series_dict
-            if key not in present
+            for kind, attr, cat, key_attr in _SERIES_KINDS
+            for key in getattr(self, attr)
+            if key not in present[(cat, key_attr)]
         ]
 
     def validate_bound(self, net: Network, strict: bool = True) -> list[str]:
@@ -354,30 +341,15 @@ class TimeseriesData:
         bound component's model, as ``(kind, key, attribute, model)`` tuples.
         In a simulation such a series does not act as an input: the solver
         owns the Var's value (see :func:`run`)."""
-        lookups = {
-            Node: (("node id", self._node_id_to_series, None),),
-            Child: (
-                ("child id", self._child_id_to_series, None),
-                ("child name", self._child_name_to_series, "name"),
-            ),
-            Branch: (
-                ("branch id", self._branch_id_to_series, None),
-                ("branch name", self._branch_name_to_series, "name"),
-            ),
-            Compound: (
-                ("compound id", self._compound_id_to_series, None),
-                ("compound name", self._compound_name_to_series, "name"),
-            ),
-        }
+        lookups: dict[type, list[tuple[str, dict, str | None]]] = {}
+        for kind, attr, cat, key_attr in _SERIES_KINDS:
+            lookups.setdefault(cat, []).append((kind, getattr(self, attr), key_attr))
         hits: list[tuple[str, Any, str, Any]] = []
         for comp in net.iter_all_components():
             for kind, series_dict, key_attr in lookups[type(comp)]:
                 key = comp.id if key_attr is None else getattr(comp, key_attr, None)
-                if key is None or key not in series_dict:
-                    continue
-                for attr in series_dict[key]:
-                    if isinstance(getattr(comp.model, attr, None), Var):
-                        hits.append((kind, key, attr, comp.model))
+                for attr in _var_attrs(comp.model, series_dict, key):
+                    hits.append((kind, key, attr, comp.model))
         return hits
 
     @staticmethod
@@ -764,43 +736,49 @@ def _temporal_replay_violations(net: Network, step_state, step: int) -> list:
     ``Var`` would compare its un-injected placeholder and yield ``False`` for
     any constraint at all.
     """
-    from monee.solver.core import ResultWarning, as_iter
-
     entries = []
-
-    def check(component):
-        for owner, args in (
-            (component.model, (step_state, component.id)),
-            (component.formulation, (component.model, step_state, component.id)),
-        ):
-            method = getattr(owner, "inter_temporal_equations", None)
-            if method is None:
-                continue
-            if _declares_var(component.model):
-                return
-            try:
-                eqs = list(as_iter(method(*args)))
-            except Exception:  # noqa: BLE001 - the solve reports it properly
-                continue
-            for index, eq in enumerate(eqs):
-                if eq is False:
-                    entries.append(
-                        ResultWarning(
-                            "temporal",
-                            f"step {step}: inter_temporal_equations[{index}] of "
-                            f"{type(component.model).__name__} is violated by the "
-                            "prescribed series; every term is a replayed value, so "
-                            "the constraint is dropped instead of enforced. See "
-                            "the how-to/timeseries docs page on prescribed-replay "
-                            "semantics.",
-                            component=str(component.id),
-                        )
-                    )
-
     for component in net.iter_all_components():
         if not getattr(component, "ignored", False):
-            check(component)
+            _component_replay_violations(component, step_state, step, entries)
     return entries
+
+
+def _component_replay_violations(component, step_state, step: int, entries) -> None:
+    from monee.solver.core import as_iter
+
+    for owner, args in (
+        (component.model, (step_state, component.id)),
+        (component.formulation, (component.model, step_state, component.id)),
+    ):
+        method = getattr(owner, "inter_temporal_equations", None)
+        if method is None:
+            continue
+        if _declares_var(component.model):
+            return
+        try:
+            eqs = list(as_iter(method(*args)))
+        except Exception:  # noqa: BLE001 - the solve reports it properly
+            continue
+        entries.extend(
+            _replay_violation_warning(component, index, step)
+            for index, eq in enumerate(eqs)
+            if eq is False
+        )
+
+
+def _replay_violation_warning(component, index: int, step: int):
+    from monee.solver.core import ResultWarning
+
+    return ResultWarning(
+        "temporal",
+        f"step {step}: inter_temporal_equations[{index}] of "
+        f"{type(component.model).__name__} is violated by the "
+        "prescribed series; every term is a replayed value, so "
+        "the constraint is dropped instead of enforced. See "
+        "the how-to/timeseries docs page on prescribed-replay "
+        "semantics.",
+        component=str(component.id),
+    )
 
 
 def _report_temporal_replay_violations(entries, result, strict: bool) -> None:

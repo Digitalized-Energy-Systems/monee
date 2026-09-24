@@ -154,6 +154,49 @@ def fill_branch_dict(
         branch_dict_list.append(branch_dict)
 
 
+def _attach_child_id(node_by_id, bus_id, child_id):
+    node_dict = node_by_id.get(bus_id)
+    if node_dict is not None:
+        node_dict["child_ids"].append(child_id)
+
+
+def _claim_pf_gen_role(bus_type, bus_id, in_service, ref_assigned, pv_controlled):
+    is_ref = bus_type == REF_BUS_TYPE and bus_id not in ref_assigned
+    is_pv = bus_type == PV_BUS_TYPE and bus_id not in pv_controlled
+    if is_ref and in_service:
+        ref_assigned.add(bus_id)
+        return "ref"
+    if is_pv and in_service:
+        pv_controlled.add(bus_id)
+        return "pv"
+    return None
+
+
+def _pf_gen_child_dict(gen_row, child_id, in_service, role):
+    child_dict = {"values": {}, "id": child_id}
+    values = child_dict["values"]
+    if role == "ref":
+        child_dict["model_type"] = "ExtPowerGrid"
+        # Load convention seed: generation Pg/Qg enters as -Pg/-Qg,
+        # matching the OPF path in fill_opf_child_dict.
+        values["p_mw"] = as_controllable(-gen_row[1])
+        values["q_mvar"] = as_controllable(-gen_row[2])
+        values["vm_pu"] = gen_row[5]
+        values["va_degree"] = 0
+    elif role == "pv":
+        child_dict["model_type"] = "VoltageControlledGenerator"
+        values["p_mw"] = -gen_row[1]
+        values["q_mvar"] = as_controllable(-gen_row[2])
+        values["vm_pu"] = gen_row[5]
+    else:
+        child_dict["model_type"] = "PowerGenerator"
+        values["p_mw"] = -gen_row[1]
+        values["q_mvar"] = -gen_row[2]
+        if not in_service:
+            values["regulation"] = 0
+    return child_dict
+
+
 def fill_child_dict(
     gen_mat,
     node_dict_list,
@@ -166,7 +209,6 @@ def fill_child_dict(
     node_by_id = {node_dict["id"]: node_dict for node_dict in node_dict_list}
 
     for i in range(len(gen_mat)):
-        child_dict = {}
         gen_row = gen_mat[i]
         bus_id = int(gen_row[0])
 
@@ -174,40 +216,52 @@ def fill_child_dict(
             continue
 
         in_service = gen_row[7] > 0  # GEN_STATUS (col 8)
-        bus_type = bus_type_by_id.get(bus_id)
-
-        is_ref = bus_type == REF_BUS_TYPE and bus_id not in ref_assigned
-        is_pv = bus_type == PV_BUS_TYPE and bus_id not in pv_controlled
-
-        child_dict["values"] = {}
-        child_dict["id"] = len(child_dict_list)
-        if is_ref and in_service:
-            ref_assigned.add(bus_id)
-            child_dict["model_type"] = "ExtPowerGrid"
-            # Load convention seed: generation Pg/Qg enters as -Pg/-Qg,
-            # matching the OPF path in fill_opf_child_dict.
-            child_dict["values"]["p_mw"] = as_controllable(-gen_row[1])
-            child_dict["values"]["q_mvar"] = as_controllable(-gen_row[2])
-            child_dict["values"]["vm_pu"] = gen_row[5]
-            child_dict["values"]["va_degree"] = 0
-        elif is_pv and in_service:
-            pv_controlled.add(bus_id)
-            child_dict["model_type"] = "VoltageControlledGenerator"
-            child_dict["values"]["p_mw"] = -gen_row[1]
-            child_dict["values"]["q_mvar"] = as_controllable(-gen_row[2])
-            child_dict["values"]["vm_pu"] = gen_row[5]
-        else:
-            child_dict["model_type"] = "PowerGenerator"
-            child_dict["values"]["p_mw"] = -gen_row[1]
-            child_dict["values"]["q_mvar"] = -gen_row[2]
-            if not in_service:
-                child_dict["values"]["regulation"] = 0
-
-        node_dict = node_by_id.get(bus_id)
-        if node_dict is not None:
-            node_dict["child_ids"].append(child_dict["id"])
-
+        role = _claim_pf_gen_role(
+            bus_type_by_id.get(bus_id),
+            bus_id,
+            in_service,
+            ref_assigned,
+            pv_controlled,
+        )
+        child_dict = _pf_gen_child_dict(gen_row, len(child_dict_list), in_service, role)
+        _attach_child_id(node_by_id, bus_id, child_dict["id"])
         child_dict_list.append(child_dict)
+
+
+def _bus_vm_value(bus_row, node_id, vm_limits_by_id):
+    # For OPF the bus voltage magnitude is a bounded decision variable
+    # (VMIN/VMAX); for a plain power flow it stays an unbounded seed.
+    if vm_limits_by_id is not None and node_id in vm_limits_by_id:
+        vm_min, vm_max = vm_limits_by_id[node_id]
+        return {
+            "value": bus_row[7],
+            "min": vm_min,
+            "max": vm_max,
+        }
+    return as_controllable(bus_row[7])
+
+
+def _append_bus_children(bus_row, node_dict, child_dict_list):
+    if bus_row[2] != 0 or bus_row[3] != 0:
+        node_dict["child_ids"].append(len(child_dict_list))
+        model_type = "PowerLoad" if bus_row[2] >= 0 else "PowerGenerator"
+        child_dict_list.append(
+            {
+                "id": len(child_dict_list),
+                "model_type": model_type,
+                "values": {"p_mw": bus_row[2], "q_mvar": bus_row[3]},
+            }
+        )
+    # Bus shunt GS/BS (cols 5-6): constant-admittance P/Q at vm = 1.0 p.u.
+    if bus_row[4] != 0 or bus_row[5] != 0:
+        node_dict["child_ids"].append(len(child_dict_list))
+        child_dict_list.append(
+            {
+                "id": len(child_dict_list),
+                "model_type": "PowerShunt",
+                "values": {"gs_mw": bus_row[4], "bs_mvar": bus_row[5]},
+            }
+        )
 
 
 def fill_node_dict(
@@ -228,17 +282,7 @@ def fill_node_dict(
         node_dict["id"] = node_id
         node_dict["grid_id"] = "power"
         node_dict["values"] = {}
-        # For OPF the bus voltage magnitude is a bounded decision variable
-        # (VMIN/VMAX); for a plain power flow it stays an unbounded seed.
-        if vm_limits_by_id is not None and node_id in vm_limits_by_id:
-            vm_min, vm_max = vm_limits_by_id[node_id]
-            node_dict["values"]["vm_pu"] = {
-                "value": bus_row[7],
-                "min": vm_min,
-                "max": vm_max,
-            }
-        else:
-            node_dict["values"]["vm_pu"] = as_controllable(bus_row[7])
+        node_dict["values"]["vm_pu"] = _bus_vm_value(bus_row, node_id, vm_limits_by_id)
         node_dict["values"]["va_radians"] = {
             "value": bus_row[8] * math.pi / 180,
             "min": -math.pi,
@@ -248,27 +292,7 @@ def fill_node_dict(
         node_dict["model_type"] = "Bus"
         node_dict["child_ids"] = []
         node_dict_list.append(node_dict)
-
-        if bus_row[2] != 0 or bus_row[3] != 0:
-            node_dict["child_ids"].append(len(child_dict_list))
-            model_type = "PowerLoad" if bus_row[2] >= 0 else "PowerGenerator"
-            child_dict_list.append(
-                {
-                    "id": len(child_dict_list),
-                    "model_type": model_type,
-                    "values": {"p_mw": bus_row[2], "q_mvar": bus_row[3]},
-                }
-            )
-        # Bus shunt GS/BS (cols 5-6): constant-admittance P/Q at vm = 1.0 p.u.
-        if bus_row[4] != 0 or bus_row[5] != 0:
-            node_dict["child_ids"].append(len(child_dict_list))
-            child_dict_list.append(
-                {
-                    "id": len(child_dict_list),
-                    "model_type": "PowerShunt",
-                    "values": {"gs_mw": bus_row[4], "bs_mvar": bus_row[5]},
-                }
-            )
+        _append_bus_children(bus_row, node_dict, child_dict_list)
 
 
 def _parse_number(token):
@@ -376,6 +400,56 @@ def _polynomial(coeffs, p):
     return sum(c * p ** (degree - k) for k, c in enumerate(coeffs))
 
 
+def _is_costless_pwl(coeffs, in_service, gencost_mat, i):
+    return (
+        coeffs is None
+        and in_service
+        and gencost_mat is not None
+        and i < len(gencost_mat)
+        and int(gencost_mat[i][0]) == _GENCOST_PIECEWISE
+    )
+
+
+def _claim_opf_ref(bus_type_by_id, bus_id, in_service, ref_assigned):
+    is_ref = bus_type_by_id.get(bus_id) == REF_BUS_TYPE and bus_id not in ref_assigned
+    if in_service and is_ref:
+        ref_assigned.add(bus_id)
+    return is_ref
+
+
+def _opf_gen_child_dict(gen_row, child_id, in_service, is_ref, coeffs, bounds):
+    child_dict = {"id": child_id, "values": {}}
+    values = child_dict["values"]
+    if not in_service:
+        child_dict["model_type"] = "PowerGenerator"
+        values["p_mw"] = -gen_row[1]
+        values["q_mvar"] = -gen_row[2]
+        values["regulation"] = 0
+        return child_dict
+    p_min, p_max, q_min, q_max = bounds
+    # Load convention: generation is negative, so Pg in [PMIN, PMAX]
+    # maps to the stored p_mw in [-PMAX, -PMIN] (likewise reactive).
+    values["p_mw"] = {
+        "value": -gen_row[1],
+        "min": -p_max,
+        "max": -p_min,
+    }
+    values["q_mvar"] = {
+        "value": -gen_row[2],
+        "min": -q_max,
+        "max": -q_min,
+    }
+    if coeffs is not None:
+        values["_cost_coeffs"] = coeffs
+    if is_ref:
+        child_dict["model_type"] = "ExtPowerGrid"
+        values["vm_pu"] = gen_row[5]
+        values["va_degree"] = 0
+    else:
+        child_dict["model_type"] = "PowerGenerator"
+    return child_dict
+
+
 def fill_opf_child_dict(
     gen_mat,
     gencost_mat,
@@ -406,50 +480,19 @@ def fill_opf_child_dict(
         p_max, p_min = gen_row[8], gen_row[9]  # PMAX, PMIN (MW)
         q_max, q_min = gen_row[3], gen_row[4]  # QMAX, QMIN (MVAr)
         coeffs = None if gencost_mat is None else _gencost_coeffs(gencost_mat, i)
-        if (
-            coeffs is None
-            and in_service
-            and gencost_mat is not None
-            and i < len(gencost_mat)
-            and int(gencost_mat[i][0]) == _GENCOST_PIECEWISE
-        ):
+        if _is_costless_pwl(coeffs, in_service, gencost_mat, i):
             costless_pwl_gens.append((i, bus_id))
-        is_ref = (
-            bus_type_by_id.get(bus_id) == REF_BUS_TYPE and bus_id not in ref_assigned
+        is_ref = _claim_opf_ref(bus_type_by_id, bus_id, in_service, ref_assigned)
+
+        child_dict = _opf_gen_child_dict(
+            gen_row,
+            len(child_dict_list),
+            in_service,
+            is_ref,
+            coeffs,
+            (p_min, p_max, q_min, q_max),
         )
-
-        child_dict = {"id": len(child_dict_list), "values": {}}
-        if not in_service:
-            child_dict["model_type"] = "PowerGenerator"
-            child_dict["values"]["p_mw"] = -gen_row[1]
-            child_dict["values"]["q_mvar"] = -gen_row[2]
-            child_dict["values"]["regulation"] = 0
-        else:
-            # Load convention: generation is negative, so Pg in [PMIN, PMAX]
-            # maps to the stored p_mw in [-PMAX, -PMIN] (likewise reactive).
-            child_dict["values"]["p_mw"] = {
-                "value": -gen_row[1],
-                "min": -p_max,
-                "max": -p_min,
-            }
-            child_dict["values"]["q_mvar"] = {
-                "value": -gen_row[2],
-                "min": -q_max,
-                "max": -q_min,
-            }
-            if coeffs is not None:
-                child_dict["values"]["_cost_coeffs"] = coeffs
-            if is_ref:
-                ref_assigned.add(bus_id)
-                child_dict["model_type"] = "ExtPowerGrid"
-                child_dict["values"]["vm_pu"] = gen_row[5]
-                child_dict["values"]["va_degree"] = 0
-            else:
-                child_dict["model_type"] = "PowerGenerator"
-
-        node_dict = node_by_id.get(bus_id)
-        if node_dict is not None:
-            node_dict["child_ids"].append(child_dict["id"])
+        _attach_child_id(node_by_id, bus_id, child_dict["id"])
         child_dict_list.append(child_dict)
 
     if costless_pwl_gens:
@@ -463,6 +506,46 @@ def fill_opf_child_dict(
             f"stay dispatchable at zero cost: {listing}.",
             stacklevel=2,
         )
+
+
+def _scale_model_vars(model, attrs, scale):
+    for attr in attrs:
+        var = getattr(model, attr, None)
+        if isinstance(var, Var):
+            var.scale = scale
+
+
+def _scale_power_vars(network, power_scale):
+    for child in network.childs:
+        _scale_model_vars(child.model, ("p_mw", "q_mvar"), power_scale)
+    for branch in network.branches:
+        _scale_model_vars(
+            branch.model,
+            ("p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar"),
+            power_scale,
+        )
+
+
+def _opf_problem(max_loading, limit_basis):
+    problem = OptimizationProblem()
+    objectives = Objectives()
+    objectives.select(lambda m: hasattr(m, "_cost_coeffs")).calculate(
+        # Cost is a function of generation Pg = -p_mw (load convention).
+        lambda models: sum(_polynomial(m._cost_coeffs, -m.p_mw) for m in models)
+    )
+    problem.objectives = objectives
+    if max_loading is not None:
+        constraints = Constraints()
+        constraints.select_types(GenericPowerBranch).equation(
+            lambda m: line_loading_limit(m, "from", max_loading, basis=limit_basis)
+        ).equation(
+            lambda m: line_loading_limit(m, "to", max_loading, basis=limit_basis)
+        )
+        problem.constraints = constraints
+    # The buses already carry their per-bus VMIN/VMAX (fill_node_dict); free the
+    # slack voltage so the OPF optimises it within that band, like MATPOWER.
+    problem.optimize_bus_voltages()
+    return problem
 
 
 def build_matpower_opf(mpc, max_loading=1.0, limit_basis="mva"):
@@ -522,36 +605,9 @@ def build_matpower_opf(mpc, max_loading=1.0, limit_basis="mva"):
 
     base = mpc["baseMVA"]
     power_scale = base if (base and base != 1) else 100.0
-    for child in network.childs:
-        for attr in ("p_mw", "q_mvar"):
-            var = getattr(child.model, attr, None)
-            if isinstance(var, Var):
-                var.scale = power_scale
-    for branch in network.branches:
-        for attr in ("p_from_mw", "q_from_mvar", "p_to_mw", "q_to_mvar"):
-            var = getattr(branch.model, attr, None)
-            if isinstance(var, Var):
-                var.scale = power_scale
+    _scale_power_vars(network, power_scale)
 
-    problem = OptimizationProblem()
-    objectives = Objectives()
-    objectives.select(lambda m: hasattr(m, "_cost_coeffs")).calculate(
-        # Cost is a function of generation Pg = -p_mw (load convention).
-        lambda models: sum(_polynomial(m._cost_coeffs, -m.p_mw) for m in models)
-    )
-    problem.objectives = objectives
-    if max_loading is not None:
-        constraints = Constraints()
-        constraints.select_types(GenericPowerBranch).equation(
-            lambda m: line_loading_limit(m, "from", max_loading, basis=limit_basis)
-        ).equation(
-            lambda m: line_loading_limit(m, "to", max_loading, basis=limit_basis)
-        )
-        problem.constraints = constraints
-    # The buses already carry their per-bus VMIN/VMAX (fill_node_dict); free the
-    # slack voltage so the OPF optimises it within that band, like MATPOWER.
-    problem.optimize_bus_voltages()
-    return network, problem
+    return network, _opf_problem(max_loading, limit_basis)
 
 
 def read_matpower_opf_case(file, max_loading=1.0, limit_basis="mva"):

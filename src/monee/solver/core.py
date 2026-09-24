@@ -286,7 +286,7 @@ class SolverResult:
         return matches[0][1]
 
     def _objective_label(self) -> str:
-        if self.objective is None or abs(self.objective) == 0.0:
+        if self.objective is None or abs(self.objective) < 1e-12:
             return ""
         label = f"objective = {self.objective:.6g}"
         if self.user_objective is not None:
@@ -485,32 +485,24 @@ class SolverInterface(ABC):
     def mark_temporal_components(network, ignored_nodes: set) -> None:
         """Set ``_temporal_active`` on every model carrying a temporal method,
         so static-only constraints can be suppressed when coupling is active."""
-        _temporal_methods = frozenset(
-            (
-                "inter_temporal_equations",
-                "inter_step_equations",
-                "inter_period_equations",
-            )
-        )
-
-        def models():
-            for node in network.nodes:
-                if node.id in ignored_nodes or node.ignored:
-                    continue
-                yield node.model
-                for child in network.childs_by_ids(node.child_ids):
-                    if not child.ignored:
-                        yield child.model
-            for branch in network.branches:
-                if not branch.ignored:
-                    yield branch.model
-            for compound in network.compounds:
-                if not compound.ignored:
-                    yield compound.model
-
-        for model in models():
-            if any(hasattr(model, m) for m in _temporal_methods):
+        for model in _unignored_models(network, ignored_nodes):
+            if any(hasattr(model, m) for m in _TEMPORAL_METHODS):
                 model._temporal_active = True
+
+    def _register_temporal_eqs(self, solver_obj, component, state, methods):
+        for method in methods:
+            if hasattr(component.model, method):
+                eqs = as_iter(getattr(component.model, method)(state, component.id))
+                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+            if component.formulation is not None and hasattr(
+                component.formulation, method
+            ):
+                eqs = as_iter(
+                    getattr(component.formulation, method)(
+                        component.model, state, component.id
+                    )
+                )
+                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
 
     def _collect_temporal_eqs(
         self,
@@ -526,35 +518,10 @@ class SolverInterface(ABC):
         """Register ``inter_temporal_equations`` and *mode_method* for every
         model/formulation that implements them."""
         methods = ("inter_temporal_equations", mode_method)
-
-        def register(component):
-            for method in methods:
-                if hasattr(component.model, method):
-                    eqs = as_iter(getattr(component.model, method)(state, component.id))
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-                if component.formulation is not None and hasattr(
-                    component.formulation, method
-                ):
-                    eqs = as_iter(
-                        getattr(component.formulation, method)(
-                            component.model, state, component.id
-                        )
-                    )
-                    self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
-
-        for node in nodes:
-            if ignore_node(node, network, ignored_nodes):
-                continue
-            register(node)
-            for child in network.childs_by_ids(node.child_ids):
-                if not ignore_child(child, ignored_nodes):
-                    register(child)
-        for branch in branches:
-            if not ignore_branch(branch, network, ignored_nodes):
-                register(branch)
-        for compound in compounds:
-            if not ignore_compound(compound, ignored_nodes):
-                register(compound)
+        for component in _active_components(
+            network, nodes, branches, compounds, ignored_nodes
+        ):
+            self._register_temporal_eqs(solver_obj, component, state, methods)
 
     def process_inter_step_equations(
         self,
@@ -1291,23 +1258,11 @@ def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
     nonconvex solve reaches.
     """
     prune = getattr(network, "_solve_simulation", False)
-    for branch in branches:
-        if ignore_branch(branch, network, ignored_nodes):
-            branch.ignored = True
-            inject_nans(branch.model)
-            continue
-        drop_unused = getattr(branch.model, "drop_unused_vars", None) if prune else None
-        if drop_unused is not None:
-            drop_unused(branch.grid)
-        inject_fn(branch.model, branch, "branch")
+    _inject_branches(inject_fn, branches, network, ignored_nodes, prune)
 
     for node in nodes:
         if ignore_node(node, network, ignored_nodes):
-            node.ignored = True
-            for child in network.childs_by_ids(node.child_ids):
-                child.ignored = True
-                inject_nans(child.model)
-            inject_nans(node.model)
+            _mark_node_ignored(node, network)
             continue
         inject_fn(node.model, node, "node")
         _inject_node_childs(inject_fn, node, network, ignored_nodes)
@@ -1320,6 +1275,26 @@ def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
         inject_fn(compound.model, compound, "compound")
 
 
+def _inject_branches(inject_fn, branches, network, ignored_nodes, prune):
+    for branch in branches:
+        if ignore_branch(branch, network, ignored_nodes):
+            branch.ignored = True
+            inject_nans(branch.model)
+            continue
+        drop_unused = getattr(branch.model, "drop_unused_vars", None) if prune else None
+        if drop_unused is not None:
+            drop_unused(branch.grid)
+        inject_fn(branch.model, branch, "branch")
+
+
+def _mark_node_ignored(node, network):
+    node.ignored = True
+    for child in network.childs_by_ids(node.child_ids):
+        child.ignored = True
+        inject_nans(child.model)
+    inject_nans(node.model)
+
+
 def _inject_node_childs(inject_fn, node, network, ignored_nodes):
     for child in network.childs_by_ids(node.child_ids):
         if ignore_child(child, ignored_nodes):
@@ -1327,6 +1302,55 @@ def _inject_node_childs(inject_fn, node, network, ignored_nodes):
             inject_nans(child.model)
             continue
         inject_fn(child.model, child, "child")
+
+
+_TEMPORAL_METHODS = frozenset(
+    (
+        "inter_temporal_equations",
+        "inter_step_equations",
+        "inter_period_equations",
+    )
+)
+
+
+def _unignored_node_models(network, ignored_nodes):
+    for node in network.nodes:
+        if node.id in ignored_nodes or node.ignored:
+            continue
+        yield node.model
+        for child in network.childs_by_ids(node.child_ids):
+            if not child.ignored:
+                yield child.model
+
+
+def _unignored_models(network, ignored_nodes):
+    yield from _unignored_node_models(network, ignored_nodes)
+    for branch in network.branches:
+        if not branch.ignored:
+            yield branch.model
+    for compound in network.compounds:
+        if not compound.ignored:
+            yield compound.model
+
+
+def _active_node_components(network, nodes, ignored_nodes):
+    for node in nodes:
+        if ignore_node(node, network, ignored_nodes):
+            continue
+        yield node
+        for child in network.childs_by_ids(node.child_ids):
+            if not ignore_child(child, ignored_nodes):
+                yield child
+
+
+def _active_components(network, nodes, branches, compounds, ignored_nodes):
+    yield from _active_node_components(network, nodes, ignored_nodes)
+    for branch in branches:
+        if not ignore_branch(branch, network, ignored_nodes):
+            yield branch
+    for compound in compounds:
+        if not ignore_compound(compound, ignored_nodes):
+            yield compound
 
 
 def withdraw_vars(withdraw_fn, nodes, branches, compounds, network):
@@ -1535,7 +1559,7 @@ def _branch_side_flow(model, side: str, is_power: bool) -> float | None:
     return _hydraulic_side_flow(model, side)
 
 
-def _add_branch_balance_terms(network, branch, node_grid, buckets, skip) -> None:
+def _add_branch_balance_terms(branch, node_grid, buckets, skip) -> None:
     fg = node_grid.get(branch.from_node_id)
     tg = node_grid.get(branch.to_node_id)
     if fg is None or tg is None or fg is not tg:
@@ -1584,6 +1608,24 @@ def _carrier_balance_entries(network, ignored_nodes) -> list[ResultWarning]:
     as storage charge, not imbalance; the finding still fires when the
     residual including the storage term exceeds
     ``max(_BALANCE_ABS_TOL, 1e-5 * total flow magnitude)``."""
+    buckets, node_grid = _carrier_buckets(network, ignored_nodes)
+    skip: set = set()
+    for branch in network.branches:
+        if ignore_branch(branch, network, ignored_nodes):
+            continue
+        _add_branch_balance_terms(branch, node_grid, buckets, skip)
+    _add_all_child_balance_terms(network, ignored_nodes, node_grid, buckets)
+    entries = []
+    for key, bucket in buckets.items():
+        if key in skip or not bucket["ok"]:
+            continue
+        entry = _carrier_imbalance_entry(bucket)
+        if entry is not None:
+            entries.append(entry)
+    return entries
+
+
+def _carrier_buckets(network, ignored_nodes) -> tuple[dict, dict]:
     buckets: dict = {}
     node_grid: dict = {}
     for node in network.nodes:
@@ -1595,11 +1637,10 @@ def _carrier_balance_entries(network, ignored_nodes) -> list[ResultWarning]:
             buckets.setdefault(
                 id(grid), {"grid": grid, "signed": 0.0, "mag": 0.0, "ok": True}
             )
-    skip: set = set()
-    for branch in network.branches:
-        if ignore_branch(branch, network, ignored_nodes):
-            continue
-        _add_branch_balance_terms(network, branch, node_grid, buckets, skip)
+    return buckets, node_grid
+
+
+def _add_all_child_balance_terms(network, ignored_nodes, node_grid, buckets) -> None:
     for node in network.nodes:
         if ignore_node(node, network, ignored_nodes):
             continue
@@ -1609,27 +1650,23 @@ def _carrier_balance_entries(network, ignored_nodes) -> list[ResultWarning]:
         for child in network.childs_by_ids(node.child_ids):
             if not ignore_child(child, ignored_nodes):
                 _add_child_balance_terms(child, grid, buckets[id(grid)])
-    entries = []
-    for key, bucket in buckets.items():
-        if key in skip or not bucket["ok"]:
-            continue
-        imbalance = abs(bucket["signed"])
-        if imbalance <= max(_BALANCE_ABS_TOL, 1e-5 * bucket["mag"]):
-            continue
-        grid = bucket["grid"]
-        unit = "MW" if isinstance(grid, PowerGrid) else "kg/s"
-        entries.append(
-            ResultWarning(
-                "energy_balance",
-                f"carrier balance does not close: net imbalance "
-                f"{bucket['signed']:.4g} {unit} across "
-                f"{type(grid).__name__}({grid.name}) - the reported flows do "
-                "not conserve energy/mass on this carrier",
-                component=f"{type(grid).__name__}({grid.name})",
-                value=imbalance,
-            )
-        )
-    return entries
+
+
+def _carrier_imbalance_entry(bucket) -> ResultWarning | None:
+    imbalance = abs(bucket["signed"])
+    if imbalance <= max(_BALANCE_ABS_TOL, 1e-5 * bucket["mag"]):
+        return None
+    grid = bucket["grid"]
+    unit = "MW" if isinstance(grid, PowerGrid) else "kg/s"
+    return ResultWarning(
+        "energy_balance",
+        f"carrier balance does not close: net imbalance "
+        f"{bucket['signed']:.4g} {unit} across "
+        f"{type(grid).__name__}({grid.name}) - the reported flows do "
+        "not conserve energy/mass on this carrier",
+        component=f"{type(grid).__name__}({grid.name})",
+        value=imbalance,
+    )
 
 
 def _served_delta_entries(network, ignored_nodes, violations) -> list[ResultWarning]:
@@ -1644,6 +1681,20 @@ def _served_delta_entries(network, ignored_nodes, violations) -> list[ResultWarn
     regulation leaves more than 1e-4 MW resp. kg/s of demand unserved, and
     for heat-exchanger duty shortfalls above the same floor.
     """
+    entries = _he_shortfall_entries(violations)
+    for node in network.nodes:
+        if ignore_node(node, network, ignored_nodes):
+            continue
+        for child in network.childs_by_ids(node.child_ids):
+            if ignore_child(child, ignored_nodes):
+                continue
+            entry = _child_served_entry(child)
+            if entry is not None:
+                entries.append(entry)
+    return entries
+
+
+def _he_shortfall_entries(violations) -> list[ResultWarning]:
     entries = []
     for key, mag in violations.items():
         if key.endswith(".q_mw_delivered_shortfall"):
@@ -1657,38 +1708,33 @@ def _served_delta_entries(network, ignored_nodes, violations) -> list[ResultWarn
                     value=mag,
                 )
             )
-    for node in network.nodes:
-        if ignore_node(node, network, ignored_nodes):
-            continue
-        for child in network.childs_by_ids(node.child_ids):
-            if ignore_child(child, ignored_nodes):
-                continue
-            model = child.model
-            regulation = getattr(model, "regulation", None)
-            if isinstance(regulation, Var):
-                continue
-            regv = _val(regulation)
-            if regv is None or regv >= 1 - _SHED_TOL:
-                continue
-            for attr in ("p_mw", "mass_flow_kgs", "q_mw_heat"):
-                setpoint = _val(getattr(model, attr, None))
-                # Load convention: only positive setpoints are demand.
-                if setpoint is None or setpoint <= 1e-9:
-                    continue
-                unserved = setpoint * (1 - regv)
-                if unserved <= max(_SERVED_ABS_TOL, 1e-6 * setpoint):
-                    break
-                entries.append(
-                    ResultWarning(
-                        "served_delta",
-                        f"{attr} setpoint {setpoint:.4g} served at "
-                        f"{100 * regv:.1f}% (unserved {unserved:.4g})",
-                        component=f"{type(model).__name__}.{child.id}",
-                        value=unserved,
-                    )
-                )
-                break
     return entries
+
+
+def _child_served_entry(child) -> ResultWarning | None:
+    model = child.model
+    regulation = getattr(model, "regulation", None)
+    if isinstance(regulation, Var):
+        return None
+    regv = _val(regulation)
+    if regv is None or regv >= 1 - _SHED_TOL:
+        return None
+    for attr in ("p_mw", "mass_flow_kgs", "q_mw_heat"):
+        setpoint = _val(getattr(model, attr, None))
+        # Load convention: only positive setpoints are demand.
+        if setpoint is None or setpoint <= 1e-9:
+            continue
+        unserved = setpoint * (1 - regv)
+        if unserved <= max(_SERVED_ABS_TOL, 1e-6 * setpoint):
+            return None
+        return ResultWarning(
+            "served_delta",
+            f"{attr} setpoint {setpoint:.4g} served at "
+            f"{100 * regv:.1f}% (unserved {unserved:.4g})",
+            component=f"{type(model).__name__}.{child.id}",
+            value=unserved,
+        )
+    return None
 
 
 _RELAXATION_FLOW_FLOOR_FRACTION = 1e-3
@@ -1897,33 +1943,43 @@ def _is_setpoint_gate(model, key, val, bound) -> bool:
     return opposite == 0
 
 
+def _is_bound_candidate(key, val, attrs) -> bool:
+    if not isinstance(val, Var) or val.integer:
+        return False
+    if key in _BOUND_SKIP_ATTRS or key.startswith("_"):
+        return False
+    if attrs is not None and key not in attrs:
+        return False
+    return not (val.min is not None and val.min == val.max)
+
+
+def _binding_entry(model, label, attrs, key, val) -> ResultWarning | None:
+    v = _val(val)
+    if v is None:
+        return None
+    hit = _binding_side(v, val.min, val.max)
+    if hit is None:
+        return None
+    side, bound = hit
+    if attrs is None and _is_setpoint_gate(model, key, val, bound):
+        return None
+    return ResultWarning(
+        "bound_active",
+        f"{key} = {v:.6g} sits at its {side} bound {bound:.6g}; the "
+        "bound is constraining the optimum",
+        component=label,
+        value=v,
+    )
+
+
 def _model_bound_entries(model, label, attrs=None) -> list[ResultWarning]:
     flagged: dict[str, ResultWarning] = {}
     for key, val in model.__dict__.items():
-        if not isinstance(val, Var) or val.integer:
+        if not _is_bound_candidate(key, val, attrs):
             continue
-        if key in _BOUND_SKIP_ATTRS or key.startswith("_"):
-            continue
-        if attrs is not None and key not in attrs:
-            continue
-        if val.min is not None and val.min == val.max:
-            continue
-        v = _val(val)
-        if v is None:
-            continue
-        hit = _binding_side(v, val.min, val.max)
-        if hit is None:
-            continue
-        side, bound = hit
-        if attrs is None and _is_setpoint_gate(model, key, val, bound):
-            continue
-        flagged[key] = ResultWarning(
-            "bound_active",
-            f"{key} = {v:.6g} sits at its {side} bound {bound:.6g}; the "
-            "bound is constraining the optimum",
-            component=label,
-            value=v,
-        )
+        entry = _binding_entry(model, label, attrs, key, val)
+        if entry is not None:
+            flagged[key] = entry
     # A squared twin binding alongside its base var is the same finding.
     return [
         entry

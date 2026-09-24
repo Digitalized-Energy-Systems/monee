@@ -468,27 +468,34 @@ def _consistent_flow_x0(reg, x0):
     }
     alt = None
     for i, r in enumerate(reg):
-        if r["key"] != "mass_flow_kgs" or r["x0"] != 0.0:
-            continue
-        # Const(1), the from -> to pin of the smooth pipe formulations, is a
-        # plain float by the time the variables are injected; a free direction
-        # binary is a symbol here and must not be seeded.
-        direction = r["model"].__dict__.get("direction")
-        if not isinstance(direction, (int, float)) or direction != 1:
-            continue
-        j = mag_index.get(id(r["model"]))
-        if j is None:
-            continue
-        magnitude = reg[j]["x0"] * (reg[j]["scale"] or 1.0)
-        if magnitude <= 0:
-            continue
-        seed = magnitude / (r["scale"] or 1.0)
-        if seed < r["lb"] or seed > r["ub"]:
+        seed = _flow_seed(r, reg, mag_index)
+        if seed is None:
             continue
         if alt is None:
             alt = [float(v) for v in np.array(x0).flatten()]
         alt[i] = seed
     return None if alt is None else ca.DM(alt)
+
+
+def _flow_seed(r, reg, mag_index):
+    if r["key"] != "mass_flow_kgs" or abs(r["x0"]) > 1e-12:
+        return None
+    # Const(1), the from -> to pin of the smooth pipe formulations, is a
+    # plain float by the time the variables are injected; a free direction
+    # binary is a symbol here and must not be seeded.
+    direction = r["model"].__dict__.get("direction")
+    if not isinstance(direction, (int, float)) or direction != 1:
+        return None
+    j = mag_index.get(id(r["model"]))
+    if j is None:
+        return None
+    magnitude = reg[j]["x0"] * (reg[j]["scale"] or 1.0)
+    if magnitude <= 0:
+        return None
+    seed = magnitude / (r["scale"] or 1.0)
+    if seed < r["lb"] or seed > r["ub"]:
+        return None
+    return seed
 
 
 def _solve_with_retry(solver, nlp, opts, args, name, what, x0_alt=None):
@@ -610,24 +617,32 @@ def _bound_hint_lines(reg, x_last, reg_range=None, period=None, tol=1e-6, limit=
         if r.get("cat") not in ("child", "compound"):
             continue
         val = float(x_last[i]) * (r.get("scale", 1.0) or 1.0)
-        vmin, vmax = r.get("vmin"), r.get("vmax")
-        if vmin is not None and val <= vmin + tol:
-            which, bound = "lower", vmin
-        elif vmax is not None and val >= vmax - tol:
-            which, bound = "upper", vmax
-        else:
+        hit = _bound_hit(val, r.get("vmin"), r.get("vmax"), tol)
+        if hit is None:
             continue
-        name = f" '{r['comp_name']}'" if r.get("comp_name") else ""
-        carrier = f", {r['carrier']}" if r.get("carrier") else ""
-        suffix = f" (t={period})" if period is not None else ""
-        lines.append(
-            f"  {r.get('comp_type', '?')}{name} ({r['cat']} {r['comp_id']}"
-            f"{carrier}).{r['key']} = {val:.6g} at {which} bound "
-            f"{bound:g}{suffix}"
-        )
+        lines.append(_bound_hint_line(r, val, *hit, period))
         if len(lines) >= limit:
             break
     return lines
+
+
+def _bound_hit(val, vmin, vmax, tol):
+    if vmin is not None and val <= vmin + tol:
+        return "lower", vmin
+    if vmax is not None and val >= vmax - tol:
+        return "upper", vmax
+    return None
+
+
+def _bound_hint_line(r, val, which, bound, period):
+    name = f" '{r['comp_name']}'" if r.get("comp_name") else ""
+    carrier = f", {r['carrier']}" if r.get("carrier") else ""
+    suffix = f" (t={period})" if period is not None else ""
+    return (
+        f"  {r.get('comp_type', '?')}{name} ({r['cat']} {r['comp_id']}"
+        f"{carrier}).{r['key']} = {val:.6g} at {which} bound "
+        f"{bound:g}{suffix}"
+    )
 
 
 def _failure_diagnostics(  # NOSONAR
@@ -898,27 +913,37 @@ def _substitute_relaxed_defaults(network, formulation_spec, simulation):
         model, grid = branch.model, branch.grid
         default = DEFAULT_SIMULATION_FORMULATION.lookup(model, grid)
         smooth = SMOOTH_SUBSTITUTE_FORMULATION.lookup(model, grid)
-        if branch.formulation is not default or smooth is None:
+        if _keeps_formulation(network, branch, requested, default, smooth):
             continue
-        if getattr(branch, "formulation_pinned", False):
-            continue
-        if requested is not None and requested.lookup(model, grid) is not None:
-            continue
-        if network.lookup_formulation(model, grid) is not None:
-            continue
-        branch.formulation = smooth
-        # ensure_var re-declares the branch's Vars, and the optimization problem
-        # has already been applied at this point: carry the bounds over.
-        bounds = {
-            key: (val.min, val.max)
-            for key, val in vars(model).items()
-            if isinstance(val, Var)
-        }
-        smooth.ensure_var(model, simulation=simulation, grid=grid)
-        for key, (lo, hi) in bounds.items():
-            var = getattr(model, key, None)
-            if isinstance(var, Var):
-                var.min, var.max = lo, hi
+        _swap_to_smooth(branch, smooth, simulation)
+
+
+def _keeps_formulation(network, branch, requested, default, smooth):
+    model, grid = branch.model, branch.grid
+    if branch.formulation is not default or smooth is None:
+        return True
+    if getattr(branch, "formulation_pinned", False):
+        return True
+    if requested is not None and requested.lookup(model, grid) is not None:
+        return True
+    return network.lookup_formulation(model, grid) is not None
+
+
+def _swap_to_smooth(branch, smooth, simulation):
+    model, grid = branch.model, branch.grid
+    branch.formulation = smooth
+    # ensure_var re-declares the branch's Vars, and the optimization problem
+    # has already been applied at this point: carry the bounds over.
+    bounds = {
+        key: (val.min, val.max)
+        for key, val in vars(model).items()
+        if isinstance(val, Var)
+    }
+    smooth.ensure_var(model, simulation=simulation, grid=grid)
+    for key, (lo, hi) in bounds.items():
+        var = getattr(model, key, None)
+        if isinstance(var, Var):
+            var.min, var.max = lo, hi
 
 
 class CasADiSolver(OperatorEquationAssembly, SolverInterface):

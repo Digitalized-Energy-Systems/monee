@@ -27,28 +27,54 @@ def _real_carrier_components(network: Network, grid_type) -> list[set]:
     ``generate_real_topology`` semantics."""
     parent: dict = {}
 
-    def find(x):
-        while parent[x] != x:
-            parent[x] = parent[parent[x]]
-            x = parent[x]
-        return x
-
     for node in network.nodes:
         if isinstance(node.grid, grid_type) and node.active:
             parent[node.id] = node.id
     for branch in network.branches:
-        if not isinstance(branch.grid, grid_type) or not branch.active:
-            continue
-        on_off = getattr(branch.model, "on_off", None)
-        if on_off is not None and type(on_off) is not Var and on_off == 0:
+        if not _branch_in_real_topology(branch, grid_type):
             continue
         if branch.from_node_id in parent and branch.to_node_id in parent:
-            parent[find(branch.from_node_id)] = find(branch.to_node_id)
+            parent[_uf_find(parent, branch.from_node_id)] = _uf_find(
+                parent, branch.to_node_id
+            )
 
     components: dict = {}
     for nid in parent:
-        components.setdefault(find(nid), set()).add(nid)
+        components.setdefault(_uf_find(parent, nid), set()).add(nid)
     return list(components.values())
+
+
+def _uf_find(parent: dict, x):
+    while parent[x] != x:
+        parent[x] = parent[parent[x]]
+        x = parent[x]
+    return x
+
+
+def _branch_in_real_topology(branch, grid_type) -> bool:
+    if not isinstance(branch.grid, grid_type) or not branch.active:
+        return False
+    on_off = getattr(branch.model, "on_off", None)
+    return not (on_off is not None and type(on_off) is not Var and on_off == 0)
+
+
+def _active_component_children(network: Network, component):
+    for nid in component:
+        node = network.node_by_id(nid)
+        for child in network.childs_by_ids(node.child_ids):
+            if child.active:
+                yield nid, child
+
+
+def _component_ext_and_formers(network: Network, component) -> tuple[bool, list]:
+    ext_led = False
+    gf_children: list = []
+    for nid, child in _active_component_children(network, component):
+        if isinstance(child.model, ExtPowerGrid | ExtHydrGrid):
+            ext_led = True
+        elif isinstance(child.model, GridFormingMixin):
+            gf_children.append((nid, child))
+    return ext_led, gf_children
 
 
 def capacity_limited_island_nodes(network: Network, mode: IslandingMode) -> set:
@@ -64,17 +90,13 @@ def capacity_limited_island_nodes(network: Network, mode: IslandingMode) -> set:
     for component in _real_carrier_components(network, mode.carrier_grid_type):
         ext_led = False
         has_limited_former = False
-        for nid in component:
-            node = network.node_by_id(nid)
-            for child in network.childs_by_ids(node.child_ids):
-                if not child.active:
-                    continue
-                if isinstance(child.model, ExtPowerGrid | ExtHydrGrid):
-                    ext_led = True
-                elif isinstance(
-                    child.model, GridFormingMixin
-                ) and mode.former_is_capacity_limited(child.model):
-                    has_limited_former = True
+        for _, child in _active_component_children(network, component):
+            if isinstance(child.model, ExtPowerGrid | ExtHydrGrid):
+                ext_led = True
+            elif isinstance(
+                child.model, GridFormingMixin
+            ) and mode.former_is_capacity_limited(child.model):
+                has_limited_former = True
         if has_limited_former and not ext_led:
             limited |= component
     return limited
@@ -252,32 +274,40 @@ class IslandingMode(NetworkAspect, ABC):
         nodes instead of rendering the whole solve infeasible."""
         if not self.gated_child_attrs:
             return
+        for child in self._gateable_children(network):
+            gated = self._gate_child_injections(child.model)
+            if gated:
+                child.model._islanding_gated_attrs = gated
+
+    def _gateable_children(self, network: Network):
         for node in network.nodes:
             if not isinstance(node.grid, self.carrier_grid_type) or not node.active:
                 continue
             for child in network.childs_by_ids(node.child_ids):
                 if not child.active or self.is_grid_forming(child):
                     continue
-                gated = {}
-                for attr in self.gated_child_attrs:
-                    val = getattr(child.model, attr, None)
-                    if not isinstance(val, int | float) or isinstance(val, bool):
-                        continue
-                    if val == 0:
-                        continue
-                    gated[attr] = val
-                    setattr(
-                        child.model,
-                        attr,
-                        Var(
-                            val,
-                            min=min(0.0, val),
-                            max=max(0.0, val),
-                            name=f"islanding_gated_{attr}",
-                        ),
-                    )
-                if gated:
-                    child.model._islanding_gated_attrs = gated
+                yield child
+
+    def _gate_child_injections(self, child_model) -> dict:
+        gated = {}
+        for attr in self.gated_child_attrs:
+            val = getattr(child_model, attr, None)
+            if not isinstance(val, int | float) or isinstance(val, bool):
+                continue
+            if val == 0:
+                continue
+            gated[attr] = val
+            setattr(
+                child_model,
+                attr,
+                Var(
+                    val,
+                    min=min(0.0, val),
+                    max=max(0.0, val),
+                    name=f"islanding_gated_{attr}",
+                ),
+            )
+        return gated
 
     def add_energisation_objective(self, network: Network) -> None:
         """Minimize the number of de-energised nodes so blackout is a last
@@ -359,17 +389,7 @@ class IslandingMode(NetworkAspect, ABC):
         voltage/pressure references; a component without an ext grid gets
         exactly one deterministic GF leader."""
         for component in _real_carrier_components(network, self.carrier_grid_type):
-            ext_led = False
-            gf_children: list = []
-            for nid in component:
-                node = network.node_by_id(nid)
-                for child in network.childs_by_ids(node.child_ids):
-                    if not child.active:
-                        continue
-                    if isinstance(child.model, ExtPowerGrid | ExtHydrGrid):
-                        ext_led = True
-                    elif isinstance(child.model, GridFormingMixin):
-                        gf_children.append((nid, child))
+            ext_led, gf_children = _component_ext_and_formers(network, component)
             leader = (
                 None if ext_led else min((nid for nid, _ in gf_children), default=None)
             )

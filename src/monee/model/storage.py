@@ -70,7 +70,7 @@ class _SocStorage(ChildModel):
         setattr(self, self._BOUND_MAX, dispatch_max)
 
     def _init_extra_state(self) -> None:
-        pass
+        """Hook for subclasses that carry state beyond the SOC."""
 
     def make_controllable(self):
         """Promote the dispatch (and loss-split vars if lossy) into solver Vars."""

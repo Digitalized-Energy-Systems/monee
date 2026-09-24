@@ -200,8 +200,8 @@ def create_compressor(
     )
 
 
-def create_water_pipe(  # NOSONAR
-    network: mm.Network,
+def create_water_pipe(
+    network: mm.Network,  # NOSONAR
     from_node_id,
     to_node_id,
     diameter_m,
@@ -351,7 +351,7 @@ def create_power_generator(
 
 
 def create_ext_power_grid(
-    network: mm.Network,
+    network: mm.Network,  # NOSONAR
     node_id,
     p_mw=0,
     q_mvar=0,
@@ -408,7 +408,7 @@ def create_ext_power_grid(
 
 
 def create_ext_hydr_grid(
-    network: mm.Network,
+    network: mm.Network,  # NOSONAR
     node_id,
     mass_flow_kgs=1,
     pressure_pu=1,
@@ -793,7 +793,7 @@ def _require_arguments(func_name, **values):
 
 
 def create_chp(
-    network: mm.Network,
+    network: mm.Network,  # NOSONAR
     power_node_id,
     heat_node_id=None,
     heat_return_node_id=None,
@@ -875,7 +875,7 @@ def create_chp(
 
 
 def create_p2h(
-    network: mm.Network,
+    network: mm.Network,  # NOSONAR
     power_node_id,
     heat_node_id=None,
     heat_return_node_id=None,

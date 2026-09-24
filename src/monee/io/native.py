@@ -305,7 +305,7 @@ def native_dict_to_network(dict_struct) -> Network:
     # A loaded grid whose name collides with one of Network's default grids
     # replaces that default: otherwise later default-grid additions would bind
     # to a second same-named grid instance and re-saving would raise.
-    for key, default_grid in list(network._default_grid_models.items()):
+    for key, default_grid in network._default_grid_models.items():
         loaded = grid_by_name.get(getattr(default_grid, "name", None))
         if loaded is not None and isinstance(loaded, type(default_grid)):
             network.set_default_grid(key, loaded)

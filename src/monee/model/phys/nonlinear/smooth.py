@@ -17,7 +17,7 @@ import math
 import monee.model.phys.core.hydraulics as hyd
 
 from .gf import R_specific as _R_SPECIFIC_DEFAULT
-from .gf import abs_psq_diff_pu, calc_C_squared
+from .gf import abs_psq_diff_pu, calc_c_squared
 
 
 def smooth_abs(signed, eps, sqrt_impl=math.sqrt):
@@ -77,7 +77,7 @@ def weymouth_pressure(
     of 0 reproduces the historical absolute form).
     """
     coeff = (
-        calc_C_squared(diameter_m, length_m, t_k, compressibility, r_specific)
+        calc_c_squared(diameter_m, length_m, t_k, compressibility, r_specific)
         * pressure_ref_pa**2
     )
     abs_diff = abs_psq_diff_pu(

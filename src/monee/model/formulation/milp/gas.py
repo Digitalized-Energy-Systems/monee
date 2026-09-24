@@ -84,7 +84,7 @@ class PwlWeymouthBranchFormulation(BranchFormulation):
             ys=ys,
         )
 
-        c_sq = ogfmodel.calc_C_squared(
+        c_sq = ogfmodel.calc_c_squared(
             branch.diameter_m,
             branch.length_m,
             grid.t_k,

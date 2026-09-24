@@ -102,12 +102,12 @@ _GRB_STATUS_TO_STRINGS: dict[str, tuple[str, str]] = {
 
 
 @functools.cache
-def _grb_status_map(GRB) -> dict[int, tuple[str, str]]:
+def _grb_status_map(grb) -> dict[int, tuple[str, str]]:
     """``{GRB status code: (solver_status, termination_condition)}`` for the
     bound GRB namespace (cached; codes are stable per gurobipy install)."""
     out: dict[int, tuple[str, str]] = {}
     for name, strings in _GRB_STATUS_TO_STRINGS.items():
-        code = getattr(GRB, name, None)
+        code = getattr(grb, name, None)
         if code is not None:
             out[code] = strings
     return out
@@ -548,27 +548,33 @@ class GurobipySolver(SolverInterface):
         bounds: list[str] = []
         try:
             gm.computeIIS()
-            for c in gm.getConstrs():
-                if c.IISConstr:
-                    constraints.append(c.ConstrName or f"c{c.index}")
-            for gc in gm.getGenConstrs():
-                if getattr(gc, "IISGenConstr", 0):
-                    constraints.append(gc.GenConstrName or f"genc{gc.index}")
-            # Quadratic rows live in their own pool; without them an IIS whose
-            # blocking constraint is e.g. a Weymouth or a bilinear heat balance
-            # reports as bounds-only and reads like a mystery.
-            for qc in gm.getQConstrs():
-                if getattr(qc, "IISQConstr", 0):
-                    constraints.append(qc.QCName or f"qc{qc.index}")
-            for v in gm.getVars():
-                if v.IISLB or v.IISUB:
-                    side = "/".join(
-                        s for s, f in (("LB", v.IISLB), ("UB", v.IISUB)) if f
-                    )
-                    bounds.append(f"{v.VarName} [{side}]")
+            self._collect_iis_constraints(gm, constraints)
+            self._collect_iis_bounds(gm, bounds)
         except Exception as exc:  # pragma: no cover - IIS can itself fail
             _log.warning("Gurobi computeIIS failed: %s", exc)
         return GurobiIISReport(constraints, bounds)
+
+    @staticmethod
+    def _collect_iis_constraints(gm, constraints: list[str]) -> None:
+        for c in gm.getConstrs():
+            if c.IISConstr:
+                constraints.append(c.ConstrName or f"c{c.index}")
+        for gc in gm.getGenConstrs():
+            if getattr(gc, "IISGenConstr", 0):
+                constraints.append(gc.GenConstrName or f"genc{gc.index}")
+        # Quadratic rows live in their own pool; without them an IIS whose
+        # blocking constraint is e.g. a Weymouth or a bilinear heat balance
+        # reports as bounds-only and reads like a mystery.
+        for qc in gm.getQConstrs():
+            if getattr(qc, "IISQConstr", 0):
+                constraints.append(qc.QCName or f"qc{qc.index}")
+
+    @staticmethod
+    def _collect_iis_bounds(gm, bounds: list[str]) -> None:
+        for v in gm.getVars():
+            if v.IISLB or v.IISUB:
+                side = "/".join(s for s, f in (("LB", v.IISLB), ("UB", v.IISUB)) if f)
+                bounds.append(f"{v.VarName} [{side}]")
 
     # --------- main solve ---------
 
@@ -1356,6 +1362,13 @@ class GurobipyTimeseries:
 
     # ------------------------------------------------------------------ #
     def _declare_param_targets(self, network, td):
+        self._check_param_series_supported(td)
+        self._declare_series_targets(td._child_id_to_series, network.child_by_id)
+        self._declare_series_targets(td._node_id_to_series, network.node_by_id)
+        self._declare_series_targets(td._branch_id_to_series, network.branch_by_id)
+
+    @staticmethod
+    def _check_param_series_supported(td):
         # Only id-addressed child/node/branch series are wired as re-boundable
         # parameters; silently ignoring the rest would freeze those inputs at
         # their static values across all steps.
@@ -1377,27 +1390,17 @@ class GurobipyTimeseries:
                 "monee.run_timeseries per-step loop for these."
             )
 
-        def add(model, attr):
-            cur = getattr(model, attr)
-            cur = (
-                cur.value if isinstance(cur, (Var, Const, Intermediate)) else float(cur)
-            )
-            setattr(model, attr, Var(value=float(cur), min=float(cur), max=float(cur)))
+    @staticmethod
+    def _pin_as_param(model, attr):
+        cur = getattr(model, attr)
+        cur = cur.value if isinstance(cur, (Var, Const, Intermediate)) else float(cur)
+        setattr(model, attr, Var(value=float(cur), min=float(cur), max=float(cur)))
 
-        for cid, attrs in td._child_id_to_series.items():
-            model = network.child_by_id(cid).model
+    def _declare_series_targets(self, id_to_series, lookup):
+        for cid, attrs in id_to_series.items():
+            model = lookup(cid).model
             for attr, series in attrs.items():
-                add(model, attr)
-                self._param_targets.append((model, attr, series))
-        for nid, attrs in td._node_id_to_series.items():
-            model = network.node_by_id(nid).model
-            for attr, series in attrs.items():
-                add(model, attr)
-                self._param_targets.append((model, attr, series))
-        for bid, attrs in td._branch_id_to_series.items():
-            model = network.branch_by_id(bid).model
-            for attr, series in attrs.items():
-                add(model, attr)
+                self._pin_as_param(model, attr)
                 self._param_targets.append((model, attr, series))
 
     def _active_models(self):
