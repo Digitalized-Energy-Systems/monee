@@ -1,6 +1,8 @@
 from .branch import HeatExchanger
 from .child import NoVarChildModel, PowerGenerator, Sink
 from .core import (
+    Intermediate,
+    IntermediateEq,
     MultiGridBranchModel,
     MultiGridCompoundModel,
     MultiGridNodeModel,
@@ -52,10 +54,43 @@ _CARRIER_PRIVATE_VARS = {
 
 @model
 class GenericTransferBranch(MultiGridBranchModel):
+    """Lossless link between a compound's control node and the carrier grid.
+
+    On the water side it behaves like a zero-length, loss-free pipe: the
+    temperature it delivers at either end is the temperature of the node at
+    the other end, and the receiving junction's own heat balance mixes it
+    with any other inflow. (It used to pin ``T_to == T_from`` instead. That
+    identity makes the receiving junction's heat balance a multiple of its
+    mass balance - every inflow already sits at the node temperature - so
+    the nodal Jacobian is rank-deficient along the whole IPOPT path: the
+    P2H/G2H supply junction then stalls below its setpoint temperature, and a
+    squared SubHE duty fails the very first step.) Junctions under the
+    McCormick H-space balance keep the identity, as that balance never sees
+    a branch without ``H_in_mw``/``H_out_mw``.
+
+    ``forward_only=True`` (set by the compounds, whose flow direction is
+    fixed by their SubHE / gas sink) pins the unused ``mass_flow_pos_kgs``
+    half to zero. Both halves enter every equation only as their difference,
+    so leaving them free is a null direction the barrier pushes to
+    arbitrarily large equal values - ~1e5 kg/s in the CHP example - which
+    amplifies every residual on the temperature rows. User-built transfer
+    branches keep the default (bidirectional).
+    """
+
+    # Class-level default: the native reader rebuilds user-built branches via
+    # object.__new__ without __init__, so a file written before this attribute
+    # existed must still read as bidirectional.
+    _forward_only = False
+
     def __init__(
-        self, flow_init_kgs: float = 1.0, p_init_mw: float = 1.0, **kwargs
+        self,
+        flow_init_kgs: float = 1.0,
+        p_init_mw: float = 1.0,
+        forward_only: bool = False,
+        **kwargs,
     ) -> None:
         super().__init__(**kwargs)
+        self._forward_only = forward_only
         # Initial values only - compounds pass setpoint-derived magnitudes so
         # solvers don't start orders of magnitude from the optimum.
         self._mass_flow_pos = Var(flow_init_kgs, min=0, name="mass_flow_pos_kgs")
@@ -105,12 +140,41 @@ class GenericTransferBranch(MultiGridBranchModel):
     def equations(self, grids, from_node_model, to_node_model, **kwargs):
         eqs = []
         if _carries(grids, WaterGrid):
-            eqs += [self.t_from_pu == self.t_to_pu]
-            eqs += [self.t_from_pu == from_node_model.t_pu]
-            eqs += [to_node_model.t_pu == self.t_to_pu]
-            eqs += [to_node_model.t_pu == from_node_model.t_pu]
+            if _mccormick_balance(from_node_model) or _mccormick_balance(to_node_model):
+                # H-space nodal balance (McCormickHeatNodeFormulation): the
+                # temperature identity is this branch's only thermal coupling.
+                eqs += [self.t_from_pu == self.t_to_pu]
+                eqs += [self.t_from_pu == from_node_model.t_pu]
+                eqs += [to_node_model.t_pu == self.t_to_pu]
+                eqs += [to_node_model.t_pu == from_node_model.t_pu]
+            else:
+                # Loss-free upwinding, as Junction.calc_signed_heat_flow reads
+                # it: t_to_pu is what arrives at the to-node when the flow runs
+                # from -> to, t_from_pu what arrives at the from-node otherwise.
+                eqs += [self.t_to_pu == from_node_model.t_pu]
+                eqs += [self.t_from_pu == to_node_model.t_pu]
             eqs += [from_node_model.pressure_pu == to_node_model.pressure_pu]
+        if self._forward_only and (
+            _carries(grids, WaterGrid) or _carries(grids, GasGrid)
+        ):
+            eqs += [self.mass_flow_pos_kgs == 0]
         return eqs
+
+
+def _mccormick_balance(node_model) -> bool:
+    return bool(getattr(node_model, "_mccormick_dhs_active", False))
+
+
+def _pressure_squared_eq(node):
+    """Report-only ``pressure_squared_pu`` of a multi-grid control node.
+
+    ``Junction.__init__`` declares it as a bounded Var; plain junctions get it
+    re-declared by ``WaterNodeFormulation.ensure_var``, the control nodes have
+    no node formulation, so they declare an ``Intermediate`` themselves and
+    evaluate it here - like the junctions' ``mass_flow_kgs``. Neither a
+    phantom Var nor an equality against the Var's inherited [0.5, 2] bounds,
+    which would clamp the loop pressure to sqrt of those."""
+    return IntermediateEq("pressure_squared_pu", node.pressure_pu * node.pressure_pu)
 
 
 def _is_zeroed(regulation):
@@ -221,6 +285,7 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
         # outside the solver. Real closure attached in equations() (needs grid).
         self.pressure_pa = PostProcess(lambda v: float("nan"))
         self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
+        self.pressure_squared_pu = Intermediate(1)
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
         heat_to_branches = _heat_branches(to_branch_models)
@@ -248,6 +313,7 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
                 self.heat_mw == 0,
                 self.t_pu == 1,
                 self.t_pu == self.t_k / grid[0].t_ref_k,
+                _pressure_squared_eq(self),
             ]
 
         gas_eqs = self.calc_signed_mass_flow(
@@ -271,6 +337,7 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
             * (KGPS_KWHPERKG_TO_MW * self._hhv),
             self.heat_mw == sub_he.q_mw,
             self.t_pu == self.t_k / grid[0].t_ref_k,
+            _pressure_squared_eq(self),
         ]
 
 
@@ -307,7 +374,10 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
 
         self.t_k = Var(350, min=200, max=800, name="t_k")
         self.t_pu = Var(1, min=0, max=2, name="t_pu")
-        self.pressure_squared_pu = Var(1, min=0.5, max=3, name="pressure_squared_pu")
+        # Report-only square of pressure_pu (see _pressure_squared_eq); a Var
+        # here would be a phantom, and a bounded one tied to pressure_pu would
+        # clamp the loop pressure to the square root of its bounds.
+        self.pressure_squared_pu = Intermediate(1)
         self.pressure_pu = Var(1, min=0.5, max=3, name="pressure_pu")
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
@@ -340,6 +410,7 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
                 sum(power_eqs[1]) == 0,
                 self.t_pu == 1,
                 self.t_k == self.t_pu * grid[1].t_ref_k,
+                _pressure_squared_eq(self),
             ]
 
         # GenericTransferBranch aliases both ends to one signed value, so the bus
@@ -368,6 +439,7 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
             sum(power_eqs[0]) == 0,
             sum(power_eqs[1]) == 0,
             self.t_k == self.t_pu * grid[1].t_ref_k,
+            _pressure_squared_eq(self),
         ]
 
 
@@ -421,6 +493,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         # pressure_pa is post-solve only (see GasToHeatControlNode).
         self.pressure_pa = PostProcess(lambda v: float("nan"))
         self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
+        self.pressure_squared_pu = Intermediate(1)
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
         heat_to_branches = _heat_branches(to_branch_models)
@@ -454,6 +527,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
                 self.heat_mw == 0,
                 self.t_pu == 1,
                 self.t_k == self.t_pu * grid[1].t_ref_k,
+                _pressure_squared_eq(self),
             ]
 
         power_eqs = self.calc_signed_power_values(
@@ -487,6 +561,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
             * (KGPS_KWHPERKG_TO_MW * self._hhv),
             self.heat_mw == sub_he.q_mw,
             self.t_k == self.t_pu * grid[1].t_ref_k,
+            _pressure_squared_eq(self),
         ]
 
 
@@ -548,12 +623,16 @@ class CHP(_GasRegulatedCompound, MultiGridCompoundModel):
             * hhv
         )
         network.branch(
-            GenericTransferBranch(flow_init_kgs=_num_or(self.mass_flow_kgs, 1.0)),
+            GenericTransferBranch(
+                flow_init_kgs=_num_or(self.mass_flow_kgs, 1.0), forward_only=True
+            ),
             gas_node.id,
             node_id_control,
         )
         network.branch(
-            GenericTransferBranch(flow_init_kgs=_heat_flow_init_kgs(heat_mw)),
+            GenericTransferBranch(
+                flow_init_kgs=_heat_flow_init_kgs(heat_mw), forward_only=True
+            ),
             heat_node.id,
             node_id_control,
         )
@@ -606,13 +685,16 @@ class GasToHeat(_RegulatedCompound, MultiGridCompoundModel):
             position=gas_node.position,
         )
         network.branch(
-            GenericTransferBranch(flow_init_kgs=_num_or(self.gas_mass_flow_kgs, 1.0)),
+            GenericTransferBranch(
+                flow_init_kgs=_num_or(self.gas_mass_flow_kgs, 1.0), forward_only=True
+            ),
             gas_node.id,
             node_id_control,
         )
         network.branch(
             GenericTransferBranch(
-                flow_init_kgs=_heat_flow_init_kgs(self.heat_energy_mw)
+                flow_init_kgs=_heat_flow_init_kgs(self.heat_energy_mw),
+                forward_only=True,
             ),
             heat_node.id,
             node_id_control,
@@ -671,7 +753,8 @@ class PowerToHeat(_RegulatedCompound, MultiGridCompoundModel):
         )
         network.branch(
             GenericTransferBranch(
-                flow_init_kgs=_heat_flow_init_kgs(self.heat_energy_mw)
+                flow_init_kgs=_heat_flow_init_kgs(self.heat_energy_mw),
+                forward_only=True,
             ),
             node_id_control,
             heat_return_node.id,
@@ -817,6 +900,7 @@ class CHPHGControlNode(MultiGridNodeModel, Junction, Bus):
         # pressure_pa is post-solve only (see GasToHeatControlNode).
         self.pressure_pa = PostProcess(lambda v: float("nan"))
         self.pressure_pu = Var(1, min=0, max=2, name="pressure_pu")
+        self.pressure_squared_pu = Intermediate(1)
 
     def equations(self, grid, from_branch_models, to_branch_models, childs, **kwargs):
         gas_to_branches = _gas_branches(to_branch_models)
@@ -913,7 +997,9 @@ class CHPHG(_GasRegulatedCompound, MultiGridCompoundModel):
             grid=[power_node.grid, gas_node.grid],
             position=power_node.position,
         )
-        network.branch(GenericTransferBranch(), gas_node.id, node_id_control)
+        network.branch(
+            GenericTransferBranch(forward_only=True), gas_node.id, node_id_control
+        )
         network.branch(GenericTransferBranch(), node_id_control, power_node.id)
         network.child(self._sub_hg, attach_to_node_id=heat_node.id)
 

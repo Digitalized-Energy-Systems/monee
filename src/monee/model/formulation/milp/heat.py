@@ -175,11 +175,14 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
             - branch.q_mw_delivered,
         ]
         # A pure simulation has no objective driving the delivered-duty
-        # inequality tight; for a fixed-duty exchanger the equality keeps the
-        # model square. Dynamic-flow exchangers (SubHE) keep the inequality:
-        # pinning the delivered duty there removes the relief that lets IPOPT
-        # leave the zero-flow corner.
-        if getattr(branch, "_he_sim_square", False) and not is_dynamic_mf:
+        # inequality tight; the equality keeps the model square and makes the
+        # exchanger deliver its full duty. That holds for the dynamic-flow
+        # SubHE as well: it used to keep the inequality because the squared
+        # duty failed IPOPT's first step, but that was the zero seed of
+        # mass_flow_design_kgs plus the degenerate transfer-branch node pin
+        # (see HeatExchanger.__init__ and GenericTransferBranch), not the
+        # equality itself.
+        if getattr(branch, "_he_sim_square", False):
             eqs.append(branch.q_mw_delivered == branch.q_mw * branch.on_off)
         elif branch._he_is_generator:
             eqs.append(branch.q_mw_delivered >= branch.q_mw * branch.on_off)

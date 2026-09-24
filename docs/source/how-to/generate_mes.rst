@@ -378,6 +378,7 @@ CHP by hand. Treat it as a fixed benchmark case rather than as an example of
 the recommended generator. It solves in a few seconds:
 
 .. testcode::
+    :skipif: not HAS_PANDAPOWER
 
     from monee import run_energy_flow
     from monee.network import create_mv_multi_cigre
@@ -387,6 +388,7 @@ the recommended generator. It solves in a few seconds:
     print(result.success)
 
 .. testoutput::
+    :skipif: not HAS_PANDAPOWER
 
     True
 
@@ -400,6 +402,7 @@ the converted network to the wrapper. The demand-based sizing described above
 is on by default, so no ``heat_kwargs`` are needed to make it solve:
 
 .. testcode::
+    :skipif: not HAS_PANDAPOWER
 
     import pandapower.networks as ppn
 
@@ -412,6 +415,7 @@ is on by default, so no ``heat_kwargs`` are needed to make it solve:
     print(run_energy_flow(mes, formulation="smooth_nlp").success)
 
 .. testoutput::
+    :skipif: not HAS_PANDAPOWER
 
     True
 

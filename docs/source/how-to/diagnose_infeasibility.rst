@@ -197,8 +197,10 @@ finding is local, a ``component`` and a ``value`` with its magnitude:
        identity spans carriers and is skipped).
    * - ``served_delta``
      - A demand was served below its setpoint: a load or sink whose
-       regulation ended below 1, or a fixed duty heat exchanger whose
-       delivered power fell short of its setpoint.
+       regulation ended below 1, or, in optimisation mode, a fixed duty heat
+       exchanger whose delivered power fell short of its setpoint. In a
+       simulation the exchanger duty is an equation, so a heat exchanger
+       entry there means the solve stopped short.
    * - ``relaxation``
      - A relaxed formulation ran and its relaxation is not tight (epigraph
        gap beyond the formulation's tolerance). The reported physics is then

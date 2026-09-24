@@ -285,13 +285,14 @@ outside the declared [0, 1] bounds.
 
 .. note::
 
-   The heat setpoints of CHP and P2H are served through built-in objective
-   terms rather than hard equations, so a custom objective competes with them
-   and ``opt.objective`` contains both parts. When a coupler then delivers
-   less heat than its setpoint, monee prints a diagnostic naming the
-   component; the objective semantics section of :doc:`../how-to/load_shedding`
-   explains how to read it. Prefer reading dispatch quantities from the result
-   frames, as done here, over interpreting the raw objective value.
+   In optimisation mode the heat setpoints of CHP and P2H are served through
+   built-in objective terms rather than hard equations, so a custom objective
+   competes with them and ``opt.objective`` contains both parts. When a
+   coupler then delivers less heat than its setpoint, monee prints a
+   diagnostic naming the component; the objective semantics section of
+   :doc:`../how-to/load_shedding` explains how to read it. Prefer reading
+   dispatch quantities from the result frames, as done here, over
+   interpreting the raw objective value.
 
 ----
 

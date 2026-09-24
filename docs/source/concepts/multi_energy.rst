@@ -494,8 +494,9 @@ Every loop needs a hydraulic reference.
 :func:`~monee.express.create_ext_hydr_grid`) pins the junction's
 ``pressure_pu`` and, because ``pin_temperature`` defaults to ``True``, its
 ``t_k`` as well. Pinning the temperature makes that junction an unbounded heat
-source and sink: whatever the couplers fail to deliver, or deliver in excess,
-disappears into the reference without a violation. Put it on the cold side, as
+source and sink: the couplers deliver their setpoints, and whatever the
+consumers then leave over, or draw beyond that, disappears into the reference
+without a violation. Put it on the cold side, as
 the P2H example above does, so it fixes the return temperature and the coupler
 still has to raise the water to the supply temperature. A reference on the
 supply side silently covers the heat demand and the coupler contributes
@@ -609,7 +610,10 @@ Regulation and dispatch
 
 All coupling components have a ``regulation`` attribute that scales their
 output between 0 (off) and 1 (full setpoint). In a plain energy flow it is
-fixed at 1. For optimisation, declare it as a solver variable:
+fixed at 1 and the heat setpoint is a hard equation: the coupler delivers
+exactly ``regulation`` times its setpoint, and only a ``regulation`` variable
+or an optimisation objective can relax that. For optimisation, declare it as a
+solver variable:
 
 .. testcode::
 

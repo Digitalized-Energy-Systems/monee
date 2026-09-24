@@ -34,6 +34,18 @@ exclude_patterns = []
 
 autoclass_content = "both"
 suppress_warnings = ["autodoc"]
+
+# ``make doctest`` runs in environments without the optional pandapower
+# dependency (the CI build jobs install ``.[test]`` only). Examples that need
+# it carry ``:skipif: not HAS_PANDAPOWER`` and are skipped there instead of
+# failing on the import.
+doctest_global_setup = """
+try:
+    import pandapower  # noqa: F401
+    HAS_PANDAPOWER = True
+except ImportError:
+    HAS_PANDAPOWER = False
+"""
 autosectionlabel_prefix_document = True
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True

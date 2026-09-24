@@ -428,7 +428,11 @@ def test_transfer_branches_add_no_phantom_variables():
 
     # THEN
     assert not [name for name in unpinned if name.startswith("GenericTransferBranch.")]
-    assert n_vars - n_eqs == 3
+    # Square: the SubHE duty is pinned in simulation mode, its negated-Var
+    # q_mw_set is tied to the duty, and the control node pins its own
+    # pressure_squared_pu.
+    assert unpinned == []
+    assert n_vars == n_eqs
 
 
 @pytest.mark.parametrize(
@@ -488,6 +492,47 @@ def test_casadi_non_convergence_message_states_status_without_hint_when_infeasib
     assert "scip" not in message
     assert "compound" not in message.lower()
     assert "diagnose_infeasibility" in message
+
+
+@pytest.mark.parametrize("pressure_pu", [0.6, 1.5])
+def test_chp_loop_follows_off_nominal_reference_pressure(pressure_pu):
+    """Mirror of the P2H case: the CHP control node inherits Junction's
+    bounded ``pressure_squared_pu``; it is report-only and must not clamp the
+    loop pressure."""
+    # GIVEN
+    net = mx.create_multi_energy_network()
+    junc_gas = mx.create_gas_junction(net)
+    mx.create_gas_ext_grid(net, junc_gas)
+    bus = mx.create_bus(net)
+    mx.create_ext_power_grid(net, bus)
+    junc_return = mx.create_water_junction(net)
+    junc_supply = mx.create_water_junction(net)
+    mx.create_water_ext_grid(net, junc_return, t_k=330, pressure_pu=pressure_pu)
+    mx.create_passive_heat_exchanger(
+        net, junc_supply, junc_return, q_mw=1.9, diameter_m=0.15
+    )
+    mx.create_chp(
+        net,
+        power_node_id=bus,
+        cold_node_id=junc_return,
+        hot_node_id=junc_supply,
+        gas_node_id=junc_gas,
+        diameter_m=0.15,
+        efficiency_power=0.35,
+        efficiency_heat=0.45,
+        mass_flow_setpoint_kgs=0.1,
+    )
+
+    # WHEN
+    result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
+    junctions = result.get(mm.Junction).set_index("id")
+    assert junctions.loc[junc_supply, "t_k"] == pytest.approx(360, abs=0.5)
+    control = result.get(mm.CHPControlNode).iloc[0]
+    assert control["pressure_pu"] == pytest.approx(pressure_pu, abs=1e-3)
+    assert control["pressure_squared_pu"] == pytest.approx(pressure_pu**2, rel=1e-3)
 
 
 def test_casadi_non_convergence_message_no_hint_without_compounds():

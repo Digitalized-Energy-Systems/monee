@@ -2,8 +2,12 @@
 
 import math
 
+import pytest
+
+import monee.express as mx
 import monee.model as mm
 import monee.solver as ms
+from monee import run_energy_flow
 from monee.model.formulation import EL_MISOCP_FORMULATION
 
 
@@ -274,6 +278,43 @@ def test_p2h_cop_analogy():
     el_ref = r_ref.dataframes["PowerToHeatControlNode"]["el_mw"].iloc[0]
     el_low = r_low.dataframes["PowerToHeatControlNode"]["el_mw"].iloc[0]
     assert math.isclose(el_low / el_ref, 1.0 / 0.6, rel_tol=1e-4)
+
+
+@pytest.mark.parametrize("pressure_pu", [0.6, 1.5])
+def test_p2h_loop_follows_off_nominal_reference_pressure(pressure_pu):
+    """The control node sits at the loop's reference pressure; its report-only
+    ``pressure_squared_pu`` must not clamp it (a bounded Var tied to
+    ``pressure_pu`` did, limiting the loop to about [0.71, 1.73] pu)."""
+    # GIVEN the docs loop with a 6 bar / 15 bar return reference on a 10 bar base
+    net = mx.create_multi_energy_network()
+    bus = mx.create_bus(net)
+    mx.create_ext_power_grid(net, bus)
+    junc_return = mx.create_water_junction(net)
+    junc_supply = mx.create_water_junction(net)
+    mx.create_water_ext_grid(net, junc_return, t_k=330, pressure_pu=pressure_pu)
+    mx.create_passive_heat_exchanger(
+        net, junc_supply, junc_return, q_mw=0.5, diameter_m=0.1
+    )
+    mx.create_p2h(
+        net,
+        power_node_id=bus,
+        cold_node_id=junc_return,
+        hot_node_id=junc_supply,
+        heat_energy_mw=0.5,
+        diameter_m=0.1,
+        efficiency=0.95,
+    )
+
+    # WHEN
+    result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
+    junctions = result.get(mm.Junction).set_index("id")
+    assert junctions.loc[junc_supply, "t_k"] == pytest.approx(360, abs=0.5)
+    control = result.get(mm.PowerToHeatControlNode).iloc[0]
+    assert control["pressure_pu"] == pytest.approx(pressure_pu, abs=1e-3)
+    assert control["pressure_squared_pu"] == pytest.approx(pressure_pu**2, rel=1e-3)
 
 
 def test_p2h_no_gas_interaction():

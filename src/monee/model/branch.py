@@ -304,7 +304,14 @@ class HeatExchanger(BranchModel):
             if isinstance(q_mw, (int, float)):
                 mass_flow_design_kgs = self._mass_flow_seed_kgs
             else:
-                mass_flow_design_kgs = Var(0, name="mass_flow_design_kgs")
+                # Seed the sized flow at the design value too: it multiplies
+                # both temperatures in the energy balance, so a zero start
+                # wipes those columns out of the Jacobian and, once the
+                # delivered duty is pinned, leaves IPOPT no consistent first
+                # step (Restoration_Failed after one iteration).
+                mass_flow_design_kgs = Var(
+                    self._mass_flow_seed_kgs, name="mass_flow_design_kgs"
+                )
                 self._calc_mass_flow = True
 
         self.mass_flow_design_kgs = mass_flow_design_kgs
@@ -332,6 +339,10 @@ class HeatExchanger(BranchModel):
                 * 1e6
                 / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * self._T_delta_design_K)
             )
+            # q_mw_set is the negated duty Var here (Var.__neg__ in __init__);
+            # keep it a Var - the formulations classify a Var q_mw_set as a
+            # sized generator - but tie it to the duty so it is no phantom.
+            eqs.append(self.q_mw_set == -self.q_mw)
         else:
             eqs.append(self.q_mw == self.q_mw_set * self.regulation)
         return eqs

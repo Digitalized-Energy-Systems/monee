@@ -374,7 +374,8 @@ def test_heat_compound_heats_the_water_towards_the_hot_node():
     assert result.success
     temperatures = result.get(mm.Junction)["t_k"]
     assert temperatures.iloc[0] == pytest.approx(330, abs=1e-3)
-    assert temperatures.iloc[1] > temperatures.iloc[0] + 25
+    # 0.5 MW at the 30 K design spread: the full duty lands on the water.
+    assert temperatures.iloc[1] == pytest.approx(360, abs=0.5)
 
 
 def test_compound_creators_store_name():

@@ -1402,10 +1402,12 @@ def persist_solution(solved_copy: Network, original: Network) -> None:
 def _he_duty_shortfall(model, tol: float) -> tuple[float, float] | None:
     """``(unmet duty [MW], duty [MW])`` of a fixed-duty heat exchanger, or ``None``.
 
-    The formulations state the duty as ``q_mw_delivered <= q_mw * on_off``
-    (``>=`` for a generator), closed only by an objective pull, so a user
-    objective can out-bid it and leave the exchanger under-delivering. Only a
-    branch without decision freedom is reported: with a regulation/on_off Var
+    In optimisation mode the formulations state the duty as
+    ``q_mw_delivered <= q_mw * on_off`` (``>=`` for a generator), closed only
+    by an objective pull, so a user objective can out-bid it and leave the
+    exchanger under-delivering. In simulation mode the duty is an equality, so
+    a shortfall there indicates a solve that stopped short of feasibility. Only
+    a branch without decision freedom is reported: with a regulation/on_off Var
     the shortfall is a shedding decision, not a defect. A compound-internal
     SubHE carries a Var setpoint, but its ``q_mw`` is pinned by the control
     node's coupling equality, so the solved ``q_mw`` is its duty.
@@ -1463,10 +1465,11 @@ def compute_bound_violations(  # NOSONAR
                 shortfall, duty = duty_gap
                 violations[f"{label}.q_mw_delivered_shortfall"] = shortfall
                 _log.warning(
-                    "%s delivers %.4g MW of its %.4g MW setpoint - the duty "
-                    "inequality stayed slack (a user objective can out-bid the "
-                    "term that closes it). See docs how-to/load_shedding on "
-                    "reading this diagnostic.",
+                    "%s delivers %.4g MW of its %.4g MW setpoint (optimisation: "
+                    "the duty inequality stayed slack, a user objective can "
+                    "out-bid the term that closes it; simulation: the solve "
+                    "stopped short). See docs how-to/load_shedding on reading "
+                    "this diagnostic.",
                     label,
                     abs(branch.model.q_mw_delivered.value),
                     abs(duty),
@@ -1648,7 +1651,8 @@ def _served_delta_entries(network, ignored_nodes, violations) -> list[ResultWarn
                 ResultWarning(
                     "served_delta",
                     f"heat exchanger delivers {mag:.4g} MW less than its "
-                    "setpoint (the duty inequality stayed slack)",
+                    "setpoint (optimisation: the duty inequality stayed slack; "
+                    "simulation: the solve stopped short)",
                     component=key.rsplit(".", 1)[0],
                     value=mag,
                 )

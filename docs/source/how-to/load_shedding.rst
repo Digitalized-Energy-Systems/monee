@@ -365,11 +365,13 @@ which unwraps ``Var`` and passes plain floats through unchanged; see
    Inspect the ``dataframes`` dict for per-component voltage, pressure, and
    temperature to understand why curtailment was needed.
 
-Heat exchangers with a fixed ``regulation`` are a special case, because their
-duty is stated as an inequality (``q_mw_delivered <= q_mw``) that only an
-objective term pulls tight. A user objective can outweigh that pull and leave
-an exchanger delivering less than its setpoint while the solve still reports
-success. Such a shortfall is listed in ``result.violations`` under the key
+In optimisation mode, heat exchangers with a fixed ``regulation`` are a
+special case, because their duty is stated as an inequality
+(``q_mw_delivered <= q_mw``) that only an objective term pulls tight. A user
+objective can outweigh that pull and leave an exchanger delivering less than
+its setpoint while the solve still reports success. In a simulation the duty
+is a hard equation, so a shortfall there means the solve stopped short of
+feasibility. Such a shortfall is listed in ``result.violations`` under the key
 ``<Type>.<id>.q_mw_delivered_shortfall``, together with a warning on the
 ``monee.solver.core`` logger:
 
@@ -386,10 +388,11 @@ objective coefficients so the duty pull is not outbid. Exchangers whose
 the shedding decision you asked for.
 
 The check also covers the internal ``SubHE`` exchanger of coupling compounds
-(CHP, GasToHeat, PowerToHeat). Its duty is not a fixed setpoint but the
-solved ``q_mw`` that the control node's coupling equation prescribes, so a
-compound heat side that delivers less than that value appears in
-``result.violations`` as ``SubHE.<id>.q_mw_delivered_shortfall``.
+(CHP, GasToHeat, PowerToHeat) in optimisation mode. Its duty is not a fixed
+setpoint but the solved ``q_mw`` that the control node's coupling equation
+prescribes, so a compound heat side that delivers less than that value appears
+in ``result.violations`` as ``SubHE.<id>.q_mw_delivered_shortfall``. In a
+simulation the compound's duty is an equation and cannot fall short.
 
 ----
 
