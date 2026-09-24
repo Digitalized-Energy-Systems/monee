@@ -809,6 +809,13 @@ class Network:
         frames = {}
         for result_type, dict_list in dict_list_dict.items():
             frame = pandas.DataFrame(dict_list)
+            # ``name`` is the one optional text column: keep it ``object`` so an
+            # unnamed component reads back as ``None`` (its container attribute)
+            # under pandas 2 and 3 alike. Left to inference, pandas >= 3 turns a
+            # mixed str/None column into a NaN-backed ``str`` column.
+            frame["name"] = pandas.Series(
+                [row["name"] for row in dict_list], index=frame.index, dtype=object
+            )
             if frame["name"].isna().all():
                 frame = frame.drop(columns=["name"])
             frames[result_type] = frame

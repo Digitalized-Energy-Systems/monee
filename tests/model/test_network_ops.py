@@ -348,6 +348,10 @@ def test_result_frames_gain_name_column_only_where_named():
 
     load_df = frames["PowerLoad"]
     assert "name" in load_df.columns
+    # Unnamed components read back as ``None`` on every pandas version: the
+    # column is built with ``object`` dtype, not left to pandas 3's string
+    # inference (which would turn ``None`` into NaN).
+    assert load_df["name"].dtype == object
     assert set(load_df["name"]) == {"load_a", None}
     assert "name" not in frames["Bus"].columns
 

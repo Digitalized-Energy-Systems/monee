@@ -6,8 +6,6 @@ import tempfile
 import uuid
 import warnings
 
-from pandapower.converter.matpower import to_mpc
-
 from monee.model.child import PowerGenerator, PowerLoad, VoltageControlledGenerator
 
 from .matpower import read_matpower_case, read_matpower_opf_case
@@ -398,6 +396,23 @@ def _has_costs(net) -> bool:
     return any(len(getattr(net, table, ())) for table in ("poly_cost", "pwl_cost"))
 
 
+def _lazy_to_mpc():
+    """Import pandapower's MATPOWER exporter on first use (optional dependency).
+
+    Keeping pandapower out of the module-level imports lets this module (and
+    :mod:`monee.io.from_simbench`, which builds on it) be imported, introspected
+    and documented in environments without pandapower.
+    """
+    try:
+        from pandapower.converter.matpower import to_mpc
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ImportError(
+            "pandapower import needs the optional 'pandapower' package. "
+            "Install it with `pip install monee[simbench]`."
+        ) from exc
+    return to_mpc
+
+
 def from_pandapower_net(net, opf=False, max_loading=1.0, limit_basis="mva"):  # NOSONAR
     """Convert a pandapower net into a monee :class:`~monee.model.network.Network`.
 
@@ -429,6 +444,7 @@ def from_pandapower_net(net, opf=False, max_loading=1.0, limit_basis="mva"):  # 
     voltage is optimised within [VMIN, VMAX], so results track pandapower
     ``runopp`` closely but are not bit-identical to it.
     """
+    to_mpc = _lazy_to_mpc()
 
     if opf and not _has_costs(net):
         raise ValueError(

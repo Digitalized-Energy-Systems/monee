@@ -148,6 +148,17 @@ id_ = id
 
 # APOPT (SOLVER=1) MINLP options. IPOPT rejects the minlp_* keys, so they are
 # applied only for the APOPT path (see _solver_options).
+#
+# objective_convergence_tolerance is an absolute tolerance and must stay below
+# the objective the MIQCQP formulations carry on a plain flow solve: their only
+# objective is the epigraph tightening term, EPIGRAPH_TIGHTENING_EPS (1e-5)
+# times the squared branch flows, i.e. O(1e-7 .. 1e-5) for district heating
+# flows. With a looser value (1e-4 up to 2.1.0) APOPT declares a branch-and-
+# bound node NLP converged before the flows are feasible again after the
+# branching bound change, discards the node as failed and runs the tree empty
+# ("no more possible trial points and no integer solution"), see
+# tests/solver/test_gekko_heat.py::test_dead_end. APOPT's own default is 1e-6;
+# it is pinned explicitly because of that coupling.
 DEFAULT_SOLVER_OPTIONS = [
     "minlp_maximum_iterations 1000",
     "minlp_max_iter_with_int_sol 500",
@@ -159,7 +170,7 @@ DEFAULT_SOLVER_OPTIONS = [
     "minlp_integer_max 2.0e5",
     "minlp_integer_leaves 150",
     "minlp_print_level 1",
-    "objective_convergence_tolerance 1.0e-4",
+    "objective_convergence_tolerance 1.0e-6",
     "constraint_convergence_tolerance 1.0e-4",
 ]
 

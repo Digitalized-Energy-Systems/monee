@@ -1,8 +1,6 @@
 import logging
 import warnings
 
-import simbench
-
 import monee.model as md
 from monee.io.from_pandapower import (
     _coerce_positive_float,
@@ -12,6 +10,23 @@ from monee.io.from_pandapower import (
 from monee.simulation.timeseries import TimeseriesData
 
 logger = logging.getLogger(__name__)
+
+
+def _lazy_simbench():
+    """Import simbench on first use (optional dependency).
+
+    Keeping simbench out of the module-level imports lets this module be
+    imported, introspected and documented in environments without it; only
+    the functions that fetch a grid need the package.
+    """
+    try:
+        import simbench
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise ImportError(
+            "SimBench import needs the optional 'simbench' package. "
+            "Install it with `pip install monee[simbench]`."
+        ) from exc
+    return simbench
 
 
 def _row_scaling(row) -> float:
@@ -174,7 +189,7 @@ def obtain_simbench_profile(sb_code) -> TimeseriesData:
     when you also need the network, to avoid fetching the grid twice. Covered
     in the how-to guide "Convert from pandapower" (SimBench section).
     """
-    net = simbench.get_simbench_net(sb_code)
+    net = _lazy_simbench().get_simbench_net(sb_code)
     return obtain_simbench_profile_by_pp_net(net)
 
 
@@ -190,7 +205,7 @@ def obtain_simbench_net(sb_code) -> md.Network:
     ``"1-LV-rural1--0-no_sw"``. Covered in the how-to guide "Convert from
     pandapower" (SimBench section).
     """
-    net = simbench.get_simbench_net(sb_code)
+    net = _lazy_simbench().get_simbench_net(sb_code)
     return from_pandapower_net(net)
 
 
@@ -209,6 +224,7 @@ def obtain_simbench_net_with_td(sb_code) -> tuple[md.Network, TimeseriesData]:
     fetch are suppressed here: they are not actionable from monee and they
     bury monee's own conversion warnings.
     """
+    simbench = _lazy_simbench()
     with warnings.catch_warnings():
         warnings.filterwarnings(
             "ignore", category=FutureWarning, module=r".*simbench.*"

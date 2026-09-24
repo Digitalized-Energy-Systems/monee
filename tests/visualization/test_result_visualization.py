@@ -120,3 +120,55 @@ def test_write_figure_html_and_real_error_for_unknown_format(tmp_path):
 
     with pytest.raises(ValueError, match="format"):
         _write_figure(fig, str(tmp_path / "result.txt"))
+
+
+def test_write_figure_rejects_unknown_format_before_touching_plotly(
+    tmp_path, monkeypatch
+):
+    """The ValueError is monee's own: it must not depend on plotly/kaleido
+    versions or on Chrome being installed, so write_image is never reached."""
+    import plotly.graph_objects as go
+    import pytest
+
+    from monee.visualization.result_visualization import (
+        SUPPORTED_EXPORT_FORMATS,
+        _write_figure,
+    )
+
+    def _boom(self, *args, **kwargs):
+        raise AssertionError("write_image must not be called for unknown formats")
+
+    monkeypatch.setattr(go.Figure, "write_image", _boom)
+    fig = go.Figure()
+
+    for bad in ("result.txt", "result", "result.PNG.bak"):
+        with pytest.raises(ValueError, match="Supported formats") as exc:
+            _write_figure(fig, str(tmp_path / bad))
+        for fmt in SUPPORTED_EXPORT_FORMATS:
+            assert fmt in str(exc.value)
+
+    # An explicit format= wins over the extension and is validated too.
+    with pytest.raises(ValueError, match="'txt'"):
+        _write_figure(fig, str(tmp_path / "result.png"), format="txt")
+
+
+def test_write_figure_delegates_static_formats_to_write_image(tmp_path, monkeypatch):
+    import plotly.graph_objects as go
+
+    from monee.visualization.result_visualization import _write_figure
+
+    calls = []
+    monkeypatch.setattr(
+        go.Figure,
+        "write_image",
+        lambda self, *args, **kwargs: calls.append((args, kwargs)),
+    )
+    fig = go.Figure()
+
+    _write_figure(fig, str(tmp_path / "result.PNG"))
+    _write_figure(fig, str(tmp_path / "result.dat"), format="svg")
+    _write_figure(fig, str(tmp_path / "result.jpg"), width=12, height=34)
+
+    assert [c[1]["format"] for c in calls] == ["png", "svg", "jpg"]
+    assert calls[2][1] == {"format": "jpg", "width": 12, "height": 34}
+    assert calls[0][0][0].endswith("result.PNG")  # path is passed through as given

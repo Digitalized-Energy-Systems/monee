@@ -760,7 +760,8 @@ the model object. Bookkeeping lives on the container (``id``, ``name``,
 
 A result frame carries the container ``name`` in a ``name`` column next to
 ``id`` as soon as one component of that type was named, so a solved run can be
-read back by name as well. Names are also the key used by
+read back by name as well; unnamed components carry ``None`` there, on every
+pandas version. Names are also the key used by
 ``TimeseriesData.add_child_series_by_name`` and its branch and compound
 siblings (see :doc:`../how-to/timeseries`).
 

@@ -4,6 +4,7 @@ Entry point: :func:`plot_result`.
 """
 
 import math
+import os
 
 import networkx as nx
 import plotly.graph_objects as go
@@ -52,10 +53,43 @@ _SKIP: frozenset[str] = frozenset(
 )
 
 
-def _write_figure(fig: go.Figure, path: str, **kwargs) -> None:
-    """Export *fig* to *path*: interactive HTML for ``.html``/``.htm``,
-    otherwise plotly's static image engine (kaleido)."""
-    if path.lower().endswith((".html", ".htm")):
+# Export formats handled by _write_figure.  HTML goes through
+# ``Figure.write_html``; the static formats go through ``Figure.write_image``
+# (plotly's kaleido engine).  The list is owned here on purpose: which
+# exception plotly/kaleido raise for an unknown format depends on their
+# versions and on whether kaleido and a Chrome binary are installed.
+_HTML_FORMATS: tuple[str, ...] = ("html", "htm")
+_IMAGE_FORMATS: tuple[str, ...] = ("png", "jpg", "jpeg", "webp", "svg", "pdf")
+SUPPORTED_EXPORT_FORMATS: tuple[str, ...] = _HTML_FORMATS + _IMAGE_FORMATS
+
+
+def _write_figure(
+    fig: go.Figure, path: str, format: str | None = None, **kwargs
+) -> None:
+    """Export *fig* to *path*.
+
+    The target format is *format* if given, otherwise the file extension of
+    *path* (case-insensitive).  ``html``/``htm`` write an interactive page via
+    ``fig.write_html``; ``png``, ``jpg``/``jpeg``, ``webp``, ``svg`` and
+    ``pdf`` use plotly's static image engine (``fig.write_image``, which needs
+    the optional ``kaleido`` package and a Chrome/Chromium binary).
+
+    Raises:
+        ValueError: if the format is not one of
+            :data:`SUPPORTED_EXPORT_FORMATS`.  This is checked *before*
+            delegating to plotly, so the error is the same regardless of the
+            installed plotly/kaleido versions and of Chrome availability.
+    """
+    path = os.fspath(path)
+    fmt = format if format is not None else os.path.splitext(path)[1].lstrip(".")
+    fmt = fmt.lower()
+    if fmt not in SUPPORTED_EXPORT_FORMATS:
+        raise ValueError(
+            f"Unsupported export format {fmt or '<none>'!r} for {path!r}: pass a "
+            "supported file extension or format=. Supported formats: "
+            f"{', '.join(SUPPORTED_EXPORT_FORMATS)}."
+        )
+    if fmt in _HTML_FORMATS:
         html_kwargs = dict(kwargs)
         for dim in ("width", "height"):
             if dim in html_kwargs:
@@ -63,7 +97,7 @@ def _write_figure(fig: go.Figure, path: str, **kwargs) -> None:
         fig.write_html(path, **html_kwargs)
         return
     try:
-        fig.write_image(path, **kwargs)
+        fig.write_image(path, format=fmt, **kwargs)
     except ImportError as e:
         raise ImportError(
             "Static image export requires the optional 'kaleido' package. "
