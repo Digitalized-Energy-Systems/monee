@@ -1,224 +1,634 @@
+"""Native JSON (de)serialization for monee :class:`~monee.model.network.Network`.
+
+The native format is a plain ``dict`` (JSON-friendly) with this shape::
+
+    {
+        "version": 2,
+        "grids":    {name: {"model_type": str, "values": {...}}},
+        "nodes":    [{"id", "grid_id", "child_ids", "from_branch_ids",
+                      "to_branch_ids", "position", "active", "name",
+                      "values", "model_type"}],
+        "childs":   [{"id", "active", "name", "values", "model_type"}],
+        "branches": [{"id", "from_node", "to_node", "grid_id", "grid_ids",
+                      "active", "name", "values", "model_type"}],
+        "compounds":[{"id", "connected_to", "values", "model_type"}],
+        "branch_order": [[from, to, key], ...],
+    }
+
+``from_branch_ids``/``to_branch_ids`` and ``branch_order`` pin the component
+ordering the solver sees, so a loaded network solves to the same result as the
+network it was saved from; files without them load with the rebuild order.
+
+Each model attribute in a ``values`` block is encoded with full fidelity:
+plain scalars pass through unchanged, while :class:`~monee.model.core.Var`,
+:class:`~monee.model.core.Const` and :class:`~monee.model.core.Intermediate`
+are tagged with a reserved ``__type__`` key so they round-trip exactly
+(``Var`` keeps its bounds, ``integer`` flag and ``name``).
+
+The reader stays backward compatible with the legacy format produced by older
+versions and by :mod:`monee.io.matpower` (untagged ``{"value", "max", "min"}``
+Var dicts).
+
+Both the public, solver-visible attributes of a model *and* its JSON-encodable
+private attributes (e.g. a storage's ``_p_max`` / ``_lossy``) are serialized, so
+models whose behaviour is configured through private state round-trip faithfully.
+Private attributes holding object references (grids, sub-models) are skipped on
+purpose - they are rebuilt by the compound ``create()`` / branch ``init()`` hooks.
+
+Serialization is independent of solve history by default: Var/Intermediate
+values are written as their declared (pre-solve) values, so ``save`` after
+``run_energy_flow`` produces the same file as before it, and loading never
+hands the solver a near-solution start (which the default IPOPT options
+handle poorly, see the concepts/solvers docs page). Pass
+``include_solve_state=True`` to checkpoint the solved operating point.
+
+Known limitations (not represented in the native format): user-supplied
+``network.constraint`` / ``network.objective`` callables, network-level
+extensions registered via ``add_extension`` (linepack, LTC, islanding), and
+non-default formulations applied with ``apply_formulation`` - the latter are
+re-derived from the default formulation rules on load.
+"""
+
 import inspect
 import json
+import numbers
 
 from monee.model import Network
-from monee.model.core import Var, component_list
+from monee.model.core import (
+    Compound,
+    Const,
+    Intermediate,
+    PostProcess,
+    Var,
+    component_list,
+)
+
+#: Bumped whenever the on-disk structure changes in a non-additive way.
+FORMAT_VERSION = 2
+
+#: Reserved key used to tag the concrete type of an encoded value object.
+_TYPE_KEY = "__type__"
 
 
 class PersistenceException(Exception):
-    """
-    No docstring provided.
-    """
+    pass
 
 
-def init_model(model_type, preprocessed_dict):
+# --------------------------------------------------------------------------- #
+# Value (de)serialization                                                      #
+# --------------------------------------------------------------------------- #
+def _encodable(value):
+    """Return ``True`` if *value* can be losslessly written to the native format."""
+    if value is None or isinstance(value, (bool, str)):
+        return True
+    if isinstance(value, (Var, Const, Intermediate, PostProcess)):
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(_encodable(item) for item in value)
+    if isinstance(value, dict):
+        return all(isinstance(k, str) and _encodable(v) for k, v in value.items())
+    # numbers.Number also covers numpy integer/float scalars.
+    return isinstance(value, numbers.Number)
+
+
+def _persistable_value(value, include_solve_state):
+    """The value to write for a Var/Intermediate.
+
+    ``persist_solution`` snapshots the pre-solve value into ``_start_value``
+    before writing a solved value into ``.value``, so by default the declared
+    (pre-solve) value is serialized and the on-disk form of a network is
+    independent of its solve history. ``include_solve_state=True`` writes the
+    live (possibly solved) value instead.
     """
-    No docstring provided.
-    """
-    model = None
+    if include_solve_state:
+        return value.value
+    return getattr(value, "_start_value", value.value)
+
+
+def _encode_value(value, include_solve_state=False):
+    """Encode a single model attribute value to a JSON-serializable form."""
+    if isinstance(value, Var):
+        return {
+            _TYPE_KEY: "Var",
+            "value": _persistable_value(value, include_solve_state),
+            "max": value.max,
+            "min": value.min,
+            "integer": value.integer,
+            "name": value.name,
+            "scale": value.scale,
+        }
+    if isinstance(value, Const):
+        return {_TYPE_KEY: "Const", "value": value.value}
+    if isinstance(value, Intermediate):
+        return {
+            _TYPE_KEY: "Intermediate",
+            "value": _persistable_value(value, include_solve_state),
+        }
+    if isinstance(value, PostProcess):
+        # Only the value is portable; the real computation is re-attached by
+        # equations()/formulation application on the next solve.
+        return {_TYPE_KEY: "PostProcess", "value": value.value}
+    if isinstance(value, dict):
+        return {k: _encode_value(v, include_solve_state) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_encode_value(v, include_solve_state) for v in value]
+    return value
+
+
+def _nan_post_process(_values):
+    return float("nan")
+
+
+def _decode_dict_value(value):
+    tag = value.get(_TYPE_KEY)
+    if tag == "Var":
+        return Var(
+            value["value"],
+            max=value.get("max"),
+            min=value.get("min"),
+            integer=value.get("integer", False),
+            name=value.get("name"),
+            scale=value.get("scale", 1.0),
+        )
+    if tag == "Const":
+        return Const(value["value"])
+    if tag == "Intermediate":
+        return Intermediate(value["value"])
+    if tag == "PostProcess":
+        # .value keeps the stored reading until the next solve. The placeholder
+        # fn mirrors the models' own __init__ placeholders (NaN): active
+        # components get the real computation re-attached by equations()/
+        # formulation application during the solve, while components excluded
+        # from the solve must report NaN exactly like in a never-serialized
+        # network (a constant fn returning the stored value would freeze a
+        # stale 0.0/reading into every future result).
+        return PostProcess(_nan_post_process, value=value["value"])
+    if tag is not None:
+        raise PersistenceException(f"Unknown encoded value type: {tag!r}")
+
+    # --- legacy (untagged) handling ------------------------------------ #
+    # Older files and matpower import emit bare Var dicts without a tag.
+    if "value" in value and ("max" in value or "min" in value):
+        return Var(
+            value["value"],
+            max=value.get("max"),
+            min=value.get("min"),
+            integer=value.get("integer", False),
+            name=value.get("name"),
+        )
+    if set(value.keys()) == {"value"}:
+        # Legacy Intermediate/Const both serialized as {"value": x}; restore
+        # the numeric value as an Intermediate rather than dropping it.
+        return Intermediate(value["value"])
+    return {k: _decode_value(v) for k, v in value.items()}
+
+
+def _decode_value(value):
+    """Inverse of :func:`_encode_value`, tolerant of the legacy format."""
+    if isinstance(value, dict):
+        return _decode_dict_value(value)
+    if isinstance(value, list):
+        return [_decode_value(v) for v in value]
+    return value
+
+
+def _encode_values(model_dict, include_solve_state=False):
+    return {k: _encode_value(v, include_solve_state) for k, v in model_dict.items()}
+
+
+def _decode_values(values_dict):
+    return {k: _decode_value(v) for k, v in values_dict.items()}
+
+
+def _json_default(obj):
+    """Fallback encoder for stray objects (e.g. numpy scalars) in ``values``."""
+    if isinstance(obj, (Var, Const, Intermediate, PostProcess)):
+        return _encode_value(obj)
+    if hasattr(obj, "item"):  # numpy scalar
+        return obj.item()
+    return vars(obj)
+
+
+# --------------------------------------------------------------------------- #
+# Deserialization (dict -> Network)                                            #
+# --------------------------------------------------------------------------- #
+
+_INIT_MODEL_CACHE = {}
+
+
+def _resolve_model_type(model_type):
+    cached = _INIT_MODEL_CACHE.get(model_type)
+    if cached is not None:
+        return cached
     model_type_dict = {
         component_cls.__name__: component_cls for component_cls in component_list
     }
-    if model_type in model_type_dict:
-        model_cls = model_type_dict[model_type]
-        model = model_cls(
-            **dict.fromkeys(
-                [
-                    argname
-                    for argname, _ in list(
-                        inspect.signature(model_cls.__init__).parameters.items()
-                    )[1:]
-                ],
-                0,
-            )
-        )
-        for key, value in preprocessed_dict.items():
-            setattr(model, key, value)
-    else:
+    if model_type not in model_type_dict:
         raise PersistenceException(
-            f"The type {model_type} is not known! Maybe you forgot to decorate your model class with @model?"
+            f"The type {model_type} is not known! Two causes: the module "
+            f"defining the class was never imported in this process (the "
+            f"@model decorator only registers the class once its module runs, "
+            f"so import it before loading), or the class is not decorated with "
+            f"@model at all. See the docs page concepts/data_model."
         )
+    model_cls = model_type_dict[model_type]
+    # Required params get 0; optional params keep their default. Real attr
+    # values arrive via setattr, bypassing constructor transforms so the
+    # serialized state round-trips exactly.
+    init_kwargs = {}
+    for argname, param in list(
+        inspect.signature(model_cls.__init__).parameters.items()
+    )[1:]:
+        if param.kind in (
+            inspect.Parameter.VAR_POSITIONAL,
+            inspect.Parameter.VAR_KEYWORD,
+        ):
+            # *args / **kwargs accept nothing by default.
+            continue
+        init_kwargs[argname] = (
+            0 if param.default is inspect.Parameter.empty else param.default
+        )
+    cached = (model_cls, init_kwargs)
+    _INIT_MODEL_CACHE[model_type] = cached
+    return cached
+
+
+def _restore_model(model_cls, preprocessed_dict):
+    model = object.__new__(model_cls)
+    for key, value in preprocessed_dict.items():
+        setattr(model, key, value)
+    return model
+
+
+def init_model(model_type, preprocessed_dict, restore=True):
+    """Rebuild a model instance from its decoded ``values`` dict.
+
+    With ``restore=True`` (current-format files, whose values block is the
+    model's full encodable ``__dict__``) the instance is created via
+    ``object.__new__`` and its attributes are set directly, so eager
+    computations in ``__init__`` (e.g. ``PowerToHeat``'s
+    ``heat_energy_mw / efficiency``) never run on placeholder zeros.
+
+    With ``restore=False`` (legacy files, whose values block may be partial)
+    ``__init__`` runs with placeholder arguments to supply defaults first;
+    if that construction itself raises, the bare restore is the fallback.
+    """
+    model_cls, init_kwargs = _resolve_model_type(model_type)
+    if restore:
+        return _restore_model(model_cls, preprocessed_dict)
+    try:
+        model = model_cls(**init_kwargs)
+    except Exception:
+        return _restore_model(model_cls, preprocessed_dict)
+    for key, value in preprocessed_dict.items():
+        setattr(model, key, value)
     return model
 
 
 def preprocess_dict(model_dict):
-    """
-    No docstring provided.
-    """
-    result = {}
-    for k, v in model_dict.items():
-        if type(v) is dict:
-            if "max" in v and "min" in v and ("value" in v):
-                result[k] = Var(v["value"], v["max"], v["min"])
-        else:
-            result[k] = v
-    return result
+    return _decode_values(model_dict)
 
 
 def native_dict_to_network(dict_struct) -> Network:
-    """
-    No docstring provided.
-    """
     network = Network(None)
-    grid_by_name = dict_struct["grids"]
-    for k, v in grid_by_name.items():
-        values_grid_dict = v["values"]
-        model = init_model(v["model_type"], values_grid_dict)
-        grid_by_name[k] = model
-    childs = dict_struct["childs"]
-    nodes = dict_struct["nodes"]
-    branches = dict_struct["branches"]
-    for child_dict in childs:
-        values_child_dict = child_dict["values"]
-        preprocessed_dict = preprocess_dict(values_child_dict)
-        model = init_model(child_dict["model_type"], preprocessed_dict)
-        network.child(model, overwrite_id=child_dict["id"])
-    for node_dict in nodes:
-        values_node_dict = node_dict["values"]
-        preprocessed_dict = preprocess_dict(values_node_dict)
-        model = init_model(node_dict["model_type"], preprocessed_dict)
-        network.node(
+    restore = dict_struct.get("version", 0) >= 2
+
+    # Build grid objects without mutating the caller's dict.
+    grid_by_name = {}
+    for name, grid_entry in dict_struct["grids"].items():
+        grid_by_name[name] = init_model(
+            grid_entry["model_type"],
+            _decode_values(grid_entry["values"]),
+            restore=restore,
+        )
+
+    # A loaded grid whose name collides with one of Network's default grids
+    # replaces that default: otherwise later default-grid additions would bind
+    # to a second same-named grid instance and re-saving would raise.
+    for key, default_grid in network._default_grid_models.items():
+        loaded = grid_by_name.get(getattr(default_grid, "name", None))
+        if loaded is not None and isinstance(loaded, type(default_grid)):
+            network.set_default_grid(key, loaded)
+
+    for child_dict in dict_struct["childs"]:
+        model = init_model(
+            child_dict["model_type"], _decode_values(child_dict["values"]), restore
+        )
+        child_id = network.child(
             model,
-            child_ids=node_dict["child_ids"],
+            overwrite_id=child_dict["id"],
+            name=child_dict.get("name"),
+        )
+        if not child_dict.get("active", True):
+            network.deactivate_by_id(type(network.child_by_id(child_id)), child_id)
+
+    for node_dict in dict_struct["nodes"]:
+        model = init_model(
+            node_dict["model_type"], _decode_values(node_dict["values"]), restore
+        )
+        position = node_dict.get("position")
+        node_id = network.node(
+            model,
+            child_ids=list(node_dict["child_ids"]),
             grid=grid_by_name[node_dict["grid_id"]],
             overwrite_id=node_dict["id"],
+            name=node_dict.get("name"),
+            position=tuple(position) if isinstance(position, list) else position,
         )
-    if "compounds" in dict_struct:
-        compounds = dict_struct["compounds"]
-        for compound_dict in compounds:
-            values_compound_dict = compound_dict["values"]
-            preprocessed_dict = preprocess_dict(values_compound_dict)
-            model = init_model(compound_dict["model_type"], preprocessed_dict)
-            network.compound(model, **compound_dict["connected_to"])
-    for branch_dict in branches:
-        values_branch_dict = branch_dict["values"]
-        preprocessed_dict = preprocess_dict(values_branch_dict)
-        model = init_model(branch_dict["model_type"], preprocessed_dict)
-        network.branch(
+        node = network.node_by_id(node_id)
+        node.active = node_dict.get("active", True)
+
+    for compound_dict in dict_struct.get("compounds", []):
+        model = init_model(
+            compound_dict["model_type"],
+            _decode_values(compound_dict["values"]),
+            restore,
+        )
+        compound_id = network.compound(
+            model,
+            overwrite_id=compound_dict.get("id"),
+            **compound_dict["connected_to"],
+        )
+        compound = network.compound_by_id(compound_id)
+        compound.name = compound_dict.get("name")
+        if not compound_dict.get("active", True):
+            network.deactivate_by_id(Compound, compound_id)
+
+    for branch_dict in dict_struct["branches"]:
+        model = init_model(
+            branch_dict["model_type"], _decode_values(branch_dict["values"]), restore
+        )
+        grid = _resolve_branch_grid(branch_dict, grid_by_name)
+        branch_id = network.branch(
             model,
             from_node_id=branch_dict["from_node"],
             to_node_id=branch_dict["to_node"],
-            grid=grid_by_name[branch_dict["grid_id"]],
+            grid=grid,
+            name=branch_dict.get("name"),
         )
+        branch = network.branch_by_id(branch_id)
+        branch.active = branch_dict.get("active", True)
+
+    _restore_branch_order(network, dict_struct)
     return network
 
 
+def _ordered_like(saved, current):
+    """Reorder *current* ids to match the *saved* order; ids unknown to either
+    side keep their relative position at the end (graceful for hand-edited
+    files and for compound-created branches whose rebuilt key differs)."""
+    current_set = set(current)
+    restored = [bid for bid in (tuple(s) for s in saved) if bid in current_set]
+    seen = set(restored)
+    restored.extend(bid for bid in current if bid not in seen)
+    return restored
+
+
+def _restore_branch_order(network, dict_struct):
+    """Restore the original branch iteration order and per-node adjacency order.
+
+    The loader rebuilds compound-created branches (via ``create()``) before the
+    plain branch section, so without this pass both the global branch order and
+    each node's ``from_branch_ids``/``to_branch_ids`` differ from the saved
+    network. That reorders solver variables/equations and can steer the solver
+    to a measurably different result for the very same model. Files written
+    before these keys existed load unchanged.
+    """
+    branch_order = dict_struct.get("branch_order")
+    if branch_order is not None:
+        graph = network._network_internal
+        existing = {edge: dict(graph.edges[edge]) for edge in graph.edges(keys=True)}
+        ordered = _ordered_like(branch_order, list(existing))
+        if ordered != list(existing):
+            graph.remove_edges_from(list(existing))
+            for edge in ordered:
+                graph.add_edge(edge[0], edge[1], key=edge[2], **existing[edge])
+
+    for node_dict in dict_struct["nodes"]:
+        node = network.node_by_id(node_dict["id"])
+        for attr in ("from_branch_ids", "to_branch_ids"):
+            saved = node_dict.get(attr)
+            if saved is not None:
+                setattr(node, attr, _ordered_like(saved, getattr(node, attr)))
+
+
+def _resolve_branch_grid(branch_dict, grid_by_name):
+
+    grid_ids = branch_dict.get("grid_ids")
+
+    if grid_ids is None:
+        grid_id = branch_dict.get("grid_id")
+        grid_ids = [grid_id] if grid_id is not None else []
+
+    distinct = [grid_by_name[g] for g in dict.fromkeys(grid_ids)]
+
+    if len(distinct) == 1:
+        return distinct[0]
+
+    return None
+
+
 def load_to_network(file) -> Network:
+    """Load a native JSON *file* into a :class:`Network`.
+
+    Also available as :func:`load_network`.
     """
-    No docstring provided.
-    """
-    dict_struct = None
-    with open(file) as read_fp:
+    with open(file, encoding="utf-8") as read_fp:
         dict_struct = json.load(read_fp)
     return native_dict_to_network(dict_struct)
 
 
-def write_omef_network(file, network: Network):
-    """
-    No docstring provided.
-    """
-    grids = {}
-    nodes = network.nodes
-    branches = network.branches
-    childs = network.childs
-    compounds = network.compounds
-    node_dict_list = []
-    branch_dict_list = []
-    child_dict_list = []
-    compound_dict_list = []
-    for node in nodes:
-        if not network.is_blacklisted(node):
-            node_dict_list.append(node_to_dict(node, grids))
-    for branch in branches:
-        if not network.is_blacklisted(branch):
-            branch_dict_list.append(branch_to_dict(branch, grids))
-    for child in childs:
-        if not network.is_blacklisted(child):
-            child_dict_list.append(child_to_dict(child))
-    for compound in compounds:
-        compound_dict_list.append(compound_to_dict(compound))
-    to_serialize = dict(
-        grids={
-            k: {"values": v.__dict__, "model_type": type(v).__name__}
-            for k, v in grids.items()
-        },
-        nodes=node_dict_list,
-        childs=child_dict_list,
-        branches=branch_dict_list,
-        compounds=compound_dict_list,
-    )
-    with open(file, "w") as write_fp:
-        json.dump(to_serialize, write_fp, indent=3, default=vars)
+load_network = load_to_network
 
 
-def child_to_dict(child):
-    """
-    No docstring provided.
-    """
-    return dict(
-        id=child.id,
-        values=model_to_dict(child.model),
-        model_type=type(child.model).__name__,
-    )
+# --------------------------------------------------------------------------- #
+# Serialization (Network -> dict)                                              #
+# --------------------------------------------------------------------------- #
 
 
-def compound_to_dict(compound):
+def iter_concrete_grids(grid):
+    """Yield the concrete grid object(s) backing a component.
+
+    Single-grid components carry their grid directly.  Multi-grid branches
+    (coupling points that span e.g. a power and a gas grid) carry a ``dict``
+    mapping grid type -> grid (and sometimes a ``list`` of grids).  Yield every
+    distinct concrete grid that exposes a ``name``, in a stable order.
     """
-    No docstring provided.
-    """
-    return dict(
-        id=compound.id,
-        values=model_to_dict(compound.model),
-        model_type=type(compound.model).__name__,
-        connected_to=compound.connected_to,
-    )
+    if isinstance(grid, dict):
+        seen = set()
+        for value in grid.values():
+            candidates = value if isinstance(value, (list, tuple)) else [value]
+            for candidate in candidates:
+                if (
+                    getattr(candidate, "name", None) is not None
+                    and id(candidate) not in seen
+                ):
+                    seen.add(id(candidate))
+                    yield candidate
+    elif getattr(grid, "name", None) is not None:
+        yield grid
 
 
 def fetch_grid_to_dict(grid_dict, grid_from_model):
-    """
-    No docstring provided.
-    """
-    if grid_from_model.name not in grid_dict:
-        grid_dict[grid_from_model.name] = grid_from_model
-    elif grid_dict[grid_from_model.name] is not grid_from_model:
-        raise PersistenceException(
-            f"You must not define multiple grids with the same name: {grid_from_model.name}"
-        )
+    for grid in iter_concrete_grids(grid_from_model):
+        if grid.name not in grid_dict:
+            grid_dict[grid.name] = grid
+        elif grid_dict[grid.name] is not grid:
+            raise PersistenceException(
+                f"You must not define multiple grids with the same name: {grid.name}"
+            )
 
 
-def branch_to_dict(branch, grids):
-    """
-    No docstring provided.
-    """
-    fetch_grid_to_dict(grids, branch.grid)
-    return dict(
-        id=branch.id,
-        from_node=branch.id[0],
-        to_node=branch.id[1],
-        grid_id=branch.grid.name,
-        values=model_to_dict(branch.model),
-        model_type=type(branch.model).__name__,
-    )
+def model_to_dict(model, include_solve_state=False):
+    """Encode a model's full state.
 
-
-def node_to_dict(node, grids):
+    All public (solver-visible) attributes are serialized; private attributes
+    are serialized only when JSON-encodable, since non-encodable ones hold object
+    references that are rebuilt by ``create()`` / ``init()`` on load. A public
+    attribute that cannot be encoded is a genuine gap and raises.
     """
-    No docstring provided.
-    """
-    fetch_grid_to_dict(grids, node.grid)
-    return dict(
-        id=node.id,
-        grid_id=node.grid.name,
-        child_ids=node.child_ids,
-        values=model_to_dict(node.model),
-        model_type=type(node.model).__name__,
-    )
-
-
-def model_to_dict(model):
-    """
-    No docstring provided.
-    """
-    base_dict = model.vars
-    result = dict(base_dict)
+    result = {}
+    for key, value in model.__dict__.items():
+        if _encodable(value):
+            result[key] = _encode_value(value, include_solve_state)
+        elif not key.startswith("_"):
+            raise PersistenceException(
+                f"Cannot serialize public attribute {key!r} of "
+                f"{type(model).__name__}: unsupported type {type(value).__name__}."
+            )
     return result
+
+
+def child_to_dict(child, include_solve_state=False):
+    return {
+        "id": child.id,
+        "active": child.active,
+        "name": child.name,
+        "values": model_to_dict(child.model, include_solve_state),
+        "model_type": type(child.model).__name__,
+    }
+
+
+def compound_to_dict(compound, include_solve_state=False):
+    return {
+        "id": compound.id,
+        "active": compound.active,
+        "name": compound.name,
+        "values": model_to_dict(compound.model, include_solve_state),
+        "model_type": type(compound.model).__name__,
+        "connected_to": compound.connected_to,
+    }
+
+
+def branch_to_dict(branch, grids, include_solve_state=False):
+    fetch_grid_to_dict(grids, branch.grid)
+    grid_ids = [grid.name for grid in iter_concrete_grids(branch.grid)]
+    return {
+        "id": branch.id,
+        "from_node": branch.id[0],
+        "to_node": branch.id[1],
+        # grid_id keeps a single representative for backward compatibility;
+        # grid_ids preserves the full (possibly multi-grid) mapping.
+        "grid_id": grid_ids[0] if grid_ids else None,
+        "grid_ids": grid_ids,
+        "active": branch.active,
+        "name": branch.name,
+        "values": model_to_dict(branch.model, include_solve_state),
+        "model_type": type(branch.model).__name__,
+    }
+
+
+def node_to_dict(node, grids, serialized_child_ids=None, include_solve_state=False):
+
+    fetch_grid_to_dict(grids, node.grid)
+
+    child_ids = node.child_ids
+    if serialized_child_ids is not None:
+        # Children created by compound create() hooks are blacklisted and get
+        # rebuilt on load; keeping their ids here would dangle.
+        child_ids = [cid for cid in child_ids if cid in serialized_child_ids]
+
+    return {
+        "id": node.id,
+        "grid_id": node.grid.name,
+        "child_ids": child_ids,
+        # Adjacency order (including compound-created branch ids, which are
+        # rebuilt on load) - the loader restores it so the solver sees the
+        # branches of each node in the original order.
+        "from_branch_ids": [list(bid) for bid in node.from_branch_ids],
+        "to_branch_ids": [list(bid) for bid in node.to_branch_ids],
+        "position": node.position,
+        "active": node.active,
+        "name": node.name,
+        "values": model_to_dict(node.model, include_solve_state),
+        "model_type": type(node.model).__name__,
+    }
+
+
+def network_to_native_dict(network: Network, include_solve_state=False) -> dict:
+    """Encode *network* as the native dict.
+
+    By default the encoding is independent of the network's solve history:
+    Var/Intermediate values are written as their declared (pre-solve) values,
+    so saving the same network before and after ``run_energy_flow`` produces
+    identical dicts and a loaded network re-solves from its declared start.
+    Pass ``include_solve_state=True`` to checkpoint the live (solved) operating
+    point instead; re-solving such a network hands the solver a near-solution
+    start, which the default IPOPT options handle poorly (see the
+    concepts/solvers page on warm starts).
+    """
+    grids = {}
+
+    serialized_child_ids = {
+        child.id for child in network.childs if not network.is_blacklisted(child)
+    }
+    node_dict_list = [
+        node_to_dict(node, grids, serialized_child_ids, include_solve_state)
+        for node in network.nodes
+        if not network.is_blacklisted(node)
+    ]
+    branch_dict_list = [
+        branch_to_dict(branch, grids, include_solve_state)
+        for branch in network.branches
+        if not network.is_blacklisted(branch)
+    ]
+    child_dict_list = [
+        child_to_dict(child, include_solve_state)
+        for child in network.childs
+        if not network.is_blacklisted(child)
+    ]
+    compound_dict_list = [
+        compound_to_dict(compound, include_solve_state)
+        for compound in network.compounds
+        if not network.is_blacklisted(compound)
+    ]
+
+    return {
+        "version": FORMAT_VERSION,
+        "grids": {
+            k: {"values": _encode_values(vars(v)), "model_type": type(v).__name__}
+            for k, v in grids.items()
+        },
+        "nodes": node_dict_list,
+        "childs": child_dict_list,
+        "branches": branch_dict_list,
+        "compounds": compound_dict_list,
+        # Global branch iteration order (including compound-created branches),
+        # restored on load so equation/variable ordering matches the original.
+        "branch_order": [list(branch.id) for branch in network.branches],
+    }
+
+
+def write_omef_network(file, network: Network, include_solve_state=False):
+    """Write *network* to *file* in the native JSON format.
+
+    See :func:`network_to_native_dict` for ``include_solve_state``.
+    Also available as :func:`save_network`.
+    """
+    to_serialize = network_to_native_dict(network, include_solve_state)
+
+    with open(file, "w", encoding="utf-8") as write_fp:
+        json.dump(to_serialize, write_fp, indent=3, default=_json_default)
+
+
+save_network = write_omef_network

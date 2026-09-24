@@ -1,4 +1,10 @@
+from __future__ import annotations
+
 import copy
+import math
+from collections.abc import Iterator
+from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import networkx as nx
 import pandas
@@ -8,7 +14,9 @@ from .core import (
     GAS_KEY,
     WATER_KEY,
     Branch,
+    BranchModel,
     Child,
+    ChildModel,
     Component,
     Compound,
     CompoundModel,
@@ -16,24 +24,85 @@ from .core import (
     GenericModel,
     Intermediate,
     Node,
+    NodeModel,
+    PostProcess,
     Var,
-)
-from .formulation import (
-    AC_NETWORK_FORMULATION,
-    NL_DARCY_WEISBACH_NETWORK_FORMULATION,
-    NL_WEYMOUTH_NETWORK_FORMULATION,
-    Formulation,
-    NetworkConstraint,
-    NetworkFormulation,
 )
 from .grid import create_gas_grid, create_power_grid, create_water_grid
 
+if TYPE_CHECKING:
+    from .extension.core import NetworkAspect
+
+    # Imported only for typing: at runtime ``apply_formulation`` resolves the
+    # spec lazily via ``formulation.registry.resolve_formulation`` (a local
+    # import), so the model package no longer eagerly triggers the
+    # formulation -> branch/node import chain at load time.
+    from .formulation import (  # noqa: F401
+        Formulation,
+        NetworkFormulation,
+    )
+
+
+_CONTAINER_BY_CLASS = (
+    (Node, NodeModel, Node),
+    (Branch, BranchModel, Branch),
+    (Child, ChildModel, Child),
+    (Compound, CompoundModel, Compound),
+)
+
+
+def _kind_and_id(cls, id):
+    """Resolve the ``(kind, id)`` / ``(branch_id,)`` argument forms.
+
+    Only branches carry tuple ids, so a bare tuple cannot collide with the
+    integer node/child/compound counters and needs no kind argument.
+    """
+    if id is not None:
+        return cls, id
+    if isinstance(cls, tuple):
+        return Branch, cls
+    raise TypeError(
+        f"missing the id argument: pass (kind, id), for example "
+        f"(mm.PowerLine, {cls!r}). Only a tuple branch id may be passed alone"
+    )
+
+
+def _container_class(cls):
+    """Normalize *cls* to a container class, accepting model classes too.
+
+    ``deactivate_by_id(PowerLine, id)`` reads naturally and matches the
+    Stepper API, so a model class resolves to the container that holds it.
+    """
+    if isinstance(cls, type):
+        for container_cls, model_cls, resolved in _CONTAINER_BY_CLASS:
+            if issubclass(cls, (container_cls, model_cls)):
+                return resolved
+    raise ValueError(
+        f"{cls!r} is neither a component container class (Node, Branch, Child, "
+        "Compound) nor a model class (PowerLine, PowerLoad, ...)"
+    )
+
+
+@dataclass
+class CheckFinding:
+    """One pre-flight finding from :meth:`Network.check`. The
+    how-to/diagnose_infeasibility docs page explains each category."""
+
+    category: str
+    message: str
+    component: str | None = None
+
+    def __str__(self) -> str:
+        where = f" [{self.component}]" if self.component else ""
+        return f"[{self.category}]{where} {self.message}"
+
+
+def _child_label(child) -> str:
+    base = f"{type(child.model).__name__}({child.id})"
+    return f"{base} '{child.name}'" if child.name else base
+
 
 class Network:
-    """
-    No docstring provided.
-    """
-
     def __init__(
         self,
         active_grid=None,
@@ -51,26 +120,41 @@ class Network:
         self._compound_dict = {}
         self._constraints = []
         self._objectives = []
-        self._extensions: list[NetworkConstraint] = []
-        self.__blacklist = []
-        self.__collected_components = []
-        self.__force_blacklist = False
-        self.__collect_components = False
+        self._extensions: list[NetworkAspect] = []
+        # Identity map id(obj) -> obj: O(1) membership without relying on
+        # component __eq__/__hash__ (components are compared by identity).
+        self.__blacklist = {}
+        # One frame per in-flight compound() call; nesting pushes/pops frames
+        # so an inner compound collects into its own frame.
+        self.__collection_stack = []
         self.__current_grid = active_grid
+        # Declarative network-level formulation choice. No default is seeded
+        # here: components without an explicit choice fall back to
+        # DEFAULT_SIMULATION_FORMULATION when the solver attaches formulations
+        # (see monee.model.formulation.registry.attach_formulations).
         self.__default_formulation: dict[tuple[type, type], Formulation] = {}
 
-        # default formulations
-        self.apply_formulation(AC_NETWORK_FORMULATION)
-        self.apply_formulation(NL_WEYMOUTH_NETWORK_FORMULATION)
-        self.apply_formulation(NL_DARCY_WEISBACH_NETWORK_FORMULATION)
+    def apply_formulation(self, network_formulation):
+        """Record *network_formulation* as the network-level default.
 
-    def apply_formulation(self, network_formulation: NetworkFormulation):
-        for type_or_tuple, formulation in (
-            list(network_formulation.branch_type_to_formulations.items())
-            + list(network_formulation.child_type_to_formulations.items())
-            + list(network_formulation.node_type_to_formulations.items())
-            + list(network_formulation.compound_type_to_formulations.items())
-        ):
+        Accepts the same spec as the solver's ``formulation`` argument
+        (:func:`~monee.model.formulation.registry.resolve_formulation`): a
+        registry key string (``"smooth_nlp"``), a :class:`NetworkFormulation`,
+        or a sequence of either (merged left to right).
+
+        Side-effect free: only the network's formulation map is updated -
+        components and their models are untouched. The choice materialises
+        when a solver runs ``attach_formulations`` on its solve-time copy. A
+        ``formulation`` argument passed to the solver overrides this choice;
+        per-component formulations passed to the builder methods override
+        both. Repeated calls merge: later registrations win per type key.
+        """
+        from .formulation.registry import resolve_formulation
+
+        network_formulation = resolve_formulation(network_formulation)
+        if network_formulation is None:
+            return
+        for type_or_tuple, formulation in network_formulation.items():
             tc, tg = None, None
             if isinstance(type_or_tuple, tuple):
                 tc, tg = type_or_tuple
@@ -79,43 +163,39 @@ class Network:
 
             self.__default_formulation[(tc, tg)] = formulation
 
-            for component in self.all_components():
-                # formulation for type tc, and if no grid type is provided or grid type of the component == tg
-                if isinstance(component.model, tc) and (
-                    tg is None or component.grid is tg
-                ):
-                    component.formulation = formulation
+    def lookup_formulation(self, model, grid) -> Formulation | None:
+        """The network-level formulation for *model* (and *grid*) accumulated
+        from ``apply_formulation`` calls, or None. Last matching registration
+        wins, mirroring :meth:`NetworkFormulation.lookup`."""
+        from .formulation.core import lookup_type_match
+
+        return lookup_type_match(self.__default_formulation.items(), model, grid)
 
     def set_default_grid(self, key, grid):
-        """
-        No docstring provided.
-        """
         self._default_grid_models[key] = grid
 
     def activate_grid(self, grid):
-        """
-        No docstring provided.
-        """
         self.__current_grid = grid
 
     @property
     def grids(self):
-        """
-        No docstring provided.
-        """
-        return list(set([node.grid for node in self.nodes]))
+        # Coupling control nodes carry list-valued grids - flatten them.
+        seen = set()
+        grids = []
+        for node in self.nodes:
+            node_grids = node.grid if isinstance(node.grid, list) else [node.grid]
+            for grid in node_grids:
+                if grid not in seen:
+                    seen.add(grid)
+                    grids.append(grid)
+        return grids
 
     @property
     def graph(self):
-        """
-        No docstring provided.
-        """
         return self._network_internal
 
     def _set_active(self, cls, id, active):
-        """
-        No docstring provided.
-        """
+        cls = _container_class(cls)
         if cls == Node:
             self.node_by_id(id).active = active
         elif cls == Branch:
@@ -126,298 +206,276 @@ class Network:
                 branch.active = active
         elif cls == Compound:
             compound: Compound = self.compound_by_id(id)
+            # Propagate to subcomponents and the compound's own ``active`` so
+            # ignore_*/inject_vars see a fully deactivated compound; model
+            # set_active alone wouldn't deactivate subcomponent children.
+            for component in compound.subcomponents:
+                self._set_active(type(component), component.id, active)
+            compound.active = active
             if hasattr(compound.model, "set_active"):
                 compound.model.set_active(active)
-            else:
-                for component in compound.subcomponents:
-                    self._set_active(type(component), component.id, active)
-                self.compound_by_id(id).active = active
         elif cls == Child:
             self.child_by_id(id).active = active
 
-    def deactivate_by_id(self, cls, id):
-        """
-        No docstring provided.
-        """
-        self._set_active(cls, id, False)
+    def deactivate_by_id(self, cls, id=None):
+        """Deactivate the component *id* of kind *cls*.
 
-    def activate_by_id(self, cls, id):
+        *cls* is either a container class (:class:`~monee.model.core.Node`,
+        :class:`~monee.model.core.Branch`, :class:`~monee.model.core.Child`,
+        :class:`~monee.model.core.Compound`) or a model class carried by one of
+        them (``mm.PowerLine``, ``mm.PowerLoad``, ...); anything else raises
+        ``ValueError``. Node and child ids are independent counters, so the
+        kind is what disambiguates them::
+
+            net.deactivate_by_id(mm.PowerLine, line_id)
+
+        A branch id is a ``(from_node, to_node, index)`` tuple, which no other
+        component kind uses, so it may also be passed on its own::
+
+            net.deactivate_by_id(line_id)
         """
-        No docstring provided.
-        """
-        self._set_active(cls, id, True)
+        cls, component_id = _kind_and_id(cls, id)
+        self._set_active(cls, component_id, False)
+
+    def activate_by_id(self, cls, id=None):
+        """Activate the component *id* of kind *cls*, the inverse of
+        :meth:`deactivate_by_id` and accepting the same argument forms."""
+        cls, component_id = _kind_and_id(cls, id)
+        self._set_active(cls, component_id, True)
 
     def activate(self, component):
-        """
-        No docstring provided.
+        """Activate *component*, a container object (:class:`Node`,
+        :class:`Branch`, :class:`Child`, :class:`Compound`) previously
+        obtained from this network; the inverse of :meth:`deactivate`.
+
+        If you only hold an id, use the two-argument form
+        :meth:`activate_by_id` and pass the kind alongside it.
         """
         self.activate_by_id(type(component), component.id)
 
     def deactivate(self, component):
-        """
-        No docstring provided.
+        """Deactivate *component*, a container object (:class:`Node`,
+        :class:`Branch`, :class:`Child`, :class:`Compound`) previously
+        obtained from this network. A deactivated component is kept in the
+        network but excluded from solves.
+
+        If you only hold an id, use the two-argument form
+        :meth:`deactivate_by_id` and pass the kind (container class or model
+        class) alongside it::
+
+            net.deactivate_by_id(mm.ElectricStorage, storage_id)
+
+        Node and child ids are independent counters, so the kind argument is
+        required to disambiguate them; only a tuple branch id is unambiguous
+        on its own.
         """
         self.deactivate_by_id(type(component), component.id)
 
     def all_models(self):
-        """
-        No docstring provided.
-        """
         return [model_container.model for model_container in self.all_components()]
 
     def all_components(self):
-        """
-        No docstring provided.
-        """
         return self.childs + self.compounds + self.branches + self.nodes
 
+    def iter_all_components(self) -> Iterator[Component]:
+        """Yield every component once in canonical traversal order: each node
+        immediately followed by its childs, then all branches, then all
+        compounds. Mirrors the ad-hoc traversal repeated across the simulation
+        layer so iteration order and child handling stay identical."""
+        for node in self.nodes:
+            yield node
+            yield from self.childs_by_ids(node.child_ids)
+        yield from self.branches
+        yield from self.compounds
+
     def all_models_with_grid(self):
-        """
-        No docstring provided.
-        """
-        model_container_list = self.childs + self.compounds + self.branches + self.nodes
         return [
-            (
-                model_container.model,
-                model_container.grid if hasattr(model_container, "grid") else None,
-            )
-            for model_container in model_container_list
+            (model_container.model, model_container.grid)
+            for model_container in self.all_components()
         ]
 
     @property
     def constraints(self):
-        """
-        No docstring provided.
-        """
         return self._constraints
 
     @property
     def objectives(self):
-        """
-        No docstring provided.
-        """
         return self._objectives
 
     @property
-    def extensions(self) -> list[NetworkConstraint]:
-        """Solver-agnostic network-level constraint extensions."""
+    def extensions(self) -> list[NetworkAspect]:
+        """Solver-agnostic network-level extensions."""
         return self._extensions
 
-    def add_extension(self, ext: NetworkConstraint) -> None:
-        """Register a NetworkConstraint extension on this network."""
+    def add_extension(self, ext: NetworkAspect) -> None:
+        """Register a NetworkAspect extension on this network."""
         self._extensions.append(ext)
 
     @property
     def compounds(self) -> list[Compound]:
-        """
-        No docstring provided.
-        """
         return list(self._compound_dict.values())
 
     @property
     def childs(self) -> list[Child]:
-        """
-        No docstring provided.
-        """
         return list(self._child_dict.values())
 
     @property
     def cps(self) -> list[GenericModel]:
-        """
-        No docstring provided.
-        """
         return [comp for comp in self.all_components() if comp.model.is_cp()]
 
     def has_child(self, child_id):
-        """
-        No docstring provided.
-        """
         return child_id in self._child_dict
 
     def remove_child(self, child_id):
-        """
-        No docstring provided.
-        """
-        del self._child_dict[child_id]
+        """Remove the child with id *child_id* (as returned by
+        :meth:`child_to` or found via ``net.childs``) and detach it from its
+        parent node. Raises ``KeyError`` for an unknown id."""
+        # Also drop the parent node's reference; otherwise childs_by_ids
+        # raises KeyError walking node.child_ids.
+        child = self._child_dict.pop(child_id)
+        node_id = getattr(child, "node_id", None)
+        if node_id is not None and node_id in self._network_internal.nodes:
+            try:
+                node = self.node_by_id(node_id)
+            except KeyError:
+                node = None
+            if node is not None and child_id in node.child_ids:
+                node.child_ids.remove(child_id)
 
     def compound_of_node(self, node_id):
-        """
-        No docstring provided.
-        """
         for compound in self.compounds:
             for subcomponent in compound.subcomponents:
-                if isinstance(subcomponent, Node):
-                    if subcomponent.id == node_id:
-                        return compound
+                if isinstance(subcomponent, Node) and subcomponent.id == node_id:
+                    return compound
         return None
 
     def remove_node(self, node_id):
-        """
-        No docstring provided.
-        """
+        """Remove the node with id *node_id* together with every incident
+        branch and every child attached to it."""
+        # nx.remove_node drops all incident edges from the graph but leaves
+        # the surviving neighbours' from_branch_ids/to_branch_ids pointing at
+        # those now-vanished edges. Detach them first so later
+        # branches_connected_to / components_connected_to on a neighbour does
+        # not call branch_by_id on a missing edge.
+        incident = [
+            (u, v, key)
+            for u, v, key in self._network_internal.edges(node_id, keys=True)
+        ]
+        for u, v, key in incident:
+            self.remove_branch_between(u, v, key=key)
+        node = self.node_by_id(node_id)
+        for child_id in tuple(node.child_ids):
+            if self.has_child(child_id):
+                self.remove_child(child_id)
         self._network_internal.remove_node(node_id)
 
     def remove_branch(self, branch_id):
-        """
-        No docstring provided.
-        """
+        """Remove the branch with id *branch_id*, a ``(from_node_id,
+        to_node_id, key)`` tuple as returned by :meth:`branch`."""
         branch: Branch = self.branch_by_id(branch_id)
-        self.remove_branch_between(branch.from_node_id, branch.to_node_id)
+        self.remove_branch_between(
+            branch.from_node_id, branch.to_node_id, key=branch_id[2]
+        )
+
+    def has_compound(self, compound_id):
+        return compound_id in self._compound_dict
 
     def remove_compound(self, compound_id):
-        """
-        No docstring provided.
-        """
+        """Remove the compound with id *compound_id* and, recursively, all of
+        its subcomponents (nodes, branches, childs, nested compounds)."""
         compound: Compound = self.compound_by_id(compound_id)
         del self._compound_dict[compound_id]
         for subcomponent in compound.subcomponents:
-            if isinstance(subcomponent, Node):
-                self.remove_node(subcomponent.id)
-            if isinstance(subcomponent, Branch):
-                if self.has_branch(subcomponent.id):
-                    self.remove_branch(subcomponent.id)
+            self._remove_subcomponent(subcomponent)
+
+    def _remove_subcomponent(self, subcomponent):
+        for cls, has, remove in (
+            (Node, self.has_node, self.remove_node),
+            (Branch, self.has_branch, self.remove_branch),
+            (Child, self.has_child, self.remove_child),
+            (Compound, self.has_compound, self.remove_compound),
+        ):
+            if isinstance(subcomponent, cls):
+                if has(subcomponent.id):
+                    remove(subcomponent.id)
+                return
 
     def remove_branch_between(self, node_one, node_two, key=0):
-        """
-        No docstring provided.
-        """
+        """Remove the branch between *node_one* and *node_two*; *key*
+        (default 0) picks one of several parallel branches and is the third
+        element of the branch id tuple."""
         self._network_internal.remove_edge(node_one, node_two, key)
         self.node_by_id(node_one).remove_branch((node_one, node_two, key))
         self.node_by_id(node_two).remove_branch((node_one, node_two, key))
 
     def move_branch(self, branch_id, new_from_id, new_to_id):
-        """
-        No docstring provided.
-        """
         branch: Branch = self.branch_by_id(branch_id)
         self.remove_branch_between(branch_id[0], branch_id[1], key=branch_id[2])
-        return self.branch(
+        new_branch_id = self.branch(
             branch.model,
             new_from_id,
             new_to_id,
+            formulation=branch.formulation,
             constraints=branch.constraints,
             grid=branch.grid,
             name=branch.name,
         )
+        new_branch = self.branch_by_id(new_branch_id)
+        new_branch.formulation_pinned = branch.formulation_pinned
+        new_branch.active = branch.active
+        new_branch.independent = branch.independent
+        return new_branch_id
 
     def child_by_id(self, child_id):
-        """
-        No docstring provided.
-        """
         return self._child_dict[child_id]
 
     def childs_by_type(self, cls):
-        """
-        No docstring provided.
-        """
         return [child for child in self.childs if type(child.model) is cls]
 
     def compound_by_id(self, compound_id):
-        """
-        No docstring provided.
-        """
         return self._compound_dict[compound_id]
 
     def compounds_by_type(self, cls):
-        """
-        No docstring provided.
-        """
         return [compound for compound in self.compounds if type(compound.model) is cls]
 
     def nodes_by_type(self, cls):
-        """
-        No docstring provided.
-        """
         return [node for node in self.nodes if type(node.model) is cls]
 
     def childs_by_ids(self, child_ids) -> list[Child]:
-        """
-        No docstring provided.
-        """
         return [self.child_by_id(child_id) for child_id in child_ids]
 
-    def has_any_child_of_type(self, branch, cls) -> bool:
-        """
-        No docstring provided.
-        """
-        childs = self.get_childs_by_type(branch, cls)
-        return len(childs) > 0
-
-    def get_childs_by_type(self, branch, cls) -> list[Child]:
-        """
-        No docstring provided.
-        """
-        return [
-            child
-            for child in self.childs_by_ids(branch.child_ids)
-            if isinstance(child.model, cls)
-        ]
-
     def branches_by_ids(self, branch_ids) -> list[Branch]:
-        """
-        No docstring provided.
-        """
         return [self.branch_by_id(branch_id) for branch_id in branch_ids]
 
     def is_blacklisted(self, obj):
-        """
-        No docstring provided.
-        """
-        return obj in self.__blacklist
+        return id(obj) in self.__blacklist
 
     def has_node(self, node_id):
-        """
-        No docstring provided.
-        """
         return node_id in self._network_internal.nodes
 
     def has_branch(self, branch_id):
-        """
-        No docstring provided.
-        """
         return branch_id in self._network_internal.edges
 
-    def get_branch_between(self, node_id_one, node_id_two):
-        """
-        No docstring provided.
-        """
-        return self._network_internal.get_edge_data(node_id_one, node_id_two)[0][
-            "internal_branch"
-        ]
+    def get_branch_between(self, node_id_one, node_id_two, bid=0):
+        edge_data = self._network_internal.get_edge_data(node_id_one, node_id_two)
+        if edge_data is None or bid not in edge_data:
+            raise ValueError(
+                f"There is no branch between node '{node_id_one}' and "
+                f"'{node_id_two}' with key {bid}."
+            )
+        return edge_data[bid]["internal_branch"]
 
     def has_branch_between(self, node_id_one, node_id_two):
-        """
-        No docstring provided.
-        """
         return self._network_internal.has_edge(node_id_one, node_id_two)
 
     def compounds_connected_to(self, node_id) -> list[Component]:
-        """
-        No docstring provided.
-        """
         return [
             compound
             for compound in self.compounds
             if node_id in compound.connected_to.values()
         ]
 
-    def compound_of(self, subcomponent_component_id) -> list[Component]:
-        """
-        No docstring provided.
-        """
-        compounds = [
-            compound
-            for compound in self.compounds
-            if subcomponent_component_id in [sc.id for sc in compound.subcomponents]
-        ]
-        if len(compounds) == 0:
-            return None
-        return compounds[0]
-
     def components_connected_to(self, node_id) -> list[Component]:
-        """
-        No docstring provided.
-        """
         node = self.node_by_id(node_id)
         return (
             self.childs_by_ids(node.child_ids)
@@ -427,9 +485,6 @@ class Network:
         )
 
     def branches_connected_to(self, node_id) -> list[Branch]:
-        """
-        No docstring provided.
-        """
         node = self.node_by_id(node_id)
         return self.branches_by_ids(node.to_branch_ids) + self.branches_by_ids(
             node.from_branch_ids
@@ -437,9 +492,6 @@ class Network:
 
     @property
     def nodes(self) -> list[Node]:
-        """
-        No docstring provided.
-        """
         return [
             self._network_internal.nodes[node]["internal_node"]
             for node in self._network_internal.nodes
@@ -447,18 +499,12 @@ class Network:
 
     @property
     def branches(self) -> list[Branch]:
-        """
-        No docstring provided.
-        """
         return [
             self._network_internal.edges[edge]["internal_branch"]
             for edge in self._network_internal.edges
         ]
 
     def node_by_id(self, node_id) -> Node:
-        """
-        No docstring provided.
-        """
         if node_id not in self._network_internal.nodes:
             raise ValueError(
                 f"The node id '{node_id}' is not valid. The valid ids are {self._network_internal.nodes.keys()}"
@@ -466,38 +512,28 @@ class Network:
         return self._network_internal.nodes[node_id]["internal_node"]
 
     def branch_by_id(self, branch_id):
-        """
-        No docstring provided.
-        """
         if branch_id not in self._network_internal.edges:
             raise ValueError(f"The branch id '{branch_id}' is not valid.")
         return self._network_internal.edges[branch_id]["internal_branch"]
 
     def branches_by_type(self, cls):
-        """
-        No docstring provided.
-        """
         return [branch for branch in self.branches if isinstance(branch.model, cls)]
 
     def __insert_to_blacklist_if_forced(self, obj):
-        """
-        No docstring provided.
-        """
-        if self.__force_blacklist:
-            self.__blacklist.append(obj)
+        if self.__collection_stack:
+            self.__blacklist[id(obj)] = obj
 
     def __insert_to_container_if_collect_toggled(self, obj):
-        """
-        No docstring provided.
-        """
-        if self.__collect_components:
-            self.__collected_components.append(obj)
+        if self.__collection_stack:
+            self.__collection_stack[-1].append(obj)
 
     def node_by_id_or_create(self, node_id, auto_node_creator, auto_grid_key):
-        """
-        No docstring provided.
-        """
         if not self.has_node(node_id):
+            if auto_node_creator is None:
+                raise ValueError(
+                    f"The node id '{node_id}' does not exist and no "
+                    "auto_node_creator was provided to create it on the fly."
+                )
             return self.node_by_id(
                 self.node(auto_node_creator(), grid=auto_grid_key, overwrite_id=node_id)
             )
@@ -514,25 +550,24 @@ class Network:
         auto_node_creator=None,
         auto_grid_key=None,
     ):
-        """
-        No docstring provided.
-        """
-        child_id = overwrite_id or (
+        next_child_id = (
             0 if len(self._child_dict) == 0 else max(self._child_dict.keys()) + 1
         )
+        if overwrite_id is not None and overwrite_id in self._child_dict:
+            raise ValueError(f"A child with the id '{overwrite_id}' already exists.")
+        child_id = overwrite_id if overwrite_id is not None else next_child_id
         child = Child(
             child_id,
             model,
-            formulation=self._or_default_formulation(model, formulation, None),
+            formulation=formulation,
             constraints=constraints,
             name=name,
-            independent=not self.__collect_components,
+            independent=not self.__collection_stack,
         )
         self.__insert_to_blacklist_if_forced(child)
         self.__insert_to_container_if_collect_toggled(child)
         self._child_dict[child_id] = child
         if attach_to_node_id is not None:
-            child.node_id = attach_to_node_id
             attaching_node = self.node_by_id_or_create(
                 attach_to_node_id, auto_node_creator, auto_grid_key
             )
@@ -552,9 +587,6 @@ class Network:
         auto_node_creator=None,
         auto_grid_key=None,
     ):
-        """
-        No docstring provided.
-        """
         return self.child(
             model,
             formulation=formulation,
@@ -567,15 +599,9 @@ class Network:
         )
 
     def first_node(self):
-        """
-        No docstring provided.
-        """
         return min(self._network_internal)
 
     def _or_default(self, grid_or_name):
-        """
-        No docstring provided.
-        """
         if isinstance(grid_or_name, str):
             return self._default_grid_models[grid_or_name]
         if grid_or_name is None:
@@ -587,13 +613,6 @@ class Network:
                 return self._default_grid_models[self.__current_grid]
             return self.__current_grid
         return grid_or_name
-
-    def _or_default_formulation(self, model, formulation, grid):
-        if formulation is None:
-            for t, form in self.__default_formulation.items():
-                if isinstance(model, t[0]) and (t[1] is None or type(grid) is t[1]):
-                    return form
-        return formulation
 
     def node(
         self,
@@ -610,19 +629,32 @@ class Network:
             0 if len(self._network_internal) == 0 else max(self._network_internal) + 1
         )
         if overwrite_id is not None:
+            if overwrite_id in self._network_internal.nodes:
+                raise ValueError(f"A node with the id '{overwrite_id}' already exists.")
             node_id = overwrite_id
 
         grid = self._or_default(grid)
+        # Apply the grid's voltage floor to the bus voltage variable so the
+        # 1/vm term in the AC current equations stays well-conditioned for NLP
+        # solvers (IPOPT). No-op for nodes without ``vm_pu`` (e.g. junctions) and
+        # for a user-customised lower bound (only the default 0 is raised).
+        vm_pu = getattr(model, "vm_pu", None)
+        if (
+            isinstance(vm_pu, Var)
+            and vm_pu.min in (0, None)
+            and hasattr(grid, "vm_pu_min")
+        ):
+            vm_pu.min = grid.vm_pu_min
         node = Node(
             node_id,
             model,
             child_ids,
-            formulation=self._or_default_formulation(model, formulation, grid),
+            formulation=formulation,
             constraints=constraints,
             grid=grid,
             name=name,
             position=position,
-            independent=not self.__collect_components,
+            independent=not self.__collection_stack,
         )
         if child_ids is not None:
             for child_id in child_ids:
@@ -647,9 +679,6 @@ class Network:
         auto_grid_key=None,
         **kwargs,
     ):
-        """
-        No docstring provided.
-        """
         from_node = self.node_by_id_or_create(
             from_node_id,
             auto_node_creator=auto_node_creator,
@@ -664,7 +693,7 @@ class Network:
             model,
             from_node_id,
             to_node_id,
-            formulation=self._or_default_formulation(model, formulation, grid),
+            formulation=formulation,
             constraints=constraints,
             grid=grid
             or (
@@ -676,7 +705,7 @@ class Network:
                 }
             ),
             name=name,
-            independent=not self.__collect_components,
+            independent=not self.__collection_stack,
             **kwargs,
         )
         self.__insert_to_blacklist_if_forced(branch)
@@ -699,16 +728,13 @@ class Network:
         formulation=None,
         constraints=None,
         overwrite_id=None,
+        name=None,
         **connected_node_ids,
     ):
-        """
-        No docstring provided.
-        """
-        compound_id = overwrite_id or (
-            0 if len(self._compound_dict) == 0 else max(self._compound_dict.keys()) + 1
-        )
-        self.__force_blacklist = True
-        self.__collect_components = True
+        # One collection frame per compound() call: nested calls collect into
+        # their own frame and an exception in create() discards the frame, so
+        # neither nesting nor failures leak components into other compounds.
+        self.__collection_stack.append([])
         try:
             model.create(
                 self,
@@ -717,118 +743,93 @@ class Network:
                     for k, v in connected_node_ids.items()
                 },
             )
+            subcomponents = self.__collection_stack[-1]
         finally:
-            self.__collect_components = False
-            self.__force_blacklist = False
+            self.__collection_stack.pop()
+        # Allocate the id only after create() ran: a nested compound() call in
+        # create() registers itself first and must not collide with ours.
+        next_compound_id = (
+            0 if len(self._compound_dict) == 0 else max(self._compound_dict.keys()) + 1
+        )
+        compound_id = overwrite_id if overwrite_id is not None else next_compound_id
         compound = Compound(
             compound_id=compound_id,
-            formulation=self._or_default_formulation(model, formulation, None),
+            formulation=formulation,
             model=model,
             constraints=constraints,
             connected_to=connected_node_ids,
-            subcomponents=self.__collected_components,
+            subcomponents=subcomponents,
+            name=name,
         )
         self._compound_dict[compound_id] = compound
-        self.__collected_components = []
+        # A nested compound is a subcomponent of the enclosing one and, like
+        # any compound-internal component, excluded from native save.
+        self.__insert_to_blacklist_if_forced(compound)
+        self.__insert_to_container_if_collect_toggled(compound)
         return compound_id
 
     def constraint(self, constraint_equation):
-        """
-        No docstring provided.
-        """
         self._constraints.append(constraint_equation)
 
     def objective(self, objective_function):
-        """
-        No docstring provided.
-        """
         self._objectives.append(objective_function)
 
     @staticmethod
-    def _model_dict_to_input(container):
-        """
-        No docstring provided.
-        """
-        model_dict = container.model.__dict__
-        input_dict = {
-            "active": container.active,
-            "id": container.id,
-            "independent": container.independent,
-            "ignored": container.ignored,
-        }
-        for k, v in model_dict.items():
-            input_value = v
-            if isinstance(v, Var):
-                input_value = "$VAR"
-            if isinstance(v, Intermediate):
-                input_value = "$INT"
-            if isinstance(v, Const):
-                input_value = v.value
-            input_dict[k] = input_value
-        return input_dict
-
-    def as_dataframe_dict(self):
-        """
-        No docstring provided.
-        """
-        input_dict_list_dict = {}
-        model_containers = self.nodes + self.childs + self.branches
-        for container in model_containers:
-            model_type_name = type(container.model).__name__
-            if model_type_name not in input_dict_list_dict:
-                input_dict_list_dict[model_type_name] = []
-            input_dict = Network._model_dict_to_input(container)
-            if isinstance(container, Child):
-                input_dict["node_id"] = container.node_id
-            input_dict_list_dict[model_type_name].append(input_dict)
-        dataframe_dict = {}
-        for result_type, dict_list in input_dict_list_dict.items():
-            dataframe_dict[result_type] = pandas.DataFrame(dict_list)
-        return dataframe_dict
+    def _input_value(v):
+        if isinstance(v, Var):
+            return "$VAR"
+        if isinstance(v, Intermediate):
+            return "$INT"
+        if isinstance(v, Const):
+            return v.value
+        # PostProcess deliberately passes through unchanged in the input view.
+        return v
 
     @staticmethod
-    def _model_dict_to_results(container):
-        """
-        No docstring provided.
-        """
-        model_dict = container.model.vars
-        result_dict = {
-            "active": container.active,
-            "id": container.id,
-            "independent": container.independent,
-            "ignored": container.ignored,
-        }
-        for k, v in model_dict.items():
-            result_value = v
-            if isinstance(v, Var | Const | Intermediate):
-                result_value = v.value
-            result_dict[k] = result_value
-        return result_dict
+    def _result_value(v):
+        if isinstance(v, Var | Const | Intermediate | PostProcess):
+            return v.value
+        return v
 
-    def as_result_dataframe_dict(self):
-        """
-        No docstring provided.
-        """
-        result_dict_list_dict = {}
+    def _as_dataframe_dict(self, value_fn):
+        dict_list_dict = {}
         model_containers = self.nodes + self.childs + self.branches
         for container in model_containers:
-            model_type_name = type(container.model).__name__
-            if model_type_name not in result_dict_list_dict:
-                result_dict_list_dict[model_type_name] = []
-            result_dict = Network._model_dict_to_results(container)
+            row = {
+                "active": container.active,
+                "id": container.id,
+                "name": container.name,
+                "independent": container.independent,
+                "ignored": container.ignored,
+            }
+            for k, v in container.model.vars.items():
+                row[k] = value_fn(v)
             if isinstance(container, Child):
-                result_dict["node_id"] = container.node_id
-            result_dict_list_dict[model_type_name].append(result_dict)
-        dataframe_dict = {}
-        for result_type, dict_list in result_dict_list_dict.items():
-            dataframe_dict[result_type] = pandas.DataFrame(dict_list)
-        return dataframe_dict
+                row["node_id"] = container.node_id
+            dict_list_dict.setdefault(type(container.model).__name__, []).append(row)
+        frames = {}
+        for result_type, dict_list in dict_list_dict.items():
+            frame = pandas.DataFrame(dict_list)
+            # ``name`` is the one optional text column: keep it ``object`` so an
+            # unnamed component reads back as ``None`` (its container attribute)
+            # under pandas 2 and 3 alike. Left to inference, pandas >= 3 turns a
+            # mixed str/None column into a NaN-backed ``str`` column.
+            frame["name"] = pandas.Series(
+                [row["name"] for row in dict_list], index=frame.index, dtype=object
+            )
+            if frame["name"].isna().all():
+                frame = frame.drop(columns=["name"])
+            frames[result_type] = frame
+        return frames
 
-    def as_dataframe_dict_str(self):
-        """
-        No docstring provided.
-        """
-        dataframes = self.as_dataframe_dict()
+    def as_dataframe_dict(self):
+        return self._as_dataframe_dict(Network._input_value)
+
+    def as_result_dataframe_dict(self):
+        return self._as_dataframe_dict(Network._result_value)
+
+    @staticmethod
+    def _dataframe_dict_str(dataframes):
         result_str = ""
         for cls_str, dataframe in dataframes.items():
             result_str += cls_str
@@ -838,9 +839,266 @@ class Network:
             result_str += "\n"
         return result_str
 
-    def statistics(self):
+    def as_result_dataframe_dict_str(self):
+        return Network._dataframe_dict_str(self.as_result_dataframe_dict())
+
+    def as_dataframe_dict_str(self):
+        return Network._dataframe_dict_str(self.as_dataframe_dict())
+
+    def __repr__(self):
+        return self.as_dataframe_dict_str()
+
+    def __str__(self):
+        return self.as_dataframe_dict_str()
+
+    def has_any_child_of_type(self, branch, cls) -> bool:
+        childs = self.get_childs_by_type(branch, cls)
+        return len(childs) > 0
+
+    def get_childs_by_type(self, branch, cls) -> list[Child]:
+        return [
+            child
+            for child in self.childs_by_ids(branch.child_ids)
+            if isinstance(child.model, cls)
+        ]
+
+    def compound_of(self, subcomponent_component_id) -> Component | None:
+        compounds = [
+            compound
+            for compound in self.compounds
+            if subcomponent_component_id in [sc.id for sc in compound.subcomponents]
+        ]
+        if len(compounds) == 0:
+            return None
+        return compounds[0]
+
+    def clear_childs(self):
+        self._child_dict = {}
+        for node in self.nodes:
+            node.child_ids = []
+
+    def check(
+        self, dof_preview: bool = True, mode: str = "simulation"
+    ) -> list[CheckFinding]:
+        """Pre-flight lint: cheap structural checks before any solve.
+
+        Looks for a missing slack or grid-forming child per carrier, dead-end
+        junctions carrying only heat children, non-transformer branches
+        between buses of different ``base_kv``, and (via a model assembly
+        without solving) simulation variables that no equation pins. Prints
+        each :class:`CheckFinding` and returns them; an empty list means
+        clean. ``dof_preview=False`` skips the assembly-based squareness
+        preview, leaving only pure graph checks.
+
+        ``mode`` declares what the network is headed into: ``"simulation"``
+        (default) keeps the squareness preview, ``"optimization"`` skips it,
+        because free variables (storage energies, coupler setpoints, ...) are
+        exactly what an optimization problem is expected to bind, so a dof
+        finding is pure noise there. The graph checks run in both modes. The
+        how-to/diagnose_infeasibility docs page explains each category.
         """
-        No docstring provided.
+        if mode not in ("simulation", "optimization"):
+            raise ValueError(
+                f"check: mode must be 'simulation' or 'optimization', got {mode!r}"
+            )
+        findings: list[CheckFinding] = []
+        findings += self._check_missing_slack()
+        findings += self._check_heat_only_dead_ends()
+        findings += self._check_mixed_base_kv()
+        if dof_preview and mode == "simulation":
+            findings += self._check_dof_preview()
+        if findings:
+            for finding in findings:
+                print(finding)
+        else:
+            print("Network.check: no findings.")
+        return findings
+
+    def _check_missing_slack(self) -> list[CheckFinding]:
+        from .child import ExtHydrGrid, ExtPowerGrid, GridFormingMixin
+        from .grid import GasGrid, PowerGrid, WaterGrid
+
+        carrier_names = {
+            PowerGrid: "electrical",
+            GasGrid: "gas",
+            WaterGrid: "water/heat",
+        }
+        node_count: dict[type, int] = {}
+        led: set[type] = set()
+        for node in self.nodes:
+            if not node.active:
+                continue
+            carrier = next((c for c in carrier_names if isinstance(node.grid, c)), None)
+            if carrier is None:
+                continue
+            node_count[carrier] = node_count.get(carrier, 0) + 1
+            for child in self.childs_by_ids(node.child_ids):
+                if child.active and isinstance(
+                    child.model, ExtPowerGrid | ExtHydrGrid | GridFormingMixin
+                ):
+                    led.add(carrier)
+        return [
+            CheckFinding(
+                "missing_slack",
+                f"{count} {carrier_names[carrier]} node(s) but no active "
+                "slack or grid-forming child on any of them; the solver "
+                "excludes every island without one, so this whole carrier "
+                "would be pruned. Add e.g. an ExtPowerGrid / ExtHydrGrid. "
+                "See the how-to/diagnose_infeasibility docs page",
+            )
+            for carrier, count in node_count.items()
+            if carrier not in led
+        ]
+
+    def _check_heat_only_dead_ends(self) -> list[CheckFinding]:
+        from .node import Junction
+
+        port_child_ids = {
+            sub.id
+            for compound in self.compounds
+            for sub in compound.subcomponents
+            if isinstance(sub, Child)
+        }
+        attachment_node_ids = {
+            node_id
+            for compound in self.compounds
+            if compound.active
+            for node_id in compound.connected_to.values()
+        }
+        findings = []
+        for node in self.nodes:
+            if not node.active or not isinstance(node.model, Junction):
+                continue
+            if node.id in attachment_node_ids:
+                continue
+            degree = sum(1 for b in self.branches_connected_to(node.id) if b.active)
+            if degree > 1:
+                continue
+            children = [
+                c
+                for c in self.childs_by_ids(node.child_ids)
+                if c.active and c.id not in port_child_ids
+            ]
+            if not children or any(
+                "mass_flow_kgs" in getattr(c.model, "vars", {}) for c in children
+            ):
+                continue
+            names = ", ".join(_child_label(c) for c in children)
+            findings.append(
+                CheckFinding(
+                    "heat_only_dead_end",
+                    f"junction has degree {degree} and only heat-only "
+                    f"child(ren) {names}; no mass flow can carry the heat, so "
+                    "the solver prunes the junction and its children. Connect "
+                    "a return pipe or add a mass-flow child (Sink / Source). "
+                    "See the how-to/diagnose_infeasibility docs page",
+                    component=f"Junction({node.id})",
+                )
+            )
+        return findings
+
+    def _check_mixed_base_kv(self) -> list[CheckFinding]:
+        from .branch import GenericPowerBranch, Trafo
+
+        findings = []
+        for branch in self.branches:
+            kvs = self._mixed_base_kv_pair(branch, Trafo, GenericPowerBranch)
+            if kvs is None:
+                continue
+            kv_from, kv_to = kvs
+            findings.append(
+                CheckFinding(
+                    "mixed_base_kv",
+                    f"connects buses with base_kv {kv_from} and {kv_to} but "
+                    "is not a transformer; per-unit branch parameters are "
+                    "computed from one side's base, so voltages and flows "
+                    "come out silently skewed. Insert a Trafo or align the "
+                    "base_kv values. See the how-to/diagnose_infeasibility "
+                    "docs page",
+                    component=f"{type(branch.model).__name__}({branch.id})",
+                )
+            )
+        return findings
+
+    def _mixed_base_kv_pair(self, branch, trafo_cls, generic_power_branch_cls):
+        if not branch.active or isinstance(branch.model, trafo_cls):
+            return None
+        # pandapower imports mark transformer branches via model.kind
+        # ("trafo"/"trafo3w") and fold the ratio into the pu conversion,
+        # so tap stays 1 and the class stays GenericPowerBranch.
+        kind = getattr(branch.model, "kind", None)
+        if isinstance(kind, str) and kind.startswith("trafo"):
+            return None
+        if not (
+            self.has_node(branch.from_node_id) and self.has_node(branch.to_node_id)
+        ):
+            return None
+        kv_from = getattr(self.node_by_id(branch.from_node_id).model, "base_kv", None)
+        kv_to = getattr(self.node_by_id(branch.to_node_id).model, "base_kv", None)
+        if (
+            not isinstance(kv_from, (int, float))
+            or not isinstance(kv_to, (int, float))
+            or math.isclose(kv_from, kv_to, rel_tol=1e-6)
+        ):
+            return None
+        tap = getattr(branch.model, "tap", 1)
+        if (
+            isinstance(branch.model, generic_power_branch_cls)
+            and isinstance(tap, (int, float))
+            and not math.isclose(tap, 1.0)
+        ):
+            return None
+        return kv_from, kv_to
+
+    def _check_dof_preview(self) -> list[CheckFinding]:
+        import warnings
+
+        try:
+            from monee.solver.core import preview_squareness
+
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                n_vars, n_eqs, unpinned = preview_squareness(self)
+        except ImportError:
+            return []
+        except Exception as e:  # noqa: BLE001
+            return [
+                CheckFinding(
+                    "check_error",
+                    f"DOF preview could not assemble the model: {e}. A solve "
+                    "will likely fail the same way; see the "
+                    "how-to/diagnose_infeasibility docs page",
+                )
+            ]
+        if n_vars == n_eqs and not unpinned:
+            return []
+        if unpinned:
+            shown = ", ".join(unpinned[:10]) + (", ..." if len(unpinned) > 10 else "")
+            detail = f"; variable(s) in no equation: {shown}"
+        else:
+            detail = ""
+        return [
+            CheckFinding(
+                "dof",
+                f"simulation-mode model is not square ({n_vars} variables, "
+                f"{n_eqs} equations){detail}. A simulation on this network "
+                "returns one feasible point, not a unique setpoint. If the "
+                "network is headed into an optimization problem that binds "
+                "these variables, this is expected; call "
+                "check(mode='optimization') to skip this preview. See the "
+                "how-to/diagnose_infeasibility docs page",
+            )
+        ]
+
+    def statistics(self):
+        """Count the independent components per model type.
+
+        Returns ``dict[type, int]``: the keys are the model *classes*
+        themselves (``monee.model.node.Bus``, ``monee.model.child.PowerLoad``,
+        ...), not their names, so a report keyed by name has to map them with
+        ``cls.__name__``. Dependent components (a compound's subcomponents)
+        are not counted; deactivated ones are. The concepts/data_model docs
+        page describes the component kinds behind these types.
         """
         type_to_number = {}
         model_containers = self.nodes + self.childs + self.branches + self.compounds
@@ -855,106 +1113,240 @@ class Network:
         return type_to_number
 
     def copy(self):
-        """
-        No docstring provided.
-        """
         return copy.deepcopy(self)
 
-    def clear_childs(self):
-        """
-        No docstring provided.
-        """
-        self._child_dict = {}
-        for node in self.nodes:
-            node.child_ids = []
+    def __deepcopy__(self, memo):
+        new = Network.__new__(Network)
+        memo[id(self)] = new
+
+        new._default_grid_models = copy.deepcopy(self._default_grid_models, memo)
+        new._child_dict = {
+            k: copy.deepcopy(v, memo) for k, v in self._child_dict.items()
+        }
+        new._compound_dict = {
+            k: copy.deepcopy(v, memo) for k, v in self._compound_dict.items()
+        }
+        # Constraints/objectives are stateless lambdas - share by reference.
+        new._constraints = list(self._constraints)
+        new._objectives = list(self._objectives)
+        new._extensions = copy.deepcopy(self._extensions, memo)
+        # ``enable_islanding`` attaches the config as an extension AND as this
+        # attribute; the whitelist would otherwise drop the latter, leaving a
+        # copy whose solver still sees islanding but whose callers do not.
+        # ``memo`` makes this the same object that landed in ``new._extensions``.
+        if hasattr(self, "islanding_config"):
+            new.islanding_config = copy.deepcopy(self.islanding_config, memo)
+        # Importer-provided source-id lookup (e.g. from_pandapower_net); the
+        # whitelist would otherwise drop it from every copy of a converted net.
+        for lookup in ("pp_bus_to_node", "pp_line_to_branch", "pp_trafo_to_branch"):
+            if hasattr(self, lookup):
+                setattr(new, lookup, dict(getattr(self, lookup)))
+        # Compound-construction transients - deepcopy preserves consistency
+        # if the copy ever lands mid-build. The blacklist is keyed by object
+        # identity, so rebuild the keys from the copied objects.
+        new._Network__blacklist = {
+            id(v): v
+            for v in copy.deepcopy(list(self._Network__blacklist.values()), memo)
+        }
+        new._Network__collection_stack = copy.deepcopy(
+            self._Network__collection_stack, memo
+        )
+        new._Network__current_grid = copy.deepcopy(self._Network__current_grid, memo)
+        # Default formulations are module-level singletons - share by reference.
+        new._Network__default_formulation = dict(self._Network__default_formulation)
+
+        # Manual MultiGraph rebuild - networkx generic deepcopy is much slower.
+        g = nx.MultiGraph()
+        new._network_internal = g
+        for node_id, data in self._network_internal.nodes(data=True):
+            new_data = {k: copy.deepcopy(v, memo) for k, v in data.items()}
+            g.add_node(node_id, **new_data)
+        for u, v, key, data in self._network_internal.edges(keys=True, data=True):
+            new_data = {dk: copy.deepcopy(dv, memo) for dk, dv in data.items()}
+            g.add_edge(u, v, key=key, **new_data)
+
+        return new
 
 
 def _clean_up_compound(network: Network, compound):
-    """
-    No docstring provided.
-    """
-    node_components = compound.component_of_type(Node)
+    """Return True when every subcomponent of *compound* survived a graph
+    transform; otherwise remove the compound (with its remaining parts) so no
+    half-alive compound lingers."""
     fully_intact = True
-    for component in node_components:
+    for component in compound.component_of_type(Node):
         if not network.has_node(component.id):
             fully_intact = False
-    child_components = compound.component_of_type(Child)
-    for component in child_components:
+    for component in compound.component_of_type(Child):
         if not network.has_child(component.id):
             fully_intact = False
-    branch_components = compound.component_of_type(Branch)
-    for component in branch_components:
+    for component in compound.component_of_type(Branch):
         if not network.has_branch(component.id):
             fully_intact = False
-    compound_components = compound.component_of_type(Compound)
-    for component in compound_components:
-        compound_alive = _clean_up_compound(network, component)
-        if not compound_alive:
+    for component in compound.component_of_type(Compound):
+        if not network.has_compound(component.id) or not _clean_up_compound(
+            network, component
+        ):
             fully_intact = False
-    network.remove_compound(compound)
+    if not fully_intact and network.has_compound(compound.id):
+        network.remove_compound(compound.id)
     return fully_intact
 
 
-def to_spanning_tree(network: Network):
+def to_spanning_tree(network: Network, *, weight=None):
+    """Minimum spanning tree of *network*.
+
+    ``weight=None`` (default) keeps unit edge weights, i.e. a fixed but
+    cost-agnostic spanning tree (unchanged historical behaviour). Pass a
+    callable ``weight(branch, node_from, node_to) -> float`` to weight edges
+    (e.g. by pipe length) and obtain a minimum-weight tree.
     """
-    No docstring provided.
+
+    def _mst(g):
+        if weight is not None:
+            for u, v, _key, data in g.edges(keys=True, data=True):
+                data["weight"] = float(
+                    weight(
+                        data["internal_branch"],
+                        g.nodes[u]["internal_node"],
+                        g.nodes[v]["internal_node"],
+                    )
+                )
+        return nx.minimum_spanning_tree(g, weight="weight")
+
+    return transform_network(network, _mst)
+
+
+def to_backbone(
+    network: Network,
+    *,
+    method="span",
+    weight=None,
+    terminals=None,
+    steiner_method="mehlhorn",
+):
+    """Backbone subgraph of *network* used as the layout skeleton for grid
+    generation.
+
+    ``method="span"`` returns a spanning tree over all nodes (see
+    :func:`to_spanning_tree`; ``weight`` is forwarded). ``method="steiner"``
+    returns an approximate minimum Steiner tree connecting only ``terminals``
+    plus the transit nodes needed to link them, dropping nodes no terminal
+    needs.
     """
-    return transform_network(network, nx.minimum_spanning_tree)
+    if method == "span":
+        return to_spanning_tree(network, weight=weight)
+    if method == "steiner":
+        if terminals is None:
+            raise ValueError("steiner backbone requires a terminals set")
+        return transform_network(
+            network, _steiner_transform(set(terminals), weight, steiner_method)
+        )
+    raise ValueError(
+        f"unknown backbone method {method!r}; expected 'span' or 'steiner'"
+    )
+
+
+def _steiner_transform(terminals, weight, steiner_method):
+    """Graph transform that reduces a MultiGraph to the Steiner tree over
+    *terminals*. Computed on a simple weighted projection (cheapest parallel
+    edge per pair) for robustness, then mapped back to the original multi-edges
+    so node/branch attributes survive."""
+    from networkx.algorithms.approximation import steiner_tree
+
+    def _transform(g):
+        simple = _cheapest_edge_projection(g, weight)
+
+        present = [t for t in terminals if t in simple]
+        result = nx.MultiGraph()
+        if len(present) <= 1:
+            for node_id in present:
+                result.add_node(node_id, **g.nodes[node_id])
+            return result
+
+        tree = steiner_tree(simple, present, weight="weight", method=steiner_method)
+        for node_id in tree.nodes:
+            result.add_node(node_id, **g.nodes[node_id])
+        for u, v in tree.edges():
+            key = simple[u][v]["_mkey"]
+            result.add_edge(u, v, key=key, **g[u][v][key])
+        return result
+
+    return _transform
+
+
+def _projection_edge_weight(g, u, v, data, weight):
+    if weight is None:
+        return 1.0
+    return float(
+        weight(
+            data["internal_branch"],
+            g.nodes[u]["internal_node"],
+            g.nodes[v]["internal_node"],
+        )
+    )
+
+
+def _cheapest_edge_projection(g, weight):
+    simple = nx.Graph()
+    for node_id, data in g.nodes(data=True):
+        simple.add_node(node_id, **data)
+    for u, v, key, data in g.edges(keys=True, data=True):
+        w = _projection_edge_weight(g, u, v, data, weight)
+        if not simple.has_edge(u, v) or w < simple[u][v]["weight"]:
+            simple.add_edge(u, v, weight=w, _mkey=key)
+    return simple
 
 
 def transform_network(network: Network, graph_transform):
-    """
-    No docstring provided.
-    """
     network = network.copy()
     network._network_internal = graph_transform(network.graph)
-    for child in list(network.childs):
+    # The transform (e.g. minimum_spanning_tree) drops edges, leaving the
+    # surviving nodes' from_branch_ids/to_branch_ids referencing branches that
+    # no longer exist. Rebuild those lists from the reduced edge set so
+    # branches_connected_to / components_connected_to stay consistent.
+    for node in network.nodes:
+        node.from_branch_ids = []
+        node.to_branch_ids = []
+    for from_id, to_id, key in network._network_internal.edges(keys=True):
+        branch_id = (from_id, to_id, key)
+        network.node_by_id(from_id).add_from_branch_id(branch_id)
+        network.node_by_id(to_id).add_to_branch_id(branch_id)
+    # Clean up compounds first: removing a broken compound also removes its
+    # surviving internal nodes, whose children the orphan sweep below catches.
+    for compound in network.compounds:
+        if network.has_compound(compound.id):
+            _clean_up_compound(network, compound)
+    for child in network.childs:
         referenced = False
         for node in network.nodes:
             if child.id in node.child_ids:
                 referenced = True
         if not referenced:
             network.remove_child(child.id)
-    for compound in list(network.compounds):
-        _clean_up_compound(network, compound)
     return network
 
 
-def _add_tuple(a, b):
-    """
-    No docstring provided.
-    """
-    return [a[i] + b[i] for i in range(len(a))]
-
-
-def _div_tuple(a, div):
-    """
-    No docstring provided.
-    """
-    return tuple([a[i] / div for i in range(len(a))])
+def _mean_position(positions):
+    return tuple(sum(xs) / len(positions) for xs in zip(*positions))
 
 
 def calc_coordinates(network: Network, component: Component):
-    """
-    No docstring provided.
-    """
     if type(component) is Node:
         return component.position
     elif type(component) is Branch:
-        node_start = network.node_by_id(component.from_node_id)
-        node_end = network.node_by_id(component.to_node_id)
-        return tuple(
+        return _mean_position(
             [
-                (node_start.position[i] + node_end.position[i]) / 2
-                for i in range(len(node_start.position))
+                network.node_by_id(component.from_node_id).position,
+                network.node_by_id(component.to_node_id).position,
             ]
         )
     elif type(component) is Child:
         return network.node_by_id(component.node_id).position
     elif type(component) is Compound:
-        position = (0, 0)
-        for connected_node_id in component.connected_to.values():
-            node = network.node_by_id(connected_node_id)
-            position = _add_tuple(position, node.position)
-        return _div_tuple(position, len(component.connected_to))
-    raise Exception(f"This should not happen! The component {component} is unknown.")
+        return _mean_position(
+            [
+                network.node_by_id(connected_node_id).position
+                for connected_node_id in component.connected_to.values()
+            ]
+        )
+    raise ValueError(f"This should not happen! The component {component} is unknown.")

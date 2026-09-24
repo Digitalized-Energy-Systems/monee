@@ -1,0 +1,133 @@
+from monee.model.branch import GenericPowerBranch
+from monee.model.child import ExtPowerGrid, PowerGenerator
+from monee.problem.core import (
+    Constraints,
+    Objectives,
+    OptimizationProblem,
+)
+from monee.problem.utils import line_loading_limit, make_vm_bounds_hook
+
+
+def _cost_or(model, default):
+    if not hasattr(model, "cost") or model.cost is None:
+        return default
+    return model.cost
+
+
+def create_economic_dispatch_problem(  # NOSONAR
+    gen_cost_default=1.0,
+    ext_grid_cost_default=None,
+    bounds_vm=(0.9, 1.1),
+    bounds_lp=(0, 1.0),
+    ext_grid_bounds=None,
+    ramp_limit=None,
+    check_vm=True,
+    check_lp=True,
+    debug=False,
+):
+    """Economic dispatch OPF minimising ``Sigma cost * p_gen``. Set each generator's
+    ``cost`` (currency/MW) at creation (``mx.create_power_generator(..., cost=...)``),
+    directly on the model, or per-period via TimeseriesData.add_objective_data.
+
+    ``ext_grid_cost_default=None`` (the default) leaves the external grid out of
+    the objective entirely: slack import is free, so the optimum degenerates to
+    importing everything and dispatching no local generation. Pass a cost to
+    price the exchange: ``ExtPowerGrid.p_mw`` follows the load convention
+    (import negative, export positive), so import is charged at ``cost`` and
+    export is credited at the same price.
+
+    ``ext_grid_bounds`` bounds ``ExtPowerGrid.p_mw`` in the same load
+    convention: import into the network is negative and export positive, so
+    capping the import at X MW is ``ext_grid_bounds=(-X, 0)``.
+
+    ``bounds_lp`` only supports a zero lower bound: line loading is capped at
+    ``bounds_lp[1]``, and a non-zero minimum loading is rejected."""
+    if bounds_lp[0] != 0:
+        raise ValueError(
+            "bounds_lp[0] must be 0: a non-zero minimum line loading would "
+            f"force flow onto every line, got bounds_lp={bounds_lp!r}."
+        )
+    problem = OptimizationProblem(debug=debug)
+
+    problem.controllable_generators(["p_mw"])
+
+    include_ext_grid = ext_grid_cost_default is not None
+    if include_ext_grid:
+        problem.controllable_ext()
+        if ext_grid_bounds is not None:
+            problem.bounds(
+                ext_grid_bounds,
+                lambda m, _: isinstance(m, ExtPowerGrid),
+                ["p_mw"],
+            )
+
+    if check_vm:
+        # Bound the actual decision var (vm_pu under the AC NLP, vm_pu_squared
+        # under MISOCP); a static bound on vm_pu alone is a no-op when it is
+        # only a reporting Intermediate.
+        problem._controllable_appliables.append(make_vm_bounds_hook(bounds_vm))
+    # The line-loading cap is enforced by the line_loading_limit *constraint*
+    # below (added when check_lp). loading_*_pu are passive intermediates in
+    # every electricity formulation (NLP and MISOCP), so a var-bounds override on
+    # them is a no-op - the constraint is the single enforcement path.
+
+    objectives = Objectives()
+
+    objectives.select(
+        lambda m: isinstance(m, PowerGenerator),
+        looked_for="PowerGenerator components (dispatch cost objective)",
+    ).calculate(
+        lambda models: sum(_cost_or(m, gen_cost_default) * (-m.p_mw) for m in models)
+    )
+
+    if include_ext_grid:
+        objectives.select(
+            lambda m: isinstance(m, ExtPowerGrid),
+            looked_for="ExtPowerGrid components (exchange cost objective)",
+        ).calculate(
+            lambda models: sum(
+                _cost_or(m, ext_grid_cost_default) * (-m.p_mw) for m in models
+            )
+        )
+
+    problem.objectives = objectives
+
+    constraints = Constraints()
+
+    if check_lp:
+        constraints.select_types(GenericPowerBranch, optional=True).equation(
+            lambda model: line_loading_limit(model, "from", bounds_lp[1])
+        ).equation(lambda model: line_loading_limit(model, "to", bounds_lp[1]))
+
+    if include_ext_grid and ext_grid_bounds is not None:
+        constraints.select_types(ExtPowerGrid).equation(
+            lambda model, _b=ext_grid_bounds: model.p_mw >= _b[0]
+        ).equation(lambda model, _b=ext_grid_bounds: model.p_mw <= _b[1])
+
+    if ramp_limit is not None:
+        _ramp = ramp_limit
+
+        def _gen_ramp(model, cid, ts):
+            prev_p = ts.get(cid, "p_mw")
+            if prev_p is None:
+                return []
+            return [
+                model.p_mw - prev_p <= _ramp,
+                prev_p - model.p_mw <= _ramp,
+            ]
+
+        constraints.select(
+            lambda comp: (
+                isinstance(comp.model, PowerGenerator)
+                and comp.active
+                and (not comp.ignored)
+            ),
+            looked_for="PowerGenerator components (ramp_limit)",
+        ).temporal_equation(_gen_ramp)
+
+    problem.constraints = constraints
+    return problem
+
+
+#: Alias for :func:`create_economic_dispatch_problem` (mirrors load_shedding naming).
+create_multi_period_economic_dispatch_problem = create_economic_dispatch_problem

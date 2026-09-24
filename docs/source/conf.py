@@ -1,3 +1,9 @@
+import os
+import sys
+
+# Local Sphinx extensions (build-time interactive figure generators).
+sys.path.insert(0, os.path.abspath("_ext"))
+
 # -- Project information -----------------------------------------------------
 project = "monee"
 author = "monee contributors"
@@ -19,6 +25,8 @@ extensions = [
     "sphinx.ext.autosectionlabel",
     "sphinx_design",
     "sphinx.ext.mathjax",
+    "sphinxcontrib.mermaid",
+    "interactive_plots",
 ]
 
 templates_path = ["_templates"]
@@ -26,6 +34,18 @@ exclude_patterns = []
 
 autoclass_content = "both"
 suppress_warnings = ["autodoc"]
+
+# ``make doctest`` runs in environments without the optional pandapower
+# dependency (the CI build jobs install ``.[test]`` only). Examples that need
+# it carry ``:skipif: not HAS_PANDAPOWER`` and are skipped there instead of
+# failing on the import.
+doctest_global_setup = """
+try:
+    import pandapower  # noqa: F401
+    HAS_PANDAPOWER = True
+except ImportError:
+    HAS_PANDAPOWER = False
+"""
 autosectionlabel_prefix_document = True
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True
@@ -36,6 +56,10 @@ napoleon_attr_annotations = True
 typehints_fully_qualified = True
 typehints_use_rtype = False
 typehints_use_signature = True
+
+# Mermaid renders client-side in HTML (raw, the default). The PDF builder shells
+# out to mermaid-cli, whose bundled Chromium needs --no-sandbox on CI.
+mermaid_params = ["-p", "puppeteer-config.json"]
 
 myst_enable_extensions = [
     "colon_fence",

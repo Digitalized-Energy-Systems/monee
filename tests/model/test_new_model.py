@@ -17,16 +17,15 @@ class IndividualPowerLoadModel(mm.PowerLoad):
 
 
 def test_new_model():
+    # GIVEN
     pn = mm.Network(mm.PowerGrid(name="power", sn_mva=1))
 
+    # WHEN
     node_2 = pn.node(
-        mm.Bus(
-            base_kv=1
-        ),  # All equations, calculation defining the bus beavior are implemented in the class Bus
-        child_ids=[
-            pn.child(IndividualPowerLoadModel(c=1))
-        ],  # New Implementation of a load
+        mm.Bus(base_kv=1),
+        child_ids=[pn.child(IndividualPowerLoadModel(c=1))],
         grid=mm.EL,
     )
 
+    # THEN
     assert node_2 is not None

@@ -4,10 +4,11 @@ Entry point: :func:`plot_network`.
 """
 
 import networkx as nx
+import numpy as np
 import plotly.graph_objects as go
 
 import monee.model as mm  # kept for Network type hint only
-from monee.model.core import Intermediate, IntermediateEq, Var
+from monee.model.core import Intermediate, IntermediateEq, PostProcess, Var
 
 # Import shared theme and layout helpers from result_visualization so the two
 # functions always look identical.
@@ -22,22 +23,54 @@ from monee.visualization.result_visualization import (
     _GRID_SYMBOL,
     _PANEL,
     _TL_GRAY,
+    _branch_line_style,
     _compute_layout,
     _fmt,
+    _format_component_header,
     _grid_type,
     _sep,
+    _write_figure,
 )
 
 _SKIP_ATTRS: frozenset[str] = frozenset({"active", "independent", "ignored"})
 
-# Pyomo-like solver objects – hide these from hover text (they carry no useful
+# Pyomo-like solver objects - hide these from hover text (they carry no useful
 # design-time information for the user).
-_SOLVER_TYPES = (Var, Intermediate, IntermediateEq)
+_SOLVER_TYPES = (Var, Intermediate, IntermediateEq, PostProcess)
 
 
-# ---------------------------------------------------------------------------
+# Marker scaling
+
+
+def _adaptive_marker_px(graph: nx.Graph, pos: dict, nominal_px: int = 1000) -> float:
+    """Marker size (px) scaled to the layout density so symbols don't swallow
+    their neighbours. Uses the lower-quartile edge length relative to the
+    layout extent (different layout engines produce wildly different absolute
+    coordinates, so fixed pixel sizes only suit one of them)."""
+    if len(pos) < 2:
+        return 24.0
+    xs = [p[0] for p in pos.values()]
+    ys = [p[1] for p in pos.values()]
+    extent = max(max(xs) - min(xs), max(ys) - min(ys))
+    if extent <= 0:
+        return 24.0
+    edge_lengths = sorted(
+        ((pos[u][0] - pos[v][0]) ** 2 + (pos[u][1] - pos[v][1]) ** 2) ** 0.5
+        for u, v in graph.edges()
+    )
+    if not edge_lengths:
+        return 24.0
+    # 10th-percentile edge length: sizes markers to survive the densest
+    # region (e.g. a meshed electrical cluster) without collapsing everywhere
+    # else; the true minimum may be a near-coincident node pair, so avoid it
+    # whenever more than one edge exists.
+    idx = min(len(edge_lengths) - 1, max(1, len(edge_lengths) // 10))
+    short_edge = edge_lengths[idx]
+    # Markers at most ~65% of a short edge, in pixels of the nominal plot size.
+    return max(8.0, min(20.0, 0.65 * short_edge / extent * nominal_px))
+
+
 # Model parameter extraction
-# ---------------------------------------------------------------------------
 
 
 def _model_params(model) -> dict:
@@ -58,14 +91,12 @@ def _model_params(model) -> dict:
             continue
         if callable(val):
             continue
-        if isinstance(val, (int, float, bool, str)):
+        if isinstance(val, (int, float, bool, str, np.integer, np.floating)):
             params[name] = val
     return params
 
 
-# ---------------------------------------------------------------------------
 # Inline labels shown directly on the graph
-# ---------------------------------------------------------------------------
 
 
 def _node_label(int_node) -> str:
@@ -89,7 +120,7 @@ def _branch_label(int_branch) -> str:
     if d is not None:
         try:
             mm_val = float(d) * 1000
-            parts.append(f"⌀{mm_val:.0f}mm")
+            parts.append(f"D{mm_val:.0f}mm")
         except (TypeError, ValueError):
             pass
 
@@ -106,16 +137,14 @@ def _branch_label(int_branch) -> str:
         r = getattr(model, "r_ohm_per_m", None)
         if r is not None and length is not None:
             try:
-                parts.append(f"{float(r) * float(length):.3g} Ω")
+                parts.append(f"{float(r) * float(length):.3g} Ohm")
             except (TypeError, ValueError):
                 pass
 
     return "  ".join(parts)
 
 
-# ---------------------------------------------------------------------------
 # Rich hover text
-# ---------------------------------------------------------------------------
 
 
 def _node_hover(int_node, children: list) -> str:
@@ -125,12 +154,7 @@ def _node_hover(int_node, children: list) -> str:
     nid = getattr(int_node, "id", "?")
     nname = getattr(int_node, "name", None)
 
-    if nname:
-        header = (
-            f"<b>{nname}</b>  <span style='color:{_DIM_COLOR}'>{typename} #{nid}</span>"
-        )
-    else:
-        header = f"<b>{typename} #{nid}</b>"
+    header = _format_component_header(nname, typename, nid, include_id=True)
 
     lines = [header, _sep()]
     for k, v in _model_params(model).items():
@@ -161,14 +185,11 @@ def _branch_hover(int_branch, from_id, to_id) -> str:
     typename = type(model).__name__
     bname = getattr(int_branch, "name", None)
 
-    if bname:
-        header = f"<b>{bname}</b>  <span style='color:{_DIM_COLOR}'>{typename}</span>"
-    else:
-        header = f"<b>{typename}</b>"
+    header = _format_component_header(bname, typename, include_id=False)
 
     lines = [
         header,
-        f"<span style='color:{_DIM_COLOR}'>{from_id} → {to_id}</span>",
+        f"<span style='color:{_DIM_COLOR}'>{from_id} -> {to_id}</span>",
         _sep(),
     ]
     for k, v in _model_params(model).items():
@@ -181,12 +202,10 @@ def _branch_hover(int_branch, from_id, to_id) -> str:
     return "<br>".join(lines)
 
 
-# ---------------------------------------------------------------------------
 # Main function
-# ---------------------------------------------------------------------------
 
 
-def plot_network(
+def plot_network(  # NOSONAR
     network: mm.Network,
     title: str | None = None,
     show_children: bool = True,
@@ -202,21 +221,22 @@ def plot_network(
     Args:
         network: The :class:`~monee.model.Network` to visualise.
         title: Figure title.  Defaults to ``"Network"``.
-        show_children: Show attached child components (loads, generators, …)
+        show_children: Show attached child components (loads, generators, ...)
             in the parent node's hover tooltip.
         use_monee_positions: Use stored ``node.position`` coordinates instead
             of the automatic graph layout.
         write_to: Optional path to export the figure (PDF / PNG / SVG).
+            Static export needs the optional ``kaleido`` package
+            (``pip install monee[plot]``).
 
     Returns:
         A :class:`plotly.graph_objects.Figure`.
     """
     graph: nx.Graph = network._network_internal
-    pos = _compute_layout(graph, network, use_monee_positions)
+    pos = _compute_layout(graph, use_monee_positions)
+    marker_px = _adaptive_marker_px(graph, pos)
 
-    # -----------------------------------------------------------------------
-    # Node data – collected per grid type
-    # -----------------------------------------------------------------------
+    # Node data - collected per grid type
     grid_data: dict[str, dict] = {
         g: {"x": [], "y": [], "hover": [], "labels": []}
         for g in ("power", "water", "gas", "cp")
@@ -251,13 +271,13 @@ def plot_network(
                 mode="markers",
                 hoverinfo="skip",
                 showlegend=False,
-                marker=dict(
-                    symbol=_GRID_SYMBOL[gtype],
-                    size=42,
-                    color=color,
-                    opacity=0.10,
-                    line=dict(width=0),
-                ),
+                marker={
+                    "symbol": _GRID_SYMBOL[gtype],
+                    "size": 1.5 * marker_px,
+                    "color": color,
+                    "opacity": 0.10,
+                    "line": {"width": 0},
+                },
             )
         )
 
@@ -268,25 +288,26 @@ def plot_network(
                 mode="markers+text",
                 textposition="top center",
                 text=d["labels"],
-                textfont=dict(family=_FONT, size=11, color=_DIM_COLOR),
+                textfont={"family": _FONT, "size": 11, "color": _DIM_COLOR},
                 hovertext=d["hover"],
                 hoverinfo="text",
                 name=_GRID_LABEL[gtype],
-                marker=dict(
-                    symbol=_GRID_SYMBOL[gtype],
-                    size=24,
-                    color=color,
-                    opacity=0.75,
-                    line=dict(width=3, color=color),
-                ),
+                # The curated legend_entries below carry the legend; without
+                # this the legend lists every grid type twice.
+                showlegend=False,
+                marker={
+                    "symbol": _GRID_SYMBOL[gtype],
+                    "size": marker_px,
+                    "color": color,
+                    "opacity": 0.75,
+                    "line": {"width": max(1.0, marker_px / 12), "color": color},
+                },
             )
         )
 
-    # -----------------------------------------------------------------------
     # Branch traces
     # Grouped by (color, is_cp) for efficient rendering; one midpoint trace
     # carries per-branch hover text and inline labels.
-    # -----------------------------------------------------------------------
     color_groups: dict[tuple, list] = {}
 
     mid_x: list[float] = []
@@ -332,11 +353,7 @@ def plot_network(
                 mode="lines",
                 hoverinfo="none",
                 showlegend=False,
-                line=dict(
-                    color=color,
-                    width=3.5 if not is_cp else 2,
-                    dash="dot" if is_cp else "solid",
-                ),
+                line={"color": color, **_branch_line_style(is_cp)},
                 opacity=0.55,
             )
         )
@@ -347,22 +364,20 @@ def plot_network(
         mode="markers+text",
         text=mid_label,
         textposition="middle right",
-        textfont=dict(family=_FONT, size=10, color=_DIM_COLOR),
+        textfont={"family": _FONT, "size": 10, "color": _DIM_COLOR},
         hovertext=mid_hover,
         hoverinfo="text",
         showlegend=False,
-        marker=dict(
-            size=9,
-            color=mid_colors,
-            symbol="circle",
-            opacity=0.85,
-            line=dict(width=1.5, color=_BG),
-        ),
+        marker={
+            "size": max(4.0, 0.35 * marker_px),
+            "color": mid_colors,
+            "symbol": "circle",
+            "opacity": 0.85,
+            "line": {"width": 1.5, "color": _BG},
+        },
     )
 
-    # -----------------------------------------------------------------------
     # Legend
-    # -----------------------------------------------------------------------
     legend_entries: list = []
     for gtype, label in _GRID_LABEL.items():
         legend_entries.append(
@@ -370,12 +385,12 @@ def plot_network(
                 x=[None],
                 y=[None],
                 mode="markers",
-                marker=dict(
-                    size=11,
-                    color=_ACCENT[gtype],
-                    symbol=_GRID_SYMBOL[gtype],
-                    line=dict(width=2, color=_ACCENT[gtype]),
-                ),
+                marker={
+                    "size": 11,
+                    "color": _ACCENT[gtype],
+                    "symbol": _GRID_SYMBOL[gtype],
+                    "line": {"width": 2, "color": _ACCENT[gtype]},
+                },
                 name=label,
             )
         )
@@ -384,14 +399,12 @@ def plot_network(
             x=[None],
             y=[None],
             mode="lines",
-            line=dict(color=_ACCENT["cp"], width=2, dash="dot"),
+            line={"color": _ACCENT["cp"], "width": 2, "dash": "dot"},
             name="Coupling branch (CP)",
         )
     )
 
-    # -----------------------------------------------------------------------
-    # Assemble – render order: edges → midpoints → glow → markers → legend
-    # -----------------------------------------------------------------------
+    # Assemble - render order: edges -> midpoints -> glow -> markers -> legend
     all_traces = (
         edge_traces + [midpoint_trace] + glow_traces + marker_traces + legend_entries
     )
@@ -399,58 +412,60 @@ def plot_network(
     fig = go.Figure(
         data=all_traces,
         layout=go.Layout(
-            title=dict(
-                text=title or "Network",
-                font=dict(family=_FONT, size=18, color=_FONT_COLOR),
-                x=0.5,
-                xanchor="center",
-                y=0.97,
-            ),
+            title={
+                "text": title or "Network",
+                "font": {"family": _FONT, "size": 18, "color": _FONT_COLOR},
+                "x": 0.5,
+                "xanchor": "center",
+                "y": 0.97,
+            },
             paper_bgcolor=_BG,
             plot_bgcolor=_BG,
             hovermode="closest",
-            hoverlabel=dict(
-                bgcolor=_PANEL,
-                bordercolor=_BORDER,
-                font=dict(family=_FONT, size=12, color=_FONT_COLOR),
-                namelength=-1,
-            ),
-            xaxis=dict(
-                showgrid=False,
-                zeroline=False,
-                showticklabels=False,
-                showline=False,
-            ),
-            yaxis=dict(
-                showgrid=False,
-                zeroline=False,
-                showticklabels=False,
-                showline=False,
-                scaleanchor="x",
-            ),
-            font=dict(family=_FONT, color=_FONT_COLOR),
+            hoverlabel={
+                "bgcolor": _PANEL,
+                "bordercolor": _BORDER,
+                "font": {"family": _FONT, "size": 12, "color": _FONT_COLOR},
+                "namelength": -1,
+            },
+            xaxis={
+                "showgrid": False,
+                "zeroline": False,
+                "showticklabels": False,
+                "showline": False,
+            },
+            yaxis={
+                "showgrid": False,
+                "zeroline": False,
+                "showticklabels": False,
+                "showline": False,
+                "scaleanchor": "x",
+            },
+            font={"family": _FONT, "color": _FONT_COLOR},
             autosize=True,
-            margin=dict(l=30, r=200, t=60, b=30),
-            legend=dict(
-                title=dict(
-                    text="Legend",
-                    font=dict(family=_FONT, size=12, color=_DIM_COLOR),
-                ),
-                x=1.02,
-                y=1.0,
-                xanchor="left",
-                yanchor="top",
-                bgcolor="rgba(246, 248, 250, 0.95)",
-                bordercolor=_BORDER,
-                borderwidth=1,
-                font=dict(family=_FONT, size=11, color=_FONT_COLOR),
-                itemsizing="constant",
-                tracegroupgap=6,
-            ),
+            margin={"l": 30, "r": 200, "t": 60, "b": 30},
+            legend={
+                "title": {
+                    "text": "Legend",
+                    "font": {"family": _FONT, "size": 12, "color": _DIM_COLOR},
+                },
+                "x": 1.02,
+                "y": 1.0,
+                "xanchor": "left",
+                "yanchor": "top",
+                "bgcolor": "rgba(246, 248, 250, 0.95)",
+                "bordercolor": _BORDER,
+                "borderwidth": 1,
+                "font": {"family": _FONT, "size": 11, "color": _FONT_COLOR},
+                "itemsizing": "constant",
+                "tracegroupgap": 6,
+            },
         ),
     )
 
     if write_to is not None:
-        fig.write_image(write_to)
+        # Fixed export size matching the nominal-pixel basis of the adaptive
+        # marker scaling (interactive autosize stays untouched).
+        _write_figure(fig, write_to, width=1230, height=1000)
 
     return fig

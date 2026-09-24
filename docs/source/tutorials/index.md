@@ -14,10 +14,10 @@ simulation or optimisation. Each tutorial builds on the {doc}`../quickstart`.
 
 A feeder serves a factory and a warehouse.  An upstream fault caps supply at
 0.6 MW.  Define controllables, a differentiated-cost objective, and a power
-constraint — the optimiser sheds the cheapest load first.
+constraint, then let the optimiser shed the cheapest load first.
 :::
 
-:::{grid-item-card} 02 · Solar feeder — day-ahead
+:::{grid-item-card} 02 · Solar feeder: day-ahead
 :link: 02_timeseries_simulation
 :link-type: doc
 :shadow: sm
@@ -25,6 +25,17 @@ constraint — the optimiser sheds the cheapest load first.
 Simulate a residential bus with rooftop PV across eight three-hour slots.
 Track the grid import "duck curve", query per-step voltages, and monitor
 under-voltage events with a step hook.
+:::
+
+:::{grid-item-card} 03 · Coupled network: CHP dispatch
+:link: 03_coupled_network
+:link-type: doc
+:shadow: sm
+
+Wire electricity, gas and heat into one network with a CHP and a power to
+heat unit, solve the coupled energy flow, then dispatch both couplers under
+a capped grid connection, with the sign, wiring and formulation conventions
+spelled out at each step.
 :::
 
 ::::
@@ -35,4 +46,5 @@ under-voltage events with a step hook.
 
 01_optimization_basics
 02_timeseries_simulation
+03_coupled_network
 ```

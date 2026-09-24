@@ -1,18 +1,26 @@
-from monee.model.branch import GasPipe, GenericPowerBranch
+from monee.model.branch import GenericPowerBranch
 from monee.model.child import PowerLoad
-from monee.model.node import Bus, Intermediate, Junction, Var
+from monee.model.core import BranchModel
+from monee.model.node import Bus, Junction
 
 
-def test_bus_vars():
-    bus = Bus(base_kv=1)
+class _CouplerBranchStub(BranchModel):
+    """Stand-in for a multi-grid coupler branch, which is the only kind that
+    declares the directional mass flows the junction balance reads."""
 
-    assert type(bus.p_mw) is Intermediate
-    assert type(bus.q_mvar) is Intermediate
-    assert type(bus.vm_pu) is Var
-    assert type(bus.va_degree) is Intermediate
+    def __init__(self, from_mass_flow_kgs=None, to_mass_flow_kgs=None) -> None:
+        super().__init__()
+        if from_mass_flow_kgs is not None:
+            self.from_mass_flow_kgs = from_mass_flow_kgs
+        if to_mass_flow_kgs is not None:
+            self.to_mass_flow_kgs = to_mass_flow_kgs
+
+    def equations(self, grid, from_node_model, to_node_model, **kwargs):
+        return []
 
 
 def test_bus_eq():
+    # GIVEN
     bus = Bus(base_kv=1)
     to_model = GenericPowerBranch(1, 0, 0, 0, 0, 0, 0, 0)
     to_model.p_to_mw = 10
@@ -20,61 +28,77 @@ def test_bus_eq():
     from_model = GenericPowerBranch(1, 0, 0, 0, 0, 0, 0, 0)
     from_model.p_from_mw = 20
     from_model.q_from_mvar = 5
+    bus.p_mw = 30
+    bus.q_mvar = 7
 
+    # WHEN
     ap, rp = bus.calc_signed_power_values(
         to_branch_models=[to_model],
         from_branch_models=[from_model],
-        connected_node_models=[],
+        child_models=[],
     )
-
-    assert ap == [20, 10]
-    assert rp == [5, 2]
-
-    bus.p_mw = 30
-    bus.q_mvar = 7
     r1 = bus.p_mw_equation([])
     r2 = bus.q_mvar_equation([])
+
+    # THEN
+    assert ap == [20, 10]
+    assert rp == [5, 2]
 
     assert r1
     assert r2
 
 
 def test_bus_eq_with_child():
+    # GIVEN
     bus = Bus(base_kv=1)
     to_model = GenericPowerBranch(1, 0, 0, 0, 0, 0, 0, 0)
     to_model.p_to_mw = 10
     to_model.q_to_mvar = 2
     child_model = PowerLoad(p_mw=11, q_mvar=12)
 
+    # WHEN
     ap, rp = bus.calc_signed_power_values(
         to_branch_models=[to_model],
         from_branch_models=[],
-        connected_node_models=[child_model],
+        child_models=[child_model],
     )
 
+    # THEN
     assert ap == [10, 11]
     assert rp == [2, 12]
 
 
-def test_junction_vars():
+def test_junction_has_generic_model_state():
+    # Junction deliberately skips super().__init__() (control-node MRO), but
+    # must still carry the essential GenericModel state.
     junction = Junction()
+    assert junction._ext_data == {}
+    assert "t_pu" in junction.vars
 
-    assert type(junction.t_k) is Intermediate
+
+def test_control_node_construction_keeps_generic_model_state():
+    from monee.model.multi import PowerToHeatControlNode
+
+    control_node = PowerToHeatControlNode(
+        load_p_mw=1.0, load_q_mvar=0.0, efficiency=0.9
+    )
+    assert control_node._ext_data == {}
+    assert "heat_mw" in control_node.vars
 
 
 def test_junction_mass_flow():
+    # GIVEN
     junction = Junction()
+    to_model = _CouplerBranchStub(to_mass_flow_kgs=10)
+    from_model = _CouplerBranchStub(from_mass_flow_kgs=3)
 
-    to_model = GasPipe(diameter_m=10, length_m=10, temperature_ext_k=234, roughness=1)
-    to_model.to_mass_flow = 10
-    from_model = GasPipe(diameter_m=10, length_m=10, temperature_ext_k=234, roughness=1)
-    from_model.from_mass_flow = 3
-
-    mass_flow = junction.calc_signed_mass_flow(
+    # WHEN
+    mass_flow_kgs = junction.calc_signed_mass_flow(
         to_branch_models=[to_model],
         from_branch_models=[from_model],
-        connected_node_models=[],
+        child_models=[],
     )
 
-    assert mass_flow[0] == 3
-    assert mass_flow[1] == 10
+    # THEN
+    assert mass_flow_kgs[0] == 3
+    assert mass_flow_kgs[1] == 10

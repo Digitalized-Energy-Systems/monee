@@ -1,122 +1,177 @@
+import math
+
 from .core import ChildModel, Const, Var, model
+from .grid import PowerGrid
+
+
+def _require_positive(cls_name, magnitude, param_name, value):
+    # Compound/internal callers pass solver Vars - only validate plain numerics.
+    if isinstance(value, (int, float)) and value < 0:
+        raise ValueError(
+            f"{cls_name} expects a positive {magnitude}; "
+            f"got {param_name}={value}.  Pass the absolute value - the "
+            f"sign is handled internally (load convention)."
+        )
+
+
+def _is_series_pinned(value) -> bool:
+    """True if a timeseries already fixed this attribute for the current step."""
+    if isinstance(value, Var):
+        return value.min is not None and value.min == value.max
+    # The build-once CasADi timeseries driver installs its parameter symbol
+    # before the child overwrites run.
+    return type(value).__name__ == "CasSym"
 
 
 class GridFormingMixin:
     """
-    Marker mixin: this child component can serve as the reference node (slack bus /
-    pressure reference) for an islanded sub-network.
+    Marker: this child can serve as the slack/reference for an islanded sub-network.
 
-    Any child class that carries this mixin *must* implement ``overwrite()`` to pin
-    the carrier-specific reference variable (voltage angle, pressure, …) on the node
-    model it is attached to.  When islanding is enabled, ``find_ignored_nodes`` treats
-    components that contain a ``GridFormingMixin`` child as "leading" and keeps them in
-    the solve.
+    Carriers must implement ``overwrite()`` to pin their reference variable.
+    Islanding keeps components containing a ``GridFormingMixin`` child in the solve.
+
+    ``_gf_leading`` says whether this child is the reference of its island. Only
+    :meth:`IslandingMode.stamp_gf_leadership` ever sets it, so the class default
+    is False: without a registered islanding config nothing leads, and a
+    reference pin applied anyway would over-constrain an ext-led component.
     """
+
+    _gf_leading = False
 
 
 class NoVarChildModel(ChildModel):
-    """
-    A :class:`ChildModel` whose parameters are plain scalars (no ``Var`` decision variables).
-
-    All attributes are fixed constants during a solve.  The ``equations()``
-    method returns an empty list because the component's contribution to the
-    system equations comes solely through node balance equations that reference
-    the stored scalar values.
-    """
-
-    def set(self, n, value):
-        """
-        No docstring provided.
-        """
-        user_attributes = [
-            attr
-            for attr in dir(self)
-            if not attr.startswith("__") and (not callable(getattr(self, attr)))
-        ]
-        if n < 0 or n >= len(user_attributes):
-            raise IndexError(f"No user-defined attribute at index {n}")
-        attr_name = user_attributes[n]
-        setattr(self, attr_name, value)
+    """:class:`ChildModel` with only scalar parameters and no equations of its own."""
 
     def equations(self, grid, node, **kwargs):
-        """
-        No docstring provided.
-        """
         return []
 
 
 @model
 class PowerGenerator(NoVarChildModel):
-    """
-    Fixed-setpoint active/reactive power generator.
+    """Fixed-setpoint active/reactive generator. Constructor takes positive magnitudes; sign is internal.
 
-    Follows the load convention: internally stores *negative* values so that
-    the node balance sees this component as an injection.  The constructor
-    accepts positive magnitudes and negates them::
+    ``cost`` (currency/MW) is read by the economic dispatch objective; leave it
+    unset to fall back to the problem's ``gen_cost_default``."""
 
-        PowerGenerator(p_mw=5, q_mvar=0)  →  p_mw=-5, q_mvar=0
-
-    Args:
-        p_mw (float): Active power output in MW (positive = generation).
-        q_mvar (float): Reactive power output in Mvar (positive = generation).
-    """
-
-    def __init__(self, p_mw, q_mvar, **kwargs) -> None:
+    def __init__(self, p_mw, q_mvar, cost=None, **kwargs) -> None:
+        _require_positive("PowerGenerator", "generation magnitude", "p_mw", p_mw)
         super().__init__(**kwargs)
         self.p_mw = -p_mw
         self.q_mvar = -q_mvar
+        if cost is not None:
+            self.cost = cost
+
+
+@model
+class VoltageControlledGenerator(ChildModel):
+    """Voltage-controlled (PV-bus) generator: injects a fixed active power while
+    holding the bus voltage magnitude, leaving reactive power free to maintain it.
+
+    This is the MATPOWER PV bus (``BUS_TYPE == 2``): ``P`` is the generator
+    dispatch (fixed), ``|V|`` is pinned to the ``vm_pu`` setpoint, ``Q`` is a
+    free :class:`~monee.model.core.Var` that the reactive power balance solves,
+    and the bus angle stays free (the slack remains the angle reference).
+
+    Contrast with :class:`PowerGenerator` (fixed P *and* Q, i.e. a PQ bus) and
+    :class:`ExtPowerGrid` (the slack, which additionally pins the angle). Unlike
+    the islanding ``GridFormingGenerator`` it does not float ``P`` to absorb
+    imbalance, and it is not grid-forming - a PV bus needs a slack elsewhere.
+
+    The constructor takes a positive generation magnitude ``p_mw``; the sign is
+    handled internally (load convention, generation = negative). ``q_mvar`` only
+    seeds the free reactive Var.
+    """
+
+    def __init__(self, p_mw, vm_pu=1.0, q_mvar=0.0, **kwargs) -> None:
+        _require_positive(
+            "VoltageControlledGenerator", "generation magnitude", "p_mw", p_mw
+        )
+        super().__init__(**kwargs)
+        self.p_mw = -p_mw
+        self.q_mvar = Var(-q_mvar, name="gen_pv_q_mvar")
+        self.vm_pu = vm_pu
+
+    def overwrite(self, node_model, grid):
+        """Pin the bus voltage magnitude to the setpoint; the angle stays free."""
+        node_model.vm_pu = Const(self.vm_pu)
+        node_model.vm_pu_squared = Const(self.vm_pu * self.vm_pu)
+
+    def equations(self, grid, node_model, **kwargs):
+        return []
 
 
 @model
 class ExtPowerGrid(NoVarChildModel, GridFormingMixin):
     """
-    External (slack) power grid connection — the reference bus for an electrical island.
+    External slack-bus connection. Pins vm_pu and va_degree, leaves p_mw/q_mvar
+    as free Vars absorbing the island's imbalance.
 
-    ``ExtPowerGrid`` pins the bus voltage magnitude and angle to fixed setpoints
-    (via :meth:`overwrite`) and exposes ``p_mw`` / ``q_mvar`` as free
-    :class:`Var` decision variables that absorb the island's power imbalance.
+    Load convention, like every other child: positive ``p_mw`` is consumption
+    seen from the network, i.e. an *export* into the external grid, while an
+    *import* into the network shows up as a negative ``p_mw``. Consequently
+    ``max_import_mw`` bounds ``p_mw`` from below at ``-max_import_mw`` and
+    ``max_export_mw`` bounds it from above; a constraint capping the import at
+    ``X`` MW reads ``p_mw >= -X``.
 
-    Follows the load convention: positive ``p_mw`` / ``q_mvar`` at the node
-    represents net *import* from the external grid (consumption perspective).
-    The ``p_mw`` / ``q_mvar`` initial values are starting guesses; the solver
-    determines the final values.
-
-    Args:
-        p_mw (float): Initial active power exchange in MW.
-        q_mvar (float): Initial reactive power exchange in Mvar.
-        vm_pu (float): Voltage magnitude setpoint in per-unit. Defaults to 1.0.
-        va_degree (float): Voltage angle setpoint in degrees. Defaults to 0.0.
+    ``regulate_vm`` controls the voltage magnitude. When ``True`` (the default,
+    power-flow semantics) the bus |V| is held at ``vm_pu``. When ``False`` it is
+    left as the bus's bounded decision variable and only the reference *angle* is
+    pinned - the optimal-power-flow convention (MATPOWER/pandapower ``runopp``
+    optimise the slack voltage within [VMIN, VMAX]).
     """
 
-    def __init__(self, p_mw, q_mvar, vm_pu=1, va_degree=0, **kwargs) -> None:
+    def __init__(
+        self,
+        p_mw,
+        q_mvar,
+        vm_pu=1,
+        va_degree=0,
+        max_import_mw=None,
+        max_export_mw=None,
+        regulate_vm=True,
+        cost=None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
-        self.p_mw = Var(p_mw, name="ext_grid_p_mw")
+        self.p_mw = Var(
+            p_mw,
+            min=None if max_import_mw is None else -max_import_mw,
+            max=max_export_mw,
+            name="ext_grid_p_mw",
+        )
         self.q_mvar = Var(q_mvar, name="ext_grid_q_mvar")
         self.vm_pu = vm_pu
         self.va_degree = va_degree
+        self.regulate_vm = regulate_vm
+        if cost is not None:
+            self.cost = cost
 
     def overwrite(self, node_model, grid):
-        """Pin the bus voltage magnitude and angle to the configured setpoints."""
-        node_model.vm_pu = Const(self.vm_pu)
-        node_model.vm_pu_squared = Const(self.vm_pu * self.vm_pu)
+        """Pin the bus angle (always) and, when this slack regulates voltage, the
+        bus voltage magnitude too. With ``regulate_vm=False`` the magnitude stays
+        the bus's bounded Var so an OPF optimises it within [VMIN, VMAX]."""
+        if self.regulate_vm:
+            node_model.vm_pu = Const(self.vm_pu)
+            node_model.vm_pu_squared = Const(self.vm_pu * self.vm_pu)
         node_model.va_degree = Const(self.va_degree)
+
+        if (
+            isinstance(grid, PowerGrid)
+            and grid.sn_mva
+            and not math.isclose(grid.sn_mva, 1.0)
+        ):
+            if isinstance(self.p_mw, Var):
+                self.p_mw.scale = grid.sn_mva
+            if isinstance(self.q_mvar, Var):
+                self.q_mvar.scale = grid.sn_mva
+
+        if not getattr(node_model, "_islanding_angle_managed", False):
+            node_model.va_radians = Const(self.va_degree * math.pi / 180)
 
 
 @model
 class PowerLoad(NoVarChildModel):
-    """
-    Fixed-setpoint active/reactive power load.
-
-    Follows the load convention: positive values represent *consumption*.
-    Unlike :class:`PowerGenerator`, the constructor does **not** negate
-    the supplied values::
-
-        PowerLoad(p_mw=5, q_mvar=1)  →  p_mw=+5, q_mvar=+1
-
-    Args:
-        p_mw (float): Active power demand in MW (positive = consumption).
-        q_mvar (float): Reactive power demand in Mvar (positive = consumption).
-    """
+    """Fixed-setpoint power load. Load convention: positive = consumption."""
 
     def __init__(self, p_mw, q_mvar, **kwargs) -> None:
         super().__init__(**kwargs)
@@ -125,108 +180,233 @@ class PowerLoad(NoVarChildModel):
 
 
 @model
-class Source(NoVarChildModel):
+class PowerShunt(ChildModel):
+    r"""Fixed shunt element: a constant admittance :math:`y = g + jb` tied to a
+    bus, modelling capacitor banks, reactors and line-charging lumped at a node.
+
+    Unlike a :class:`PowerLoad` (constant power) the draw follows the bus voltage,
+    since a fixed admittance carries :math:`S = y^* \cdot |V|^2`:
+
+    .. math::
+
+        p_{mw} = g_{s,mw} \cdot v^2 \qquad q_{mvar} = -b_{s,mvar} \cdot v^2
+
+    with ``v`` the per-unit voltage magnitude. ``gs_mw`` / ``bs_mvar`` are the
+    real / reactive power the element would draw at ``v = 1.0`` p.u. and map
+    directly to the MATPOWER bus ``GS`` (MW demanded) and ``BS`` (MVAr injected)
+    columns.
+
+    Sign (load convention, positive ``p_mw`` / ``q_mvar`` = consumption):
+
+    * ``gs_mw > 0`` is a resistive shunt dissipating real power; it is rarely
+      nonzero in practice.
+    * ``bs_mvar > 0`` is a capacitor that *injects* reactive power (the minus
+      sign above makes ``q_mvar`` negative), raising the local voltage.
+    * ``bs_mvar < 0`` is a reactor that absorbs reactive power, lowering it.
+
+    Because the draw scales with ``v^2``, the reactive support a capacitor gives
+    falls off exactly when voltage sags - the well-known weakness of fixed shunt
+    compensation, and the reason results differ from a constant-power source.
+
+    ``p_mw`` / ``q_mvar`` are decision Vars pinned to the equations above; the
+    voltage coupling itself is emitted by the electricity
+    :class:`~monee.model.formulation.core.ChildFormulation`, which binds ``v`` to
+    ``vm_pu`` (polar AC NLP) or ``v^2`` to ``vm_pu_squared`` (branch-flow MISOCP)
+    to keep each formulation in its native variable - the same split branches use.
     """
-    Fixed-setpoint mass-flow source (injection) for gas or water networks.
 
-    Follows the load convention: internally stores a *negative* mass-flow so
-    that the junction balance treats this component as an injection.  The
-    constructor accepts positive magnitudes and negates them::
-
-        Source(mass_flow=2.0)  →  self.mass_flow = -2.0
-
-    Args:
-        mass_flow (float): Mass flow rate in kg/s to inject (positive = injection).
-    """
-
-    def __init__(self, mass_flow, **kwargs) -> None:
+    def __init__(self, gs_mw, bs_mvar, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = -mass_flow
+        self.gs_mw = gs_mw
+        self.bs_mvar = bs_mvar
+        self.p_mw = Var(0, name="shunt_p_mw")
+        self.q_mvar = Var(0, name="shunt_q_mvar")
+
+    def equations(self, grid, node_model, **kwargs):
+        return []
+
+
+@model
+class Source(NoVarChildModel):
+    """Fixed-setpoint mass-flow source. Constructor takes positive magnitude; sign is internal.
+
+    ``t_k`` (optional) is the temperature of the injected stream. Without it the
+    injection is credited at the junction's own (mixed) temperature.
+    """
+
+    def __init__(self, mass_flow_kgs, t_k=None, **kwargs) -> None:
+        _require_positive(
+            "Source", "injection magnitude", "mass_flow_kgs", mass_flow_kgs
+        )
+        super().__init__(**kwargs)
+
+        self.mass_flow_kgs = -mass_flow_kgs
+        self.injection_t_k = t_k
 
 
 @model
 class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
     """
-    External hydraulic grid (slack source) — the pressure/temperature reference for a gas or water island.
+    External hydraulic slack source. Pins pressure (and optionally temperature),
+    leaves mass_flow_kgs as a free Var. Load convention: negative mass_flow_kgs = injection.
 
-    ``ExtHydrGrid`` pins the junction pressure and temperature to fixed
-    setpoints (via :meth:`overwrite`) and exposes ``mass_flow`` as a free
-    :class:`Var` decision variable that absorbs the island's flow imbalance.
+    The class serves both carriers: a gas external grid created via
+    ``monee.express.create_gas_ext_grid`` is also an ``ExtHydrGrid`` (the name
+    refers to the shared hydraulic slack role, not to water specifically).
 
-    Follows the load convention: the default ``mass_flow=-1`` represents
-    *injection* (negative = generation/source).  The solver determines the
-    actual mass flow.
+    On a water loop this slack acts as an unlimited backup heat plant: it
+    supplies or absorbs whatever mass flow at its pinned feed temperature the
+    heat balance needs, so a fuel-starved or deactivated heat source elsewhere
+    is silently compensated instead of causing curtailment. Cap it with
+    ``max_import_kgs`` / ``max_export_kgs`` here, or with ``bounds_ext_heat``
+    on the load-shedding problem, when backup supply should be limited. The
+    concepts/multi_energy docs page explains the semantics.
 
-    Args:
-        mass_flow (float): Initial mass-flow guess in kg/s. Negative = injection
-            (source), positive = consumption (sink). Defaults to -1.
-        pressure_pu (float): Junction pressure setpoint in per-unit. Defaults to 1.0.
-        t_k (float): Supply temperature setpoint in Kelvin. Defaults to 356 K.
+    ``mass_flow_kgs`` only seeds the free Var. ``max_import_kgs`` (positive
+    magnitude) bounds it from below at ``-max_import_kgs``, ``max_export_kgs``
+    from above; both default to None (unbounded). The caps are re-read at every
+    solve, so mutating them on an existing model takes effect on the next
+    solve. ``pin_temperature=True`` (the default) pins the junction
+    temperature to ``t_k``; ``t_k=None`` (the default) resolves at solve time
+    to the grid's own operating temperature (``grid.t_k``, e.g. 300 K for the
+    default gas grid; a water grid falls back to ``t_ref_k``, 356 K). Before
+    2026-09 a gas slack defaulted to the 356 K heat-network value; pass
+    ``t_k=356`` to restore that. ``free_pressure_bounds`` replaces the
+    pressure pin: given a ``(lo, hi)`` tuple in pu, the node pressure stays a
+    Var bounded to that band instead of being fixed at ``pressure_pu``.
     """
 
-    def __init__(self, mass_flow=-1, pressure_pu=1, t_k=356, **kwargs) -> None:
+    def __init__(
+        self,
+        mass_flow_kgs=-1,
+        pressure_pu=1,
+        t_k=None,
+        max_import_kgs=None,
+        max_export_kgs=None,
+        pin_temperature=True,
+        free_pressure_bounds=None,
+        **kwargs,
+    ) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = Var(mass_flow, name="ext_grid_mass_flow")
+        self.max_import_kgs = max_import_kgs
+        self.max_export_kgs = max_export_kgs
+        lo = None if max_import_kgs is None else -abs(max_import_kgs)
+        self.mass_flow_kgs = Var(
+            mass_flow_kgs,
+            min=lo,
+            max=max_export_kgs,
+            name="ext_grid_mass_flow",
+        )
+        self._applied_import_bound = lo
+        self._applied_export_bound = max_export_kgs
         self.pressure_pu = pressure_pu
         self.t_k = t_k
+        self.pin_temperature = pin_temperature
+        self.free_pressure_bounds = free_pressure_bounds
+
+    def _refresh_exchange_bounds(self):
+        if not isinstance(self.mass_flow_kgs, Var):
+            return
+        lo = None if self.max_import_kgs is None else -abs(self.max_import_kgs)
+        hi = self.max_export_kgs
+        if lo != self._applied_import_bound:
+            self.mass_flow_kgs.min = lo
+            self._applied_import_bound = lo
+        if hi != self._applied_export_bound:
+            self.mass_flow_kgs.max = hi
+            self._applied_export_bound = hi
 
     def overwrite(self, node_model, grid):
-        """Pin the junction pressure and temperature to the configured setpoints."""
-        node_model.pressure_pu = Const(self.pressure_pu)
-        node_model.pressure_squared_pu = Const(self.pressure_pu**2)
-        node_model.t_pu = Const(self.t_k / grid.t_ref)
-        node_model.t_k = Const(self.t_k)
+        self._refresh_exchange_bounds()
+
+        if self.free_pressure_bounds is not None:
+            lo, hi = self.free_pressure_bounds
+
+            psq = getattr(node_model, "pressure_squared_pu", None)
+            p = getattr(node_model, "pressure_pu", None)
+            if type(psq) is Var:
+                psq.min, psq.max = lo * lo, hi * hi
+            if type(p) is Var:
+                p.min, p.max = lo, hi
+        else:
+            node_model.pressure_pu = Const(self.pressure_pu)
+            node_model.pressure_squared_pu = Const(self.pressure_pu**2)
+        if self.pin_temperature:
+            if _is_series_pinned(getattr(node_model, "t_pu", None)):
+                name = getattr(self, "name", None) or type(self).__name__
+                raise ValueError(
+                    f"The node temperature is fixed by a timeseries, but "
+                    f"{name} pins it too (pin_temperature=True); the pin would "
+                    "discard the series. Register the series on the ext grid's "
+                    "'t_k' instead, or pass pin_temperature=False."
+                )
+            if self.t_k is None:
+                self.t_k = getattr(grid, "t_k", None) or grid.t_ref_k
+            node_model.t_pu = Const(self.t_k / grid.t_ref_k)
+            node_model.t_k = Const(self.t_k)
 
 
 @model
 class ConsumeHydrGrid(NoVarChildModel):
-    """
-    Hydraulic demand point (consumption) for gas or water networks.
+    """Hydraulic demand point with a free ``mass_flow_kgs`` Var absorbing the
+    island's imbalance.
 
-    Represents a fixed-pressure offtake point (e.g. a building substation or
-    a gas consumer).  Pins the junction pressure to a setpoint and applies a
-    fixed mass-flow consumption.
+    Unlike :class:`ExtHydrGrid` it pins nothing: the node's pressure and
+    temperature stay free (the solver pins one gauge per island without a
+    grid-forming source, see ``pin_floating_hydraulic_gauges``; pinning here
+    too would over-determine such islands). ``pressure_pu`` / ``t_k`` are
+    stored as descriptive setpoints only. ``overwrite`` bounds the free mass
+    flow to the grid's ``max_mass_flow_kgs`` where no explicit bound is set.
 
-    Follows the load convention: internally stores a *negative* mass-flow so
-    that the junction balance treats it as withdrawal.  The constructor
-    accepts positive magnitudes and negates them::
-
-        ConsumeHydrGrid(mass_flow=0.5)  →  self.mass_flow = -0.5
-
-    Args:
-        mass_flow (float): Mass flow rate in kg/s to consume (positive = consumption).
-            Defaults to 0.1.
-        pressure_pu (float): Junction pressure setpoint in per-unit. Defaults to 1.0.
-        t_k (float): Return temperature in Kelvin. Defaults to 293 K.
+    Result tables mix both kinds of column for this class: ``mass_flow_kgs``
+    is solved, while ``pressure_pu`` and ``t_k`` are inputs echoed back
+    unchanged (``t_k=293`` is the constructor default, not a computed
+    temperature). Read the solved state of the node this child sits on from
+    the junction table instead. See the how-to/express_structures docs page.
     """
 
-    def __init__(self, mass_flow=0.1, pressure_pu=1, t_k=293, **kwargs) -> None:
+    def __init__(self, mass_flow_kgs=0.1, pressure_pu=1, t_k=293, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = -mass_flow
+        self.mass_flow_kgs = Var(
+            mass_flow_kgs,
+            name="consume_ext_grid_mass_flow",
+        )
         self.pressure_pu = pressure_pu
         self.t_k = t_k
 
     def overwrite(self, node_model, grid):
-        """Pin the junction pressure to the configured setpoint."""
-        node_model.pressure_pu = Const(self.pressure_pu)
-        node_model.pressure_squared_pu = Const(self.pressure_pu**2)
+        max_flow = getattr(grid, "max_mass_flow_kgs", None)
+        if max_flow is None or not isinstance(self.mass_flow_kgs, Var):
+            return
+        if self.mass_flow_kgs.min is None:
+            self.mass_flow_kgs.min = -max_flow
+        if self.mass_flow_kgs.max is None:
+            self.mass_flow_kgs.max = max_flow
+
+
+@model
+class HeatGenerator(NoVarChildModel):
+    """Node-based heat injection (``H_G,i``). Takes positive magnitude; sign is internal."""
+
+    def __init__(self, q_mw, **kwargs) -> None:
+        _require_positive("HeatGenerator", "heat-generation magnitude", "q_mw", q_mw)
+        super().__init__(**kwargs)
+        self.q_mw_heat = -q_mw
+
+
+@model
+class HeatLoad(NoVarChildModel):
+    """Node-based heat withdrawal (``H_L,i``). Positive q_mw = consumption."""
+
+    def __init__(self, q_mw, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.q_mw_heat = q_mw
 
 
 @model
 class Sink(NoVarChildModel):
-    """
-    Fixed-setpoint mass-flow sink (withdrawal) for gas or water networks.
+    """Fixed-setpoint mass-flow sink. Positive = consumption (load convention)."""
 
-    Follows the load convention: positive values represent *consumption*.
-    Unlike :class:`Source`, the constructor does **not** negate the supplied
-    value::
-
-        Sink(mass_flow=2.0)  →  self.mass_flow = +2.0
-
-    Args:
-        mass_flow (float): Mass flow rate in kg/s to withdraw (positive = consumption).
-    """
-
-    def __init__(self, mass_flow, **kwargs) -> None:
+    def __init__(self, mass_flow_kgs, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.mass_flow = mass_flow
+        self.mass_flow_kgs = mass_flow_kgs

@@ -1,47 +1,72 @@
+# Branch-Flow SOCP with an ideal a:1 transformer in series with Z = r + jx.
+#   W_j = W_i / a^2 - 2(r \cdot P + x \cdot Q) + |Z|^2 \cdot ell
+#   P^2 + Q^2 \le (W_i / a^2) \cdot ell
+# Losses are tap-free (ideal transformer is lossless). tap=1 reduces to BFM.
+#
+# P/Q here are the SERIES flows of the pi-model, i.e. the terminal flows minus
+# the shunt injection of the branch's own charging admittance. The caller does
+# that split (formulation/miqcqp/convex/el.py); feeding terminal flows in
+# instead silently models a network with zero line charging.
+
+
 def active_power_loss(
-    var_active_power_from, var_active_power_to, var_im_ij_pu, resistance_r
+    var_active_power_from, var_active_power_to, var_ell_pu, resistance_r
 ):
-    return var_active_power_from == var_im_ij_pu * resistance_r - var_active_power_to
+    return var_active_power_from == var_ell_pu * resistance_r - var_active_power_to
 
 
 def reactive_power_loss(
-    var_reactive_power_from, var_reactive_power_to, var_im_ij_pu, reactance_x
+    var_reactive_power_from, var_reactive_power_to, var_ell_pu, reactance_x
 ):
-    return var_reactive_power_from == var_im_ij_pu * reactance_x - var_reactive_power_to
+    return var_reactive_power_from == var_ell_pu * reactance_x - var_reactive_power_to
 
 
 def voltage_drop(
-    var_voltage_pu_i,
-    var_voltage_pu_j,
+    var_w_pu_i,
+    var_w_pu_j,
     var_active_power_ij_pu,
     var_reactive_power_ij_pu,
-    var_im_ij_pu,
+    var_ell_pu,
     resistance_r,
     reactance_x,
+    tap=1.0,
 ):
-    return var_voltage_pu_j - (
-        var_voltage_pu_i
+    return var_w_pu_j - (
+        var_w_pu_i / (tap * tap)
         - 2
         * (
             resistance_r * var_active_power_ij_pu
             + reactance_x * var_reactive_power_ij_pu
         )
-        + (resistance_r**2 + reactance_x**2) * var_im_ij_pu
+        + (resistance_r**2 + reactance_x**2) * var_ell_pu
     )
 
 
 def soc_rel(
-    var_voltage_pu_i, var_active_power_ij_pu, var_reactive_power_ij_pu, var_im_ij_pu
+    var_w_pu_i,
+    var_active_power_ij_pu,
+    var_reactive_power_ij_pu,
+    var_ell_pu,
+    tap=1.0,
 ):
+    r"""Rotated SOC :math:`P^2 + Q^2 \le (W/tap^2) \cdot ell`."""
     return (
         var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2
-        <= var_voltage_pu_i * var_im_ij_pu
+        <= (var_w_pu_i / (tap * tap)) * var_ell_pu
     )
 
 
-def gap_expr(
-    var_voltage_pu_i, var_active_power_ij_pu, var_reactive_power_ij_pu, var_im_ij_pu
+def soc_eq(
+    var_w_pu_i,
+    var_active_power_ij_pu,
+    var_reactive_power_ij_pu,
+    var_ell_pu,
+    tap=1.0,
 ):
-    return var_voltage_pu_i * var_im_ij_pu - (
+    r"""Exact (non-convex) form of :func:`soc_rel`: :math:`P^2 + Q^2 = (W/tap^2) \cdot ell`.
+    Pins the branch-flow model to the physical surface; requires a global
+    MIQCQP solver (SCIP, Gurobi)."""
+    return (
         var_active_power_ij_pu**2 + var_reactive_power_ij_pu**2
+        == (var_w_pu_i / (tap * tap)) * var_ell_pu
     )
