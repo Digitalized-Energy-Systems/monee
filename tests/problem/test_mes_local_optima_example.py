@@ -6,11 +6,12 @@ import contextlib
 import importlib.util
 import io
 import sys
-import textwrap
 import warnings
 from pathlib import Path
 
 import pytest
+
+from tests.problem._tutorial_report import assert_report_matches, tutorial_report
 
 ROOT = Path(__file__).resolve().parents[2]
 EXAMPLE = ROOT / "examples" / "mes_local_optima.py"
@@ -34,17 +35,6 @@ def solved():
         return example, example.run()
 
 
-def _tutorial_report():
-    lines = TUTORIAL.read_text(encoding="utf-8").splitlines()
-    start = lines.index(".. code-block:: text") + 2
-    block = []
-    for line in lines[start:]:
-        if line and not line.startswith("   "):
-            break
-        block.append(line)
-    return textwrap.dedent("\n".join(block)).strip("\n")
-
-
 def test_mes_local_optima_example_is_plausible(solved):
     example, (results, checks) = solved
 
@@ -63,4 +53,4 @@ def test_tutorial_shows_the_report_the_example_prints(solved):
     with contextlib.redirect_stdout(printed):
         example.print_report(*run)
 
-    assert _tutorial_report() == printed.getvalue().strip("\n")
+    assert_report_matches(tutorial_report(TUTORIAL), printed.getvalue().strip("\n"))

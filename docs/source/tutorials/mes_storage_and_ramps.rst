@@ -331,9 +331,9 @@ suite. It imports the network, the prices and the shared checks from
 ``examples/mes_economic_dispatch.py``, so keep the two files in the same
 folder. Change a battery constant, or ``RAMP_LIMIT`` to another value below
 1, at the top of the file, and the copper plate twin and the checks follow.
-If an hour of the hour by hour run then fails to converge, drop
-``solver_options`` from ``solve_hour_by_hour``: with ``ipopt.mu_strategy``
-set, monee skips its own automatic retry.
+``solve_hour_by_hour`` passes no IPOPT options on purpose: with
+``ipopt.mu_strategy`` set, monee skips its own automatic retry, and an hour
+that IPOPT cannot solve at the first attempt then fails the whole run.
 
 Next steps
 ==========

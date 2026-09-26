@@ -129,7 +129,6 @@ def solve_hour_by_hour():
         price_day(ids),
         steps=len(ed.EL_PRICE),
         optimization_problem=dispatch_problem(battery=False),
-        solver_options={"ipopt.mu_strategy": "adaptive"},
     )
     periods = [step.result for step in result.step_results]
     return Day(quantities(periods, ids), ed.day_cost(periods))
