@@ -2,11 +2,11 @@
 
 This follows examples/mes_network_limits.py: the same town, the same three
 coupling units, the same eight hourly prices and the same two weak links to
-the plant site, the 1.5 MVA cable and the 30 mm gas pipe. There IPOPT, the
-third-party solver monee calls by default through CasADi, reaches the
-optimum in every hour. A local solver need not:
+the plant site, the 1.5 MVA cable and the 30 mm gas pipe. There IPOPT,
+which monee uses by default, reaches the optimum in every hour. A local
+solver need not:
 
-* APOPT, a local MINLP solver that the GEKKO package ships, reports every
+* APOPT, a local MINLP solver, reports every
   hour of that day as optimal, yet leaves the CHP off in the four hours it
   should run in. Its point is feasible and is the best dispatch without the
   CHP: the CHP's feed-in exchanger sits at zero flow with its outlet off the
@@ -18,9 +18,8 @@ optimum in every hour. A local solver need not:
   printed after it. One check still rests on IPOPT: that no result
   undercuts the global optimum, which holds on every build.
 
-SCIP, a third-party global solver that monee calls through Pyomo and
-pyscipopt, finds and proves the optimum
-of every hour on the exact quadratic formulation (nonconvex_miqcqp). Since
+SCIP, a global solver, finds and proves the optimum of every hour on the
+exact quadratic formulation (nonconvex_miqcqp). Since
 neither that formulation nor APOPT's is the NLP that IPOPT solves, IPOPT then
 solves every hour on its own formulation with every unit pinned at SCIP's and
 at APOPT's operating points, and must reach each solver's cost. A relaxation (SOC
@@ -67,8 +66,8 @@ import mes_network_limits as nl  # noqa: E402
 APOPT = {"solver": "apopt"}
 # The squared gas flows are about 1e-4 (kg/s)^2 here, so SCIP's default
 # feasibility tolerance of 1e-6 moves the thin pipe's pressure drop by up to
-# 0.4 %; the gap of 1e-4 that monee passes to SCIP by default lets the
-# relaxation stop with a loose cone.
+# 0.4 %; monee's default gap of 1e-4 lets the relaxation stop with a loose
+# cone.
 SCIP_OPTIONS = {"numerics/feastol": 1e-9, "limits/gap": 1e-6, "limits/time": 60}
 EXACT = {
     "solver": "scip",
@@ -723,7 +722,7 @@ def ipopt_row(key, h, optimum):
 def print_ipopt(results):
     day, sweep = results.day["IPOPT"], results.sweep
     off = [t for t, h in day.items() if not h.deviation <= 1e-3]
-    print("IPOPT as monee calls it by default (depends on the CasADi build)")
+    print("IPOPT with monee's defaults (depends on the CasADi build)")
     print(
         f"network limits day: {sum(h.cost for h in day.values()):.4f}, hours off "
         f"the hand dispatch: {listing(off) or 'none'}, retries: "

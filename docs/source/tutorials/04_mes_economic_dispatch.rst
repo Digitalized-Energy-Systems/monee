@@ -168,8 +168,7 @@ stay at their setpoint, which is full output; the must run CHP baseline
 below is built that way.
 
 ``solver_options`` passes ``mu_strategy="adaptive"`` to IPOPT, the
-third-party nonlinear solver monee hands the dispatch to by default, so the
-two most expensive hours converge at the first attempt instead of after
+solver monee uses, so the two most expensive hours converge at the first attempt instead of after
 monee's automatic retry. Setting it also switches that retry off (see
 :ref:`concepts/solvers:Tuning solver options`), so if a change to the script
 makes an hour fail, try the run without the option.

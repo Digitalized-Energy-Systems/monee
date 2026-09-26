@@ -203,5 +203,5 @@ Next steps
 - See :doc:`02_timeseries_simulation` to run energy-flow calculations over a
   time series with varying demand profiles.
 - Explore :doc:`../problems/load_shedding` for the ready-made one-call interface.
-- Read :doc:`../how-to/use_pyomo_solver` to switch to a MILP solver back-end
+- Read :doc:`../how-to/use_pyomo_solver` to switch to a MILP solver
   (SCIP, Gurobi, etc.) for integer-programming formulations.

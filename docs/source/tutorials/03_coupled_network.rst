@@ -112,9 +112,8 @@ Choosing the formulation
 :data:`~monee.model.formulation.bundles.DEFAULT_SIMULATION_FORMULATION`, a
 hybrid of the polar AC power flow, a relaxed Weymouth gas model and the
 bilinear Darcy-Weisbach heat model. The heat part of that default carries
-binary flow-direction variables. IPOPT, the third-party solver monee's
-default CasADi back-end calls, cannot branch on binaries; the back-end
-relaxes them and warns::
+binary flow-direction variables. IPOPT, which monee uses by default,
+cannot branch on binaries, so monee relaxes them and warns::
 
     UserWarning: IPOPT relaxes integer variables, but 3 component(s) carry a
     formulation that needs them enforced: PassiveHeatExchangerLoad((5, 4, 0)),
@@ -335,7 +334,7 @@ Next steps
 - :doc:`../concepts/multi_energy` documents every coupling component and the
   full sign table for their result columns.
 - :doc:`../concepts/formulations` explains the formulation registry behind
-  ``formulation="smooth_nlp"`` and when a MIQCQP back-end is the better exit.
+  ``formulation="smooth_nlp"`` and when a MIQCQP solver is the better exit.
 - :doc:`../how-to/generate_mes` creates larger coupled benchmark networks in
   one call.
 - :doc:`../problems/load_shedding` prices unserved demand across all three

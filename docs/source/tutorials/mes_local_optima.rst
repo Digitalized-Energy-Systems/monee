@@ -5,24 +5,23 @@ Local optima and global solvers
 **Scenario.** The town of the
 :doc:`network limits tutorial <mes_network_limits>` keeps its prices, its
 three coupling units and its two weak links to the plant site, the 1.5 MVA
-cable and the 30 mm gas pipe. That tutorial solved the day with IPOPT, the
-third-party solver monee calls by default, and closed with a warning: close
-to its settings, IPOPT can stop at a point that is not the optimum and still
-report success. Here the same day goes to APOPT, a mixed integer solver that
-comes with the GEKKO package, which monee can call instead. APOPT reports
-every hour as optimal, yet it leaves the CHP off in the four hours in which
-it should run, and the day costs 117.15 more than the optimum of 1374.79.
+cable and the 30 mm gas pipe. That tutorial solved the day with IPOPT and
+closed with a warning: close to its settings, IPOPT can stop at a point that
+is not the optimum and still report success. Here the same day goes to
+APOPT, a mixed integer solver. APOPT reports every hour as optimal, yet it
+leaves the CHP off in the four hours in which it should run, and the day
+costs 117.15 more than the optimum of 1374.79.
 
 The point of this tutorial is that neither of the two local solvers, APOPT
 and IPOPT, is guaranteed to find the global optimum. It compares each of
-them one to one with SCIP, an open-source global solver developed at the
-Zuse Institute Berlin, on the same hours: APOPT on the network limits day,
+them one to one with SCIP, a global solver, on the same hours: APOPT on
+the network limits day,
 and IPOPT on nearby settings where it stops early on some builds. It works
 out why a local solver stops where it does, and it shows that the way to the
 optimum lies in the formulation: on the exact quadratic formulation SCIP
 finds and proves the optimum of every hour, IPOPT confirms both solvers'
-dispatches on its own formulation, and a relaxation of that formulation gives a lower
-bound that no dispatch can undercut. Everything
+dispatches on its own formulation, and a relaxation of that formulation
+gives a lower bound that no dispatch can undercut. Everything
 shown here comes from ``examples/mes_local_optima.py`` in the repository,
 which prints the same report and exits with an error when a check fails. The
 network, the prices, the two limits and the hand dispatch are explained in
@@ -37,33 +36,25 @@ A solver is local when all it can establish is that no small step from its
 answer lowers the cost. The economic dispatch of this town is nonconvex: the
 AC power flow, the Weymouth equation of the gas pipes and the products of
 flow and temperature in the heating line all bend the feasible set. On such a
-problem a point with that property need not be the optimum. None of the
-three solvers below is part of monee. They are third-party packages,
-developed and maintained elsewhere; monee builds the model from the network
-and its formulation and hands it to them. The packages that bring them,
-CasADi, GEKKO, Pyomo and pyscipopt, are dependencies that pip installs along
-with monee. The three differ in exactly this property, and each needs a
-formulation of the network that suits it:
+problem a point with that property need not be the optimum. The three
+solvers used here differ in exactly this, and each needs a formulation of
+the network that suits it:
 
-- IPOPT, an interior point solver from the COIN-OR project, which monee
-  calls by default through the CasADi package, whose builds bring IPOPT and
-  its linear solver along. It solves smooth problems; on this network it
-  solves the same problem as ``formulation="smooth_nlp"``, polar AC power
-  flow with sines and cosines, and pipe flows whose direction is smoothed
-  with square roots instead of decided by a binary. It is local.
-- APOPT, a solver that the GEKKO package ships as a binary, selected with
-  ``solver="apopt"``. It solves the default formulation and branches on its
-  integer variables, here the flow direction binaries of the gas and water
-  pipes, solving a smooth problem with a local method at each node of its
-  search tree. Its ``optimal`` says that no branch found a better point from
-  where that local method stopped, so it is local as well.
-- SCIP, from the Zuse Institute Berlin, selected with ``solver="scip"``;
-  monee passes the model to it through the Pyomo and pyscipopt packages. A
-  spatial branch and bound solver: it bounds every nonconvex term from below
-  by a convex relaxation, and it splits the ranges of continuous variables as
-  well as integer ones until the best point it has found lies within a set
-  gap of the lower bound it has proved. Its ``optimal`` is a proof, up to
-  that gap and its tolerances.
+- IPOPT, which monee uses by default, solves smooth problems; on this
+  network it solves the same problem as ``formulation="smooth_nlp"``, polar
+  AC power flow with sines and cosines, and pipe flows whose direction is
+  smoothed with square roots instead of decided by a binary. It is local.
+- APOPT, selected with ``solver="apopt"``, solves the default formulation
+  and branches on its integer variables, here the flow direction binaries of
+  the gas and water pipes, solving a smooth problem with a local method at
+  each node of its search tree. Its ``optimal`` says that no branch found a
+  better point from where that local method stopped, so it is local as well.
+- SCIP, selected with ``solver="scip"``, is a spatial branch and bound
+  solver: it bounds every nonconvex term from below by a convex relaxation,
+  and it splits the ranges of continuous variables as well as integer ones
+  until the best point it has found lies within a set gap of the lower bound
+  it has proved. Its ``optimal`` is a proof, up to that gap and its
+  tolerances.
 
 SCIP needs a formulation whose nonconvex terms it can bound well.
 ``nonconvex_miqcqp`` writes every carrier with quadratic terms only: the
@@ -88,12 +79,12 @@ The script names the solver and formulation of each approach once:
    :start-at: APOPT = {"solver": "apopt"}
    :end-before: DAY_LIMITS = {
 
-``APOPT`` needs no formulation: monee writes the default formulation as a
-GEKKO model, and APOPT solves that. ``EXACT`` is SCIP on
+``APOPT`` needs no formulation, since APOPT solves the default one.
+``EXACT`` is SCIP on
 ``nonconvex_miqcqp`` with the options of `The global optimum`_,
 and ``RELAXATION`` loosens it into a lower bound
-(`A lower bound from a relaxation`_). IPOPT is the solver monee calls when
-none is named, so it needs no entry.
+(`A lower bound from a relaxation`_). IPOPT is what monee uses when no
+solver is named, so it needs no entry.
 
 ----
 
@@ -403,9 +394,9 @@ options:
   tolerance of :math:`10^{-6}` is a noticeable fraction of them. With it,
   the pipe's pressure drop missed the Weymouth equation by up to 0.4 %, more
   than the script's check allows, although the dispatch was right.
-- ``limits/gap`` at 1e-6. With the gap of :math:`10^{-4}` that monee passes
-  to SCIP unless told otherwise, the relaxation below could stop slightly
-  above the exact optimum with a loose cone.
+- ``limits/gap`` at 1e-6. With monee's default gap of :math:`10^{-4}`, the
+  relaxation below could stop slightly above the exact optimum with a loose
+  cone.
 - ``limits/time`` at 60 s, so that a hard hour cannot stall the script. A
   SCIP solve that runs into the limit still returns its best point so far,
   which ``run_timeseries`` accepts, so the script checks that every SCIP
@@ -417,9 +408,8 @@ tolerances. The result carries the cost of the dispatch SCIP found, not the
 lower bound it proved, so the status is the certificate; the relaxation
 below gives a second one that can be read off a result.
 
-On this day a SCIP hour took about as long as an IPOPT hour. Gurobi, a
-commercial solver that monee can also call, reached SCIP's optimum in every
-sweep hour with its tolerances tightened the same way, but in our
+On this day a SCIP hour took about as long as an IPOPT hour. Gurobi
+reached SCIP's optimum in every sweep hour with its tolerances tightened the same way, but in our
 measurements it was not exact on the day: the thin pipe missed the Weymouth
 equation by more than the script's check allows.
 
