@@ -187,9 +187,7 @@ def solve_day(net, ids, dispatch_coupling_points=True):
         heat_cost_default=BOILER_PRICE,
         dispatch_coupling_points=dispatch_coupling_points,
     )
-    result = run_timeseries(
-        net, td, steps=len(EL_PRICE), optimization_problem=problem
-    )
+    result = run_timeseries(net, td, steps=len(EL_PRICE), optimization_problem=problem)
     return [step.result for step in result.step_results]
 
 
