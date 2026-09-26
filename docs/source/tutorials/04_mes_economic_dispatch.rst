@@ -167,11 +167,10 @@ point, its ``regulation``, becomes a decision between 0 and 1
 stay at their setpoint, which is full output; the must run CHP baseline
 below is built that way.
 
-``solver_options`` passes ``mu_strategy="adaptive"`` to IPOPT, the
-solver monee uses, so the two most expensive hours converge at the first attempt instead of after
-monee's automatic retry. Setting it also switches that retry off (see
-:ref:`concepts/solvers:Tuning solver options`), so if a change to the script
-makes an hour fail, try the run without the option.
+``solve_day`` passes no solver options. When IPOPT cannot solve an hour at
+the first attempt, monee retries it automatically and says so in the log;
+setting ``ipopt.mu_strategy`` would switch that retry off (see
+:ref:`concepts/solvers:Tuning solver options`).
 
 The script prints this report:
 

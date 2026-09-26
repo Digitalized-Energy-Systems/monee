@@ -112,13 +112,9 @@ The limits cap each hour on its own and nothing else links the hours, so the
 day is still eight independent dispatches and
 :func:`~monee.simulation.timeseries.run_timeseries` is still the right tool.
 
-Unlike the economic dispatch tutorial, ``solve_day`` passes no
-``solver_options``. That tutorial's ``"ipopt.mu_strategy": "adaptive"``
-stops hour 0 with ``Error_In_Step_Computation`` once the pipe is thin, and
-monee retries a failed solve with the adaptive strategy only when
-``ipopt.mu_strategy`` is not set. With IPOPT's default, the monotone
-strategy, every limited day solves and the retry stays available. The day
-without limits keeps that tutorial's own ``solve_day``.
+As in the economic dispatch tutorial, ``solve_day`` passes no solver
+options, so monee's automatic retry stays available should an hour stall.
+The day without limits uses that tutorial's own ``solve_day``.
 
 ----
 

@@ -125,9 +125,6 @@ def solve_day(net, ids):
         gas_cost_default=ed.GAS_PRICE,
         heat_cost_default=ed.BOILER_PRICE,
     )
-    # No solver options: the adaptive mu_strategy of the economic dispatch
-    # tutorial fails once the gas pipe is thin, and setting any mu_strategy
-    # switches off monee's automatic retry.
     result = run_timeseries(
         net, td, steps=len(ed.EL_PRICE), optimization_problem=problem
     )

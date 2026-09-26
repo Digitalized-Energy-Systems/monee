@@ -187,14 +187,8 @@ def solve_day(net, ids, dispatch_coupling_points=True):
         heat_cost_default=BOILER_PRICE,
         dispatch_coupling_points=dispatch_coupling_points,
     )
-    # The CHP's feed-in exchanger next to the AC lines can stall IPOPT's
-    # default barrier update from a cold start in the high price hours.
     result = run_timeseries(
-        net,
-        td,
-        steps=len(EL_PRICE),
-        optimization_problem=problem,
-        solver_options={"ipopt.mu_strategy": "adaptive"},
+        net, td, steps=len(EL_PRICE), optimization_problem=problem
     )
     return [step.result for step in result.step_results]
 
