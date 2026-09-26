@@ -460,8 +460,10 @@ def check_bound(checks, label, relaxation, optimum):
         f"{label}: relaxation {relaxation.objective:.4f}, optimum "
         f"{optimum.objective:.4f}",
     )
+    # SCIP may stop at the relative gap of 1e-6 instead of closing it, which
+    # leaves residuals of about 1e-6 per unit; a loose cone is off by ~1e-2.
     checks.expect(
-        relaxation.soc_residual is not None and relaxation.soc_residual <= 1e-6,
+        relaxation.soc_residual is not None and relaxation.soc_residual <= 1e-5,
         f"{label}: the relaxation's power flow cone is off by "
         f"{relaxation.soc_residual}",
     )

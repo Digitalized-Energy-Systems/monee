@@ -11,6 +11,7 @@ the suite does. The status-mapping and selection tests need no SCIP at all.
 """
 
 import math
+import types
 
 import pytest
 from pyomo.opt import SolverStatus, TerminationCondition
@@ -112,6 +113,45 @@ def test_build_result_limit_without_incumbent_is_infeasible():
     # THEN
     assert result.solver.status == SolverStatus.warning
     assert result.solver.termination_condition == TerminationCondition.infeasible
+
+
+def _scip_executable_result(message):
+    """What Pyomo's interface to the scip executable returns for a stop at a
+    limit: ok/other, with SCIP's own message."""
+    return types.SimpleNamespace(
+        solver=types.SimpleNamespace(
+            status=SolverStatus.ok,
+            termination_condition=TerminationCondition.other,
+            message=message,
+        )
+    )
+
+
+def test_scip_executable_gap_limit_reads_optimal_like_the_bridge():
+    # GIVEN
+    result = _scip_executable_result("gap limit reached")
+
+    # WHEN
+    success, _, _, tc_str = pyo_mod._classify_solve_result(
+        result, None, "scip", phase_label="test"
+    )
+
+    # THEN
+    assert success
+    assert tc_str == str(TerminationCondition.optimal)
+
+
+def test_scip_executable_other_limits_stay_other():
+    # GIVEN
+    result = _scip_executable_result("memory limit reached")
+
+    # WHEN
+    _, _, _, tc_str = pyo_mod._classify_solve_result(
+        result, None, "scip", phase_label="test"
+    )
+
+    # THEN
+    assert tc_str == str(TerminationCondition.other)
 
 
 # --------------------------------------------------------------------------- #
