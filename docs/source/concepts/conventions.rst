@@ -64,6 +64,14 @@ does not fail, it silently forbids or maximises the import. See
 :ref:`data-model-slack-sign` and the pricing example in
 :doc:`../how-to/multi_period`.
 
+The economic dispatch applies the rule per carrier
+(:doc:`../problems/economic_dispatch`). A gas external grid is priced on
+``-price * 3.6 * HHV * mass_flow_kgs``, per MW of higher heating value, so
+import is charged and export credited. A water external grid is priced on the
+heat it supplies to its island, and ``bounds_ext_heat_mw`` bounds the heat
+exchange in the load convention: ``(-X, 0.0)`` supplies at most ``X`` MW and
+absorbs nothing.
+
 Branch signs
 ============
 
@@ -253,7 +261,7 @@ still reads 2. The same holds for compound setpoints such as
 ``CHPControlNode.gas_mass_flow_kgs`` and ``SubHE.q_mw_set``: ``*_set``
 columns and control-node setpoints are inputs, while branch flows and ``q_mw``
 are solved quantities. See :doc:`multi_energy` for the coupler result
-columns and :doc:`../how-to/load_shedding` for shedding semantics.
+columns and :doc:`../problems/load_shedding` for shedding semantics.
 
 Time
 ====

@@ -195,7 +195,7 @@ sign of the printed zero.
 
     Objective: 0.0000
 
-See :doc:`tutorials/01_optimization_basics` and :doc:`how-to/load_shedding`
+See :doc:`tutorials/01_optimization_basics` and :doc:`problems/load_shedding`
 for end-to-end worked examples.
 
 ----

@@ -118,6 +118,8 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
         return branch.mass_flow_design_kgs * branch.regulation
 
     def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
+        if getattr(branch, "_he_duty_exact", False):
+            return []
         if branch._he_is_generator:
             return [branch.q_mw_delivered]
         return [-branch.q_mw_delivered]
@@ -181,8 +183,12 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
         # duty failed IPOPT's first step, but that was the zero seed of
         # mass_flow_design_kgs plus the degenerate transfer-branch node pin
         # (see HeatExchanger.__init__ and GenericTransferBranch), not the
-        # equality itself.
-        if getattr(branch, "_he_sim_square", False):
+        # equality itself. An economic dispatch pins it too (_he_duty_exact):
+        # heat demand is hard there, and a duty pull in the objective would be
+        # a hidden price on heat.
+        if getattr(branch, "_he_sim_square", False) or getattr(
+            branch, "_he_duty_exact", False
+        ):
             eqs.append(branch.q_mw_delivered == branch.q_mw * branch.on_off)
         elif branch._he_is_generator:
             eqs.append(branch.q_mw_delivered >= branch.q_mw * branch.on_off)

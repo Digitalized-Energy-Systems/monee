@@ -1,6 +1,6 @@
-==================================
-01 · Minimum-cost load curtailment
-==================================
+=============================
+Minimum-cost load curtailment
+=============================
 
 **Scenario.** A radial feeder connects a substation (Bus 0) to two loads over
 two line segments. Bus 1 serves a small factory (0.6 MW); Bus 2 serves a
@@ -14,7 +14,7 @@ refrigeration). The optimiser finds the cheapest curtailment plan.
 .. tip::
 
    For a ready-made one-call load-shedding interface see
-   :doc:`../how-to/load_shedding`.  This tutorial builds the problem from
+   :doc:`../problems/load_shedding`.  This tutorial builds the problem from
    scratch to show the full API.
 
 ----
@@ -170,12 +170,11 @@ given model type:
 
 The ``p_mw`` column is the setpoint you passed to
 :func:`~monee.express.create_power_load`; it never moves during the solve. The
-served power is ``p_mw * regulation``, so the factory (row 0) keeps about
-96 percent of its 0.6 MW, roughly 0.57 MW, and the warehouse (row 1) is
-curtailed completely at ``regulation = 0.0``. The same holds for every
-curtailable component: the setpoint attribute stays put and ``regulation``
-carries the decision. The node result frames report the served value directly,
-since a node balances ``p_mw * regulation`` over its children.
+served power is ``p_mw * regulation``, so the factory (row 0) keeps most of
+its load and the warehouse (row 1) is curtailed completely. The same holds for
+every curtailable component: the setpoint attribute stays put and
+``regulation`` carries the decision. The node result frames report the served
+value directly, since a node balances ``p_mw * regulation`` over its children.
 
 The substation import equals exactly the 0.6 MW limit. Import is negative under
 the load convention, so negate the column to read it as an import:
@@ -203,6 +202,6 @@ Next steps
 
 - See :doc:`02_timeseries_simulation` to run energy-flow calculations over a
   time series with varying demand profiles.
-- Explore :doc:`../how-to/load_shedding` for the ready-made one-call interface.
+- Explore :doc:`../problems/load_shedding` for the ready-made one-call interface.
 - Read :doc:`../how-to/use_pyomo_solver` to switch to a MILP solver back-end
   (SCIP, Gurobi, etc.) for integer-programming formulations.

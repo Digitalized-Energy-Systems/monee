@@ -1,6 +1,6 @@
-===================================
-03 · Coupled network: CHP dispatch
-===================================
+=============================
+Coupled network: CHP dispatch
+=============================
 
 **Scenario.** An industrial site draws 0.8 MW of electricity from the public
 grid and 1.2 MW of heat from a small district heating loop. On site sit two
@@ -112,25 +112,24 @@ Choosing the formulation
 :data:`~monee.model.formulation.bundles.DEFAULT_SIMULATION_FORMULATION`, a
 hybrid of the polar AC power flow, a relaxed Weymouth gas model and the
 bilinear Darcy-Weisbach heat model. The heat part of that default carries
-binary flow-direction variables. The default CasADi/IPOPT back-end cannot
-branch on binaries; it relaxes them and warns::
+binary flow-direction variables. IPOPT, the third-party solver monee's
+default CasADi back-end calls, cannot branch on binaries; the back-end
+relaxes them and warns::
 
     UserWarning: IPOPT relaxes integer variables, but 3 component(s) carry a
     formulation that needs them enforced: PassiveHeatExchangerLoad((5, 4, 0)),
     ... Solve with a MIQCQP/MINLP back-end (e.g. solver='scip' or 'gurobi') or
     pass a binary-free formulation (e.g. formulation='smooth_nlp' / ...).
 
-Take one of the two exits the warning names. For a pure electricity network
-the default is fine as it is, and for gas the binary-free substitute is picked
-automatically, but as soon as heat exchangers are involved, pass
+For a pure electricity network the default is fine as it is, and for gas the
+binary-free substitute is picked automatically. As soon as heat exchangers are
+involved, take one of the two exits the warning names: pass
 ``formulation="smooth_nlp"`` to solve the whole multi-energy network as one
 smooth NLP, or keep the default formulation and solve with
 ``solver="scip"`` (open source) or ``solver="gurobi"`` (commercial). This
-tutorial uses ``smooth_nlp`` throughout: on the default IPOPT back-end for the
-energy flow below, and on SCIP for the dispatch optimisation further down,
-where the coupler model is nonconvex and IPOPT converges to whichever local
-solution its start point leads to. :doc:`../concepts/formulations` has the full
-decision table.
+tutorial uses ``smooth_nlp`` throughout, with IPOPT for the energy flow and
+SCIP for the dispatch optimisation further down.
+:doc:`../concepts/formulations` has the full decision table.
 
 ----
 
@@ -173,21 +172,20 @@ Running the energy flow
 Two conventions are at work in these numbers.
 
 First the slack sign: :class:`~monee.model.child.ExtPowerGrid` reports
-``p_mw`` from the network's point of view, negative while the network imports
-(here ``p_mw`` is ``-0.3833``), so the import is read by negating the column.
+``p_mw`` from the network's point of view, negative while the network imports,
+so the import is read by negating the column.
 :ref:`Sign of the slack <data-model-slack-sign>` explains why.
 
 Second the coupler signs: on the control nodes, consumption is positive and
-generation negative. The CHP burns its 0.05 kg/s setpoint and produces
-0.7428 MW of electricity (``el_mw`` negative) plus 0.955 MW of heat
-(``heat_mw`` negative). The P2H consumes 0.3158 MW (``el_mw`` positive, which
-is ``0.3 / 0.95``) to inject its 0.3 MW of heat. The electric balance then
-closes: 0.8 load plus 0.3158 P2H minus 0.7428 CHP leaves 0.373 MW, which the
-grid covers together with the line losses, 0.3833 MW in total.
+generation negative. The CHP burns its 0.05 kg/s setpoint and generates both
+electricity and heat, so its ``el_mw`` and ``heat_mw`` are negative. The P2H
+consumes ``0.3 / 0.95`` MW of electricity (``el_mw`` positive) to inject its
+0.3 MW of heat. The grid covers the site load plus the P2H demand minus the
+CHP output, plus the line losses.
 
-On the heat side the couplers inject 1.255 MW while the consumer takes 1.2 MW.
-The pinned reference absorbs the 0.055 MW excess, and the loop temperatures
-settle at the design spread:
+On the heat side the couplers inject slightly more than the 1.2 MW the
+consumer takes. The pinned reference absorbs the excess, and the loop
+temperatures settle at the design spread:
 
 .. testcode::
 
@@ -276,12 +274,11 @@ returns the same answer whatever the network was solved for before.
     P2H regulation: 0.0
     grid import [MW]: 0.2
 
-The dispatch is readable: with imports capped at 0.2 MW, the CHP must generate
-the remaining 0.6 MW plus losses, which takes 81.2 percent of its capacity.
-The P2H only adds electric demand that the CHP would have to cover with paid
-fuel, so it is switched off. The ``max(0.0, ...)`` clip is the same habit as
-in :doc:`01_optimization_basics`: an interior-point solver may land a hair
-outside the declared [0, 1] bounds.
+With imports capped at 0.2 MW, the CHP must generate the remaining 0.6 MW plus
+losses. The P2H only adds electric demand that the CHP would have to cover with
+paid fuel, so it is switched off. The ``max(0.0, ...)`` clip is the same habit
+as in :doc:`01_optimization_basics`: a solver may land a hair outside the
+declared [0, 1] bounds, within its feasibility tolerance.
 
 .. note::
 
@@ -290,7 +287,7 @@ outside the declared [0, 1] bounds.
    competes with them and ``opt.objective`` contains both parts. When a
    coupler then delivers less heat than its setpoint, monee prints a
    diagnostic naming the component; the objective semantics section of
-   :doc:`../how-to/load_shedding` explains how to read it. Prefer reading
+   :doc:`../problems/load_shedding` explains how to read it. Prefer reading
    dispatch quantities from the result frames, as done here, over
    interpreting the raw objective value.
 
@@ -328,7 +325,7 @@ what makes the loop solvable but also makes the heat demand non-binding in an
 optimisation. If undersupplied heat must show up as a violation or as shed
 load, keep the pressure reference but release the temperature with
 ``pin_temperature=False``, or model the demand with curtailable heat
-components as in :doc:`../how-to/load_shedding`.
+components as in :doc:`../problems/load_shedding`.
 
 ----
 
@@ -341,5 +338,5 @@ Next steps
   ``formulation="smooth_nlp"`` and when a MIQCQP back-end is the better exit.
 - :doc:`../how-to/generate_mes` creates larger coupled benchmark networks in
   one call.
-- :doc:`../how-to/load_shedding` prices unserved demand across all three
+- :doc:`../problems/load_shedding` prices unserved demand across all three
   carriers with a ready-made problem.

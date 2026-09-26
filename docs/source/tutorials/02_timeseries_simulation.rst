@@ -1,6 +1,6 @@
-==============================
-02 · Solar feeder: day-ahead
-==============================
+=======================
+Solar feeder: day-ahead
+=======================
 
 **Scenario.** A residential bus (Bus 1) has a rooftop PV system and a household
 load.  An external grid (Bus 0) acts as the slack source.  This tutorial
@@ -8,9 +8,9 @@ simulates eight three-hour slots across a summer day and tracks how the bus
 voltage and the net grid import change as the solar output rises, peaks, and
 falls.
 
-During the afternoon the PV covers the full household demand and briefly pushes
-the external grid import close to zero.  A monitoring hook raises a flag
-whenever the bus voltage dips below a threshold.
+Around midday the PV output exceeds the household demand and the bus briefly
+exports to the grid.  A monitoring hook raises a flag whenever the bus voltage
+dips below a threshold.
 
 Key features covered
 --------------------
@@ -43,7 +43,7 @@ internally and never modifies the original.
 
     mx.create_ext_power_grid(net, bus_grid)
 
-    # Household load - initial value overwritten each step by the time series
+    # Household load: the initial value is overwritten each step by the time series
     load_id = mx.create_power_load(net, bus_home, p_mw=0.30, q_mvar=0.0)
 
     # PV modelled as a load with negative p_mw (injection convention):
@@ -59,10 +59,10 @@ Eight steps represent three-hour slots from 00:00 to 21:00 on a summer day.
 
 .. testcode::
 
-    # Household demand (positive = consumption) - low overnight, peaks in evening
+    # Household demand (positive = consumption): low overnight, peaks in the evening
     load_profile = [0.10, 0.10, 0.15, 0.20, 0.25, 0.35, 0.40, 0.25]  # MW
 
-    # PV output (negative = generation) - zero at night, peak midday
+    # PV output (negative = generation): zero at night, peaks at midday
     pv_profile   = [0.00, 0.00,-0.10,-0.30,-0.45,-0.30,-0.10, 0.00]  # MW
 
     td = TimeseriesData()
@@ -90,9 +90,8 @@ Inspecting results
 
 :meth:`~monee.simulation.TimeseriesResult.get_result_for` returns a
 :class:`pandas.DataFrame` with one row per successful step and one column per
-component of the requested type.
-
-**Bus voltage over the day:**
+component of the requested type. Querying the bus voltages gives one column per
+bus:
 
 .. testcode::
 
@@ -105,12 +104,9 @@ component of the requested type.
     Voltage columns (one per bus): 2
     Step rows:                     8
 
-**Net exchange with the external grid:**
-
-``ExtPowerGrid.p_mw`` follows the load convention seen from the network, so a
-negative value is an import and a positive one an export. During the
-early-afternoon steps the PV covers and then exceeds the household demand, so
-the import shrinks towards zero and finally flips positive.
+The net exchange with the external grid follows the load convention seen from
+the network: ``ExtPowerGrid.p_mw`` is negative for an import and positive for an
+export.
 
 .. testcode::
 
@@ -129,9 +125,9 @@ the import shrinks towards zero and finally flips positive.
     6   -0.303
     7   -0.252
 
-Steps 3 and 4 are the only ones where excess PV is exported back to the grid.
-The evening peak imports slightly more than the 0.30 MW and 0.25 MW of demand
-because the line losses ride on top of it.
+Around midday (steps 3 and 4) the PV surplus is exported. In the evening the
+import runs slightly above the net demand because the line losses ride on top
+of it.
 
 Solar feeder: bus voltage and grid import vary as rooftop PV ramps up and down across the day.
 

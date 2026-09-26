@@ -19,7 +19,7 @@
 
 ---
 
-**monee** is a Python framework for steady-state simulation and optimal energy flow of **multi-energy systems (MES)**. It models electricity, gas, and district-heat networks in a single unified directed graph, couples them via standard conversion units (CHP, P2H, P2G, G2P, G2H), and exposes the coupled system to three solver back-ends (CasADi, GEKKO, and Pyomo). The framework is designed for research workflows that require flexible problem formulation, reproducible benchmarks, and straightforward integration with external optimisers.
+**monee** is a Python framework for steady-state simulation and optimal energy flow of **multi-energy systems (MES)**. It models electricity, gas, and district-heat networks in a single unified directed graph, couples them via standard conversion units (CHP, P2H, P2G, G2P, G2H), and hands the coupled system to third-party solvers through four back-ends (for CasADi, GEKKO, Pyomo, and gurobipy). The framework is designed for research workflows that require flexible problem formulation, reproducible benchmarks, and straightforward integration with external optimisers.
 
 ## Capabilities
 
@@ -58,12 +58,12 @@ Requires **Python 3.11+**.
 pip install monee
 ```
 
-The core install bundles everything needed for both simulation and the default
-optimisation workflows:
+The core install pulls in, as dependencies, the third-party packages needed for
+both simulation and the default optimisation workflows:
 
-- **CasADi**: in-process IPOPT, the default solver when present.
+- **CasADi**: runs the IPOPT solver in-process; monee uses it by default.
 - **GEKKO**: bundles its own APOPT/BPOPT/IPOPT binaries; used as the IPOPT fallback if CasADi is unavailable.
-- **Pyomo**: for MILP/MIQCP problems such as MISOCP optimal power flow.
+- **Pyomo** and **pyscipopt**: hand MILP/MIQCP problems such as MISOCP optimal power flow to the SCIP solver, or to any other solver Pyomo supports.
 
 Optional solvers and import formats are pulled in only when you need them:
 
@@ -155,6 +155,13 @@ print(result.get(mm.PowerGenerator)[["p_mw"]])
 # 0 -9.000072e-02
 # 1  6.969836e-09
 ```
+
+The same problem dispatches gas and heat as well: pass `gas_cost_default` and
+`heat_cost_default` (prices per MW of gas energy and per MW of heat) and give
+gas sources, heat generators and external grids their own `cost`; coupling
+units such as CHPs then follow the merit order too. See the
+[economic dispatch](https://monee.readthedocs.io/en/latest/problems/economic_dispatch.html)
+page.
 
 For resilience studies, `create_min_load_shedding_problem` instead minimises
 curtailment with per-carrier operational bounds, returning a `regulation` per

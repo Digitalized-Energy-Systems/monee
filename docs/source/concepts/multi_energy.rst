@@ -595,8 +595,13 @@ If backup supply should be limited or absent, cap the slack explicitly:
   mass flow and can also be set later on the child's model, taking effect on
   the next solve, or
 - pass ``bounds_ext_heat`` to the load-shedding problem
-  (:doc:`../how-to/load_shedding`), which bounds the exchange inside the
-  optimisation.
+  (:doc:`../problems/load_shedding`), which bounds the exchange inside the
+  optimisation, or
+- dispatch heat with the economic dispatch problem
+  (:doc:`../problems/economic_dispatch`), which prices the heat the slack
+  supplies through its ``cost`` or ``heat_cost_default`` and bounds it with
+  ``bounds_ext_heat_mw``; by default the slack may supply heat but not absorb
+  a surplus.
 
 The same class serves as the gas slack: a child created via
 :func:`monee.express.create_gas_ext_grid` is also an ``ExtHydrGrid``. Its
@@ -636,5 +641,5 @@ The optimiser then freely dispatches each coupling unit within its capacity.
 .. tip::
 
    See :doc:`../tutorials/01_optimization_basics` and
-   :doc:`../how-to/load_shedding` for end-to-end worked examples of coupling
+   :doc:`../problems/load_shedding` for end-to-end worked examples of coupling
    unit dispatch in an optimisation problem.

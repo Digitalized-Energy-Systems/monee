@@ -355,6 +355,8 @@ _PLAIN_VALUE_TYPES = (int, float, complex, bool, str, bytes, list, tuple, dict, 
 # back with getattr/hasattr, keyed by the model class name that owns them.
 _OPTIONAL_ATTRIBUTES: dict[str, set[str]] = {
     "GenericPowerBranch": {"kind"},
+    "HeatExchanger": {"cost"},
+    "PassiveHeatExchanger": {"cost"},
 }
 
 _optional_cache: dict[type, frozenset] = {}

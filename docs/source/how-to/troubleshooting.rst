@@ -34,7 +34,7 @@ Fix
     when a supplied ``bounds_ext_el`` lower bound is not negative.
 
 Read on
-    :ref:`data-model-slack-sign` and :doc:`load_shedding`. The same sign rule
+    :ref:`data-model-slack-sign` and :doc:`../problems/load_shedding`. The same sign rule
     applies to pricing objectives, see :doc:`multi_period`.
 
 My PV runs at nameplate at midnight
@@ -225,7 +225,7 @@ Fix
 
 Read on
     :doc:`diagnose_infeasibility`, :doc:`../concepts/islanding` and the
-    compound handling notes in :doc:`load_shedding`.
+    compound handling notes in :doc:`../problems/load_shedding`.
 
 result.objective is not my objective
 ====================================

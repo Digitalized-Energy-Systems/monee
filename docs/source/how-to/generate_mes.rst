@@ -166,7 +166,9 @@ Heat-plant modes
    * - ``"two_port"``
      - A second hydraulic slack at the return junction: cleaner physics,
        but requires the McCormick-DHS path, that is
-       ``node_based_heat_loads=True``.
+       ``node_based_heat_loads=True``. Not supported by the heat pricing of
+       :doc:`../problems/economic_dispatch`, which needs one slack per heat
+       island and the nodal heat balance.
    * - ``"screening"``
      - Closing pipe plus an oversized return sink. Fast for screening
        studies, but the resulting mass flow is not physical.

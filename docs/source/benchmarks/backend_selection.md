@@ -1,7 +1,7 @@
 # Choosing a solver backend
 
 monee keeps the formulation (the equations) separate from the backend (the
-numerical engine that solves them). The same network and formulation can be
+monee module that hands them to a third-party numerical solver). The same network and formulation can be
 handed to several backends, so the practical question is which backend is
 fastest for the formulation class you picked. This page answers that with a
 head-to-head benchmark.

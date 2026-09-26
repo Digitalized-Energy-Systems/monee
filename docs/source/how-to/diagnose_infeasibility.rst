@@ -54,7 +54,7 @@ mistakes cause the vast majority of infeasible solves:
    exclude such components automatically. For optimisation solves, attach an
    islanding config (see :doc:`islanding`), the preferred mechanism, or pass
    the legacy ``exclude_unconnected_nodes=True`` flag to the solve call. See
-   :doc:`load_shedding` for how excluded components are reported.
+   :doc:`../problems/load_shedding` for how excluded components are reported.
 
 .. note::
 
