@@ -1070,7 +1070,7 @@ class _ParamStepState(InterStepState):
         self.dt_h = dt_h
         self.params: dict = {}  # {(component_id, attr): gurobi Var}
 
-    def get(self, component_id, attr: str, step: int = -1):
+    def get(self, component_id, attr: str, step: int = -1, model_type=None):
         if step != -1:
             raise NotImplementedError(
                 "The gurobipy build-once timeseries driver carries only the "

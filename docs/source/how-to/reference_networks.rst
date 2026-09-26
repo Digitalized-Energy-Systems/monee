@@ -265,7 +265,7 @@ See also
       generators in :mod:`monee.network.mes`.
 
    .. grid-item-card:: Load shedding
-      :link: load_shedding
+      :link: ../problems/load_shedding
       :link-type: doc
       :shadow: sm
 

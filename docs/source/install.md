@@ -19,8 +19,9 @@
 pip install monee
 ```
 
-Installs the core package with all required dependencies: GEKKO, Pyomo,
-NumPy, SciPy, pandas, NetworkX, Plotly, and geopy.
+Installs the core package with all required dependencies, all of them
+third-party packages: CasADi, GEKKO, Pyomo, pyscipopt, NumPy, SciPy, pandas,
+NetworkX, Plotly, and geopy.
 :::
 
 :::{tab-item} From source
@@ -43,7 +44,6 @@ reinstalling.
 
 | Extra | Install command | What it adds |
 |---|---|---|
-| `casadi` | `pip install monee[casadi]` | In-process CasADi/IPOPT solver back-end (the default solver when present) |
 | `simbench` | `pip install monee[simbench]` | Import networks from [SimBench](https://simbench.de/en/) and convert [pandapower](https://www.pandapower.org/) networks |
 
 ### Optional dependencies
@@ -58,21 +58,26 @@ when you need the feature:
 | `pyESDL` | `pip install pyESDL` | ESDL import (`monee.io.from_esdl`) |
 | `simbench` + `pandapower` | `pip install monee[simbench]` | SimBench and pandapower grid import |
 | `pygraphviz` (plus a system [Graphviz](https://graphviz.org/)) | `pip install pygraphviz` | Automatic graph layout in `plot_network` / `plot_result` |
-| `geopy` | already included | Geodesic branch lengths in the MES generators |
+| `geopy` | installed with monee | Geodesic branch lengths in the MES generators |
 
 ```{note}
-SciPy (MATPOWER import), Plotly (visualization), and geopy ship with the core
-install, so no extra step is needed for those features.
+SciPy (MATPOWER import), Plotly (visualization) and geopy are core
+dependencies of monee, so pip installs them together with it and those
+features need no extra step.
 ```
 
 ---
 
 ## Solver back-ends
 
-The default solver is IPOPT. With the optional CasADi extra installed, IPOPT
-runs in-process through CasADi (no subprocess, typically much faster); without
-it, IPOPT falls back to the GEKKO binary that ships with the core install. For
-mixed-integer or conic problems you switch to Pyomo and add a solver binary.
+monee does not contain a solver of its own. It builds the mathematical model
+and hands it to third-party solvers through the packages below, which pip
+installs with monee as core dependencies. By default monee hands the model to
+IPOPT, an open-source solver, and runs it in-process through CasADi (no
+subprocess, typically much faster); if CasADi cannot be imported, monee runs
+IPOPT through GEKKO instead, using the IPOPT binary that the GEKKO package
+bundles. For mixed-integer or conic problems you switch to Pyomo, which passes
+the model on to SCIP through pyscipopt, or to another solver you install.
 
 ::::{grid} 1 1 2 2
 :gutter: 3
@@ -82,29 +87,23 @@ mixed-integer or conic problems you switch to Pyomo and add a solver binary.
 
 [CasADi](https://web.casadi.org) builds the NLP as an in-memory expression
 graph and calls IPOPT in-process. It covers the smooth formulations, including
-temporal and multi-period coupling. Install it with the extra below; if it is
-absent, monee uses the [GEKKO](https://gekko.readthedocs.io) suite, which
-bundles its own APOPT, BPOPT and IPOPT binaries.
+temporal and multi-period coupling. If CasADi cannot be imported, monee uses
+the [GEKKO](https://gekko.readthedocs.io) suite instead, which bundles its own
+APOPT, BPOPT and IPOPT binaries. Both are third-party packages that pip
+installs with monee.
 
 Best for: nonlinear energy-flow simulation and NLP optimisation.
-
-```bash
-pip install monee[casadi]
-```
 :::
 
-:::{grid-item-card} Pyomo {bdg-secondary}`bring your own solver`
+:::{grid-item-card} Pyomo {bdg-secondary}`MILP and MIQCP`
 :shadow: sm
 
 Translates the network model to a [Pyomo](https://www.pyomo.org)
-`ConcreteModel`. You install at least one solver binary separately.
+`ConcreteModel` and passes it to a solver. pyscipopt, the Python interface to
+the open-source SCIP solver, is a core dependency, so SCIP works without an
+extra step; other solvers such as Gurobi are installed separately.
 
 Best for: MILP and MIQCP problems, for example MISOCP optimal power flow.
-
-```bash
-# SCIP: recommended non-commercial solver for MIQCP
-conda install -y pyscipopt
-```
 
 See {doc}`how-to/use_pyomo_solver` for a full walk-through.
 :::
@@ -115,7 +114,7 @@ See {doc}`how-to/use_pyomo_solver` for a full walk-through.
 
 | Solver | Licence | Problem types | Install |
 |---|---|---|---|
-| [SCIP](https://scipopt.org/) | Open-source | LP · MILP · MIQCP · MINLP | `conda install -y pyscipopt` or `pip install pyscipopt` |
+| [SCIP](https://scipopt.org/) | Open-source | LP · MILP · MIQCP · MINLP | installed with monee (pyscipopt is a core dependency) |
 | [GLPK](https://www.gnu.org/software/glpk/) | Open-source | LP · MILP | `conda install -c conda-forge glpk` |
 | [CBC](https://github.com/coin-or/Cbc) | Open-source | LP · MILP | `conda install -c conda-forge coincbc` |
 | [Gurobi](https://www.gurobi.com/) | Commercial | LP · MILP · MIQCP | requires licence |

@@ -34,6 +34,8 @@ without touching the topology.
 
    The :mod:`monee.express` API creates all of these objects for you. You only
    need to work with the low-level classes when implementing custom components.
+   :doc:`../components/index` lists every built-in component with its model class,
+   its ``create_*`` function, parameters, defaults and result columns.
 
 ----
 
@@ -139,7 +141,10 @@ Settable, and read by the equations
    Every attribute the model declares in its ``__init__``, plus any parameter
    its constructor accepts even when the default left it unset (a
    :class:`~monee.model.child.PowerGenerator` created without ``cost`` still
-   takes ``model.cost = 12.0`` for the economic dispatch objective). Writing a
+   takes ``model.cost = 12.0`` for the economic dispatch objective; so do
+   :class:`~monee.model.child.ExtPowerGrid`,
+   :class:`~monee.model.child.Source`, :class:`~monee.model.child.ExtHydrGrid`,
+   :class:`~monee.model.child.HeatGenerator` and the heat exchangers). Writing a
    plain number here is the normal way to change a setpoint or a parameter
    between solves::
 

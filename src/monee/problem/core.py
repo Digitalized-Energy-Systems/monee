@@ -327,8 +327,9 @@ class Constraint:
 
     def temporal_equation(self, equation_lambda):
         """Add a cross-period constraint. Lambda signature
-        ``(model, component_id, temporal_state) -> eq | list[eq]``. Silently
-        skipped in single-period solves."""
+        ``(model, component_id, temporal_state) -> eq | list[eq]``. Skipped in a
+        single solve; ``run_timeseries`` applies it against the previous step's
+        solved values, ``run_multi_period`` across its periods."""
         self._temporal_equations.append(equation_lambda)
         return self
 
@@ -493,7 +494,7 @@ class Constraints:
                 model.regulation, (int, float)
             ):
                 return []
-            prev_reg = ts.get(cid, "regulation")
+            prev_reg = ts.get(cid, "regulation", model_type=type(model))
             if prev_reg is None:
                 return []
             return [

@@ -78,6 +78,9 @@ def _prepare_period(
     # on it (islanding injection gating / energisation objective) must not
     # activate when the optimization problem brings its own shedding vars.
     net_t._solve_has_optimization_problem = optimization_problem is not None
+    # Read by problem hooks that only make sense across a horizon (economic
+    # dispatch storages); must be set before optimization_problem._apply.
+    net_t._solve_multi_period = True
     for ext in net_t.extensions:
         ext.prepare(net_t)
 
@@ -125,16 +128,27 @@ def _extract_terminal_state(net_t: Network) -> dict:
     """``{(comp_id, attr): value}`` for all Var/numeric attributes; used by
     :func:`run_mpc` to seed the next horizon's ``initial_state``."""
     state: dict = {}
+    # Compound ids share the key space with node/child/branch ids, and a
+    # compound's plain attributes are build-time seeds (e.g. a CHP's
+    # mass_flow_kgs setpoint); they must not replace the solved state of the
+    # component the next window's temporal equations read.
+    compound_ids = {id(compound) for compound in net_t.compounds}
 
-    def _scan(comp_id, model):
+    def _scan(comp_id, model, keep_existing):
         for k, v in model.__dict__.items():
             if isinstance(v, Var):
-                state[(comp_id, k)] = v.value
+                value = v.value
             elif isinstance(v, (int, float)):
-                state[(comp_id, k)] = v
+                value = v
+            else:
+                continue
+            if keep_existing:
+                state.setdefault((comp_id, k), value)
+            else:
+                state[(comp_id, k)] = value
 
     for comp in net_t.iter_all_components():
-        _scan(comp.id, comp.model)
+        _scan(comp.id, comp.model, id(comp) in compound_ids)
     return state
 
 

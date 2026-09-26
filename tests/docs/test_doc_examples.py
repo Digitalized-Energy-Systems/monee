@@ -103,8 +103,9 @@ def run_page(page: str):
     [
         "quickstart.rst",
         "tutorials/03_coupled_network.rst",
-        "how-to/load_shedding.rst",
-        "how-to/economic_dispatch.rst",
+        "problems/index.rst",
+        "problems/load_shedding.rst",
+        "problems/economic_dispatch.rst",
         "how-to/express_structures.rst",
         pytest.param(
             "how-to/district_heating.rst",

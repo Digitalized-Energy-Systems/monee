@@ -2,18 +2,26 @@
 Solvers & Backends
 ===================
 
-monee turns the network model and its formulation into a mathematical programme
-and hands it to a numerical solver back-end. Four back-ends ship with monee:
+monee contains no numerical solver of its own. It turns the network model and
+its formulation into a mathematical programme and hands it to a third-party
+solver through one of four back-ends. Each back-end is a monee module that
+passes the programme to a third-party package:
 
-- CasADi: in-process IPOPT, the default when ``casadi`` is installed. It builds
-  the problem once as an in-memory expression graph and calls IPOPT directly,
-  with no subprocess. Best for smooth nonlinear energy flow and NLP optimisation.
-- GEKKO: bundled, the fallback default when ``casadi`` is absent. Ships its own
-  APOPT, BPOPT, and IPOPT binaries.
-- Pyomo: routes to any Pyomo-registered solver (Gurobi, SCIP, GLPK, CBC,
-  CPLEX, …). Best for MILP and MIQCP problems.
-- gurobipy: native in-memory Gurobi, single-period only, an alternative to
-  driving Gurobi through Pyomo's file round-trip.
+- CasADi back-end: the default. It builds the problem once as an in-memory
+  CasADi expression graph and has CasADi call the IPOPT solver in-process,
+  with no subprocess. Best for smooth nonlinear energy flow and NLP
+  optimisation.
+- GEKKO back-end: the fallback default when ``casadi`` cannot be imported.
+  The GEKKO package ships its own APOPT, BPOPT, and IPOPT binaries.
+- Pyomo back-end: routes to any Pyomo-registered solver (Gurobi, SCIP, GLPK,
+  CBC, CPLEX, …). Best for MILP and MIQCP problems.
+- gurobipy back-end: drives Gurobi in memory through its gurobipy API,
+  single-period only, an alternative to driving Gurobi through Pyomo's file
+  round-trip.
+
+CasADi, GEKKO, Pyomo and pyscipopt (the Python interface to SCIP) are core
+dependencies that pip installs with monee; gurobipy and a Gurobi licence are
+installed separately.
 
 In everyday use you pick a back-end by naming a solver.
 
@@ -89,8 +97,10 @@ A concrete instance also works as the ``solver=`` argument of
 
    .. tab-item:: CasADi (default)
 
-      The CasADi back-end (``monee.solver.casadi``) is the default when the
-      optional ``casadi`` package is installed. It builds the NLP once as an
+      The CasADi back-end (``monee.solver.casadi``) is the default. It hands
+      the model to the third-party ``casadi`` package, a core dependency of
+      monee, and to the IPOPT solver that CasADi's builds bring along. It
+      builds the NLP once as an
       in-memory `CasADi <https://web.casadi.org>`_ expression graph and calls
       IPOPT in-process, with no subprocess and no text round-trip, so it is
       typically much faster than GEKKO on repeated solves.
@@ -122,10 +132,11 @@ A concrete instance also works as the ``solver=`` argument of
    .. tab-item:: GEKKO
 
       The :class:`~monee.solver.GEKKOSolver` (``monee.solver.gekko``) wraps the
-      `GEKKO <https://gekko.readthedocs.io>`_ optimisation suite, which ships its
-      own solver binaries (APOPT, BPOPT, IPOPT) and needs no extra installation
-      beyond ``pip install monee``. It is the fallback default when ``casadi``
-      is not installed.
+      `GEKKO <https://gekko.readthedocs.io>`_ optimisation suite, a third-party
+      package that ships its own solver binaries (APOPT, BPOPT, IPOPT). GEKKO
+      is a core dependency of monee, so ``pip install monee`` installs it and
+      nothing else is needed. It is the fallback default when ``casadi``
+      cannot be imported.
 
       Suitable for:
 
@@ -439,7 +450,7 @@ back-ends fall back to the single summed objective.
 Tuning solver options
 =====================
 
-The back-ends ship sensible defaults per solver:
+monee's back-ends pass their own preset options to each solver:
 
 - GEKKO: APOPT (``solver=1``) receives MINLP options (1000 branch iterations,
   gap tolerance ``1e-3``, …); IPOPT (``solver=3``) receives NLP-only options
@@ -676,7 +687,8 @@ Choosing a solver
 .. tip::
 
    When in doubt, start with the default (``"ipopt"``): it handles all smooth
-   nonlinear problems and runs on CasADi when installed, GEKKO otherwise.
+   nonlinear problems and runs through CasADi, or through GEKKO if CasADi
+   cannot be imported.
    Switch to Pyomo only when you need a MILP / MIQCP solver, lexicographic
    objectives, or a specific commercial solver back-end.
 

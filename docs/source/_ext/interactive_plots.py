@@ -19,8 +19,14 @@ the ``builder-inited`` event.
 
 from __future__ import annotations
 
+import functools
+import importlib.util
 import os
+import platform
+import sys
+import warnings
 
+import casadi
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -1556,7 +1562,7 @@ def build_benchmark_pandapower(out_path):
     PP_TEXT = TEXT
     PP_AXIS_LINE = "rgba(128,128,128,0.5)"
     PANDAPOWER = "pandapower"
-    CASADI = "monee · CasADi"
+    CASADI = "monee via CasADi/IPOPT"
 
     df = pd.read_csv(_bench_csv("results", "pandapower_comparison.csv"))
 
@@ -1572,11 +1578,14 @@ def build_benchmark_pandapower(out_path):
     # Hatch the reference engine so the paired solve-time bars never rely on hue.
     hatch = {PANDAPOWER: "/", CASADI: ""}
     groups = [
-        ("PF", "Power flow (AC): pandapower runpp vs monee CasADi"),
-        ("OPF", "Optimal power flow, no line limit: pandapower runopp vs monee CasADi"),
+        ("PF", "Power flow (AC): pandapower runpp vs monee via CasADi/IPOPT"),
+        (
+            "OPF",
+            "Optimal power flow, no line limit: pandapower runopp vs monee via CasADi/IPOPT",
+        ),
         (
             "OPF-LL",
-            "Optimal power flow, line-loading limit binds: pandapower runopp vs monee CasADi",
+            "Optimal power flow, line-loading limit binds: pandapower runopp vs monee via CasADi/IPOPT",
         ),
     ]
     groups = [g for g in groups if (df.group == g[0]).any()]
@@ -1746,7 +1755,7 @@ def build_benchmark_pandapipes(out_path):
     df = pd.read_csv(_bench_csv("results", "pandapipes_comparison.csv"))
 
     PANDAPIPES = "pandapipes"
-    MONEE = "monee · CasADi"
+    MONEE = "monee via CasADi/IPOPT"
     C_PANDAPIPES = CB_VERMILION
     C_MONEE = CB_GREEN
     C_PRESSURE = CB_BLUE
@@ -1943,6 +1952,1962 @@ def build_benchmark_pandapipes(out_path):
 
 
 # Registry: (output filename under _static/interactive/, builder function).
+C_CHP = CB_VERMILION
+C_E_BOILER = CB_ORANGE
+C_ELECTROLYSER = CB_GREEN
+C_PLANT = CB_PURPLE
+C_BATTERY = CB_PURPLE
+C_IMPORT = CB_BLUE
+C_PV = CB_YELLOW
+# Reference lines are svg strokes the theme script does not recolour, so they
+# take a grey that reads on the light and the dark page.
+C_REFERENCE = "#8a8a8a"
+C_DEMAND = "#9e9e9e"
+C_BIOGAS = CB_SKY
+
+
+@functools.lru_cache(maxsize=1)
+def _mes_dispatch_run():
+    """Solve examples/mes_economic_dispatch.py once for both of its figures, so
+    the tutorial plots whatever the example currently computes."""
+    path = os.path.join(_REPO_ROOT, "examples", "mes_economic_dispatch.py")
+    spec = importlib.util.spec_from_file_location("mes_economic_dispatch", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        hours, baselines, checks = module.run()
+    if checks.failed:
+        raise RuntimeError(f"mes_economic_dispatch checks failed: {checks.failed}")
+    return module, hours, baselines
+
+
+def _balance_bars(fig, hours_x, supply, use, row, shown):
+    """Supply stacked above zero, use stacked below: in a balanced hour the two
+    stacks mirror each other up to the losses."""
+    for sign, series in ((1, supply), (-1, use)):
+        for name, values, color in series:
+            fig.add_trace(
+                go.Bar(
+                    x=hours_x,
+                    y=[sign * v for v in values],
+                    name=name,
+                    legendgroup=name,
+                    showlegend=name not in shown,
+                    marker=_bar_marker(color),
+                    customdata=values,
+                    hovertemplate=f"{name}: %{{customdata:.3f}} MW<extra></extra>",
+                ),
+                row=row,
+                col=1,
+            )
+            shown.add(name)
+
+
+def build_tutorial_mes_dispatch(out_path):
+    """Hourly price with the analytic breakevens, and the supply and use of
+    power, gas and heat by unit (tutorials/04_mes_economic_dispatch.rst)."""
+    ex, hours, _ = _mes_dispatch_run()
+    x = list(range(len(hours)))
+    k = hours[0]["k"]
+    fig = make_subplots(
+        rows=4,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        subplot_titles=(
+            "Electricity price and breakeven prices",
+            "Power: supply above zero, use below",
+            "Gas: supply above zero, use below",
+            "Heat: supply above zero, use below",
+        ),
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=[h["price"] for h in hours],
+            mode="lines+markers",
+            line_shape="hvh",
+            line={"color": C_PRICE, "width": 3},
+            marker={"size": 8},
+            name="price",
+            showlegend=False,
+            hovertemplate="hour %{x}: %{y:.1f} per MWh<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    for label, value, color, position in (
+        ("CHP runs above", ex.CHP_ABOVE, C_CHP, "top left"),
+        ("e-boiler runs below", ex.E_BOILER_BELOW, C_E_BOILER, "bottom left"),
+        (
+            "electrolyser runs below",
+            ex.ELECTROLYSER_BELOW,
+            C_ELECTROLYSER,
+            "bottom left",
+        ),
+    ):
+        fig.add_hline(
+            y=value,
+            line={"color": color, "width": 2, "dash": "dash"},
+            annotation_text=f"{label} {value:.2f}",
+            annotation={"xshift": 12},
+            annotation_position=position,
+            annotation_font={"color": color, "size": 12},
+            row=1,
+            col=1,
+        )
+    shown = set()
+    _balance_bars(
+        fig,
+        x,
+        supply=[
+            ("grid", [h["import_mw"] for h in hours], C_IMPORT),
+            ("PV", [h["pv_mw"] for h in hours], C_PV),
+            ("CHP", [h["chp_el_mw"] for h in hours], C_CHP),
+        ],
+        use=[
+            ("town demand", [ex.LOAD_MW for _ in hours], C_DEMAND),
+            ("e-boiler", [h["e_boiler_el_mw"] for h in hours], C_E_BOILER),
+            ("electrolyser", [h["electrolyser_el_mw"] for h in hours], C_ELECTROLYSER),
+        ],
+        row=2,
+        shown=shown,
+    )
+    _balance_bars(
+        fig,
+        x,
+        supply=[
+            ("grid", [k * h["gas_import_kgs"] for h in hours], C_IMPORT),
+            ("biogas", [k * h["biogas_kgs"] for h in hours], C_BIOGAS),
+            (
+                "electrolyser",
+                [k * h["electrolyser_gas_kgs"] for h in hours],
+                C_ELECTROLYSER,
+            ),
+        ],
+        use=[
+            ("town demand", [k * ex.GAS_DEMAND_KGS for _ in hours], C_DEMAND),
+            ("CHP", [k * h["chp_fuel_kgs"] for h in hours], C_CHP),
+        ],
+        row=3,
+        shown=shown,
+    )
+    _balance_bars(
+        fig,
+        x,
+        supply=[
+            ("boiler plant", [h["plant_heat_mw"] for h in hours], C_PLANT),
+            ("CHP", [h["chp_heat_mw"] for h in hours], C_CHP),
+            ("e-boiler", [h["e_boiler_heat_mw"] for h in hours], C_E_BOILER),
+        ],
+        use=[("town demand", [h["hx_duty_mw"] for h in hours], C_DEMAND)],
+        row=4,
+        shown=shown,
+    )
+    _base_layout(fig, "A coupled day: price and dispatch", height=1060)
+    fig.update_layout(
+        barmode="relative",
+        showlegend=True,
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.06,
+            "xanchor": "center",
+            "x": 0.5,
+            "font": {"size": 13, "color": TEXT},
+            "bgcolor": C_BLACK,
+        },
+        margin={"l": 60, "r": 25, "t": 90, "b": 110},
+    )
+    fig.update_xaxes(title_text="hour", dtick=1, row=4, col=1)
+    fig.update_yaxes(title_text="per MWh", rangemode="tozero", row=1, col=1)
+    for row in (2, 3, 4):
+        fig.update_yaxes(title_text="MW", row=row, col=1)
+    return _write(fig, out_path, height_px=1060)
+
+
+def build_tutorial_mes_checks(out_path):
+    """Validation of the coupled day: each unit's operating point against its
+    hand computed margin, the solver's saving against the saving the margins
+    predict, and the supply temperature against its setpoint
+    (tutorials/04_mes_economic_dispatch.rst)."""
+    ex, hours, baselines = _mes_dispatch_run()
+    optimum = sum(h["objective"] for h in hours)
+    x = list(range(len(hours)))
+    fig = make_subplots(
+        rows=2,
+        cols=2,
+        column_widths=[0.6, 0.4],
+        row_heights=[0.55, 0.45],
+        horizontal_spacing=0.12,
+        vertical_spacing=0.2,
+        specs=[[{}, {}], [{"colspan": 2}, None]],
+        subplot_titles=(
+            "Operating point against margin",
+            "Saving against the baselines",
+            "Supply and return temperature",
+        ),
+    )
+    for key, label, color in (
+        ("chp", "CHP", C_CHP),
+        ("e_boiler", "e-boiler", C_E_BOILER),
+        ("electrolyser", "electrolyser", C_ELECTROLYSER),
+    ):
+        margins = [ex.unit_margins(h["price"])[key] for h in hours]
+        fig.add_trace(
+            go.Scatter(
+                x=margins,
+                y=[h[key] for h in hours],
+                mode="markers",
+                marker={
+                    "size": 13,
+                    "color": color,
+                    "line": {"color": BAR_LINE, "width": 1},
+                },
+                name=label,
+                customdata=[h["price"] for h in hours],
+                hovertemplate=(
+                    f"{label}<br>price %{{customdata:.1f}}: margin %{{x:.2f}} per hour, "
+                    "operating point %{y:.3f}<extra></extra>"
+                ),
+            ),
+            row=1,
+            col=1,
+        )
+    fig.add_vline(
+        x=0, line={"color": C_REFERENCE, "width": 1.5, "dash": "dash"}, row=1, col=1
+    )
+    expected = ex.expected_savings()
+    names = list(baselines)
+    fig.add_trace(
+        go.Bar(
+            x=names,
+            y=[baselines[n] - optimum for n in names],
+            name="solver saving",
+            marker=_bar_marker(CB_BLUE),
+            text=[f"{baselines[n] - optimum:.1f}" for n in names],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="solver saving: %{y:.2f}<extra></extra>",
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=names,
+            y=[expected[n] for n in names],
+            name="sum of unit margins",
+            marker=_bar_marker(CB_SKY, pattern="/"),
+            text=[f"{expected[n]:.1f}" for n in names],
+            textposition="outside",
+            cliponaxis=False,
+            hovertemplate="from the margins: %{y:.2f}<extra></extra>",
+        ),
+        row=1,
+        col=2,
+    )
+    for name, values, color, dash in (
+        (
+            "hottest supply junction",
+            [max(h["supply_t_k"]) for h in hours],
+            C_HEAT,
+            None,
+        ),
+        (
+            "coolest supply junction",
+            [min(h["supply_t_k"]) for h in hours],
+            C_HEAT,
+            "dot",
+        ),
+        ("return to the heat plant", [h["return_t_k"] for h in hours], CB_BLUE, None),
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=values,
+                mode="lines+markers",
+                line={"color": color, "width": 2.5, "dash": dash},
+                marker={"size": 7},
+                name=name,
+                hovertemplate=f"{name}, hour %{{x}}: %{{y:.2f}} K<extra></extra>",
+            ),
+            row=2,
+            col=1,
+        )
+    # After the traces: plotly drops shapes on a subplot that is still empty.
+    lo_k, hi_k = ex.SUPPLY_T_BAND_K
+    fig.add_hrect(
+        y0=lo_k,
+        y1=hi_k,
+        fillcolor=C_ACCENT,
+        opacity=0.18,
+        line_width=0,
+        annotation={
+            "text": f"supply setpoint band {lo_k:.0f} to {hi_k:.0f} K",
+            "yshift": 14,
+            "xshift": 12,
+            "font": {"color": C_ACCENT, "size": 12},
+        },
+        annotation_position="top left",
+        row=2,
+        col=1,
+    )
+    _base_layout(fig, "Checking the dispatch", height=860)
+    fig.update_layout(
+        barmode="group",
+        showlegend=True,
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.1,
+            "xanchor": "center",
+            "x": 0.5,
+            "font": {"size": 13, "color": TEXT},
+            "bgcolor": C_BLACK,
+        },
+        margin={"l": 60, "r": 25, "t": 90, "b": 130},
+    )
+    fig.update_xaxes(title_text="margin at full output, per hour", row=1, col=1)
+    fig.update_yaxes(title_text="operating point", range=[-0.1, 1.15], row=1, col=1)
+    fig.update_yaxes(title_text="saving over the day", row=1, col=2)
+    fig.update_xaxes(title_text="hour", dtick=1, row=2, col=1)
+    fig.update_yaxes(title_text="K", range=[320, 366], row=2, col=1)
+    return _write(fig, out_path, height_px=860)
+
+
+@functools.lru_cache(maxsize=1)
+def _mes_storage_run():
+    """Solve examples/mes_storage_and_ramps.py once for both of its figures."""
+    path = os.path.join(_REPO_ROOT, "examples", "mes_storage_and_ramps.py")
+    spec = importlib.util.spec_from_file_location("mes_storage_and_ramps", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        days, plates, checks = module.run()
+    if checks.failed:
+        raise RuntimeError(f"mes_storage_and_ramps checks failed: {checks.failed}")
+    return module, days, plates
+
+
+def _legend_key(fig, name, row, col, marker=None, line=None):
+    fig.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers" if marker else "lines",
+            marker=marker,
+            line=line,
+            name=name,
+            hoverinfo="skip",
+        ),
+        row=row,
+        col=col,
+    )
+
+
+def build_tutorial_mes_storage_dispatch(out_path):
+    """Price, the operating point of each coupling unit jointly, hour by hour
+    and without ramp limits, and the battery's charge, discharge and state of
+    charge (tutorials/mes_storage_and_ramps.rst)."""
+    ex, days, _ = _mes_storage_run()
+    free, hourly, _, joint = (days[name].hours for name in ex.DAYS)
+    x = list(range(len(joint)))
+    fig = make_subplots(
+        rows=5,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.05,
+        row_heights=[0.24, 0.14, 0.14, 0.14, 0.34],
+        subplot_titles=(
+            "Electricity price and breakeven prices",
+            "CHP operating point",
+            "e-boiler operating point",
+            "electrolyser operating point",
+            "Battery: charge above zero, discharge below, energy stored",
+        ),
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=[h["price"] for h in joint],
+            mode="lines+markers",
+            line_shape="hvh",
+            line={"color": C_PRICE, "width": 3},
+            marker={"size": 8},
+            showlegend=False,
+            hovertemplate="hour %{x}: %{y:.1f} per MWh<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    for label, value, color, position in (
+        ("CHP runs above", ex.ed.CHP_ABOVE, C_CHP, "top left"),
+        ("e-boiler runs below", ex.ed.E_BOILER_BELOW, C_E_BOILER, "bottom left"),
+        (
+            "electrolyser runs below",
+            ex.ed.ELECTROLYSER_BELOW,
+            C_ELECTROLYSER,
+            "bottom left",
+        ),
+    ):
+        fig.add_hline(
+            y=value,
+            line={"color": color, "width": 2, "dash": "dash"},
+            annotation_text=f"{label} {value:.2f}",
+            annotation_position=position,
+            annotation_font={"color": color, "size": 12},
+            row=1,
+            col=1,
+        )
+    for row, (key, label, color) in enumerate(
+        (
+            ("chp", "CHP", C_CHP),
+            ("e_boiler", "e-boiler", C_E_BOILER),
+            ("electrolyser", "electrolyser", C_ELECTROLYSER),
+        ),
+        start=2,
+    ):
+        for hours, name, line in (
+            (free, "no ramp limits", {"color": C_REFERENCE, "width": 2, "dash": "dot"}),
+            (hourly, "hour by hour", {"color": color, "width": 2.5, "dash": "dash"}),
+            (joint, "joint", {"color": color, "width": 3.5}),
+        ):
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=[h[key] for h in hours],
+                    mode="lines+markers" if name == "joint" else "lines",
+                    line_shape="hvh",
+                    line=line,
+                    marker={"size": 7},
+                    showlegend=False,
+                    hovertemplate=f"{label}, {name}, hour %{{x}}: %{{y:.2f}}<extra></extra>",
+                ),
+                row=row,
+                col=1,
+            )
+        fig.update_yaxes(range=[-0.12, 1.15], tickvals=[0, 0.5, 1], row=row, col=1)
+    for name, dash in (
+        ("joint: solid, in the unit's colour", None),
+        ("hour by hour: dashed, in the unit's colour", "dash"),
+        ("no ramp limits: grey dotted", "dot"),
+    ):
+        _legend_key(
+            fig,
+            name,
+            row=2,
+            col=1,
+            line={"color": C_REFERENCE, "width": 3, "dash": dash},
+        )
+    fig.add_trace(
+        go.Bar(
+            x=x,
+            y=[h["charge_mw"] - h["discharge_mw"] for h in joint],
+            width=0.6,
+            marker=_bar_marker(C_BATTERY),
+            opacity=0.6,
+            name="battery power",
+            hovertemplate="hour %{x}: %{y:+.3f} MW<extra></extra>",
+        ),
+        row=5,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[t - 0.5 for t in range(len(joint) + 1)],
+            y=[ex.BATTERY_START_MWH] + [h["stored_mwh"] for h in joint],
+            mode="lines+markers",
+            line={"color": C_BATTERY, "width": 3},
+            marker={
+                "size": 10,
+                "symbol": "diamond",
+                "line": {"color": BAR_LINE, "width": 1},
+            },
+            name="energy stored",
+            hovertemplate="%{y:.3f} MWh stored<extra></extra>",
+        ),
+        row=5,
+        col=1,
+    )
+    # After the traces: plotly drops shapes on a subplot that is still empty.
+    fig.add_hline(
+        y=ex.BATTERY_MWH,
+        line={"color": C_REFERENCE, "width": 1.5, "dash": "dot"},
+        annotation_text=f"capacity {ex.BATTERY_MWH:g} MWh",
+        annotation_position="top left",
+        annotation_font={"size": 12},
+        row=5,
+        col=1,
+    )
+    _base_layout(fig, "A coupled day with a battery and ramp limits", height=1250)
+    fig.update_layout(
+        showlegend=True,
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.06,
+            "xanchor": "center",
+            "x": 0.5,
+            "font": {"size": 13, "color": TEXT},
+            "bgcolor": C_BLACK,
+        },
+        margin={"l": 60, "r": 25, "t": 90, "b": 100},
+    )
+    fig.update_xaxes(range=[-0.6, len(joint) - 0.4])
+    fig.update_xaxes(title_text="hour", dtick=1, row=5, col=1)
+    fig.update_yaxes(title_text="per MWh", rangemode="tozero", row=1, col=1)
+    fig.update_yaxes(title_text="MW, MWh", range=[-1.2, 2.45], row=5, col=1)
+    return _write(fig, out_path, height_px=1250)
+
+
+def build_tutorial_mes_storage_checks(out_path):
+    """Validation of the joint day: ramp steps and state of charge against the
+    copper plate, the battery's hourly saving against its cash flow, the
+    solver's effects against the copper plate's, and the supply temperature
+    (tutorials/mes_storage_and_ramps.rst)."""
+    ex, days, plates = _mes_storage_run()
+    _, _, joint, battery = (days[name].hours for name in ex.DAYS)
+    plate = plates["battery"]
+    x = list(range(len(battery)))
+    ring = {"size": 17, "color": C_BLACK}
+    fig = make_subplots(
+        rows=3,
+        cols=2,
+        horizontal_spacing=0.12,
+        vertical_spacing=0.14,
+        row_heights=[0.37, 0.37, 0.26],
+        specs=[[{}, {}], [{}, {}], [{"colspan": 2}, None]],
+        subplot_titles=(
+            f"Change of operating point, limit {ex.RAMP_LIMIT:g} per hour",
+            "Energy stored at each hour boundary",
+            "Battery's hourly saving and cash flow",
+            "Solver against copper plate",
+            "Supply and return temperature",
+        ),
+    )
+    for offset, (key, label, color) in zip(
+        (-0.22, 0.0, 0.22),
+        (
+            ("chp", "CHP", C_CHP),
+            ("e_boiler", "e-boiler", C_E_BOILER),
+            ("electrolyser", "electrolyser", C_ELECTROLYSER),
+        ),
+    ):
+        steps = x[1:]
+        fig.add_trace(
+            go.Scatter(
+                x=[t + offset for t in steps],
+                y=[plate[key][t] - plate[key][t - 1] for t in steps],
+                mode="markers",
+                marker={**ring, "line": {"color": color, "width": 2}},
+                showlegend=False,
+                customdata=steps,
+                hovertemplate=f"{label}, copper plate, hour %{{customdata}}: %{{y:+.2f}}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[t + offset for t in steps],
+                y=[battery[t][key] - battery[t - 1][key] for t in steps],
+                mode="markers",
+                marker={
+                    "size": 9,
+                    "color": color,
+                    "line": {"color": BAR_LINE, "width": 1},
+                },
+                name=label,
+                customdata=steps,
+                hovertemplate=f"{label}, hour %{{customdata}}: %{{y:+.3f}}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+    _legend_key(
+        fig,
+        "copper plate: ring in the unit's colour",
+        row=1,
+        col=1,
+        marker={**ring, "size": 15, "line": {"color": C_REFERENCE, "width": 2}},
+    )
+    ends = [t - 0.5 for t in range(len(battery) + 1)]
+    fig.add_trace(
+        go.Scatter(
+            x=ends,
+            y=[ex.BATTERY_START_MWH] + plate["stored_mwh"],
+            mode="markers",
+            marker={**ring, "line": {"color": C_BATTERY, "width": 2}},
+            showlegend=False,
+            hovertemplate="copper plate: %{y:.3f} MWh<extra></extra>",
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=ends,
+            y=[ex.BATTERY_START_MWH] + [h["stored_mwh"] for h in battery],
+            mode="lines+markers",
+            line={"color": C_BATTERY, "width": 2.5},
+            marker={
+                "size": 9,
+                "color": C_BATTERY,
+                "line": {"color": BAR_LINE, "width": 1},
+            },
+            name="energy stored",
+            hovertemplate="solver: %{y:.3f} MWh<extra></extra>",
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_trace(
+        go.Bar(
+            x=x,
+            y=[
+                ex.ed.hourly_cost(c) - ex.ed.hourly_cost(d)
+                for c, d in zip(joint, battery)
+            ],
+            marker=_bar_marker(CB_BLUE),
+            name="hourly cost saved",
+            hovertemplate="hour %{x}: %{y:+.3f}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=[h["price"] * (h["discharge_mw"] - h["charge_mw"]) for h in battery],
+            mode="markers",
+            marker={
+                "size": 10,
+                "symbol": "diamond",
+                "color": CB_SKY,
+                "line": {"color": BAR_LINE, "width": 1},
+            },
+            name="battery cash flow",
+            hovertemplate="hour %{x}: %{y:+.2f}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    effects = ex.effects(days, plates)
+    names = [name.replace(" of ", " of<br>", 1) for name in effects]
+    for i, (label, pattern, color) in enumerate(
+        (("solver effect", None, CB_BLUE), ("copper plate effect", "/", CB_SKY))
+    ):
+        values = [pair[i] for pair in effects.values()]
+        fig.add_trace(
+            go.Bar(
+                x=names,
+                y=values,
+                name=label,
+                marker=_bar_marker(color, pattern=pattern),
+                text=[f"{v:.2f}" for v in values],
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate=f"{label}: %{{y:.3f}}<extra></extra>",
+            ),
+            row=2,
+            col=2,
+        )
+    for name, values, color, dash in (
+        (
+            "hottest supply junction",
+            [max(h["supply_t_k"]) for h in battery],
+            C_HEAT,
+            None,
+        ),
+        (
+            "coolest supply junction",
+            [min(h["supply_t_k"]) for h in battery],
+            C_HEAT,
+            "dot",
+        ),
+        ("return to the heat plant", [h["return_t_k"] for h in battery], CB_BLUE, None),
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=values,
+                mode="lines+markers",
+                line={"color": color, "width": 2.5, "dash": dash},
+                marker={"size": 7},
+                name=name,
+                hovertemplate=f"{name}, hour %{{x}}: %{{y:.2f}} K<extra></extra>",
+            ),
+            row=3,
+            col=1,
+        )
+    # After the traces: plotly drops shapes on a subplot that is still empty.
+    fig.add_hrect(
+        y0=-ex.RAMP_LIMIT,
+        y1=ex.RAMP_LIMIT,
+        fillcolor=C_ACCENT,
+        opacity=0.14,
+        line_width=0,
+        layer="below",
+        row=1,
+        col=1,
+    )
+    fig.add_hrect(
+        y0=0,
+        y1=ex.BATTERY_MWH,
+        fillcolor=C_ACCENT,
+        opacity=0.12,
+        line_width=0,
+        layer="below",
+        row=1,
+        col=2,
+    )
+    lo_k, hi_k = ex.ed.SUPPLY_T_BAND_K
+    fig.add_hrect(
+        y0=lo_k,
+        y1=hi_k,
+        fillcolor=C_ACCENT,
+        opacity=0.18,
+        line_width=0,
+        layer="below",
+        annotation={
+            "text": f"supply setpoint band {lo_k:.0f} to {hi_k:.0f} K",
+            "yshift": 14,
+            "font": {"color": C_ACCENT, "size": 12},
+        },
+        annotation_position="top left",
+        row=3,
+        col=1,
+    )
+    _base_layout(fig, "Checking the joint dispatch", height=1180)
+    fig.update_layout(
+        barmode="group",
+        showlegend=True,
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.07,
+            "xanchor": "center",
+            "x": 0.5,
+            "font": {"size": 13, "color": TEXT},
+            "bgcolor": C_BLACK,
+        },
+        margin={"l": 60, "r": 25, "t": 90, "b": 130},
+    )
+    fig.update_xaxes(title_text="hour", dtick=1, row=1, col=1)
+    fig.update_yaxes(range=[-0.75, 0.75], tickvals=[-0.5, 0, 0.5], row=1, col=1)
+    fig.update_xaxes(
+        title_text="hour", dtick=1, range=[-0.9, len(battery) - 0.1], row=1, col=2
+    )
+    fig.update_yaxes(title_text="MWh", range=[-0.2, 2.3], row=1, col=2)
+    fig.update_xaxes(title_text="hour", dtick=1, row=2, col=1)
+    fig.update_yaxes(title_text="per hour", row=2, col=1)
+    fig.update_yaxes(title_text="over the day", range=[0, 150], row=2, col=2)
+    fig.update_xaxes(title_text="hour", dtick=1, row=3, col=1)
+    fig.update_yaxes(title_text="K", range=[320, 366], row=3, col=1)
+    return _write(fig, out_path, height_px=1180)
+
+
+@functools.lru_cache(maxsize=1)
+def _mes_limits_run():
+    """Solve examples/mes_network_limits.py once for both of its figures."""
+    path = os.path.join(_REPO_ROOT, "examples", "mes_network_limits.py")
+    spec = importlib.util.spec_from_file_location("mes_network_limits", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        days, checks = module.run()
+    if checks.failed:
+        raise RuntimeError(f"mes_network_limits checks failed: {checks.failed}")
+    return module, days
+
+
+def build_tutorial_mes_limits_dispatch(out_path):
+    """Price, the load on the cable and the gas pipe to the plant site against
+    their limits, and each unit's operating point with both limits and without
+    (tutorials/mes_network_limits.rst)."""
+    ex, days = _mes_limits_run()
+    both, free = days["both limits"].hours, days["neither"].hours
+    k = both[0]["k"]
+    x = list(range(len(both)))
+    fig = make_subplots(
+        rows=6,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.045,
+        row_heights=[0.2, 0.19, 0.19, 0.14, 0.14, 0.14],
+        subplot_titles=(
+            "Electricity price and breakeven prices",
+            "Cable to the plant bus: apparent power",
+            "Gas pipe to the plant junction: gas arriving",
+            "CHP operating point",
+            "e-boiler operating point",
+            "electrolyser operating point",
+        ),
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=[h["price"] for h in both],
+            mode="lines+markers",
+            line_shape="hvh",
+            line={"color": C_PRICE, "width": 3},
+            marker={"size": 8},
+            showlegend=False,
+            hovertemplate="hour %{x}: %{y:.1f} per MWh<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    for label, value, color, position in (
+        ("CHP runs above", ex.ed.CHP_ABOVE, C_CHP, "top left"),
+        ("e-boiler runs below", ex.ed.E_BOILER_BELOW, C_E_BOILER, "bottom left"),
+        (
+            "electrolyser runs below",
+            ex.ed.ELECTROLYSER_BELOW,
+            C_ELECTROLYSER,
+            "bottom left",
+        ),
+    ):
+        fig.add_hline(
+            y=value,
+            line={"color": color, "width": 2, "dash": "dash"},
+            annotation_text=f"{label} {value:.2f}",
+            annotation_position=position,
+            annotation_font={"color": color, "size": 12},
+            row=1,
+            col=1,
+        )
+    for row, key, scale, unit in (
+        (2, "cable_mva", 1.0, "MVA"),
+        (3, "pipe_kgs", k, "MW"),
+    ):
+        for hours, label, marker in (
+            (free, "without limits", _bar_marker(C_REFERENCE, pattern="/")),
+            (both, "with both limits", _bar_marker(CB_BLUE)),
+        ):
+            fig.add_trace(
+                go.Bar(
+                    x=x,
+                    y=[scale * h[key] for h in hours],
+                    name=label,
+                    legendgroup=label,
+                    showlegend=row == 2,
+                    marker=marker,
+                    hovertemplate=f"{label}, hour %{{x}}: %{{y:.3f}} {unit}<extra></extra>",
+                ),
+                row=row,
+                col=1,
+            )
+    for row, (key, label, color) in enumerate(
+        (
+            ("chp", "CHP", C_CHP),
+            ("e_boiler", "e-boiler", C_E_BOILER),
+            ("electrolyser", "electrolyser", C_ELECTROLYSER),
+        ),
+        start=4,
+    ):
+        for hours, name, line in (
+            (free, "without limits", {"color": C_REFERENCE, "width": 2, "dash": "dot"}),
+            (both, "with both limits", {"color": color, "width": 3.5}),
+        ):
+            fig.add_trace(
+                go.Scatter(
+                    x=x,
+                    y=[h[key] for h in hours],
+                    mode="lines+markers" if name == "with both limits" else "lines",
+                    line_shape="hvh",
+                    line=line,
+                    marker={"size": 7},
+                    showlegend=False,
+                    hovertemplate=f"{label}, {name}, hour %{{x}}: %{{y:.3f}}<extra></extra>",
+                ),
+                row=row,
+                col=1,
+            )
+        fig.update_yaxes(range=[-0.12, 1.15], tickvals=[0, 0.5, 1], row=row, col=1)
+    for name, dash in (
+        ("operating point with both limits: solid, in the unit's colour", None),
+        ("operating point without limits: grey dotted", "dot"),
+    ):
+        _legend_key(
+            fig,
+            name,
+            row=4,
+            col=1,
+            line={"color": C_REFERENCE, "width": 3, "dash": dash},
+        )
+    # After the traces: plotly drops shapes on a subplot that is still empty.
+    limited = days["both limits"]
+    for row, value, text, position in (
+        (2, limited.cable_mva, f"rating {limited.cable_mva:g} MVA", "top left"),
+        (
+            3,
+            limited.pipe_capacity_kgs * k,
+            f"capacity at the floor {limited.pipe_capacity_kgs * k:.2f} MW",
+            "top",
+        ),
+    ):
+        fig.add_hline(
+            y=value,
+            line={"color": C_REFERENCE, "width": 2, "dash": "dash"},
+            annotation_text=text,
+            annotation_position=position,
+            annotation_font={"size": 12},
+            row=row,
+            col=1,
+        )
+    _base_layout(fig, "Where the network binds", height=1310)
+    fig.update_layout(
+        barmode="group",
+        showlegend=True,
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.05,
+            "xanchor": "center",
+            "x": 0.5,
+            "font": {"size": 13, "color": TEXT},
+            "bgcolor": C_BLACK,
+        },
+        margin={"l": 60, "r": 25, "t": 90, "b": 110},
+    )
+    fig.update_xaxes(range=[-0.6, len(both) - 0.4])
+    fig.update_xaxes(title_text="hour", dtick=1, row=6, col=1)
+    fig.update_yaxes(title_text="per MWh", rangemode="tozero", row=1, col=1)
+    fig.update_yaxes(title_text="MVA", range=[0, 2.4], row=2, col=1)
+    fig.update_yaxes(title_text="MW", range=[-1.2, 3.1], row=3, col=1)
+    return _write(fig, out_path, height_px=1310)
+
+
+def build_tutorial_mes_limits_checks(out_path):
+    """Validation of the limited day: the value of one more MW through each
+    bottleneck against the marginal unit's margin, the congestion cost against
+    the margins lost, the gas pipe on its Weymouth curve, every operating point
+    against the hand dispatch, and the supply temperature
+    (tutorials/mes_network_limits.rst)."""
+    ex, days = _mes_limits_run()
+    limited = days["both limits"]
+    both, free = limited.hours, days["neither"].hours
+    x = list(range(len(both)))
+    ring = {"size": 17, "color": C_BLACK}
+    fig = make_subplots(
+        rows=3,
+        cols=2,
+        horizontal_spacing=0.12,
+        vertical_spacing=0.14,
+        row_heights=[0.37, 0.37, 0.26],
+        specs=[[{}, {}], [{}, {}], [{"colspan": 2}, None]],
+        subplot_titles=(
+            "Value of one more MW through the bottleneck",
+            "Congestion cost per hour",
+            "Gas pipe: pressure at the plant junction against flow",
+            "Operating point: solver against hand calculation",
+            "Supply and return temperature",
+        ),
+    )
+    values = ex.marginal_values(days)
+    for limit, unit, color in (
+        ("cable", "electrolyser", C_ELECTROLYSER),
+        ("gas pipe", "CHP", C_CHP),
+    ):
+        hours = [t for t, (name, _, _) in values.items() if name == limit]
+        fig.add_trace(
+            go.Scatter(
+                x=hours,
+                y=[values[t][2] for t in hours],
+                mode="markers",
+                marker={**ring, "line": {"color": color, "width": 2}},
+                showlegend=False,
+                hovertemplate=f"{unit}'s margin per MW, hour %{{x}}: %{{y:.2f}}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=hours,
+                y=[values[t][1] for t in hours],
+                mode="markers",
+                marker={
+                    "size": 10,
+                    "color": color,
+                    "line": {"color": BAR_LINE, "width": 1},
+                },
+                name=f"{limit}: {unit} at the margin",
+                hovertemplate=f"one more MW through the {limit}, hour %{{x}}: %{{y:.3f}}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+    _legend_key(
+        fig,
+        "margin per MW, by hand: ring in the unit's colour",
+        row=1,
+        col=1,
+        marker={**ring, "size": 15, "line": {"color": C_REFERENCE, "width": 2}},
+    )
+    congestion = ex.congestion(days, "both limits")
+    fig.add_trace(
+        go.Bar(
+            x=x,
+            y=[cost for cost, _ in congestion],
+            name="congestion cost",
+            marker=_bar_marker(CB_BLUE),
+            hovertemplate="hour %{x}: %{y:.4f}<extra></extra>",
+        ),
+        row=1,
+        col=2,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=x,
+            y=[
+                lost + h["price"] * (h["line_loss_mw"] - f["line_loss_mw"])
+                for (_, lost), h, f in zip(congestion, both, free)
+            ],
+            mode="markers",
+            marker={
+                "size": 11,
+                "symbol": "diamond",
+                "color": CB_SKY,
+                "line": {"color": BAR_LINE, "width": 1},
+            },
+            name="margins lost and line losses",
+            hovertemplate="hour %{x}: %{y:.4f}<extra></extra>",
+        ),
+        row=1,
+        col=2,
+    )
+    net, _, site = ex.build_network()
+    k_main = ex.weymouth_k(net, site.main_pipe)
+    demand = ex.ed.GAS_DEMAND_KGS
+    flows = np.linspace(-0.03, 0.068, 120)
+    fig.add_trace(
+        go.Scatter(
+            x=flows,
+            y=[
+                1
+                - k_main * (m + demand) * abs(m + demand)
+                - limited.k_pipe * m * abs(m)
+                for m in flows
+            ],
+            mode="lines",
+            line={"color": C_GAS, "width": 2.5},
+            name="Weymouth, by hand",
+            hoverinfo="skip",
+        ),
+        row=2,
+        col=1,
+    )
+    thin = [
+        (label, h)
+        for label, day in days.items()
+        if day.k_pipe == limited.k_pipe
+        for h in day.hours
+    ]
+    fig.add_trace(
+        go.Scatter(
+            x=[h["pipe_kgs"] for _, h in thin],
+            y=[h["psq"][-1] for _, h in thin],
+            mode="markers",
+            marker={"size": 9, "color": C_GAS, "line": {"color": BAR_LINE, "width": 1}},
+            name="solver, days with the 30 mm pipe",
+            customdata=[label for label, _ in thin],
+            hovertemplate="%{customdata}: %{x:.5f} kg/s, %{y:.4f}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    full = max(h["pipe_kgs"] for h in free)
+    fig.add_trace(
+        go.Scatter(
+            x=[full],
+            y=[1 - k_main * (full + demand) ** 2 - limited.k_pipe * full**2],
+            mode="markers",
+            marker={**ring, "line": {"color": C_REFERENCE, "width": 2}},
+            name="full CHP without the floor",
+            hovertemplate="%{x:.4f} kg/s would leave %{y:.3f}<extra></extra>",
+        ),
+        row=2,
+        col=1,
+    )
+    # Decreasing sizes keep the units visible where their points coincide.
+    for key, label, color, size in (
+        ("chp", "CHP", C_CHP, 17),
+        ("e_boiler", "e-boiler", C_E_BOILER, 12),
+        ("electrolyser", "electrolyser", C_ELECTROLYSER, 7),
+    ):
+        points = [
+            (ex.expected_dispatch(day, h["price"], h["k"])[key], h[key], name)
+            for name, day in days.items()
+            for h in day.hours
+        ]
+        fig.add_trace(
+            go.Scatter(
+                x=[p[0] for p in points],
+                y=[p[1] for p in points],
+                mode="markers",
+                marker={
+                    "size": size,
+                    "color": color,
+                    "line": {"color": BAR_LINE, "width": 1},
+                },
+                name=label,
+                customdata=[p[2] for p in points],
+                hovertemplate=f"{label}, %{{customdata}}: by hand %{{x:.4f}}, solver %{{y:.4f}}<extra></extra>",
+            ),
+            row=2,
+            col=2,
+        )
+    for name, values_k, color, dash in (
+        ("hottest supply junction", [max(h["supply_t_k"]) for h in both], C_HEAT, None),
+        (
+            "coolest supply junction",
+            [min(h["supply_t_k"]) for h in both],
+            C_HEAT,
+            "dot",
+        ),
+        ("return to the heat plant", [h["return_t_k"] for h in both], CB_BLUE, None),
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=values_k,
+                mode="lines+markers",
+                line={"color": color, "width": 2.5, "dash": dash},
+                marker={"size": 7},
+                name=name,
+                hovertemplate=f"{name}, hour %{{x}}: %{{y:.2f}} K<extra></extra>",
+            ),
+            row=3,
+            col=1,
+        )
+    # After the traces: plotly drops shapes on a subplot that is still empty.
+    for floor, dash in ((limited.floor, "dash"), (days[ex.FLOOR_RELAXED].floor, "dot")):
+        fig.add_hline(
+            y=floor,
+            line={"color": C_REFERENCE, "width": 1.5, "dash": dash},
+            annotation_text=f"floor {floor:g}",
+            annotation_position="bottom left" if dash == "dot" else "top left",
+            annotation_font={"size": 12},
+            row=2,
+            col=1,
+        )
+    fig.add_shape(
+        type="line",
+        x0=0,
+        y0=0,
+        x1=1,
+        y1=1,
+        line={"color": C_REFERENCE, "width": 1.5, "dash": "dash"},
+        layer="below",
+        row=2,
+        col=2,
+    )
+    lo_k, hi_k = ex.ed.SUPPLY_T_BAND_K
+    fig.add_hrect(
+        y0=lo_k,
+        y1=hi_k,
+        fillcolor=C_ACCENT,
+        opacity=0.18,
+        line_width=0,
+        layer="below",
+        annotation={
+            "text": f"supply setpoint band {lo_k:.0f} to {hi_k:.0f} K",
+            "yshift": 14,
+            "font": {"color": C_ACCENT, "size": 12},
+        },
+        annotation_position="top left",
+        row=3,
+        col=1,
+    )
+    _base_layout(fig, "Checking the constrained dispatch", height=1180)
+    fig.update_layout(
+        showlegend=True,
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.07,
+            "xanchor": "center",
+            "x": 0.5,
+            "font": {"size": 13, "color": TEXT},
+            "bgcolor": C_BLACK,
+        },
+        margin={"l": 60, "r": 25, "t": 90, "b": 150},
+    )
+    fig.update_xaxes(title_text="hour", dtick=1, range=[-0.5, 7.5], row=1, col=1)
+    fig.update_yaxes(title_text="per MW", range=[0, 30], row=1, col=1)
+    fig.update_xaxes(title_text="hour", dtick=1, row=1, col=2)
+    fig.update_yaxes(title_text="per hour", row=1, col=2)
+    fig.update_xaxes(title_text="flow to the plant junction, kg/s", row=2, col=1)
+    fig.update_yaxes(title_text="squared pressure, pu", range=[0.4, 1.12], row=2, col=1)
+    fig.update_xaxes(title_text="by hand", range=[-0.08, 1.08], row=2, col=2)
+    fig.update_yaxes(title_text="solver", range=[-0.08, 1.08], row=2, col=2)
+    fig.update_xaxes(title_text="hour", dtick=1, row=3, col=1)
+    fig.update_yaxes(title_text="K", range=[320, 366], row=3, col=1)
+    return _write(fig, out_path, height_px=1180)
+
+
+C_MISSED = "#d7191c"
+
+
+@functools.lru_cache(maxsize=1)
+def _mes_local_optima_solve():
+    """Solve examples/mes_local_optima.py once for both of its figures, with
+    the failures of the checks that do not depend on IPOPT. Those of IPOPT's
+    results only warn: the sweep figure shows what IPOPT does on the build
+    machine, whatever that is."""
+    path = os.path.join(_REPO_ROOT, "examples", "mes_local_optima.py")
+    spec = importlib.util.spec_from_file_location("mes_local_optima", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        results, _ = module.run()
+    solid, ipopt = module.ed.Checks(), module.ed.Checks()
+    module.check_scip_and_apopt(solid, results)
+    module.check_ipopt_results(ipopt, results)
+    for label in ipopt.failed:
+        print(
+            f"[interactive_plots] WARNING: mes_local_optima, IPOPT on this build: {label}"
+        )
+    return module, results, tuple(solid.failed)
+
+
+def _mes_local_optima_run():
+    module, results, failed = _mes_local_optima_solve()
+    if failed:
+        raise RuntimeError(f"mes_local_optima checks failed: {list(failed)}")
+    return module, results
+
+
+def build_tutorial_mes_local_optima_day(out_path):
+    """The network limits day by APOPT and by SCIP: the cost of each hour with
+    the relaxation's bound, the CHP's operating point, the CHP exchanger's
+    balance with APOPT's stops, and hour 0's cost along the CHP's operating
+    point, and the loading of the cable and the gas pipe to the plant site
+    (tutorials/mes_local_optima.rst)."""
+    ex, results = _mes_local_optima_run()
+    apopt, scip, bound = (results.day[k] for k in ("APOPT", "SCIP", "relaxation"))
+    x = list(scip)
+    fig = make_subplots(
+        rows=4,
+        cols=2,
+        horizontal_spacing=0.12,
+        vertical_spacing=0.07,
+        row_heights=[0.29, 0.16, 0.2, 0.35],
+        specs=[[{"colspan": 2}, None], [{"colspan": 2}, None], [{}, {}], [{}, {}]],
+        subplot_titles=(
+            "Cost of each hour",
+            "CHP operating point",
+            f"Cable loading, % of its {ex.DAY_LIMITS['cable_mva']:g} MVA rating",
+            "Gas pipe loading, % of its capacity at the floor",
+            "CHP exchanger: where its balance holds",
+            "Hour 0 with the CHP pinned, by SCIP",
+        ),
+    )
+    width = 0.38
+    excess = {t: apopt[t].cost - scip[t].objective for t in ex.CHP_HOURS}
+    for values, label, marker, offset, text in (
+        (
+            [apopt[t].cost for t in x],
+            "APOPT",
+            _bar_marker(C_REFERENCE, pattern="/"),
+            -width,
+            [f"+{excess[t]:.2f}" if t in excess else "" for t in x],
+        ),
+        (
+            [scip[t].objective for t in x],
+            "SCIP on the exact formulation",
+            _bar_marker(CB_BLUE),
+            0.0,
+            None,
+        ),
+    ):
+        fig.add_trace(
+            go.Bar(
+                x=x,
+                y=values,
+                width=width,
+                offset=offset,
+                name=f"{label}, day {sum(values):.2f}",
+                legendgroup=label,
+                marker=marker,
+                text=text,
+                textposition="outside",
+                constraintext="none",
+                cliponaxis=False,
+                hovertemplate=f"{label}, hour %{{x}}: %{{y:.2f}}<extra></extra>",
+            ),
+            row=1,
+            col=1,
+        )
+    fig.add_trace(
+        go.Scatter(
+            x=[t + width / 2 for t in x],
+            y=[bound[t].objective for t in x],
+            mode="markers",
+            marker={
+                "size": 11,
+                "symbol": "diamond",
+                "color": CB_SKY,
+                "line": {"color": BAR_LINE, "width": 1},
+            },
+            name=f"relaxation's bound, day {sum(h.objective for h in bound.values()):.2f}",
+            customdata=x,
+            hovertemplate="bound, hour %{customdata}: %{y:.2f}<extra></extra>",
+        ),
+        row=1,
+        col=1,
+    )
+    for hours, name, line, mode in (
+        (
+            apopt,
+            "CHP by APOPT",
+            {"color": C_REFERENCE, "width": 2.5, "dash": "dot"},
+            "lines",
+        ),
+        (scip, "CHP by SCIP", {"color": C_CHP, "width": 3.5}, "lines+markers"),
+    ):
+        fig.add_trace(
+            go.Scatter(
+                x=x,
+                y=[hours[t].dispatch["chp"] for t in x],
+                mode=mode,
+                line_shape="hvh",
+                line=line,
+                marker={"size": 7},
+                name=name,
+                hovertemplate=f"{name}, hour %{{x}}: %{{y:.3f}}<extra></extra>",
+            ),
+            row=2,
+            col=1,
+        )
+    net, _, site = ex.nl.build_network(**ex.DAY_LIMITS)
+    capacity_kgs = ex.nl.pipe_capacity_kgs(net, site, ex.DAY_LIMITS["floor"])
+    loadings = (
+        (1, lambda h: 100 * h.quantities["cable_mva"] / ex.DAY_LIMITS["cable_mva"]),
+        (2, lambda h: 100 * abs(h.quantities["pipe_kgs"]) / capacity_kgs),
+    )
+    for col, loading in loadings:
+        for hours, label, marker, offset in (
+            (apopt, "APOPT", _bar_marker(C_REFERENCE, pattern="/"), -width),
+            (scip, "SCIP on the exact formulation", _bar_marker(CB_BLUE), 0.0),
+        ):
+            fig.add_trace(
+                go.Bar(
+                    x=x,
+                    y=[loading(hours[t]) for t in x],
+                    width=width,
+                    offset=offset,
+                    marker=marker,
+                    legendgroup=label,
+                    showlegend=False,
+                    customdata=[
+                        (
+                            hours[t].quantities["cable_mva"],
+                            hours[t].quantities["pipe_kgs"],
+                            "to the plant"
+                            if hours[t].quantities["pipe_kgs"] >= 0
+                            else "to the town",
+                        )
+                        for t in x
+                    ],
+                    hovertemplate=(
+                        f"{label}, hour %{{x}}: %{{y:.0f}} %<br>cable "
+                        "%{customdata[0]:.3f} MVA, pipe %{customdata[1]:.4f} kg/s "
+                        "%{customdata[2]}<extra></extra>"
+                    ),
+                ),
+                row=3,
+                col=col,
+            )
+    on_k = scip[ex.CHP_HOURS[0]].exchangers["chp"].spread_k
+    fig.add_trace(
+        go.Scatter(
+            x=[0, 0, None, 0, 2],
+            y=[0, 100, None, on_k, on_k],
+            mode="lines",
+            line={"color": C_CHP, "width": 3},
+            name="where the CHP exchanger's balance holds",
+            hoverinfo="skip",
+        ),
+        row=4,
+        col=1,
+    )
+    for hours, name, color in (
+        (apopt, "APOPT's stops", C_REFERENCE),
+        (scip, "SCIP's optimum", CB_BLUE),
+    ):
+        states = [hours[t].exchangers["chp"] for t in ex.CHP_HOURS]
+        fig.add_trace(
+            go.Scatter(
+                x=[s.heat_mw for s in states],
+                y=[s.spread_k for s in states],
+                mode="markers",
+                marker={
+                    "size": 12,
+                    "color": color,
+                    "line": {"color": BAR_LINE, "width": 1},
+                },
+                name=name,
+                customdata=[
+                    (t, s.flow_kgs, s.node_k) for t, s in zip(ex.CHP_HOURS, states)
+                ],
+                hovertemplate=(
+                    f"{name}, hour %{{customdata[0]}}: %{{x:.3f}} MW, spread "
+                    "%{y:.2f} K, flow %{customdata[1]:.3g} kg/s, node "
+                    "%{customdata[2]:.2f} K<extra></extra>"
+                ),
+            ),
+            row=4,
+            col=1,
+        )
+    points = ex.chp_cost_curve(results)
+    fig.add_trace(
+        go.Scatter(
+            x=[p[0] for p in points],
+            y=[p[1] for p in points],
+            mode="lines+markers",
+            line={"color": CB_BLUE, "width": 2.5},
+            marker={
+                "size": 9,
+                "color": CB_BLUE,
+                "line": {"color": BAR_LINE, "width": 1},
+            },
+            name="hour 0 by SCIP with the CHP pinned",
+            hovertemplate="CHP pinned at %{x:.3f}: %{y:.2f}<extra></extra>",
+        ),
+        row=4,
+        col=2,
+    )
+    fig.add_trace(
+        go.Scatter(
+            x=[apopt[0].dispatch["chp"]],
+            y=[apopt[0].cost],
+            mode="markers",
+            marker={
+                "size": 19,
+                "color": C_BLACK,
+                "line": {"color": C_REFERENCE, "width": 2.5},
+            },
+            showlegend=False,
+            hovertemplate="APOPT, hour 0: CHP %{x:.3f}, %{y:.2f}<extra></extra>",
+        ),
+        row=4,
+        col=2,
+    )
+    # After the traces: plotly drops shapes on a subplot that is still empty.
+    cap = scip[ex.CHP_HOURS[0]].expected["chp"]
+    fig.add_hline(
+        y=cap,
+        line={"color": C_REFERENCE, "width": 2, "dash": "dash"},
+        layer="below",
+        annotation_text=f"the gas pipe allows {cap:.3f}",
+        annotation_position="top",
+        annotation_font={"size": 12},
+        row=2,
+        col=1,
+    )
+    for col in (1, 2):
+        fig.add_hline(
+            y=100,
+            line={"color": C_REFERENCE, "width": 2, "dash": "dash"},
+            layer="below",
+            row=3,
+            col=col,
+        )
+    stop_k = max(apopt[t].exchangers["chp"].spread_k for t in ex.CHP_HOURS)
+    margin = ex.ed.unit_margins(scip[0].price)["chp"]
+    for col, annotation in (
+        (
+            1,
+            {
+                "x": 0,
+                "y": stop_k,
+                "text": f"APOPT stops here: feeding heat in<br>needs a {on_k:.0f} K spread first",
+                "ax": 40,
+                "ay": -70,
+                "xanchor": "left",
+            },
+        ),
+        (
+            1,
+            {
+                "x": 0,
+                "y": 0.97,
+                "yref": "y domain",
+                "text": "unit off: any spread",
+                "showarrow": False,
+                "xanchor": "left",
+                "xshift": 8,
+            },
+        ),
+        (
+            1,
+            {
+                "x": 0.4,
+                "y": on_k,
+                "text": f"unit on: {on_k:.0f} K spread",
+                "showarrow": False,
+                "xanchor": "left",
+                "yshift": -14,
+            },
+        ),
+        (2, {"x": points[0][0], "y": points[0][1], "text": "APOPT", "ax": 45, "ay": 0}),
+        (
+            2,
+            {
+                "x": points[-1][0],
+                "y": points[-1][1],
+                "text": "optimum",
+                "ax": -55,
+                "ay": 20,
+            },
+        ),
+        (
+            2,
+            {
+                "x": 0.65,
+                "y": 0.85,
+                "xref": "x domain",
+                "yref": "y domain",
+                "text": f"falls about {margin:.0f} per unit,<br>the CHP's margin at {scip[0].price:g}",
+                "showarrow": False,
+            },
+        ),
+    ):
+        fig.add_annotation(
+            **{"arrowcolor": C_REFERENCE, "font": {"size": 12}, **annotation},
+            row=4,
+            col=col,
+        )
+    _base_layout(fig, "Where APOPT stops", height=1550)
+    fig.update_layout(
+        showlegend=True,
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.06,
+            "xanchor": "center",
+            "x": 0.5,
+            "font": {"size": 13, "color": TEXT},
+            "bgcolor": C_BLACK,
+        },
+        margin={"l": 60, "r": 25, "t": 90, "b": 120},
+    )
+    fig.update_xaxes(dtick=1, range=[-0.6, len(x) - 0.4], row=1, col=1)
+    fig.update_yaxes(
+        title_text="cost of the hour",
+        range=[0, 1.15 * max(h.cost for h in apopt.values())],
+        row=1,
+        col=1,
+    )
+    fig.update_xaxes(
+        title_text="hour", dtick=1, range=[-0.6, len(x) - 0.4], row=2, col=1
+    )
+    fig.update_yaxes(range=[-0.12, 1.15], tickvals=[0, 0.5, 1], row=2, col=1)
+    for col in (1, 2):
+        fig.update_xaxes(
+            title_text="hour",
+            dtick=1,
+            range=[-0.6, len(x) - 0.4],
+            showgrid=False,
+            row=3,
+            col=col,
+        )
+        fig.update_yaxes(
+            range=[0, 118],
+            tickvals=[0, 50, 100],
+            ticktext=["0 %", "50 %", "100 %"],
+            row=3,
+            col=col,
+        )
+    fig.update_xaxes(title_text="heat fed in, MW", range=[-0.1, 1.35], row=4, col=1)
+    fig.update_yaxes(title_text="spread, K", range=[25, 40], row=4, col=1)
+    fig.update_xaxes(
+        title_text="CHP operating point", range=[-0.08, 0.86], row=4, col=2
+    )
+    costs = [p[1] for p in points]
+    fig.update_yaxes(
+        title_text="cost of hour 0",
+        range=[min(costs) - 12, max(costs) + 12],
+        row=4,
+        col=2,
+    )
+    return _write(fig, out_path, height_px=1550)
+
+
+def _ipopt_outcome(ex, hour, optimum):
+    if hour.failed:
+        return "failed"
+    if hour.deviation <= 1e-3 and abs(hour.objective - optimum.objective) <= 1e-3:
+        return (
+            "at the optimum after the retry"
+            if hour.retried
+            else "at the optimum, first attempt"
+        )
+    if hour.status == "Solve_Succeeded":
+        return "off the optimum, Solve_Succeeded"
+    return "off the optimum, another status"
+
+
+def build_tutorial_mes_local_optima_sweep(out_path):
+    """Hours 4 and 5 with the 34 mm pipe across the cable ratings: IPOPT's
+    result from monee's default start and option presets against SCIP's
+    optimum and the optimum with the e-boiler pinned off, how IPOPT ended,
+    and the time per hourly solve. How IPOPT ends depends on the CasADi build,
+    so the figure shows what the build machine computes
+    (tutorials/mes_local_optima.rst)."""
+    ex, results = _mes_local_optima_run()
+    sweep = results.sweep
+    outcomes = {
+        "at the optimum, first attempt": _bar_marker(CB_SKY),
+        "at the optimum after the retry": _bar_marker(CB_SKY, pattern="/"),
+        "off the optimum, Solve_Succeeded": _bar_marker(C_MISSED),
+        "off the optimum, another status": _bar_marker(C_MISSED, pattern="x"),
+        "failed": _bar_marker(C_REFERENCE, pattern="."),
+    }
+    fig = make_subplots(
+        rows=3,
+        cols=2,
+        horizontal_spacing=0.14,
+        vertical_spacing=0.1,
+        row_heights=[0.3, 0.3, 0.4],
+        specs=[[{"colspan": 2}, None], [{"colspan": 2}, None], [{}, {}]],
+        subplot_titles=tuple(
+            f"Hour {t}, price {ex.ed.EL_PRICE[t]:g}: cost of the hour"
+            for t in ex.SWEEP_HOURS
+        )
+        + (
+            f"IPOPT's outcome, CasADi {casadi.__version__} on {platform.system()}",
+            "Seconds per hourly solve, same build",
+        ),
+    )
+    offset, width = 0.021, 0.038
+    counts = {t: {name: [] for name in outcomes} for t in ex.SWEEP_HOURS}
+    for row, t in enumerate(ex.SWEEP_HOURS, start=1):
+        keys = [key for key in sweep["SCIP"] if key[1] == t]
+        optima = [sweep["SCIP"][key] for key in keys]
+        fig.add_trace(
+            go.Bar(
+                x=[key[0] - offset for key in keys],
+                y=[h.objective for h in optima],
+                width=width,
+                marker=_bar_marker(CB_BLUE),
+                name="SCIP, the global optimum",
+                legendgroup="SCIP",
+                showlegend=row == 1,
+                customdata=[
+                    (key[0], h.dispatch["e_boiler"], h.dispatch["electrolyser"])
+                    for key, h in zip(keys, optima)
+                ],
+                hovertemplate=(
+                    "SCIP, %{customdata[0]:.2f} MVA: %{y:.2f}<br>e-boiler "
+                    "%{customdata[1]:.3f}, electrolyser %{customdata[2]:.3f}"
+                    "<extra></extra>"
+                ),
+            ),
+            row=row,
+            col=1,
+        )
+        for key, optimum in zip(keys, optima):
+            hour = sweep["IPOPT"][key]
+            outcome = _ipopt_outcome(ex, hour, optimum)
+            counts[t][outcome].append(f"{key[0]:.2f}")
+            x = key[0] + offset
+            if hour.failed:
+                fig.add_annotation(
+                    x=x,
+                    y=optimum.objective / 2,
+                    text="IPOPT failed",
+                    textangle=-90,
+                    showarrow=False,
+                    font={"size": 11, "color": TEXT},
+                    row=row,
+                    col=1,
+                )
+                continue
+            excess = hour.cost - optimum.objective
+            fig.add_trace(
+                go.Bar(
+                    x=[x],
+                    y=[hour.cost],
+                    width=width,
+                    marker=outcomes[outcome],
+                    legendgroup=outcome,
+                    showlegend=False,
+                    text=[f"+{excess:.2f}" if outcome.startswith("off") else ""],
+                    textposition="outside",
+                    textfont={"size": 12, "color": TEXT},
+                    cliponaxis=False,
+                    customdata=[
+                        (
+                            key[0],
+                            hour.status,
+                            "after the retry"
+                            if hour.retried
+                            else "at the first attempt",
+                            hour.dispatch["e_boiler"],
+                            hour.dispatch["electrolyser"],
+                            excess,
+                        )
+                    ],
+                    hovertemplate=(
+                        "IPOPT, %{customdata[0]:.2f} MVA: %{customdata[1]} "
+                        "%{customdata[2]}<br>cost %{y:.2f}, %{customdata[5]:+.2f} "
+                        "against SCIP<br>e-boiler %{customdata[3]:.3f}, "
+                        "electrolyser %{customdata[4]:.3f}<extra></extra>"
+                    ),
+                ),
+                row=row,
+                col=1,
+            )
+    hours_x = [f"hour {t}" for t in ex.SWEEP_HOURS]
+    for name, marker in outcomes.items():
+        fig.add_trace(
+            go.Bar(
+                x=hours_x,
+                y=[len(counts[t][name]) for t in ex.SWEEP_HOURS],
+                name=f"IPOPT {name}",
+                legendgroup=name,
+                marker=marker,
+                customdata=[
+                    ", ".join(counts[t][name]) or "none" for t in ex.SWEEP_HOURS
+                ],
+                hovertemplate=f"{name}: %{{y}}, MVA %{{customdata}}<extra></extra>",
+            ),
+            row=3,
+            col=1,
+        )
+    seconds = ex.seconds_per_solve(sweep)
+    for name, value, marker in (
+        ("IPOPT", seconds["IPOPT"], _bar_marker(CB_SKY)),
+        ("SCIP<br>exact", seconds["SCIP"], _bar_marker(CB_BLUE)),
+        (
+            "SCIP<br>relaxation",
+            seconds["relaxation"],
+            _bar_marker(CB_BLUE, pattern="/"),
+        ),
+    ):
+        fig.add_trace(
+            go.Bar(
+                x=[name],
+                y=[value],
+                marker=marker,
+                showlegend=False,
+                text=[f"{value:.2f} s"],
+                textposition="outside",
+                cliponaxis=False,
+                hovertemplate="%{y:.3f} s per hourly solve<extra></extra>",
+            ),
+            row=3,
+            col=2,
+        )
+    _base_layout(fig, "IPOPT near the network limits", height=1150)
+    fig.update_layout(
+        barmode="stack",
+        showlegend=True,
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.07,
+            "xanchor": "center",
+            "x": 0.5,
+            "font": {"size": 13, "color": TEXT},
+            "bgcolor": C_BLACK,
+        },
+        margin={"l": 60, "r": 25, "t": 90, "b": 150},
+    )
+    ratings = ex.SWEEP_CABLE_MVA
+    for row, t in enumerate(ex.SWEEP_HOURS, start=1):
+        highest = max(
+            sweep[label][key].cost
+            for label in ("SCIP", "IPOPT")
+            for key in sweep["SCIP"]
+            if key[1] == t and not sweep[label][key].failed
+        )
+        fig.update_xaxes(
+            tickvals=list(ratings),
+            tickformat=".2f",
+            range=[min(ratings) - 0.05, max(ratings) + 0.05],
+            row=row,
+            col=1,
+        )
+        fig.update_yaxes(title_text="cost", range=[0, 1.12 * highest], row=row, col=1)
+    fig.update_xaxes(title_text="cable rating, MVA", row=2, col=1)
+    fig.update_xaxes(showgrid=False)
+    fig.update_yaxes(
+        title_text="cable ratings", dtick=1, range=[0, len(ratings) + 0.5], row=3, col=1
+    )
+    fig.update_xaxes(tickangle=0, row=3, col=2)
+    fig.update_yaxes(title_text="seconds", rangemode="tozero", row=3, col=2)
+    return _write(fig, out_path, height_px=1150)
+
+
+def build_tutorial_mes_local_optima_nlp(out_path):
+    """The network limits day's dispatches by SCIP and by APOPT on IPOPT's
+    NLP formulation: the cost of each hour there against each solver's own,
+    and how far cost and squared pressure move between the formulations
+    (tutorials/mes_local_optima.rst)."""
+    ex, results = _mes_local_optima_run()
+    day = results.day
+    x = list(day["SCIP"])
+    solvers = (
+        ("APOPT", _bar_marker(C_REFERENCE, pattern="/"), -1),
+        ("SCIP", _bar_marker(CB_BLUE), 0),
+    )
+    fig = make_subplots(
+        rows=2,
+        cols=2,
+        horizontal_spacing=0.12,
+        vertical_spacing=0.16,
+        row_heights=[0.55, 0.45],
+        specs=[[{"colspan": 2}, None], [{}, {}]],
+        subplot_titles=(
+            "Cost of each hour on IPOPT's formulation",
+            "IPOPT's cost minus the solver's own",
+            "Largest difference in squared pressure",
+        ),
+    )
+    width = 0.38
+    nlp = {solver: day[f"{solver} on NLP"] for solver, _, _ in solvers}
+    excess = {t: nlp["APOPT"][t].cost - nlp["SCIP"][t].cost for t in x}
+    for solver, marker, side in solvers:
+        own, on_nlp = day[solver], nlp[solver]
+        fig.add_trace(
+            go.Bar(
+                x=x,
+                y=[on_nlp[t].cost for t in x],
+                width=width,
+                offset=side * width,
+                marker=marker,
+                name=f"{solver}'s dispatch, day {sum(h.cost for h in on_nlp.values()):.2f}",
+                legendgroup=solver,
+                text=[
+                    f"+{excess[t]:.2f}"
+                    if solver == "APOPT" and excess[t] > 0.01
+                    else ""
+                    for t in x
+                ],
+                textposition="outside",
+                constraintext="none",
+                cliponaxis=False,
+                hovertemplate=(
+                    f"{solver}'s dispatch, hour %{{x}}: %{{y:.4f}} on IPOPT's "
+                    "formulation<extra></extra>"
+                ),
+            ),
+            row=1,
+            col=1,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=[t + (side + 0.5) * width for t in x],
+                y=[own[t].cost for t in x],
+                mode="markers",
+                marker={
+                    "symbol": "line-ew",
+                    "size": 26,
+                    "line": {"color": TEXT, "width": 3},
+                },
+                name="each solver's cost on its own formulation",
+                legendgroup="own",
+                showlegend=solver == "SCIP",
+                customdata=[solver] * len(x),
+                hovertemplate=(
+                    "%{customdata} on its own formulation, hour %{x:.0f}: "
+                    "%{y:.4f}<extra></extra>"
+                ),
+            ),
+            row=1,
+            col=1,
+        )
+        for col, values, fmt in (
+            (1, [on_nlp[t].cost - own[t].cost for t in x], ".5f"),
+            (
+                2,
+                [
+                    max(
+                        abs(a - b)
+                        for a, b in zip(
+                            on_nlp[t].quantities["psq"], own[t].quantities["psq"]
+                        )
+                    )
+                    for t in x
+                ],
+                ".3g",
+            ),
+        ):
+            fig.add_trace(
+                go.Bar(
+                    x=x,
+                    y=values,
+                    width=width,
+                    offset=side * width,
+                    marker=marker,
+                    legendgroup=solver,
+                    showlegend=False,
+                    text=[f"{v:.3f}" if col == 2 and v > 0.01 else "" for v in values],
+                    textposition="outside",
+                    textfont={"size": 12, "color": TEXT},
+                    constraintext="none",
+                    cliponaxis=False,
+                    hovertemplate=(
+                        f"{solver}, hour %{{x}}: %{{y:{fmt}}}<extra></extra>"
+                    ),
+                ),
+                row=2,
+                col=col,
+            )
+    fig.add_hline(
+        y=1e-3,
+        line={"color": C_REFERENCE, "width": 2, "dash": "dash"},
+        annotation_text="tolerance of the check",
+        annotation_position="top left",
+        annotation_font={"size": 12},
+        row=2,
+        col=1,
+    )
+    _base_layout(fig, "Both dispatches on IPOPT's formulation", height=900)
+    fig.update_layout(
+        showlegend=True,
+        legend={
+            "orientation": "h",
+            "yanchor": "top",
+            "y": -0.1,
+            "xanchor": "center",
+            "x": 0.5,
+            "font": {"size": 13, "color": TEXT},
+            "bgcolor": C_BLACK,
+        },
+        margin={"l": 70, "r": 25, "t": 90, "b": 110},
+    )
+    fig.update_xaxes(
+        dtick=1, range=[-0.6, len(x) - 0.4], showgrid=False, title_text="hour"
+    )
+    fig.update_yaxes(
+        title_text="cost of the hour",
+        range=[0, 1.15 * max(h.cost for h in nlp["APOPT"].values())],
+        row=1,
+        col=1,
+    )
+    lowest = min(
+        0.0, *(nlp[s][t].cost - day[s][t].cost for s, _, _ in solvers for t in x)
+    )
+    fig.update_yaxes(range=[1.2 * lowest, 1.25e-3], tickformat=".4f", row=2, col=1)
+    fig.update_yaxes(rangemode="tozero", row=2, col=2)
+    return _write(fig, out_path, height_px=900)
+
+
 GENERATORS = [
     ("benchmark_backend.html", build_benchmark_backend),
     ("benchmark_pandapower.html", build_benchmark_pandapower),
@@ -1958,6 +3923,15 @@ GENERATORS = [
     ("howto_multi_period_chp.html", build_howto_multi_period_chp),
     ("howto_multi_period_linepack.html", build_howto_multi_period_linepack),
     ("tutorial_timeseries.html", build_tutorial_timeseries),
+    ("tutorial_mes_dispatch.html", build_tutorial_mes_dispatch),
+    ("tutorial_mes_checks.html", build_tutorial_mes_checks),
+    ("tutorial_mes_storage_dispatch.html", build_tutorial_mes_storage_dispatch),
+    ("tutorial_mes_storage_checks.html", build_tutorial_mes_storage_checks),
+    ("tutorial_mes_limits_dispatch.html", build_tutorial_mes_limits_dispatch),
+    ("tutorial_mes_limits_checks.html", build_tutorial_mes_limits_checks),
+    ("tutorial_mes_local_optima_day.html", build_tutorial_mes_local_optima_day),
+    ("tutorial_mes_local_optima_sweep.html", build_tutorial_mes_local_optima_sweep),
+    ("tutorial_mes_local_optima_nlp.html", build_tutorial_mes_local_optima_nlp),
 ]
 
 

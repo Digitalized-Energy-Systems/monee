@@ -257,6 +257,14 @@ def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
     """
     status = result.solver.status
     tc = result.solver.termination_condition
+    if tc == TerminationCondition.other and "gap limit reached" in str(
+        getattr(result.solver, "message", "")
+    ):
+        # Pyomo's interface to the scip executable reports a stop at
+        # limits/gap as "other"; the pyscipopt bridge and Gurobi report it as
+        # optimal within tolerance, so the outcome must not depend on which
+        # SCIP interface ran.
+        tc = TerminationCondition.optimal
     status_str = str(status) if status is not None else None
     tc_str = str(tc) if tc is not None else None
     if status == SolverStatus.ok:

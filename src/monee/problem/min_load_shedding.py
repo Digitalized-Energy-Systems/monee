@@ -343,7 +343,7 @@ def _shed_headroom_entry(key, total, headroom, shed_loads, result, warning_cls):
         f"{total:.4g} MW of {_CARRIER_LABEL[carrier]} demand is shed "
         f"({named}{more}) although the carrier slack {slack_name} in "
         f"the same island still has import headroom ({room_str}). "
-        f"{_shed_headroom_advice(result)}. The how-to/load_shedding "
+        f"{_shed_headroom_advice(result)}. The problems/load_shedding "
         "docs page explains this check",
         value=total,
     )
@@ -634,9 +634,10 @@ def create_min_load_shedding_problem(
 
     Each demand/generator/coupling gets a regulation Var in [0,1]; the objective
     penalises ``(1-regulation)`` weighted per category. Gas Sink/Source shed is
-    energy-converted via the enclosing grid's HHV. External grids contribute
-    only via ``ext_grid_*_bounds`` constraints (and an optional quadratic slack
-    nudge to zero exchange when ``include_ext_grids=True``).
+    energy-converted via the enclosing grid's HHV. External grids carry no cost:
+    they contribute only through the ``bounds_ext_*`` constraints, which are
+    applied when ``include_ext_grids=True``. The problems/load_shedding docs
+    page states the full mathematical formulation.
 
     ``bounds_ext_el`` bounds ``ExtPowerGrid.p_mw`` in the load convention, so
     import into the network is negative and export positive: capping the import
@@ -862,7 +863,7 @@ def create_min_load_shedding_problem(
                     "negative and export positive. To cap the import at X MW pass "
                     "bounds_ext_el=(-X, 0). With the current bounds an importing "
                     "network can only be balanced by shedding demand. See the "
-                    "how-to/load_shedding docs page.",
+                    "problems/load_shedding docs page.",
                     stacklevel=2,
                 )
             constraints.select_types(ExtPowerGrid).equation(

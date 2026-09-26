@@ -1429,8 +1429,9 @@ def _he_duty_shortfall(model, tol: float) -> tuple[float, float] | None:
     In optimisation mode the formulations state the duty as
     ``q_mw_delivered <= q_mw * on_off`` (``>=`` for a generator), closed only
     by an objective pull, so a user objective can out-bid it and leave the
-    exchanger under-delivering. In simulation mode the duty is an equality, so
-    a shortfall there indicates a solve that stopped short of feasibility. Only
+    exchanger under-delivering. In simulation mode, and under an economic
+    dispatch with heat enabled (``_he_duty_exact``), the duty is an equality,
+    so a shortfall there indicates a solve that stopped short of feasibility. Only
     a branch without decision freedom is reported: with a regulation/on_off Var
     the shortfall is a shedding decision, not a defect. A compound-internal
     SubHE carries a Var setpoint, but its ``q_mw`` is pinned by the control
@@ -1491,9 +1492,10 @@ def compute_bound_violations(  # NOSONAR
                 _log.warning(
                     "%s delivers %.4g MW of its %.4g MW setpoint (optimisation: "
                     "the duty inequality stayed slack, a user objective can "
-                    "out-bid the term that closes it; simulation: the solve "
-                    "stopped short). See docs how-to/load_shedding on reading "
-                    "this diagnostic.",
+                    "out-bid the term that closes it; simulation or heat "
+                    "economic dispatch: the duty is exact, so the solve "
+                    "stopped short). See docs problems/load_shedding on "
+                    "reading this diagnostic.",
                     label,
                     abs(branch.model.q_mw_delivered.value),
                     abs(duty),
@@ -2550,11 +2552,21 @@ def _collect_id_matches(net, component_id):
     return candidates
 
 
-def _find_model(net, component_id, attr=None):
-    """Return the model for *component_id*. Disambiguates node/child id collisions
-    by preferring a model that actually carries *attr*."""
+def _find_model(net, component_id, attr=None, model_type=None):
+    """Return the model for *component_id*. With *model_type*, only a model of
+    exactly that class carrying *attr* qualifies, else None: a bus shares
+    attribute names with its children (``p_mw``), so an attribute alone can
+    resolve a generator's id to the bus it sits on. Without it, node/child id
+    collisions are disambiguated by preferring a model that carries *attr*."""
     candidates = _collect_id_matches(net, component_id)
 
+    if model_type is not None:
+        typed = [
+            m
+            for m in candidates
+            if type(m) is model_type and (attr is None or hasattr(m, attr))
+        ]
+        return typed[0] if typed else None
     if not candidates:
         return None
     if attr is not None and len(candidates) > 1:
@@ -2582,8 +2594,10 @@ class InterStepState(ABC):
     dt_h: float = 1.0
 
     @abstractmethod
-    def get(self, component_id, attr: str, step: int = -1):
-        """Float (StepState) / live var (PeriodState), or None if no data."""
+    def get(self, component_id, attr: str, step: int = -1, model_type=None):
+        """Float (StepState) / live var (PeriodState), or None if no data.
+        ``model_type`` resolves an id shared by a node and a child (or branch)
+        to the model of exactly that class."""
 
     def has(self, component_id, attr: str) -> bool:
         return self.get(component_id, attr) is not None
@@ -2653,10 +2667,10 @@ class StepState(InterStepState):
             return None
         return self._networks[pos - self._dropped]
 
-    def get(self, component_id, attr: str, step: int = -1):
+    def get(self, component_id, attr: str, step: int = -1, model_type=None):
         net = self._network_for_step(step)
         if net is not None:
-            model = _find_model(net, component_id, attr)
+            model = _find_model(net, component_id, attr, model_type)
             if model is not None:
                 val = _extract_value(getattr(model, attr, None))
                 if val is not None:
@@ -2704,7 +2718,7 @@ class PeriodState(InterStepState):
     def T(self) -> int:
         return len(self._networks)
 
-    def get(self, component_id, attr: str, step: int = -1):
+    def get(self, component_id, attr: str, step: int = -1, model_type=None):
         actual_t = (self.current_t + step) if step < 0 else step
 
         if actual_t < 0:
@@ -2717,7 +2731,7 @@ class PeriodState(InterStepState):
             net = self._networks[actual_t]
         except IndexError:
             return None
-        model = _find_model(net, component_id, attr)
+        model = _find_model(net, component_id, attr, model_type)
         if model is None:
             return None
         return getattr(model, attr, None)

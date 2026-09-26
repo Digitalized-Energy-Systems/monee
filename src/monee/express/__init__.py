@@ -456,6 +456,9 @@ def create_ext_hydr_grid(
         free_pressure_bounds: (lo, hi) tuple in pu; instead of pinning the
             pressure at pressure_pu, leave it a Var bounded to [lo, hi].
             Default None (pressure pinned).
+        cost: forwarded to :class:`ExtHydrGrid`; the economic dispatch
+            price per MW of gas energy (gas grid) or of island heat (water
+            grid).
     """
     return network.child_to(
         mm.ExtHydrGrid(
@@ -498,6 +501,9 @@ def create_source(
         grid_key: grid key used when the junction is auto-created.
         t_k: temperature of the injected stream in K. Default None credits
             the injection at the junction's own mixed temperature.
+        cost: currency per MW of higher heating value, forwarded to
+            :class:`Source`; prices a gas source in the economic dispatch
+            objective.
     """
     return network.child_to(
         mm.Source(mass_flow_kgs, t_k=t_k, **kwargs),
@@ -580,7 +586,9 @@ def create_heat_generator(
 
     Part load in one line: drive the stored ``q_mw_heat`` attribute; a nodal
     heat source has no mass flow of its own, so the exchangers' constant-flow
-    vs variable-flow distinction does not apply."""
+    vs variable-flow distinction does not apply. ``cost=`` (currency per MW
+    heat, forwarded to the model) prices it in the economic dispatch
+    objective."""
     return create_water_child(
         network,
         mm.HeatGenerator(q_mw=q_mw, **kwargs),
@@ -615,6 +623,14 @@ def create_heat_load(
     )
 
 
+def _reject_cost_on_consumer(cost, q_mw):
+    if cost is not None and q_mw > 0:
+        raise ValueError(
+            "cost prices heat supply; a consuming exchanger (q_mw > 0) cannot "
+            f"carry one, got q_mw={q_mw!r}, cost={cost!r}."
+        )
+
+
 def create_heat_exchanger(
     network: mm.Network,
     from_node_id,
@@ -625,10 +641,13 @@ def create_heat_exchanger(
     constraints=None,
     grid=None,
     name=None,
+    cost=None,
 ):
     """Add a heat-exchanger branch. ``q_mw > 0`` gives a
     :class:`HeatExchangerLoad` (consumption); ``q_mw < 0`` a
-    :class:`HeatExchangerGenerator` (injection).
+    :class:`HeatExchangerGenerator` (injection). ``cost`` (currency per MW
+    heat) prices a generating exchanger in the economic dispatch objective; a
+    consuming one rejects it.
 
     This is the fixed-flow exchanger: a numeric ``q_mw`` pins the branch mass
     flow to the design flow ``|q_mw| * 1e6 / (c_p * T_delta_design_K)`` (a 30 K
@@ -645,6 +664,7 @@ def create_heat_exchanger(
     together (variable flow at the design temperature spread), while driving
     ``q_mw_set`` changes the duty at the constant design mass flow (the
     temperature spread moves instead of the flow)."""
+    _reject_cost_on_consumer(cost, q_mw)
     return network.branch(
         mm.HeatExchangerLoad(
             q_mw=-q_mw,
@@ -656,6 +676,7 @@ def create_heat_exchanger(
             q_mw=-q_mw,
             mass_flow_design_kgs=mass_flow_design_kgs,
             regulation=regulation,
+            cost=cost,
         ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
@@ -677,6 +698,7 @@ def create_passive_heat_exchanger(
     constraints=None,
     grid=None,
     name=None,
+    cost=None,
 ):
     """Add a passive heat-exchanger branch: a fixed ``q_mw`` injected into or
     extracted from the free-flowing water stream, with the temperature change
@@ -689,14 +711,20 @@ def create_passive_heat_exchanger(
 
     Part load in one line: drive ``q_mw_set`` or ``regulation`` (they multiply
     into the duty); the mass flow follows the surrounding hydraulics either
-    way, so there is no constant-flow vs variable-flow choice here."""
+    way, so there is no constant-flow vs variable-flow choice here.
+
+    ``cost`` (currency per MW heat) prices a generating exchanger in the
+    economic dispatch objective; a consuming one rejects it."""
+    _reject_cost_on_consumer(cost, q_mw)
     # Pass -q_mw to match create_heat_exchanger: both model bases store
     # q_mw_set = -q_mw, so a positive public q_mw must be negated here too for
     # the active and passive wrappers to agree on the load/generator sign.
     return network.branch(
         mm.PassiveHeatExchangerLoad(-q_mw, diameter_m, temperature_ext_k)
         if q_mw > 0
-        else mm.PassiveHeatExchangerGenerator(-q_mw, diameter_m, temperature_ext_k),
+        else mm.PassiveHeatExchangerGenerator(
+            -q_mw, diameter_m, temperature_ext_k, cost=cost
+        ),
         from_node_id=from_node_id,
         to_node_id=to_node_id,
         constraints=constraints,
@@ -1179,6 +1207,9 @@ def create_gas_ext_grid(
         free_pressure_bounds: (lo, hi) tuple in pu; instead of pinning the
             pressure at pressure_pu, leave it a Var bounded to [lo, hi].
             Default None (pressure pinned).
+        cost: forwarded to :class:`ExtHydrGrid`; currency per MW of higher
+            heating value in the economic dispatch objective (import charged,
+            export credited).
     """
     return create_ext_hydr_grid(
         network,
@@ -1213,9 +1244,10 @@ def create_water_ext_grid(
     On a heat network this slack behaves as an unlimited backup heat plant:
     it delivers any mass flow at its pinned feed temperature, so lost heat
     sources elsewhere are compensated silently instead of shedding heat load.
-    Cap it with ``max_import_kgs`` / ``max_export_kgs``, or with
-    ``bounds_ext_heat`` on the load-shedding problem, when that is not the
-    intended physics (see the concepts/multi_energy page).
+    Cap it with ``max_import_kgs`` / ``max_export_kgs``, with
+    ``bounds_ext_heat`` on the load-shedding problem, or with
+    ``bounds_ext_heat_mw`` on the economic dispatch problem, when that is not
+    the intended physics (see the concepts/multi_energy page).
 
     Args:
         node_id: water junction to attach to; a missing node is auto-created.
@@ -1241,6 +1273,9 @@ def create_water_ext_grid(
         free_pressure_bounds: (lo, hi) tuple in pu; instead of pinning the
             pressure at pressure_pu, leave it a Var bounded to [lo, hi].
             Default None (pressure pinned).
+        cost: forwarded to :class:`ExtHydrGrid`; currency per MW of heat
+            the slack supplies to its island in the economic dispatch
+            objective.
     """
     return create_ext_hydr_grid(
         network,

@@ -232,9 +232,13 @@ class Source(NoVarChildModel):
 
     ``t_k`` (optional) is the temperature of the injected stream. Without it the
     injection is credited at the junction's own (mixed) temperature.
+
+    ``cost`` (currency per MW of higher heating value) prices a gas source in
+    the economic dispatch objective; leave it unset to fall back to the
+    problem's ``gas_cost_default``. A water source's cost is not read.
     """
 
-    def __init__(self, mass_flow_kgs, t_k=None, **kwargs) -> None:
+    def __init__(self, mass_flow_kgs, t_k=None, cost=None, **kwargs) -> None:
         _require_positive(
             "Source", "injection magnitude", "mass_flow_kgs", mass_flow_kgs
         )
@@ -242,6 +246,8 @@ class Source(NoVarChildModel):
 
         self.mass_flow_kgs = -mass_flow_kgs
         self.injection_t_k = t_k
+        if cost is not None:
+            self.cost = cost
 
 
 @model
@@ -258,9 +264,15 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
     supplies or absorbs whatever mass flow at its pinned feed temperature the
     heat balance needs, so a fuel-starved or deactivated heat source elsewhere
     is silently compensated instead of causing curtailment. Cap it with
-    ``max_import_kgs`` / ``max_export_kgs`` here, or with ``bounds_ext_heat``
-    on the load-shedding problem, when backup supply should be limited. The
+    ``max_import_kgs`` / ``max_export_kgs`` here, with ``bounds_ext_heat``
+    on the load-shedding problem, or with ``bounds_ext_heat_mw`` on the
+    economic dispatch problem, when backup supply should be limited. The
     concepts/multi_energy docs page explains the semantics.
+
+    ``cost`` prices the exchange in the economic dispatch objective: per MW of
+    higher heating value on a gas grid (import charged, export credited), per
+    MW of heat supplied to its island on a water grid. Unset, it falls back to
+    the problem's ``gas_cost_default`` / ``heat_cost_default``.
 
     ``mass_flow_kgs`` only seeds the free Var. ``max_import_kgs`` (positive
     magnitude) bounds it from below at ``-max_import_kgs``, ``max_export_kgs``
@@ -285,9 +297,12 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
         max_export_kgs=None,
         pin_temperature=True,
         free_pressure_bounds=None,
+        cost=None,
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
+        if cost is not None:
+            self.cost = cost
         self.max_import_kgs = max_import_kgs
         self.max_export_kgs = max_export_kgs
         lo = None if max_import_kgs is None else -abs(max_import_kgs)
@@ -386,12 +401,17 @@ class ConsumeHydrGrid(NoVarChildModel):
 
 @model
 class HeatGenerator(NoVarChildModel):
-    """Node-based heat injection (``H_G,i``). Takes positive magnitude; sign is internal."""
+    """Node-based heat injection (``H_G,i``). Takes positive magnitude; sign is internal.
 
-    def __init__(self, q_mw, **kwargs) -> None:
+    ``cost`` (currency per MW heat) is read by the economic dispatch objective;
+    leave it unset to fall back to the problem's ``heat_cost_default``."""
+
+    def __init__(self, q_mw, cost=None, **kwargs) -> None:
         _require_positive("HeatGenerator", "heat-generation magnitude", "q_mw", q_mw)
         super().__init__(**kwargs)
         self.q_mw_heat = -q_mw
+        if cost is not None:
+            self.cost = cost
 
 
 @model

@@ -221,8 +221,8 @@ remain importable but are deprecated.
       :math:`\ell` is the loss term :math:`r \cdot \ell`, so a zero-resistance
       branch (an idealised transformer, which is how case9 models all three of
       its) has nothing pulling its cone tight and the solver stops as soon as
-      its relative MIP gap is met. Both mixed-integer presets ship a ``1e-4``
-      gap (SCIP ``limits/gap``, Gurobi ``MIPGap``), under which the case9
+      its relative MIP gap is met. Both of monee's mixed-integer presets set a
+      ``1e-4`` gap (SCIP ``limits/gap``, Gurobi ``MIPGap``), under which the case9
       residual on branch ``(3, 6, 0)`` reads ``3.77`` while every resistive
       branch stays at ``1e-8``; passing
       ``solver_options={"limits/gap": 0.0}`` brings that branch back to

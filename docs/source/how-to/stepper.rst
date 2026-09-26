@@ -184,7 +184,7 @@ strictly caller-owned.
 
 On large networks using the smooth gas and heat NLP formulations (several
 hundred nodes, such as the simbench based MES from the test suite) the
-default IPOPT warm start options can backfire: iteration counts roughly
+warm start options that monee passes to IPOPT by default can backfire: iteration counts roughly
 double compared to cold starts, because the previous solution sits on the
 degenerate bounds of the pos/neg flow splits. For such networks either pass
 ``warm_start=False``, or keep the value carry-over but soften the warm

@@ -13,7 +13,7 @@ Problem definitions
    letting a fixed-duty heat exchanger under-deliver. ``result.objective`` is
    the combined value; ``result.user_objective`` reports your part alone and
    ``result.aux_objective`` the formulation part. See
-   :doc:`../how-to/load_shedding` for the duty shortfall this can cause and how
+   :doc:`../problems/load_shedding` for the duty shortfall this can cause and how
    it is reported.
 
 .. note::

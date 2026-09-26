@@ -101,7 +101,7 @@ _log = logging.getLogger(__name__)
 
 _CASADI_MISSING = (
     "The CasADi backend requires the 'casadi' package, which is not installed. "
-    "Install it with `pip install casadi` (or `pip install monee[casadi]`)."
+    "Install it with `pip install casadi`; it is a core dependency of monee."
 )
 
 

@@ -335,8 +335,9 @@ choice (for example to force Pyomo for an integer problem).
 
          result = run_multi_period(net, td, solver=GekkoMultiPeriodSolver())
 
-      Smooth NLP problems without integer variables. Ships with its own IPOPT
-      binaries and is the automatic fallback when casadi is not installed.
+      Smooth NLP problems without integer variables. Runs IPOPT from the
+      binaries that the GEKKO package bundles, and is the automatic fallback
+      when casadi cannot be imported.
 
    .. tab-item:: Pyomo
 
@@ -355,7 +356,7 @@ choice (for example to force Pyomo for an integer problem).
 Two-pass assembly
 =================
 
-All three multi-period solvers (CasADi, GEKKO, and Pyomo) use a two-pass
+All three of monee's multi-period back-ends (for CasADi, GEKKO, and Pyomo) use a two-pass
 approach to build the joint problem efficiently:
 
 .. code-block:: text

@@ -355,6 +355,13 @@ the solver charges the battery during the most expensive hours.
 The battery charges (positive ``p_mw`` under the load convention) during
 the cheap first hour and discharges through the expensive midday peak.
 
+The economic dispatch problem reads the ``cost`` attribute instead and needs
+no objective of its own: ``add_objective_data(child_id, "cost", [...])``
+prices a generator, an external grid, a gas source or a heat generator per
+period, and ``add_branch_series(hx_id, "cost", [...])`` a generating heat
+exchanger. With ``include_storages=True`` it dispatches the storages across
+the horizon, see :doc:`../problems/economic_dispatch`.
+
 ----
 
 Per-period constraints

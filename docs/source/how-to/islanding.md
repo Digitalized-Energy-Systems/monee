@@ -165,7 +165,7 @@ back-ends support this:
 
 | Solver | Notes |
 |---|---|
-| `GEKKOSolver` | Built-in APOPT handles MILP; sufficient for most islanding problems |
+| `GEKKOSolver` | APOPT, which the GEKKO package bundles, handles MILP; sufficient for most islanding problems |
 | `PyomoSolver` | Use SCIP (`scip`), CBC (`cbc`), or Gurobi (`gurobi`) for larger problems |
 
 ```python

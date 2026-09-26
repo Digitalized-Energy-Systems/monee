@@ -24,7 +24,8 @@ The headline:
 
 The electrical model is handed to both engines through the neutral MATPOWER
 `mpc` exchange, so any difference is the solver, not the model. monee uses its
-in-process CasADi/IPOPT backend; pandapower uses its native Newton-Raphson
+in-process CasADi backend, which calls the third-party solver IPOPT;
+pandapower uses its native Newton-Raphson
 `runpp` and the PYPOWER AC-OPF `runopp`.
 
 ````{only} html

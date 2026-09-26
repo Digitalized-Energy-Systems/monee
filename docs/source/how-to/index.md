@@ -2,28 +2,11 @@
 # How-to guides
 
 Short, task-focused guides for common operations. Each guide assumes you are
-already familiar with the {doc}`../quickstart`.
+already familiar with the {doc}`../quickstart`. Load shedding and economic
+dispatch have moved to {doc}`../problems/index`.
 
 ::::{grid} 1 2 2 2
 :gutter: 4
-
-:::{grid-item-card} Load shedding
-:link: load_shedding
-:link-type: doc
-:shadow: sm
-
-Find the minimum demand curtailment needed to keep a network feasible under
-voltage, pressure, and temperature bounds, in one call or fully customised.
-:::
-
-:::{grid-item-card} Economic dispatch
-:link: economic_dispatch
-:link-type: doc
-:shadow: sm
-
-Minimise generation cost with per-generator prices, a priced external grid
-exchange, voltage and line loading limits, and ramp constraints over time.
-:::
 
 :::{grid-item-card} Import MATPOWER files
 :link: matpower_io
@@ -167,8 +150,6 @@ regional MES) for benchmarking, tutorials, and quick experiments.
 :maxdepth: 1
 :hidden:
 
-load_shedding
-economic_dispatch
 matpower_io
 convert_from_pandapower
 import_cim_esdl

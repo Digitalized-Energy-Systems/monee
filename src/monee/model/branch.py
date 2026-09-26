@@ -364,14 +364,19 @@ class HeatExchangerLoad(HeatExchanger):
 @model
 class HeatExchangerGenerator(HeatExchanger):
     """Heat exchanger that injects heat (``q_mw_set < 0``); the magnitude of
-    ``q_mw`` is used, its sign is ignored."""
+    ``q_mw`` is used, its sign is ignored. ``cost`` (currency per MW heat) is
+    read by the economic dispatch objective."""
 
-    def __init__(self, q_mw, mass_flow_design_kgs=None, regulation=1) -> None:
+    def __init__(
+        self, q_mw, mass_flow_design_kgs=None, regulation=1, cost=None
+    ) -> None:
         super().__init__(
             _normalize_he_q_mw(q_mw, load=False),
             mass_flow_design_kgs=mass_flow_design_kgs,
             regulation=regulation,
         )
+        if cost is not None:
+            self.cost = cost
 
 
 @model
@@ -462,10 +467,16 @@ class PassiveHeatExchangerLoad(PassiveHeatExchanger):
 @model
 class PassiveHeatExchangerGenerator(PassiveHeatExchanger):
     """Passive heat exchanger that injects heat (``q_mw_set < 0``); the
-    magnitude of ``q_mw`` is used, its sign is ignored."""
+    magnitude of ``q_mw`` is used, its sign is ignored. ``cost`` (currency per
+    MW heat) is read by the economic dispatch objective."""
 
     def __init__(
-        self, q_mw, diameter_m, temperature_ext_k=293, loss_coefficient=None
+        self,
+        q_mw,
+        diameter_m,
+        temperature_ext_k=293,
+        loss_coefficient=None,
+        cost=None,
     ) -> None:
         super().__init__(
             _normalize_he_q_mw(q_mw, load=False),
@@ -473,6 +484,8 @@ class PassiveHeatExchangerGenerator(PassiveHeatExchanger):
             temperature_ext_k=temperature_ext_k,
             loss_coefficient=loss_coefficient,
         )
+        if cost is not None:
+            self.cost = cost
 
 
 @model
