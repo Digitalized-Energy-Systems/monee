@@ -111,14 +111,32 @@ _THEME_POST_SCRIPT = """
 var gd = document.getElementById('{plot_id}');
 var _styleEl = document.createElement('style');
 document.head.appendChild(_styleEl);
+// Marks drawn in the text colour (__INK__) would vanish on the dark page, so
+// remember which trace attributes use it and recolour them along with the text.
+var _ink = {};
+(gd.data || []).forEach(function (tr, i) {
+    ['line.color', 'marker.color', 'marker.line.color'].forEach(function (attr) {
+        var v = attr.split('.').reduce(function (o, k) { return o && o[k]; }, tr);
+        if (typeof v === 'string' && v.toLowerCase() === '__INK__') {
+            (_ink[attr] = _ink[attr] || []).push(i);
+        }
+    });
+});
 function _apply(dark) {
     var fc = dark ? '#ffffff' : '#333333';
     var grid = dark ? 'rgba(200,200,200,0.22)' : 'rgba(80,80,80,0.12)';
     var zl = dark ? 'rgba(200,200,200,0.42)' : 'rgba(80,80,80,0.25)';
     // Bulletproof text recolour: override the fill of EVERY svg text element with
     // !important, which beats Plotly's inline fill regardless of whether it is a
-    // tick label, legend entry, title, annotation or bar value label.
-    _styleEl.textContent = 'text { fill: ' + fc + ' !important; }';
+    // tick label, legend entry, title, annotation or bar value label. Hover labels
+    // are exempt: they sit on the trace colour, and Plotly picks a font that
+    // contrasts with it - the page's text colour would not.
+    _styleEl.textContent = 'text:not(.hoverlayer text) { fill: ' + fc + ' !important; }';
+    Object.keys(_ink).forEach(function (attr) {
+        var u = {};
+        u[attr] = dark ? fc : '__INK__';
+        try { Plotly.restyle(gd, u, _ink[attr]); } catch (e) {}
+    });
     // Grid / zero lines are svg strokes (not text) - update those via relayout.
     var up = {};
     Object.keys(gd.layout).forEach(function (k) {
@@ -155,7 +173,7 @@ if (window.matchMedia) {
             .addEventListener('change', function () { _apply(_detect()); });
     } catch (e) {}
 }
-"""
+""".replace("__INK__", TEXT.lower())
 
 
 def _base_layout(fig, title, height=640):
@@ -195,8 +213,7 @@ def _write(fig, out_path, height_px=640):
     with no horizontal scroll) plus best-effort static PNG and PDF copies for the
     PDF build."""
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
-    fig.write_html(
-        out_path,
+    html = fig.to_html(
         include_plotlyjs="cdn",
         full_html=True,
         default_width="100%",
@@ -204,6 +221,15 @@ def _write(fig, out_path, height_px=640):
         config={"displayModeBar": False, "responsive": True},
         post_script=_THEME_POST_SCRIPT,
     )
+    # furo declares <meta name="color-scheme" content="light dark">. Browsers paint
+    # an opaque canvas behind an iframe whose colour scheme differs from its
+    # embedder's, so without the same declaration a visitor whose OS is in dark
+    # mode gets the figure - with its text recoloured white - on a white box.
+    html = html.replace(
+        "<head>", '<head><meta name="color-scheme" content="light dark" />', 1
+    )
+    with open(out_path, "w", encoding="utf-8") as fh:
+        fh.write(html)
     # Static copies for the LaTeX/PDF builder; never fail the build on them.
     for ext in ("png", "pdf"):
         try:
@@ -1275,9 +1301,11 @@ def build_tutorial_timeseries(out_path):
     grid_imp = [float(v) for v in ext_df.iloc[:, 0].values]
     pv_output = [-p for p in pv_profile]
 
+    # PV is a dark gold, not a pale yellow: a light yellow line all but vanishes
+    # on the white page, while this one holds >= 3:1 on both furo backgrounds.
     c_load, c_pv, c_vm, c_imp, c_exp = (
         "#f4a261",
-        "#ffe066",
+        "#b58900",
         "#2c7bb6",
         "#d7191c",
         "#1a9641",
@@ -1291,7 +1319,7 @@ def build_tutorial_timeseries(out_path):
         vertical_spacing=0.09,
         subplot_titles=(
             "Load and PV generation",
-            "External grid import / export",
+            "External grid flow  (+ import / - export)",
             "Residential bus voltage",
         ),
     )
@@ -1370,7 +1398,7 @@ def build_tutorial_timeseries(out_path):
         tickvals=hours, ticktext=ticktext, title_text="Hour of day", row=3, col=1
     )
     fig.update_yaxes(title_text="Power [MW]", row=1, col=1)
-    fig.update_yaxes(title_text="Grid flow [MW] (+ import / - export)", row=2, col=1)
+    fig.update_yaxes(title_text="Grid flow [MW]", row=2, col=1)
     fig.update_yaxes(title_text="Voltage [pu]", row=3, col=1)
     return _write(fig, out_path, height_px=640)
 
@@ -1577,15 +1605,14 @@ def build_benchmark_pandapower(out_path):
     color = {PANDAPOWER: C_PANDAPOWER, CASADI: C_MONEE}
     # Hatch the reference engine so the paired solve-time bars never rely on hue.
     hatch = {PANDAPOWER: "/", CASADI: ""}
+    # The legend names the monee backend; repeating it here pushed the longest
+    # title past the right edge at the docs' content width.
     groups = [
-        ("PF", "Power flow (AC): pandapower runpp vs monee via CasADi/IPOPT"),
-        (
-            "OPF",
-            "Optimal power flow, no line limit: pandapower runopp vs monee via CasADi/IPOPT",
-        ),
+        ("PF", "Power flow (AC): pandapower runpp vs monee"),
+        ("OPF", "Optimal power flow, no line limit: pandapower runopp vs monee"),
         (
             "OPF-LL",
-            "Optimal power flow, line-loading limit binds: pandapower runopp vs monee via CasADi/IPOPT",
+            "Optimal power flow, line-loading limit binds: pandapower runopp vs monee",
         ),
     ]
     groups = [g for g in groups if (df.group == g[0]).any()]
@@ -2181,6 +2208,10 @@ def build_tutorial_mes_checks(out_path):
     )
     expected = ex.expected_savings()
     names = list(baselines)
+    # Headroom above the tallest bar so its outside label clears the subplot title.
+    top_saving = max(
+        max(baselines[n] - optimum for n in names), max(expected[n] for n in names)
+    )
     fig.add_trace(
         go.Bar(
             x=names,
@@ -2272,7 +2303,9 @@ def build_tutorial_mes_checks(out_path):
     )
     fig.update_xaxes(title_text="margin at full output, per hour", row=1, col=1)
     fig.update_yaxes(title_text="operating point", range=[-0.1, 1.15], row=1, col=1)
-    fig.update_yaxes(title_text="saving over the day", row=1, col=2)
+    fig.update_yaxes(
+        title_text="saving over the day", range=[0, 1.15 * top_saving], row=1, col=2
+    )
     fig.update_xaxes(title_text="hour", dtick=1, row=2, col=1)
     fig.update_yaxes(title_text="K", range=[320, 366], row=2, col=1)
     return _write(fig, out_path, height_px=860)
@@ -2611,6 +2644,7 @@ def build_tutorial_mes_storage_checks(out_path):
                 marker=_bar_marker(color, pattern=pattern),
                 text=[f"{v:.2f}" for v in values],
                 textposition="outside",
+                textfont={"size": 11},
                 cliponaxis=False,
                 hovertemplate=f"{label}: %{{y:.3f}}<extra></extra>",
             ),
@@ -2686,6 +2720,9 @@ def build_tutorial_mes_storage_checks(out_path):
     _base_layout(fig, "Checking the joint dispatch", height=1180)
     fig.update_layout(
         barmode="group",
+        # Outside labels are capped at their bar's width, so without a gap the
+        # solver's and the copper plate's values run into each other.
+        bargroupgap=0.12,
         showlegend=True,
         legend={
             "orientation": "h",
@@ -2907,8 +2944,8 @@ def build_tutorial_mes_limits_checks(out_path):
         subplot_titles=(
             "Value of one more MW through the bottleneck",
             "Congestion cost per hour",
-            "Gas pipe: pressure at the plant junction against flow",
-            "Operating point: solver against hand calculation",
+            "Gas pipe: pressure against flow",
+            "Solver against hand calculation",
             "Supply and return temperature",
         ),
     )
@@ -3209,7 +3246,7 @@ def build_tutorial_mes_local_optima_day(out_path):
             "Cost of each hour",
             "CHP operating point",
             f"Cable loading, % of its {ex.DAY_LIMITS['cable_mva']:g} MVA rating",
-            "Gas pipe loading, % of its capacity at the floor",
+            "Gas pipe loading, % of capacity at floor",
             "CHP exchanger: where its balance holds",
             "Hour 0 with the CHP pinned, by SCIP",
         ),
@@ -3749,7 +3786,10 @@ def build_tutorial_mes_local_optima_sweep(out_path):
         title_text="cable ratings", dtick=1, range=[0, len(ratings) + 0.5], row=3, col=1
     )
     fig.update_xaxes(tickangle=0, row=3, col=2)
-    fig.update_yaxes(title_text="seconds", rangemode="tozero", row=3, col=2)
+    # Headroom so the tallest bar's label clears the subplot title.
+    fig.update_yaxes(
+        title_text="seconds", range=[0, 1.15 * max(seconds.values())], row=3, col=2
+    )
     return _write(fig, out_path, height_px=1150)
 
 

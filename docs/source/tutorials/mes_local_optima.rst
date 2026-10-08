@@ -461,7 +461,7 @@ Windows and on Linux.
 
 In the figure, the top panel is the cost of each hour on IPOPT's formulation
 for APOPT's and SCIP's dispatch, with each solver's cost on its own
-formulation as a black cap on its bar. The bottom panels show how far the
+formulation as a cap on its bar. The bottom panels show how far the
 cost and the squared pressure move between IPOPT's formulation and the
 solver's own: the cost far inside the check's tolerance, the pressure only
 in APOPT's hour 0.
