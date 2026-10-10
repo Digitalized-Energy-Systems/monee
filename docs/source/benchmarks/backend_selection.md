@@ -84,7 +84,9 @@ import monee
 monee.run_energy_flow(net, formulation="smooth_nlp")
 
 # (MI)QCQP / MISOCP: pick the solver
-monee.run_energy_flow_optimization(net, problem, solver="gurobi")  # gurobipy if installed
+monee.run_energy_flow_optimization(
+    net, problem, solver="gurobi"
+)  # gurobipy if installed
 monee.run_energy_flow_optimization(net, problem, solver="scip")  # Pyomo + SCIP (global)
 
 # Force a backend with backend=, for example Gurobi through Pyomo
