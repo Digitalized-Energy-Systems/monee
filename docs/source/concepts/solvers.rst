@@ -49,7 +49,7 @@ automatically:
 
 .. code-block:: python
 
-    # Names other than ipopt/apopt/bpopt route to Pyomo (solver must be installed):
+    # scip and other names route to Pyomo; gurobi uses gurobipy when it is installed:
     result = solve(net, optimization_problem=problem, solver="gurobi")
     result = run_energy_flow(net, solver="scip")
 
@@ -63,8 +63,11 @@ The routing rules (implemented in :func:`~monee.solver.resolve_solver` in
   solvers).
 - ``"auto"`` runs the default back-end and retries once on SCIP if it ends in a
   numerics failure; see `Automatic back-end fallback`_ below.
-- Any other name (``"gurobi"``, ``"scip"``, ``"glpk"``,
-  ``"cbc"``, …) is forwarded to Pyomo's ``SolverFactory``.
+- ``"gurobi"`` routes to the native in-memory gurobipy back-end when
+  ``gurobipy`` is importable and the solve is single-period. Multi-period
+  solves, or an environment without ``gurobipy``, use Pyomo's Gurobi plugin.
+- Any other name (``"scip"``, ``"glpk"``, ``"cbc"``, …) is forwarded to
+  Pyomo's ``SolverFactory``.
 - ``backend="casadi"`` / ``"gekko"`` / ``"pyomo"`` / ``"gurobipy"`` overrides
   the automatic routing. The CasADi and gurobipy back-ends each provide one
   solver only (``"ipopt"`` and ``"gurobi"`` respectively).
@@ -467,8 +470,10 @@ monee's back-ends pass their own preset options to each solver:
   Gurobi's default MIP gap) and ``limits/time=300``, so an exploratory MILP
   returns its incumbent once the relative gap closes to 0.01 percent instead
   of grinding on the optimality proof. Override per call with the
-  ``solver_options`` keyword, which every ``run_*`` helper forwards to the
-  backend:
+  ``solver_options`` keyword, which ``run_energy_flow``,
+  ``run_energy_flow_optimization``, ``run_timeseries`` and the ``Stepper``
+  forward to the backend (``run_multi_period`` and ``run_mpc`` do not take
+  it):
 
   .. code-block:: python
 

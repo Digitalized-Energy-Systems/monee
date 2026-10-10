@@ -121,5 +121,7 @@ See {doc}`how-to/use_pyomo_solver` for a full walk-through.
 
 Pass the solver by name, e.g. `run_energy_flow(net, solver="scip")`. The name
 chooses the back-end: `ipopt` routes to CasADi when installed (otherwise
-GEKKO), `apopt` and `bpopt` route to GEKKO, and every other name is forwarded
-to Pyomo. Override the back-end explicitly with `backend=...` if needed.
+GEKKO), `apopt` and `bpopt` route to GEKKO, `gurobi` routes to the native
+gurobipy back-end when gurobipy is installed (Pyomo otherwise, and always for
+multi-period solves), and every other name is forwarded to Pyomo. Override the
+back-end explicitly with `backend=...` if needed.

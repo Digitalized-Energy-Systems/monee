@@ -5,6 +5,7 @@
 
 install
 quickstart
+features
 concepts/index
 tutorials/index
 how-to/index
@@ -147,6 +148,16 @@ match the reference to at ~1e-9%-1%.
 
 ::::
 
+:::{div} sd-text-center sd-pt-4
+
+```{button-ref} features
+:color: primary
+:outline:
+Explore all features
+```
+
+:::
+
 ---
 
 ## Quick look
@@ -195,7 +206,7 @@ use the express form in examples that stay inside `monee.express`, and
 
 ## Where to go next
 
-::::{grid} 1 2 2 4
+::::{grid} 1 2 3 3
 :gutter: 3
 
 :::{grid-item-card} Quickstart
@@ -205,6 +216,15 @@ use the express form in examples that stay inside `monee.express`, and
 :shadow: sm
 
 A five-minute guided tour of the core workflow.
+:::
+
+:::{grid-item-card} Feature overview
+:link: features
+:link-type: doc
+:text-align: center
+:shadow: sm
+
+Every capability on one map, and a table of common goals.
 :::
 
 :::{grid-item-card} Concepts

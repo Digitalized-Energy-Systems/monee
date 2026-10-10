@@ -27,6 +27,7 @@ extensions = [
     "sphinx.ext.mathjax",
     "sphinxcontrib.mermaid",
     "interactive_plots",
+    "feature_map",
 ]
 
 templates_path = ["_templates"]
@@ -87,6 +88,8 @@ html_theme = "furo"
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
+# Opens the sphinx-design tab that holds a linked #anchor.
+html_js_files = [("tab_anchor.js", {"defer": "defer"})]
 
 html_theme_options = {
     "light_logo": "monee-logo.drawio.svg",

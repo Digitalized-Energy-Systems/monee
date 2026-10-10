@@ -83,12 +83,12 @@ import monee
 # Smooth NLP: CasADi by default (nothing to set)
 monee.run_energy_flow(net, formulation="smooth_nlp")
 
-# (MI)QCQP / MISOCP: pick the solver. A plain name routes to Pyomo
-monee.run_energy_flow_optimization(net, problem, solver="gurobi")  # Pyomo + Gurobi
+# (MI)QCQP / MISOCP: pick the solver
+monee.run_energy_flow_optimization(net, problem, solver="gurobi")  # gurobipy if installed
 monee.run_energy_flow_optimization(net, problem, solver="scip")  # Pyomo + SCIP (global)
 
-# The faster native Gurobi backend is opt-in via backend=
-monee.run_energy_flow_optimization(net, problem, backend="gurobipy")
+# Force a backend with backend=, for example Gurobi through Pyomo
+monee.run_energy_flow_optimization(net, problem, solver="gurobi", backend="pyomo")
 ```
 
 ## Formulation class to recommended backend
@@ -105,8 +105,9 @@ monee.run_energy_flow_optimization(net, problem, backend="gurobipy")
 ```{tip}
 When in doubt, take the default. A plain `run_energy_flow` already uses the fast
 in-process CasADi/IPOPT path for the smooth NLPs. For the (MI)QCQP and MISOCP
-models, name a solver (`solver="gurobi"` or `"scip"` routes to Pyomo)
-and add `backend="gurobipy"` when you want the fastest native Gurobi path. See
+models, name a solver: `solver="scip"` routes to Pyomo, and `solver="gurobi"`
+takes the fast native gurobipy path when gurobipy is installed (Pyomo
+otherwise, and always for multi-period solves). See
 {doc}`../concepts/solvers` for the full routing rules and
 {doc}`../concepts/formulations` for what each formulation class models.
 ```

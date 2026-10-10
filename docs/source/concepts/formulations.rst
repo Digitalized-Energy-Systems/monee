@@ -204,7 +204,10 @@ remain importable but are deprecated.
       (``branch.shift``) has no representation in a magnitude-only branch-flow
       model and is ignored; only the magnitude ratio ``tap`` enters.
 
-      Checking the cone gap: the SOC constrains the series flows, and the
+      .. rubric:: Checking the cone gap
+         :name: checking-the-cone-gap
+
+      The SOC constrains the series flows, and the
       branch result frame reports them directly as ``p_series_from_mw`` and
       ``q_series_from_mvar`` (plus the ``_to`` pair). In per unit
       (divide by ``sn_mva``), a tight relaxation satisfies
@@ -294,6 +297,9 @@ remain importable but are deprecated.
       and turbulent regimes both resolve. Use it when lightly-loaded pipes
       (Re < 2300) matter.
 
+      .. rubric:: Smooth gas NLP
+         :name: smooth-gas-nlp
+
       :func:`~monee.model.formulation.make_gas_nlp_formulation` ``(friction_model="constant", smoothing_eps=1e-3)``
       / ``GAS_NLP_FORMULATION``
 
@@ -360,6 +366,9 @@ remain importable but are deprecated.
       *Best for:* GEKKO IPOPT/APOPT solves of heat networks and full MES.
 
    .. tab-item:: District heating (McCormick)
+
+      .. rubric:: McCormick district heating
+         :name: mccormick-district-heating
 
       ``HEAT_CONVEX_MILP_FORMULATION`` /
       :func:`~monee.model.formulation.make_heat_convex_milp_formulation` ``(num_partitions=1, include_heat_exchangers=True)``
