@@ -217,6 +217,72 @@ def test_p2h_partial_regulation_result_columns():
     assert math.isclose(cn["heat_mw"].iloc[0], -reg * heat_mw, rel_tol=1e-4)
 
 
+def test_p2h_regulation_set_after_create_reaches_a_single_solve():
+    """Regression: the compound's ``regulation`` is a build-time seed that only
+    ``sync()`` pushes onto the control node, and only the timeseries driver
+    called it, so a value set before ``run_energy_flow`` was silently ignored."""
+    # GIVEN a unit built at full regulation, then set to half
+    heat_mw, eff, reg = 0.020, 0.8, 0.5
+    net = _build_p2h_network(heat_mw=heat_mw, efficiency=eff)
+    net.compounds[0].model.regulation = reg
+
+    # WHEN
+    result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
+    cn = result.dataframes["PowerToHeatControlNode"]
+    assert cn["regulation"].iloc[0] == pytest.approx(reg)
+    assert math.isclose(cn["heat_mw"].iloc[0], -reg * heat_mw, rel_tol=1e-4)
+
+
+def _p2h_control_node_id(net):
+    return next(
+        node.id
+        for node in net.nodes
+        if isinstance(node.model, mm.PowerToHeatControlNode)
+    )
+
+
+def test_p2h_regulation_set_on_the_control_node_survives_the_solve():
+    """Regression: the solve-time compound sync reset a regulation written onto
+    the control node itself to the compound's unchanged build-time seed."""
+    # GIVEN
+    heat_mw, eff, reg = 0.020, 0.8, 0.5
+    net = _build_p2h_network(heat_mw=heat_mw, efficiency=eff)
+    net.node_by_id(_p2h_control_node_id(net)).model.regulation = reg
+
+    # WHEN
+    result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
+    cn = result.dataframes["PowerToHeatControlNode"]
+    assert cn["regulation"].iloc[0] == pytest.approx(reg)
+    assert math.isclose(cn["heat_mw"].iloc[0], -reg * heat_mw, rel_tol=1e-4)
+
+
+def test_p2h_control_node_series_survives_the_per_step_rebuild():
+    """The same reset hit a node series on the control node in the per-step
+    rebuild loop, while the CasADi build-once path kept it."""
+    from monee.simulation.timeseries import TimeseriesData, run
+
+    # GIVEN a node series on the control node; the step hook forces the
+    # per-step rebuild loop
+    net = _build_p2h_network(heat_mw=0.020, efficiency=0.8)
+    control_id = _p2h_control_node_id(net)
+    td = TimeseriesData()
+    td.add_node_series(control_id, "regulation", [0.5, 0.25])
+
+    # WHEN
+    res = run(net, td, steps=2, step_hooks=[lambda *a: None])
+
+    # THEN
+    assert res.failed_steps == []
+    regulation = res.get_result_for(mm.PowerToHeatControlNode, "regulation")
+    assert regulation[control_id].tolist() == pytest.approx([0.5, 0.25])
+
+
 def test_p2h_heat_mw_sign_convention():
     """Positive heat_energy_mw input reports as negative heat_mw (injection)."""
     heat_mw = 0.020

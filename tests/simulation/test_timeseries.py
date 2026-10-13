@@ -263,6 +263,23 @@ def test_series_on_var_attribute_warns_up_front_in_simulation_run():
     assert math.isclose(p.iloc[1, 0], 0.8, rel_tol=1e-9)
 
 
+def test_series_on_a_reported_value_warns_that_it_has_no_effect():
+    """Regression: a series on ``Junction.t_k`` (a PostProcess recomputed from
+    the solution) was silently a no-op; only Var targets warned."""
+    # GIVEN
+    net = mm.Network(mm.create_water_grid("water"))
+    j0, j1 = mx.create_water_junction(net), mx.create_water_junction(net)
+    mx.create_water_ext_grid(net, j0, t_k=350)
+    mx.create_water_pipe(net, j0, j1, diameter_m=0.1, length_m=100)
+    mx.create_water_sink(net, j1, mass_flow_kgs=0.1)
+    td = TimeseriesData()
+    td.add_node_series(j1, "t_k", [340.0, 345.0])
+
+    # WHEN / THEN
+    with pytest.warns(UserWarning, match=r"recomputed from the solution.*'t_k'"):
+        run(net, td, steps=2)
+
+
 def test_series_on_var_attribute_silent_without_solve():
     # GIVEN
     net = _free_var_net()
@@ -970,6 +987,29 @@ def test_compound_series_does_not_clobber_controllable_var():
     # THEN
     assert control_node.regulation is not None
     assert isinstance(control_node.regulation, Var)
+
+
+def test_compound_sync_keeps_values_set_on_the_control_node():
+    # GIVEN a regulation and gas dispatch written onto the control node itself
+    net, chp_id = _chp_net()
+    chp = net.compound_by_id(chp_id).model
+    control_node = _chp_control_node(net)
+    control_node.regulation = 0.5
+    control_node.gas_mass_flow_kgs = 0.05
+
+    # WHEN the unchanged compound is synced
+    chp.sync()
+
+    # THEN the control node keeps them ...
+    assert control_node.regulation == 0.5
+    assert control_node.gas_mass_flow_kgs == 0.05
+
+    # ... until the compound's own attributes change
+    chp.regulation = 0.8
+    chp.mass_flow_setpoint_kgs = 0.07
+    chp.sync()
+    assert control_node.regulation == 0.8
+    assert control_node.gas_mass_flow_kgs == 0.07
 
 
 def test_unmatched_series_key_is_reported_before_the_first_step():

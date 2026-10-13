@@ -612,7 +612,16 @@ def create_heat_load(
 
     Part load in one line: drive the stored ``q_mw_heat`` attribute; a nodal
     heat load has no mass flow of its own, so the exchangers' constant-flow
-    vs variable-flow distinction does not apply."""
+    vs variable-flow distinction does not apply.
+
+    The heat comes out of the junction's mixed stream (the nodal heat
+    balance), so every stream leaving the junction, the downstream supply
+    pipe included, leaves at the cooled temperature; a Sink on the same
+    junction drains water at that temperature and does not carry the heat
+    away separately. Along a supply line the temperature therefore drops at
+    every node-based consumer. A consumer that should cool only its own flow
+    is a branch from supply to return
+    (:func:`create_heat_exchanger` / :func:`create_passive_heat_exchanger`)."""
     return create_water_child(
         network,
         mm.HeatLoad(q_mw=q_mw, **kwargs),
@@ -1242,12 +1251,15 @@ def create_water_ext_grid(
     auto-creating a water junction if needed.
 
     On a heat network this slack behaves as an unlimited backup heat plant:
-    it delivers any mass flow at its pinned feed temperature, so lost heat
-    sources elsewhere are compensated silently instead of shedding heat load.
-    Cap it with ``max_import_kgs`` / ``max_export_kgs``, with
-    ``bounds_ext_heat`` on the load-shedding problem, or with
-    ``bounds_ext_heat_mw`` on the economic dispatch problem, when that is not
-    the intended physics (see the concepts/multi_energy page).
+    with its temperature pinned it supplies whatever heat the island balance
+    needs, so lost heat sources elsewhere are compensated silently instead of
+    shedding heat load. Cap it with ``bounds_ext_heat_mw`` on the
+    load-shedding or economic dispatch problem, or pass
+    ``pin_temperature=False``, when that is not the intended physics. On a
+    closed loop (reference on the return) the heat is not carried by the
+    exchanged mass flow, so ``max_import_kgs`` / ``max_export_kgs`` and the
+    load-shedding ``bounds_ext_heat`` (kg/s) only limit it where the slack
+    feeds the loop with mass (see the concepts/multi_energy page).
 
     Args:
         node_id: water junction to attach to; a missing node is auto-created.

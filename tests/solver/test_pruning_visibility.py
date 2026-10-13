@@ -65,3 +65,26 @@ def test_unpruned_net_emits_no_pruned_entry():
 
     assert result.success
     assert [w for w in result.warnings if w.category == "pruned"] == []
+
+
+def test_a_branch_coupler_anchors_its_leaf_gas_junction():
+    """Regression: the dead-end rule runs on a copy without multi-grid
+    branches, so a P2G feeding a childless leaf junction was pruned together
+    with the junction (success=True, only a 'pruned' warning). Compound ports
+    were already exempt; the coupler's injection anchors the node the same way."""
+    net = mm.Network()
+    b0 = mx.create_bus(net, base_kv=20)
+    mx.create_ext_power_grid(net, b0)
+    g0 = mx.create_gas_junction(net)
+    g1 = mx.create_gas_junction(net)
+    mx.create_gas_ext_grid(net, g0)
+    mx.create_gas_pipe(net, g0, g1, 0.1, 1000)
+    mx.create_p2g(net, b0, g1, efficiency=0.7, mass_flow_setpoint_kgs=0.005)
+
+    result = monee.run_energy_flow(net)
+
+    assert result.success
+    assert [w for w in result.warnings if w.category == "pruned"] == []
+    p2g = result.get(mm.PowerToGas).iloc[0]
+    assert not p2g["ignored"]
+    assert p2g["to_mass_flow_kgs"] == pytest.approx(-0.005)

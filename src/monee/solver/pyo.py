@@ -190,6 +190,10 @@ class PyscipoptSolver:
             solver_status, tc = SolverStatus.warning, TerminationCondition.infeasible
         elif status == "unbounded":
             solver_status, tc = SolverStatus.warning, TerminationCondition.unbounded
+        elif status == "inforunbd":
+            # Proven infeasible or unbounded: a verdict about the model, not a
+            # limit stop, so it keeps the infeasibility diagnosis.
+            solver_status, tc = SolverStatus.warning, TerminationCondition.infeasible
         elif has_solution:
             if status == "gaplimit":
                 # The incumbent meets the configured relative gap (limits/gap):
@@ -206,11 +210,22 @@ class PyscipoptSolver:
                     TerminationCondition.maxTimeLimit,
                 )
         else:
-            # Limit hit with no incumbent -> report as infeasible so the caller
-            # surfaces a diagnostic rather than reading unset Vars as a solution.
-            solver_status, tc = SolverStatus.warning, TerminationCondition.infeasible
+            # Limit hit with no incumbent: a failed solve, but no verdict about
+            # the model (gurobipy reports the same as aborted/maxTimeLimit).
+            # has_solution=False keeps _classify_solve_result from reading the
+            # unset Vars as a witness solution.
+            solver_status = SolverStatus.aborted
+            tc = (
+                TerminationCondition.maxTimeLimit
+                if status == "timelimit"
+                else TerminationCondition.other
+            )
         return types.SimpleNamespace(
-            solver=types.SimpleNamespace(status=solver_status, termination_condition=tc)
+            solver=types.SimpleNamespace(
+                status=solver_status,
+                termination_condition=tc,
+                has_solution=has_solution,
+            )
         )
 
 
@@ -294,7 +309,8 @@ def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
         TerminationCondition.locallyOptimal,
         TerminationCondition.globallyOptimal,
     }
-    if tc in witness_terminations:
+    # The pyscipopt bridge says whether a limit stop carries an incumbent.
+    if tc in witness_terminations and getattr(result.solver, "has_solution", True):
         _log.warning(
             "%s returned non-ok status (status=%s, termination=%s); "
             "using witness solution.",

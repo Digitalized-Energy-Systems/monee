@@ -89,6 +89,18 @@ def _register_branch(table, row, pair, seen, kinds, meta):
     return bid
 
 
+def _trafo_max_i_ka(net, row):
+    """hv-side rated current in kA of a pandapower trafo row (``sn_mva``
+    times ``parallel`` and ``df``), or None without a usable rating."""
+    sn_mva = _coerce_positive_float(getattr(row, "sn_mva", None), default=None)
+    vn_kv = _coerce_positive_float(net.bus.at[row.hv_bus, "vn_kv"], default=None)
+    if sn_mva is None or vn_kv is None:
+        return None
+    parallel = _coerce_positive_int(getattr(row, "parallel", 1))
+    df = _coerce_positive_float(getattr(row, "df", 1.0))
+    return sn_mva * parallel * df / (math.sqrt(3) * vn_kv)
+
+
 def _pp_branch_max_i_ka_overrides(net, bus_to_node, monee_node_ids):
     overrides = {}
     kinds = {}
@@ -130,8 +142,17 @@ def _pp_branch_max_i_ka_overrides(net, bus_to_node, monee_node_ids):
                 bus_to_node,
                 monee_node_ids,
             )
-            if pair is not None:
-                _register_branch(table, row, pair, seen, kinds, meta)
+            if pair is None:
+                continue
+            bid = _register_branch(table, row, pair, seen, kinds, meta)
+            if table == "trafo":
+                # to_mpc writes a 100 MVA placeholder RATE_A for a trafo
+                # without max_loading_percent; rate it at its sn_mva like
+                # pandapower's own loading_percent (and like the lines above),
+                # in the hv (from-side) current basis.
+                rating = _trafo_max_i_ka(net, row)
+                if rating is not None:
+                    overrides[bid] = rating
 
     if skipped_lines:
         warnings.warn(

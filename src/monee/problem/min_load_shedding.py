@@ -55,6 +55,7 @@ from monee.problem.core import (
     nan_to_zero,
 )
 from monee.problem.utils import (
+    bound_water_slack_heat,
     cp_input_rated_mw,
     line_loading_limit,
     make_node_var_bounds_hook,
@@ -605,6 +606,46 @@ def _calc_objective(model_to_data):
     )
 
 
+def _warn_replaced_demand_regulation(network):
+    """Warn when the shedding variable replaces a demand's input regulation.
+
+    ``REGULATION_ATTR`` promotes every demand's ``regulation`` to a fresh
+    [0, 1] decision measured against the setpoint, so a part-load encoded in
+    ``regulation`` (e.g. a timeseries driving a heat exchanger) is silently
+    replaced by the full setpoint."""
+    replaced = [
+        component
+        for component in network.all_components()
+        if component.active
+        and not getattr(component, "ignored", False)
+        and (
+            (isinstance(component.model, _DEMAND_TYPES) and _demand_sink(component))
+            or hx_is_consuming(component.model)
+        )
+        and isinstance(getattr(component.model, "regulation", 1), int | float)
+        and not isinstance(component.model.regulation, bool)
+        and abs(component.model.regulation - 1) > 1e-9
+    ]
+    if not replaced:
+        return
+    first = replaced[0]
+    warnings.warn(
+        f"The load-shedding problem replaces the regulation of {len(replaced)} "
+        f"demand(s) (e.g. {type(first.model).__name__} {first.id!r} at "
+        f"{first.model.regulation:g}) by its [0, 1] shedding variable and "
+        "measures the shed against the full setpoint, so a part load encoded "
+        "in regulation is dropped. Write the demand into the setpoint instead "
+        "(p_mw, q_mw_set, mass_flow_kgs, q_mw_heat). See the "
+        "problems/load_shedding docs page.",
+        stacklevel=2,
+    )
+
+
+def _demand_sink(component) -> bool:
+    # Water sinks are hydraulic boundaries, not demands (see controllable_demands).
+    return type(component.model) is not Sink or type(component.grid) is GasGrid
+
+
 def create_min_load_shedding_problem(
     *,  # NOSONAR
     demand_weight=WEIGHT_DEMAND,
@@ -617,6 +658,7 @@ def create_min_load_shedding_problem(
     bounds_ext_el=None,
     bounds_ext_gas=None,
     bounds_ext_heat=None,
+    bounds_ext_heat_mw=None,
     regulation_ramp_limit=None,
     include_storages=False,
     include_ext_grids=True,
@@ -648,6 +690,15 @@ def create_min_load_shedding_problem(
     default would silently shed load on any network importing more than the
     default allows.
 
+    ``bounds_ext_heat_mw`` = (lo, hi) bounds the heat each water
+    ``ExtHydrGrid`` supplies to its island in MW, in the load convention
+    (supply negative; ``None`` leaves a side open), exactly like
+    ``bounds_ext_heat_mw`` of the economic dispatch. Use it to cap a
+    temperature-pinned reference: on a closed loop (reference on the return)
+    that slack re-heats the water through its dropped heat balance at almost
+    zero exchanged mass flow, so ``bounds_ext_heat`` (kg/s) does not limit
+    its heat. ``(0, 0)`` makes the reference heat-neutral. Default ``None``.
+
     ``lex_objectives`` (Pyomo only) solves in two phases: shed first, then
     formulation-tightening aux terms with the phase-1 optimum pinned.
     ``auto_priority_floor`` (default True) scales ``demand_weight`` to
@@ -668,6 +719,7 @@ def create_min_load_shedding_problem(
     }
 
     problem.controllable_demands(REGULATION_ATTR, optional=True)
+    problem._controllable_appliables.append(_warn_replaced_demand_regulation)
     problem.controllable_generators(REGULATION_ATTR, optional=True)
     problem.controllable_cps(REGULATION_ATTR, optional=True)
     problem.controllable_backup_lines(optional=True)
@@ -898,6 +950,9 @@ def create_min_load_shedding_problem(
                     ExtHydrGrid, "mass_flow_kgs", bounds_ext_heat, grid_type=WaterGrid
                 )
             )
+
+        if bounds_ext_heat_mw is not None:
+            bound_water_slack_heat(constraints, bounds_ext_heat_mw)
 
     if regulation_ramp_limit is not None:
         constraints.regulation_ramp(regulation_ramp_limit)

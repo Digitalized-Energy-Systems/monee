@@ -26,13 +26,14 @@ from .core import NetworkAspect
 class LumpedThermalCapacitance(NetworkAspect):
     """LTC extension. Nodes with a GridFormingMixin child are excluded.
 
-    First-step anchor precedence (anchored mode, the default - required for NLP
-    solvers like GEKKO/IPOPT): ``t_init_overrides[node_id]`` -> ``default_t_init``
-    -> the junction's own ``t_pu`` Var initialiser. Pass ``default_t_init`` near
-    the operating mean to skip the warm-up transient.
+    First-step anchor precedence (anchored mode, the default):
+    ``t_init_overrides[node_id]`` -> ``default_t_init`` -> the junction's own
+    ``t_pu`` Var initialiser. Pass ``default_t_init`` near the operating mean
+    to skip the warm-up transient.
 
     ``first_step_steady_state=True`` drops the first-step inertia term (emits
-    ``net_heat == 0``); MIP backends only.
+    ``net_heat == 0``), so step 0 reproduces the steady energy flow without a
+    warm-up transient; it works on the NLP (CasADi/IPOPT) and MIP backends.
     """
 
     def __init__(
@@ -150,7 +151,7 @@ class LumpedThermalCapacitance(NetworkAspect):
 
             t_prev = temporal_state.get(node.id, "t_pu")
             if t_prev is None and self._first_step_steady_state:
-                # MIP-only steady-state mode - see class docstring.
+                # Steady-state first step - see class docstring.
                 eqs.append(net_heat == 0)
             else:
                 if t_prev is None:
@@ -199,11 +200,20 @@ class LumpedThermalCapacitance(NetworkAspect):
 
 
 def _water_branch_terms(network, node_id, t_n, scale_mw_per_kgs, ignored_nodes):
+    # Mirror Junction.calc_signed_heat_flow: every incident branch carrying
+    # mass_flow_pos/neg_kgs counts, whatever its grid. A WaterGrid filter
+    # dropped the multi-grid GenericTransferBranch (grid is a dict) that ties
+    # a P2H hot side and a CHP/G2H cold side to its control node, so the
+    # junction kept that mass in its balance but lost its enthalpy. The
+    # McCormick balance only sees branches with H vars, and so does this term.
+    mccormick = getattr(
+        network.node_by_id(node_id).model, "_mccormick_dhs_active", False
+    )
     terms = []
     for branch in network.branches:
-        if not isinstance(branch.grid, WaterGrid):
-            continue
         if not branch.active or _branch_ignored(branch, ignored_nodes):
+            continue
+        if mccormick and "H_in_mw" not in branch.model.vars:
             continue
         term = _branch_convective_term(
             branch.model.vars, branch, node_id, t_n, scale_mw_per_kgs

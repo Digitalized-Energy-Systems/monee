@@ -152,3 +152,75 @@ def test_node_temperature_series_on_ext_grid_junction_is_refused():
         pytest.raises(ValueError, match="pin_temperature"),
     ):
         run(net, td, steps=2, solver="ipopt")
+
+
+def _coupler_loop(kind):
+    """A DHS loop fed by one coupler whose GenericTransferBranch ends at an
+    LTC junction: the P2H hot side, or the G2H cold side behind a pipe."""
+    import monee.express as mx
+
+    gas = kind == "g2h_cold"
+    grids = dict(
+        el_model=mm.create_power_grid("el"), water_model=mm.create_water_grid("w")
+    )
+    if gas:
+        grids["gas_model"] = mm.create_gas_grid("g")
+    net = mm.Network(**grids)
+    b0, b1 = mx.create_bus(net, base_kv=20), mx.create_bus(net, base_kv=20)
+    mx.create_ext_power_grid(net, b0)
+    mx.create_line(net, b0, b1, 1000, 1e-4, 1e-4, max_i_ka=0.4)
+    r = mx.create_water_junction(net)
+    mx.create_water_ext_grid(net, r, t_k=333.15)
+    s1, s2 = mx.create_water_junction(net), mx.create_water_junction(net)
+    if gas:
+        g0, g1 = mx.create_gas_junction(net), mx.create_gas_junction(net)
+        mx.create_gas_ext_grid(net, g0)
+        mx.create_gas_pipe(net, g0, g1, 0.1, 500)
+        probe = mx.create_water_junction(net)
+        mx.create_water_pipe(net, r, probe, diameter_m=0.1, length_m=200)
+        mx.create_g2h(
+            net,
+            gas_node_id=g1,
+            cold_node_id=probe,
+            hot_node_id=s1,
+            heat_energy_mw=1.0,
+            diameter_m=0.1,
+            efficiency=0.93,
+        )
+    else:
+        probe = s1
+        mx.create_p2h(
+            net,
+            power_node_id=b1,
+            cold_node_id=r,
+            hot_node_id=s1,
+            heat_energy_mw=1.0,
+            diameter_m=0.1,
+            efficiency=3.0,
+        )
+    mx.create_water_pipe(net, s1, s2, diameter_m=0.1, length_m=500)
+    mx.create_water_pipe(net, s1, r, diameter_m=0.1, length_m=20)
+    hx = mx.create_heat_exchanger(net, s2, r, q_mw=0.9)
+    return net, probe, hx
+
+
+@pytest.mark.parametrize("kind", ["p2h_hot", "g2h_cold"])
+def test_ltc_counts_the_coupler_transfer_branch_enthalpy(kind):
+    """Regression: the inertia term skipped every branch not on a WaterGrid, so
+    a coupler's multi-grid transfer branch kept its mass in the junction
+    balance but lost its enthalpy; every step failed (or drained the hot
+    junction far below zero degC)."""
+
+    def _probe_t_k(with_ltc):
+        net, probe, hx = _coupler_loop(kind)
+        if with_ltc:
+            net.add_extension(LumpedThermalCapacitance(first_step_steady_state=True))
+        td = TimeseriesData()
+        td.add_branch_series(hx, "regulation", [1.0, 1.0])
+        res = run(net, td, steps=2, dt_h=0.25)
+        assert res.failed_steps == []
+        return res.get_result_for(mm.Junction, "t_k")[probe].tolist()
+
+    steady = _probe_t_k(with_ltc=False)
+
+    assert _probe_t_k(with_ltc=True) == pytest.approx(steady, abs=1e-3)

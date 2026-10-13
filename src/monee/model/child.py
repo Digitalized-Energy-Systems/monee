@@ -260,14 +260,18 @@ class ExtHydrGrid(NoVarChildModel, GridFormingMixin):
     ``monee.express.create_gas_ext_grid`` is also an ``ExtHydrGrid`` (the name
     refers to the shared hydraulic slack role, not to water specifically).
 
-    On a water loop this slack acts as an unlimited backup heat plant: it
-    supplies or absorbs whatever mass flow at its pinned feed temperature the
-    heat balance needs, so a fuel-starved or deactivated heat source elsewhere
-    is silently compensated instead of causing curtailment. Cap it with
-    ``max_import_kgs`` / ``max_export_kgs`` here, with ``bounds_ext_heat``
-    on the load-shedding problem, or with ``bounds_ext_heat_mw`` on the
-    economic dispatch problem, when backup supply should be limited. The
-    concepts/multi_energy docs page explains the semantics.
+    On a water loop this slack acts as an unlimited backup heat plant: with
+    its temperature pinned, its node's heat balance is the island's dropped
+    (heat-slack) one, so it supplies or absorbs whatever heat the balance
+    needs and a fuel-starved or deactivated heat source elsewhere is silently
+    compensated instead of causing curtailment. On a closed loop (reference
+    on the return) that heat is not carried by its mass flow, so only
+    ``bounds_ext_heat_mw`` (MW, load-shedding and economic dispatch problems)
+    or ``pin_temperature=False`` limit it; ``max_import_kgs`` /
+    ``max_export_kgs`` here and ``bounds_ext_heat`` (kg/s) on the
+    load-shedding problem cap the exchanged mass flow, which bounds the heat
+    only where the slack feeds the loop with mass. The concepts/multi_energy
+    docs page explains the semantics.
 
     ``cost`` prices the exchange in the economic dispatch objective: per MW of
     higher heating value on a gas grid (import charged, export credited), per

@@ -2,6 +2,7 @@ r"""Branch-flow MISOCP electricity formulation: convex SOC relaxation
 :math:`P^2 + Q^2 \le (W/tap^2) \cdot ell` plus big-M switching binaries."""
 
 import math
+import numbers
 
 from monee.model.core import Intermediate, IntermediateEq, Var, value
 from monee.model.formulation.core import (
@@ -32,6 +33,10 @@ def _to_pu(value_mw, grid):
 
 
 class MISOCPElectricityNodeFormulation(NodeFormulation):
+    # vm_pu only reports sqrt(vm_pu_squared); by equation time it holds that
+    # (nonlinear) backend expression, so constraints belong on vm_pu_squared.
+    derived_attrs = ("vm_pu",)
+
     def ensure_var(self, node, simulation=False, grid=None):
         vm_min = getattr(grid, "vm_pu_min", 0.5)
         vm_max = getattr(grid, "vm_pu_max", 1.5)
@@ -102,9 +107,14 @@ def _shunt_gate(branch):
     """Multiplier applied to the pi-shunt injection. A switchable branch keeps
     its charging energised here: gating by a binary ``on_off`` Var would make
     the SOC constraint quartic, and the nodal balance (model/node.py) already
-    multiplies the terminal flows by ``on_off``."""
+    multiplies the terminal flows by ``on_off``.
+
+    ``equations()`` runs after the backend injected its variables, so a
+    switchable ``on_off`` arrives as a Pyomo/gurobipy/... variable, not as a
+    monee :class:`Var`; only a plain number is a fixed state, numpy scalars
+    included (a numpy/pandas ``on_off`` series writes ``np.int64``)."""
     on_off = branch.on_off
-    return 1.0 if type(on_off) is Var else on_off
+    return on_off if isinstance(on_off, numbers.Real) else 1.0
 
 
 def _series_flows(branch, grid, from_node_model, to_node_model, tap):

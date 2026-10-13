@@ -276,8 +276,12 @@ class ElectricityIslandingMode(IslandingMode):
         vm_min = getattr(node.grid, "vm_pu_min", 0.5)
         vm_max = getattr(node.grid, "vm_pu_max", 1.5)
         eqs = []
+        # A formulation-derived report (branch-flow: vm_pu = sqrt(W)) has been
+        # replaced by its backend expression here, which _is_decision_value
+        # cannot tell from a variable; gating W already pins it.
+        derived = getattr(getattr(node, "formulation", None), "derived_attrs", ())
         vm = getattr(node.model, "vm_pu", None)
-        if _is_decision_value(vm):
+        if "vm_pu" not in derived and _is_decision_value(vm):
             eqs.append(voltage_upper_bound_energized(vm, vm_max, e))
             eqs.append(voltage_lower_bound_energized(vm, vm_min, e))
         w = getattr(node.model, "vm_pu_squared", None)

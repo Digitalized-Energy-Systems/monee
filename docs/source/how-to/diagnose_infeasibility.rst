@@ -223,6 +223,15 @@ finding is local, a ``component`` and a ``value`` with its magnitude:
        variable sitting at its own setpoint bound (an islanding gated
        injection, or a load at the served end of a zero to setpoint gate) is
        the normal fully served state and is not reported.
+   * - ``temperature``
+     - A water junction solved outside 0 to 200 degC. The nodal heat model
+       has no physical temperature limit (only the loose ``t_pu`` box), so
+       such a value is a modelling symptom, not physics: typically a heat
+       injection without mass flow (a ``HeatGenerator`` at a low-flow
+       junction; inject heat with mass through a coupler instead), or a part
+       of the loop whose solved flows decouple it from every temperature
+       reference (a fixed-flow coupler that exactly balances its consumers),
+       which then settles where its pipe losses vanish.
    * - ``dof``
      - A simulation solve was requested but the model is not square, so the
        solved values are one feasible point rather than a unique setpoint.
@@ -460,7 +469,10 @@ Only infeasible terminations trigger a report. Other non-OK outcomes, most
 commonly a time limit reached with a feasible incumbent, count as success with
 a warning ("using witness solution"): the result carries the best solution
 found so far, ``result.success`` is ``True``, and no report is attached. Check
-the log for the warning if your objective value looks suboptimal.
+the log for the warning if your objective value looks suboptimal. A time limit
+that found no incumbent fails (``result.success`` is ``False``) with
+``termination_condition="maxTimeLimit"`` and no report: it is not evidence of
+infeasibility, so raise the limit before diagnosing the model.
 
 ----
 

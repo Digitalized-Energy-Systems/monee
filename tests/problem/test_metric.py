@@ -172,3 +172,15 @@ def test_include_ext_grid_counts_the_import_as_unserved():
     power, _, _ = GeneralResiliencePerformanceMetric().calc(net, include_ext_grid=True)
     imported = -net.childs_by_type(mm.ExtPowerGrid)[0].model.p_mw.value
     assert power == pytest.approx(imported, rel=1e-9)
+
+
+def test_hx_load_under_delivering_at_full_regulation_counts_the_gap():
+    """Regression: in optimisation a consuming exchanger's duty is the
+    inequality ``q_mw_delivered <= q_mw``; the metric read ``q_mw`` (=
+    q_mw_set * regulation) and missed an under-delivery the load-shedding
+    objective counts."""
+    net, branch = _hx_net(Q_SET_MW)
+    branch.model.regulation = 1.0
+    branch.model.q_mw.value = Q_SET_MW
+    branch.model.q_mw_delivered = mm.Var(Q_SET_MW * 0.25, min=0)
+    assert _heat_curtailed(net) == pytest.approx(Q_SET_MW * 0.75)

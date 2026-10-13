@@ -35,6 +35,7 @@ from monee.problem.core import (
 )
 from monee.problem.utils import (
     _live,
+    bound_water_slack_heat,
     gas_mw_per_kgs,
     line_loading_limit,
     make_vm_bounds_hook,
@@ -424,7 +425,7 @@ def _add_heat(
     _add_heat_controls(problem, bounds_t_k)
     _add_heat_objectives(objectives, heat_cost_default)
     if bounds_ext_heat_mw is not None:
-        _bound_heat_exchange(constraints, bounds_ext_heat_mw)
+        bound_water_slack_heat(constraints, bounds_ext_heat_mw)
 
 
 def _add_heat_controls(problem, bounds_t_k):
@@ -482,17 +483,6 @@ def _add_heat_objectives(objectives, heat_cost_default):
             _cost_or(slack.model, heat_cost_default) * q_mw for slack, q_mw in terms
         )
     )
-
-
-def _bound_heat_exchange(constraints, bounds_ext_heat_mw):
-    lo, hi = bounds_ext_heat_mw
-    exchange = constraints.with_models(
-        lambda network: [q_mw for _, q_mw in water_slack_heat_terms(network)]
-    )
-    if lo is not None:
-        exchange.equation(lambda q_mw: -q_mw >= lo)
-    if hi is not None:
-        exchange.equation(lambda q_mw: -q_mw <= hi)
 
 
 def _add_coupling_points(problem, enabled, ext_grid_cost_default):

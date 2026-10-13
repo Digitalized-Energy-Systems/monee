@@ -561,6 +561,9 @@ class OptimizationProblem:
         self._constraints: Constraints | None = None
         self._debug = debug
         self._lex_objectives = lex_objectives
+        # Read by the solve-time pruning (find_ignored_nodes): a backup line
+        # this problem makes switchable is a connection, even if built open.
+        self._promotes_backup_lines = False
 
     @property
     def lex_objectives(self) -> bool:
@@ -957,7 +960,12 @@ class OptimizationProblem:
         (``ElectricityIslandingMode.branch_gating``) only bounds a backup branch
         from above (``on_off <= e_from``, ``on_off <= e_to``), so closing it
         remains this method's decision; see docs/source/concepts/islanding.md.
+
+        ``exclude_unconnected_nodes=True`` keeps a backup line in the pruning
+        topology even when it is built open (``on_off=0``), so the part of the
+        network only it can reconnect is not dropped before it can close.
         """
+        self._promotes_backup_lines = True
         self.controllable(
             optional=optional,
             looked_for="branches with backup=True",

@@ -364,6 +364,130 @@ def test_misocp_optimization_matches_pyomo_gurobi():
     )
 
 
+def _ring_with_backup_tie(on_off):
+    """Three-bus ring; the backup tie runs from the load bus b2 (a variable
+    voltage) back to the slack bus b0, and the b1-b2 line is out."""
+    import monee.express as mx
+
+    net = mx.create_multi_energy_network()
+    b = [mx.create_bus(net) for _ in range(3)]
+    mx.create_line(net, b[0], b[1], 300, 7e-5, 7e-5)
+    mx.create_line(net, b[1], b[2], 300, 7e-5, 7e-5)
+    net.branch(
+        mm.PowerLine(300, 7e-5, 7e-5, 1, backup=True, on_off=on_off),
+        from_node_id=b[2],
+        to_node_id=b[0],
+    )
+    mx.create_ext_power_grid(net, b[0])
+    mx.create_power_load(net, b[2], 0.2, 0.0)
+    net.deactivate_by_id(mm.PowerLine, (b[1], b[2], 0))
+    return net
+
+
+@requires_gurobi
+@pytest.mark.parametrize("on_off", [0, 1])
+def test_misocp_switchable_backup_tie_builds_and_closes(on_off):
+    """Regression: the pi-shunt gate tested ``type(on_off) is Var``, but
+    ``equations()`` sees the injected gurobipy Var, so the series flow became
+    ``p - on_off * g * W`` and its square a quartic NLExpr that gurobipy refuses
+    (``Nonlinear constraints must take the form y=f(x)``)."""
+    import monee
+    from monee.problem.min_load_shedding import create_min_load_shedding_problem
+
+    # GIVEN a backup tie whose from-bus voltage is a decision variable
+    net = _ring_with_backup_tie(on_off)
+
+    # WHEN
+    result = monee.run_energy_flow_optimization(
+        net,
+        create_min_load_shedding_problem(check_pressure=False, check_t=False),
+        solver="gurobi",
+        formulation="el_misocp",
+    )
+
+    # THEN the tie closes and serves the load
+    assert result.success
+    backup = result.get(mm.PowerLine).query("backup == True").iloc[0]
+    assert backup["on_off"] == 1
+    assert result.get(mm.PowerLoad)["regulation"].iloc[0] == pytest.approx(1.0)
+
+
+@requires_gurobi
+def test_per_call_solver_options_reach_the_gurobi_model():
+    """Regression: ``solver_options`` passed to a solve routed to gurobipy was
+    swallowed by ``**kwargs``; only ``GurobipySolver(params=...)`` worked."""
+    import monee
+    from monee.problem.min_load_shedding import create_min_load_shedding_problem
+
+    # GIVEN a solve that cannot finish within a zero time limit
+    def _solve(**kwargs):
+        return monee.run_energy_flow_optimization(
+            _ring_with_backup_tie(on_off=1),
+            create_min_load_shedding_problem(check_pressure=False, check_t=False),
+            solver="gurobi",
+            formulation="el_misocp",
+            **kwargs,
+        )
+
+    # WHEN / THEN the per-call option is applied ...
+    stopped = _solve(solver_options={"TimeLimit": 0.0})
+    assert stopped.backend_used == "gurobipy"
+    assert stopped.termination_condition == "maxTimeLimit"
+    # ... and a None value drops the key instead of passing it to Gurobi
+    assert _solve(solver_options={"TimeLimit": None}).success
+
+
+@requires_gurobi
+def test_polar_nlp_load_shedding_raises_a_clear_error():
+    """Regression: gurobipy rejects ``loading_from_pu <= max`` (an NLExpr on the
+    left) with a bare GurobiError; the backend now names the way out."""
+    import monee
+    from monee.problem.min_load_shedding import create_min_load_shedding_problem
+
+    with pytest.raises(NotImplementedError, match="el_misocp"):
+        monee.run_energy_flow_optimization(
+            _ring_with_backup_tie(on_off=1),
+            create_min_load_shedding_problem(check_pressure=False, check_t=False),
+            solver="gurobi",
+        )
+
+
+@requires_gurobi
+def test_misocp_islanding_branch_gate_builds_on_gurobipy():
+    """Regression: the islanding voltage gate bounded ``vm_pu``, which under the
+    branch-flow formulation is the ``sqrt(vm_pu_squared)`` expression, so
+    gurobipy refused the nonlinear inequality. The gate now bounds W only."""
+    import monee
+    import monee.express as mx
+    from monee.problem.min_load_shedding import create_min_load_shedding_problem
+
+    # GIVEN a feeder cut from its ext grid, a 0.5 MW former for 0.6 MW of load
+    net = mx.create_multi_energy_network()
+    buses = [mx.create_bus(net, base_kv=20) for _ in range(4)]
+    for a, b in zip(buses, buses[1:]):
+        mx.create_line(net, a, b, length_m=500, r_ohm_per_m=1.6e-4, x_ohm_per_m=1e-4)
+    mx.create_ext_power_grid(net, buses[0])
+    for b in buses[1:]:
+        mx.create_power_load(net, b, p_mw=0.2, q_mvar=0.02)
+    mx.create_grid_forming_generator(net, buses[-1], p_mw_max=0.5, q_mvar_max=0.5)
+    net.deactivate_by_id(mm.PowerLine, (buses[0], buses[1], 0))
+    monee.enable_islanding(net, electricity=True)
+
+    # WHEN
+    result = monee.run_energy_flow_optimization(
+        net,
+        create_min_load_shedding_problem(check_pressure=False, check_t=False),
+        solver="gurobi",
+        formulation="el_misocp",
+        exclude_unconnected_nodes=True,
+    )
+
+    # THEN the island survives and sheds exactly the 0.1 MW it cannot carry
+    assert result.success
+    served = (result.get(mm.PowerLoad)["regulation"] * 0.2).sum()
+    assert served == pytest.approx(0.5, abs=1e-4)
+
+
 @requires_gurobi
 def test_chphg_islanded_heat_side_degrades_without_leaking_model_var(monkeypatch):
     """Regression: when a CHPHG's heat unit (its ``SubHG`` child) is deactivated
@@ -626,6 +750,32 @@ def test_iis_reports_the_blocking_quadratic_row():
 
     # THEN both halves of the conflict are named, not just the linear one
     assert "unit_ball_qc" in report.constraints
+    assert "impossible_c" in report.constraints
+
+
+@requires_gurobi
+def test_iis_names_an_unnamed_quadratic_row_by_its_position():
+    """Regression: an unnamed QConstr fell back to ``qc.index``, which gurobipy's
+    QConstr does not have; the AttributeError aborted the IIS collection, so
+    the report lost the quadratic row and every bound."""
+    from monee.solver.gurobipy import GurobipySolver, _require_gurobipy
+
+    # GIVEN the unit-ball conflict with an unnamed quadratic row
+    solver = GurobipySolver()
+    gp, _GRB, _nlfunc = _require_gurobipy()
+    m = gp.Model()
+    m.setParam("OutputFlag", 0)
+    x = m.addVar(lb=-10, ub=10, name="x_var")
+    y = m.addVar(lb=-10, ub=10, name="y_var")
+    m.addQConstr(x * x + y * y <= 1.0)
+    m.addConstr(x >= 5, name="impossible_c")
+    m.optimize()
+
+    # WHEN
+    report = solver._compute_iis(m)
+
+    # THEN
+    assert "qc0" in report.constraints
     assert "impossible_c" in report.constraints
 
 

@@ -657,7 +657,11 @@ class CompoundModel(GenericModel):
 
         A compound's own attributes are only build-time seeds; without this hook
         a timeseries or override written to the compound never reaches the model
-        that carries the equations. Default: no-op."""
+        that carries the equations. The timeseries driver calls it per step and
+        every solve calls it on its working copy before building the model, so
+        an implementation should push only what the compound changed since it
+        last wrote it, keeping a value set on the sub-component itself.
+        Default: no-op."""
 
 
 class MultiGridCompoundModel(CompoundModel):

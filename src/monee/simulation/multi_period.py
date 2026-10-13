@@ -51,6 +51,7 @@ from monee.solver.core import (
     inject_vars,
     mark_ignored_components,
     mark_slacks_and_prescriptions,
+    sync_compounds,
     withdraw_vars,
 )
 from monee.solver.core import col_summary as _col_summary
@@ -70,6 +71,7 @@ def _prepare_period(
     """Copy net, apply timeseries for *t*, run extension prepare(), compute
     ignored nodes. Returns ``(net_t, ignored_nodes)`` ready for injection."""
     net_t = network.copy()
+    sync_compounds(net_t)
 
     if timeseries_data is not None:
         timeseries_data.apply_to_network(net_t, t)
@@ -153,12 +155,22 @@ def _extract_terminal_state(net_t: Network) -> dict:
 
 
 def _validate_state_keys(state: dict | None, net: Network, label: str) -> None:
-    """Raise if any (comp_id, attr) key isn't found. ``label`` names the source."""
+    """Raise if any (comp_id, attr) key isn't found. ``label`` names the source.
+
+    Attributes an extension declares in ``prepare()`` (e.g. ``GasLinepack``'s
+    ``linepack_kg``) only exist on the per-period copies, so a key missing on
+    the base network is looked up once more on a prepared throwaway copy."""
     if not state:
         return
+    prepared = None
     for comp_id, attr in state:
-        var = _find_component_var(net, comp_id, attr)
-        if var is None:
+        if _find_component_var(net, comp_id, attr) is not None:
+            continue
+        if prepared is None:
+            prepared = net.copy()
+            for ext in prepared.extensions:
+                ext.prepare(prepared)
+        if _find_component_var(prepared, comp_id, attr) is None:
             raise ValueError(
                 f"{label}: component {comp_id!r} attribute {attr!r} not found "
                 f"in the network.  Check the component id and attribute name."
@@ -766,7 +778,9 @@ class PyomoMultiPeriodSolver:
         pm.obj = pyo.Objective(expr=obj_expr, sense=pyo.minimize)
 
         _log.info("Solving multi-period problem (T=%d) ...", steps)
-        solver = pyo.SolverFactory(self._solver_name)
+        # Same resolution as the single-period backend: falls back to the
+        # pyscipopt bridge when only the SCIP Python bindings are installed.
+        solver = PyomoSolver._make_solver(self._solver_name)
         solve_result = solver.solve(pm)
 
         _ok_terminations = {

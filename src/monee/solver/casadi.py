@@ -1480,6 +1480,12 @@ class CasADiTimeseries:
                 compound, td._compound_id_to_series, td._compound_name_to_series
             ).items():
                 add(compound.model, attr, series)
+        # A compound attribute reaches the equations only through its control
+        # node (CompoundModel.sync). prepare_solve_network synced the numeric
+        # seeds before these parameters existed; push the symbols now, or the
+        # compound series stays frozen at its step-0 seed.
+        for compound in network.compounds:
+            compound.model.sync()
 
     def _active_models(self):
         return iter_active_models(
@@ -1546,9 +1552,12 @@ class CasADiTimeseries:
             residuals = warn_on_residuals(
                 _residual_from_values(gv, self._lbg, self._ubg)
             )
+        # The driver re-solves the same network object every step; hand out a
+        # snapshot so each step's result.network keeps that step's values.
+        network = self._network.copy()
         return SolverResult(
-            self._network,
-            self._network.as_result_dataframe_dict(),
+            network,
+            network.as_result_dataframe_dict(),
             self._last_objective,
             success,
             violations,

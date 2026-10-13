@@ -1,3 +1,5 @@
+import numbers
+
 from .branch import HeatExchanger
 from .child import NoVarChildModel, PowerGenerator, Sink
 from .core import (
@@ -199,9 +201,39 @@ def _power_branches(branch_models, power_var):
     return [branch for branch in branch_models if power_var in branch.vars]
 
 
+def _same_value(a, b) -> bool:
+    """Identity, or equal plain numbers (numpy scalars included). Symbolic
+    values compare by identity only: their ``==`` builds an expression."""
+    return a is b or (
+        isinstance(a, numbers.Real) and isinstance(b, numbers.Real) and a == b
+    )
+
+
 class _RegulatedCompound:
     """set_active() for compounds steered by a control node's ``regulation``:
-    save/zero on deactivate, restore on activate."""
+    save/zero on deactivate, restore on activate.
+
+    :meth:`sync` pushes a compound attribute onto the control node only when it
+    changed since the compound last wrote it there (``create()`` or the
+    previous push), so a value set on the control node itself, directly or by
+    a node series, is kept instead of being reset to the unchanged seed."""
+
+    def _seed(self, node_attr, value):
+        """Record *value* as written to the control node's *node_attr*."""
+        if not hasattr(self, "_sync_seeds"):
+            self._sync_seeds = {}
+        self._sync_seeds[node_attr] = value
+        return value
+
+    def _push(self, node_attr, value):
+        # A Var (controllable CP) or a backend symbol on the node is never
+        # overwritten.
+        if not is_plain_number(getattr(self._control_node, node_attr)):
+            return
+        seeds = getattr(self, "_sync_seeds", {})
+        if node_attr in seeds and _same_value(seeds[node_attr], value):
+            return
+        setattr(self._control_node, node_attr, self._seed(node_attr, value))
 
     def set_active(self, activation_flag):
         if activation_flag:
@@ -228,8 +260,7 @@ class _RegulatedCompound:
     def sync(self):
         if not self._active:
             return
-        if is_plain_number(self._control_node.regulation):
-            self._control_node.regulation = self.regulation
+        self._push("regulation", self.regulation)
 
 
 class _GasRegulatedCompound(_RegulatedCompound):
@@ -238,12 +269,14 @@ class _GasRegulatedCompound(_RegulatedCompound):
 
     def _restore_controls(self):
         if is_plain_number(self._control_node.gas_mass_flow_kgs):
-            self._control_node.gas_mass_flow_kgs = self.mass_flow_setpoint_kgs
+            self._control_node.gas_mass_flow_kgs = self._seed(
+                "gas_mass_flow_kgs", self.mass_flow_setpoint_kgs
+            )
         super()._restore_controls()
 
     def sync(self):
-        if self._active and is_plain_number(self._control_node.gas_mass_flow_kgs):
-            self._control_node.gas_mass_flow_kgs = self.mass_flow_setpoint_kgs
+        if self._active:
+            self._push("gas_mass_flow_kgs", self.mass_flow_setpoint_kgs)
         super().sync()
 
     def _zero_controls(self):
@@ -599,11 +632,11 @@ class CHP(_GasRegulatedCompound, MultiGridCompoundModel):
         self._gas_grid = gas_node.grid
         hhv = gas_node.grid.higher_heating_value_kwh_per_kg
         self._control_node = CHPControlNode(
-            self.mass_flow_kgs,
+            self._seed("gas_mass_flow_kgs", self.mass_flow_kgs),
             self.efficiency_power,
             self.efficiency_heat,
             hhv,
-            regulation=self.regulation,
+            regulation=self._seed("regulation", self.regulation),
         )
         node_id_control = network.node(
             self._control_node,
@@ -677,7 +710,7 @@ class GasToHeat(_RegulatedCompound, MultiGridCompoundModel):
             self.gas_mass_flow_kgs,
             self.efficiency,
             hhv,
-            regulation=self.regulation,
+            regulation=self._seed("regulation", self.regulation),
         )
         node_id_control = network.node(
             self._control_node,
@@ -739,7 +772,7 @@ class PowerToHeat(_RegulatedCompound, MultiGridCompoundModel):
             self.load_p_mw,
             self.load_q_mvar,
             self.efficiency,
-            regulation=self.regulation,
+            regulation=self._seed("regulation", self.regulation),
         )
         node_id_control = network.node(
             self._control_node,
@@ -984,13 +1017,13 @@ class CHPHG(_GasRegulatedCompound, MultiGridCompoundModel):
         hhv = gas_node.grid.higher_heating_value_kwh_per_kg
         self._sub_hg = SubHG()
         self._control_node = CHPHGControlNode(
-            self.mass_flow_kgs,
+            self._seed("gas_mass_flow_kgs", self.mass_flow_kgs),
             self.efficiency_power,
             self.efficiency_heat,
             hhv,
             self._sub_hg,
             q_mvar=self.q_mvar,
-            regulation=self.regulation,
+            regulation=self._seed("regulation", self.regulation),
         )
         node_id_control = network.node(
             self._control_node,

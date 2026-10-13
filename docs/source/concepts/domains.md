@@ -196,7 +196,7 @@ smooth NLP gas and water/heat formulations (`GAS_NLP_FORMULATION`,
 
 | Mode | Friction factor | When to use |
 |---|---|---|
-| `constant` (default) | Per-pipe constant: the turbulent Swamee-Jain asymptote $f = 0.25 / \log_{10}\!\big(\tfrac{\epsilon}{3.7 D}\big)^2$ | Turbulent networks (Re ≳ 10⁴), where it is accurate to within a few percent |
+| `constant` (default) | Per-pipe constant: the turbulent Swamee-Jain asymptote $f = 0.25 / \log_{10}\!\big(\tfrac{\epsilon}{3.7 D}\big)^2$ | Turbulent networks (Re ≳ 10⁴). It is the fully rough limit, so it is a lower bound: in a district heating network (Re 10⁵ to 10⁶, ε = 0.1 mm) the Reynolds-dependent factor (`nonlinear`) is 5 to 10 % higher, and so is the pressure drop |
 | `hybrid` | Hagen-Poiseuille laminar term ($64/\mathrm{Re}$, linear in flow) plus the fully-rough turbulent term; matches pandapipes' default Nikuradse law and stays QCQP-representable | Mixed laminar/turbulent networks where a closed-form variable friction is enough |
 | `pwl` | Piecewise function of the flow: a cubic-spline interpolation of the full drop term over log-spaced breakpoints | Laminar-heavy networks needing a variable friction without a Reynolds closure |
 | `nonlinear` | Smooth sigmoid blend of the laminar law and Swamee-Jain, Reynolds-coupled | Laminar-heavy networks solved as pure NLPs |

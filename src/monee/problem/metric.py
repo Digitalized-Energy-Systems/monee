@@ -132,9 +132,14 @@ class GeneralResiliencePerformanceMetric(PerformanceMetric):
                     * component.grid.higher_heating_value_kwh_per_kg
                 )
             if md.hx_is_consuming(model):
-                # q_mw solves to q_mw_set * regulation, so the shed is the gap
-                # to the setpoint (no extra regulation factor).
-                heat_load_curtailed += model.q_mw_set - md.value(model.q_mw)
+                # The duty reached is q_mw_delivered where the formulation
+                # declares it: in optimisation it may stay below q_mw (=
+                # q_mw_set * regulation), as the load-shedding objective
+                # counts. Otherwise q_mw is the duty (no extra regulation
+                # factor).
+                delivered = getattr(model, "q_mw_delivered", None)
+                reached = md.value(model.q_mw if delivered is None else delivered)
+                heat_load_curtailed += model.q_mw_set - reached
             if isinstance(model, md.HeatLoad):
                 heat_load_curtailed += md.upper(model.q_mw_heat) - md.value(
                     model.q_mw_heat

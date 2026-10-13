@@ -240,8 +240,12 @@ A concrete instance also works as the ``solver=`` argument of
       - Requires the ``gurobipy`` package and a valid Gurobi licence
         installed separately (Gurobi 12 or newer for the NLP formulations).
 
-      Usage (note the explicit ``backend=``: a bare ``solver="gurobi"`` routes
-      to Pyomo, not to this backend):
+      Usage (a bare ``solver="gurobi"`` routes here for single-period solves
+      when ``gurobipy`` is importable; ``backend="gurobipy"`` makes it
+      explicit). The polar AC NLP electricity formulation, the default, cannot
+      be expressed on this backend (gurobipy rejects a nonlinear expression
+      on the left of a constraint) and raises :exc:`NotImplementedError`;
+      pass ``formulation="el_misocp"`` or ``"nonconvex_miqcqp"``:
 
       .. code-block:: python
 
@@ -419,8 +423,13 @@ occasionally fails the step computation. The Stepper therefore hints the
 CasADi back-end (``CasADiSolver.set_warm_start_hint``, a no-op on the other
 back-ends) whenever the injected values are a previous solution, and that
 solve runs with IPOPT warm start options (``mu_init=1e-6``, small bound
-pushes) instead. On the bundled multi-energy benchmark network this roughly
-halves the wall time per step (see ``benchmarks/stepper_warm_start.py``).
+pushes) instead. Whether that pays off depends on the network: on small
+power-only nets it saves iterations, but on multi-energy networks the
+previous solution sits on the degenerate bounds of the pos/neg flow splits
+and the warm options can multiply the iteration count (the bundled 32-node
+:func:`~monee.network.create_monee_benchmark_net` needed 285-387 IPOPT
+iterations per step warm against 44-95 cold). See
+:doc:`../how-to/stepper` for the softened options or ``warm_start=False``.
 
 ----
 
@@ -490,11 +499,15 @@ monee's back-ends pass their own preset options to each solver:
   ``termination_condition="optimal"`` (the incumbent meets the requested
   tolerance, as Gurobi reports at ``MIPGap``); a time limit that still found
   an incumbent reports ``"aborted"`` / ``"maxTimeLimit"``, so scripts can
-  tell a tolerance stop from a real timeout.
+  tell a tolerance stop from a real timeout. A time limit without an
+  incumbent reports the same status with ``success=False``; it says nothing
+  about feasibility.
 - gurobipy: the native back-end runs with ``MIPGap=1e-3`` and
   ``TimeLimit=300`` (``DEFAULT_GUROBI_PARAMS`` in ``monee.solver.gurobipy``).
   Pass ``GurobipySolver(params={...})`` to merge in any other Gurobi
-  parameter.
+  parameter, or the per-call ``solver_options`` keyword as above (merged over
+  the instance parameters; ``None`` drops a key), e.g.
+  ``solver="gurobi", solver_options={"TimeLimit": 30}``.
 
 IPOPT's default monotone barrier is sensitive to the starting point: on a model
 that is perfectly feasible it can still fail the step computation or the

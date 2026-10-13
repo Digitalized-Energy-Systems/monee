@@ -588,20 +588,33 @@ heat consumer is still served in full. A contingency or resilience study that
 leaves the slack uncapped will therefore report zero heat curtailment no
 matter what happens on the gas or electricity side.
 
+The heat does not always travel with the slack's mass flow. On a closed loop
+with the reference on the return junction (the pattern recommended in
+:ref:`concepts/multi_energy:The plant reference`), the exchanged mass flow is
+close to zero: the pinned temperature re-heats the returning water directly,
+because the reference node's heat balance is the one dropped as the heat slack.
+A mass-flow cap then limits nothing.
+
 If backup supply should be limited or absent, cap the slack explicitly:
 
-- pass ``max_import_kgs`` (and ``max_export_kgs``) to
-  :func:`monee.express.create_water_ext_grid`; the caps bound the exchanged
-  mass flow and can also be set later on the child's model, taking effect on
-  the next solve, or
-- pass ``bounds_ext_heat`` to the load-shedding problem
-  (:doc:`../problems/load_shedding`), which bounds the exchange inside the
-  optimisation, or
-- dispatch heat with the economic dispatch problem
-  (:doc:`../problems/economic_dispatch`), which prices the heat the slack
-  supplies through its ``cost`` or ``heat_cost_default`` and bounds it with
-  ``bounds_ext_heat_mw``; by default the slack may supply heat but not absorb
-  a surplus.
+- pass ``bounds_ext_heat_mw`` to the load-shedding problem
+  (:doc:`../problems/load_shedding`) or to the economic dispatch problem
+  (:doc:`../problems/economic_dispatch`); it bounds the heat the slack
+  supplies to its island in MW whatever carries it, and ``(0, 0)`` makes the
+  reference heat-neutral. The economic dispatch also prices that heat through
+  the slack's ``cost`` or ``heat_cost_default``; by default it may supply heat
+  but not absorb a surplus, or
+- release the temperature with ``pin_temperature=False``: the reference then
+  keeps its heat balance and only fixes the pressure, so the temperatures
+  follow the energy balance (on a closed loop the temperature level is then
+  set by the pipe losses alone, so keep the temperature bounds of the
+  problem), or
+- where the slack feeds the loop with mass (an open plant, e.g.
+  ``attach_heat_plant``), pass ``max_import_kgs`` (and ``max_export_kgs``) to
+  :func:`monee.express.create_water_ext_grid`, or ``bounds_ext_heat`` (kg/s)
+  to the load-shedding problem; the caps bound the exchanged mass flow and
+  can also be set later on the child's model, taking effect on the next
+  solve.
 
 The same class serves as the gas slack: a child created via
 :func:`monee.express.create_gas_ext_grid` is also an ``ExtHydrGrid``. Its

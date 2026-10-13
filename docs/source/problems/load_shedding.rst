@@ -13,6 +13,12 @@ The optimiser gives every demand, generator and coupling unit a service level
 served, in MW, across electricity, gas and heat at once, subject to the full network
 physics and to bounds on voltage, pressure, temperature and line loading.
 
+That ``regulation`` replaces any value the component carried before, and the
+shed is measured against the full setpoint. A part load encoded in a demand's
+``regulation`` (for example a timeseries driving a heat exchanger) is therefore
+dropped, and the problem warns when it happens: write the demand into the
+setpoint (``p_mw``, ``q_mw_set``, ``q_mw_heat``, ``mass_flow_kgs``) instead.
+
 Mathematical formulation
 ========================
 
@@ -561,6 +567,17 @@ Keyword reference
        ``max_import_*`` / ``max_export_*`` caps. Applied only with
        ``include_ext_grids=True``. Default: ``None`` (unconstrained), since any
        bound tighter than the network's intact import forces shedding.
+   * - ``bounds_ext_heat_mw``
+     -
+     - Range of the heat each water external grid supplies to its island, in
+       MW and the load convention (supply negative; ``None`` leaves a side
+       open), as ``bounds_ext_heat_mw`` of the economic dispatch. A
+       temperature-pinned reference on the return of a closed loop re-heats
+       the water through its dropped heat balance at almost no exchanged mass
+       flow, so ``bounds_ext_heat`` (kg/s) does not limit its heat; this bound
+       does, and ``(0, 0)`` makes it heat-neutral. See
+       :ref:`concepts/multi_energy:The heat slack is a backup plant`. Applied
+       only with ``include_ext_grids=True``. Default: ``None``.
    * - ``include_ext_grids``
      -
      - Apply the exchange bounds (8). External grids stay the slack either way

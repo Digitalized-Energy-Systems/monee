@@ -257,6 +257,20 @@ def water_slack_heat_terms(network):
     return terms
 
 
+def bound_water_slack_heat(constraints, bounds_mw):
+    """Bound the heat every water :class:`ExtHydrGrid` supplies to its island
+    (:func:`water_slack_heat_terms`) to ``bounds_mw = (lo, hi)`` in MW, load
+    convention (supply negative); a ``None`` side is left open."""
+    lo, hi = bounds_mw
+    exchange = constraints.with_models(
+        lambda network: [q_mw for _, q_mw in water_slack_heat_terms(network)]
+    )
+    if lo is not None:
+        exchange.equation(lambda q_mw: -q_mw >= lo)
+    if hi is not None:
+        exchange.equation(lambda q_mw: -q_mw <= hi)
+
+
 def cp_input_rated_mw(component):  # NOSONAR
 
     model = component.model

@@ -1,6 +1,7 @@
 """Inactive branches (on_off=0) in the MISOCP formulation must carry zero current and power."""
 
 import math
+from types import SimpleNamespace
 
 import monee.model as mm
 from monee.model import Network
@@ -101,3 +102,34 @@ def test_active_lines_carry_full_load():
     assert (loads["regulation"] > 0.99).all(), (
         f"All load should be served:\n{loads['regulation']}"
     )
+
+
+def test_shunt_gate_treats_an_injected_backend_var_as_switchable():
+    """Regression: ``equations()`` runs after variable injection, so a
+    switchable ``on_off`` is a backend variable, never a monee ``Var``. Gating
+    the pi-shunt by it made the SOC row quartic on every backend."""
+    import pyomo.environ as pyo
+
+    from monee.model.formulation.miqcqp.convex.el import _shunt_gate
+
+    # GIVEN
+    m = pyo.ConcreteModel()
+    m.on_off = pyo.Var(domain=pyo.Binary)
+
+    # WHEN / THEN a decision variable keeps the charging energised ...
+    assert _shunt_gate(SimpleNamespace(on_off=m.on_off)) == 1.0
+    # ... and a fixed state still gates it
+    assert _shunt_gate(SimpleNamespace(on_off=0)) == 0
+    assert _shunt_gate(SimpleNamespace(on_off=1)) == 1
+
+
+def test_shunt_gate_treats_a_numpy_integer_as_a_fixed_state():
+    """Regression: an ``on_off`` series held in a numpy array or pandas Series
+    writes ``np.int64`` onto the model, which is no ``int``; taken for a
+    switchable variable, an open charging branch reported its charging flow."""
+    import numpy as np
+
+    from monee.model.formulation.miqcqp.convex.el import _shunt_gate
+
+    assert _shunt_gate(SimpleNamespace(on_off=np.int64(0))) == 0
+    assert _shunt_gate(SimpleNamespace(on_off=np.int64(1))) == 1

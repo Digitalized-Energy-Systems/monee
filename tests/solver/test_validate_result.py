@@ -408,3 +408,60 @@ def test_result_repr_and_str_are_cp1252_safe():
 
     repr(result).encode("cp1252")
     str(result).encode("cp1252")
+
+
+def _water_line_with_heat_generator(q_mw):
+    import monee.express as mx
+    import monee.model as mm
+
+    net = mm.Network(mm.create_water_grid("w"))
+    j0, j1 = mx.create_water_junction(net), mx.create_water_junction(net)
+    mx.create_water_ext_grid(net, j0, t_k=363.15)
+    mx.create_water_pipe(net, j0, j1, diameter_m=0.1, length_m=200)
+    mx.create_water_sink(net, j1, mass_flow_kgs=1.0)
+    mx.create_heat_generator(net, j1, q_mw=q_mw)
+    return net, j1
+
+
+def test_an_implausible_water_temperature_is_reported():
+    """Regression: a mass-free HeatGenerator at a low-flow junction solved to
+    hundreds of degC with success=True and no finding at all."""
+    import monee
+
+    net, j1 = _water_line_with_heat_generator(q_mw=0.6)
+
+    result = monee.run_energy_flow(net)
+
+    assert result.success
+    hits = [w for w in result.warnings if w.category == "temperature"]
+    assert [w.component for w in hits] == [f"Junction.{j1}"]
+    assert hits[0].value > 473.15
+
+
+def test_a_plausible_water_temperature_is_not_reported():
+    import monee
+
+    net, _ = _water_line_with_heat_generator(q_mw=0.05)
+
+    result = monee.run_energy_flow(net)
+
+    assert result.success
+    assert not [w for w in result.warnings if w.category == "temperature"]
+
+
+def test_the_unused_t_pu_of_a_gas_junction_is_not_reported_as_binding():
+    """Regression: no gas formulation uses a gas junction's t_pu, so in an
+    optimisation it is a free placeholder that Gurobi parks at its 0.3 bound;
+    every economic dispatch reported it as bound_active."""
+    import monee.express as mx
+    from monee.solver.core import _bound_entries
+
+    net = mm.Network(gas_model=mm.create_gas_grid("g"))
+    gas = mx.create_gas_junction(net)
+    water = mx.create_water_junction(net)
+    for nid in (gas, water):
+        net.node_by_id(nid).model.t_pu.value = 0.3
+
+    flagged = [w.component for w in _bound_entries(net, set())]
+
+    assert flagged == [f"Junction.{water}"]

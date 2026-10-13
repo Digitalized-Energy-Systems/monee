@@ -14,7 +14,9 @@ from monee.model.core import (
     Compound,
     CompoundModel,
     Const,
+    Intermediate,
     Node,
+    PostProcess,
     Var,
 )
 from monee.simulation.core import solve
@@ -60,11 +62,11 @@ _SERIES_KINDS = (
 _SERIES_ATTRS = tuple(attr for _, attr, _, _ in _SERIES_KINDS)
 
 
-def _var_attrs(model, series_dict: dict, key) -> list[str]:
+def _var_attrs(model, series_dict: dict, key, kinds=Var) -> list[str]:
     if key is None:
         return []
     attrs = series_dict.get(key, ())
-    return [attr for attr in attrs if isinstance(getattr(model, attr, None), Var)]
+    return [attr for attr in attrs if isinstance(getattr(model, attr, None), kinds)]
 
 
 def _unsuccessful_solve_error(step: int, result) -> RuntimeError:
@@ -336,11 +338,12 @@ class TimeseriesData:
             warnings.warn(message, stacklevel=2)
         return unbound
 
-    def var_targets(self, net: Network) -> list[tuple[str, Any, str, Any]]:
+    def var_targets(self, net: Network, kinds=Var) -> list[tuple[str, Any, str, Any]]:
         """Registered series whose target attribute is a solver ``Var`` on the
         bound component's model, as ``(kind, key, attribute, model)`` tuples.
         In a simulation such a series does not act as an input: the solver
-        owns the Var's value (see :func:`run`)."""
+        owns the Var's value (see :func:`run`). *kinds* selects other
+        attribute types instead (e.g. the reporting-only ``PostProcess``)."""
         lookups: dict[type, list[tuple[str, dict, str | None]]] = {}
         for kind, attr, cat, key_attr in _SERIES_KINDS:
             lookups.setdefault(cat, []).append((kind, getattr(self, attr), key_attr))
@@ -348,7 +351,7 @@ class TimeseriesData:
         for comp in net.iter_all_components():
             for kind, series_dict, key_attr in lookups[type(comp)]:
                 key = comp.id if key_attr is None else getattr(comp, key_attr, None)
-                for attr in _var_attrs(comp.model, series_dict, key):
+                for attr in _var_attrs(comp.model, series_dict, key, kinds):
                     hits.append((kind, key, attr, comp.model))
         return hits
 
@@ -815,14 +818,35 @@ def _dt_h_at_step(datetime_index, step: int) -> float | None:
 
 
 def _td_has_name_or_compound_series(td: TimeseriesData) -> bool:
-    """True if *td* carries series the build-once reuse drivers do not wire
-    (only id-addressed child/node/branch series are declared as parameters)."""
+    """True if *td* carries series the gurobipy build-once driver does not
+    wire (it declares only id-addressed child/node/branch series as
+    parameters; the CasADi driver handles name and compound series too)."""
     return bool(
         td._child_name_to_series
         or td._branch_name_to_series
         or td._compound_id_to_series
         or td._compound_name_to_series
     )
+
+
+def _td_switches_topology(td: TimeseriesData, net) -> bool:
+    """True if a branch ``on_off`` series opens a branch at some step (or
+    closes one that the base network has open). Pruning reads ``on_off`` once
+    when a build-once reuse driver is built, so such a series needs the
+    per-step rebuild loop to drop and re-add the isolated part."""
+    for branch in net.branches:
+        series = td._branch_id_to_series.get(branch.id, {}).get("on_off")
+        name = getattr(branch, "name", None)
+        if name is not None and name in td._branch_name_to_series:
+            series = td._branch_name_to_series[name].get("on_off", series)
+        if series is None:
+            continue
+        base = branch.model.on_off
+        if any(float(v) == 0 for v in series) or (
+            isinstance(base, int | float) and base == 0
+        ):
+            return True
+    return False
 
 
 def _only_reuse_kwargs(solver_kwargs) -> bool:
@@ -852,11 +876,12 @@ def _casadi_reuse_eligible(
     """Whether the build-once / re-solve CasADi graph-reuse path can replace the
     per-step rebuild loop and produce identical results.
 
-    The parametric reuse driver only handles memory-less, id-addressed series on
-    a plain power flow, so it is gated to exactly those cases; anything else
-    (optimisation problem, step hooks observing temporal state, temporal coupling
-    in the network, name-addressed or compound series, or solver kwargs it cannot
-    honour) falls back to the standard loop.
+    The parametric reuse driver only handles memory-less series on a plain
+    power flow (id- and name-addressed, compound series included:
+    ``CasADiTimeseries._declare_params`` declares them all), so it is gated to
+    exactly those cases; anything else (optimisation problem, step hooks
+    observing temporal state, temporal coupling in the network, or solver
+    kwargs it cannot honour) falls back to the standard loop.
     """
     if not _is_casadi_solver(solver):
         return False
@@ -866,7 +891,7 @@ def _casadi_reuse_eligible(
     # (storage/linepack/LTC) must go through the per-step loop instead.
     if _network_has_temporal_coupling(net):
         return False
-    if _td_has_name_or_compound_series(timeseries_data):
+    if _td_switches_topology(timeseries_data, net):
         return False
     return _only_reuse_kwargs(solver_kwargs)
 
@@ -960,6 +985,8 @@ def _gurobipy_reuse_eligible(
     if _extension_needs_step0_structure_switch(net):
         return False
     if _td_has_name_or_compound_series(timeseries_data):
+        return False
+    if _td_switches_topology(timeseries_data, net):
         return False
     return _only_reuse_kwargs(solver_kwargs)
 
@@ -1069,6 +1096,29 @@ _VAR_SERIES_CONTEXTS = {
 }
 
 
+def _warn_on_report_series_targets(timeseries_data: TimeseriesData, net) -> None:
+    """Warn once at run start when a registered series targets a reported
+    value (``PostProcess`` / ``Intermediate``, e.g. ``Junction.t_k``): it is
+    recomputed from the solution, so the series has no effect at all."""
+    hits = timeseries_data.var_targets(net, kinds=(PostProcess, Intermediate))
+    if not hits:
+        return
+    details = [
+        f"{kind} {key!r} attribute {attr!r} on {type(model).__name__} "
+        f"(settable inputs: {', '.join(_settable_inputs(model)[:8]) or 'none'})"
+        for kind, key, attr, model in hits
+    ]
+    warnings.warn(
+        "Timeseries series target reported values that are recomputed from "
+        "the solution, so they have no effect: "
+        + "; ".join(details)
+        + ". A node quantity is usually driven via the input of an attached "
+        "boundary child (for example an ExtHydrGrid's 't_k'). See the "
+        "how-to/timeseries docs page.",
+        stacklevel=4,
+    )
+
+
 def _warn_on_var_series_targets(
     timeseries_data: TimeseriesData, net: Network, context: str = "simulation"
 ) -> None:
@@ -1079,6 +1129,7 @@ def _warn_on_var_series_targets(
     (``run_timeseries``) and the single-shot (``run_multi_period``) path;
     *context* selects the consequence clause and does not change when it
     fires."""
+    _warn_on_report_series_targets(timeseries_data, net)
     hits = timeseries_data.var_targets(net)
     if not hits:
         return
@@ -1167,6 +1218,8 @@ def run(  # NOSONAR
         solver_kwargs.setdefault("simulation", True)
     if solve_flag and solver_kwargs.get("simulation"):
         _warn_on_var_series_targets(timeseries_data, net)
+    elif solve_flag:
+        _warn_on_report_series_targets(timeseries_data, net)
     if step_hooks is None:
         step_hooks = []
     if on_step_error not in ("raise", "skip"):

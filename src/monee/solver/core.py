@@ -27,7 +27,7 @@ from monee.model import (
     Var,
     WaterPipe,
 )
-from monee.model.child import GridFormingMixin
+from monee.model.child import GridFormingMixin, _is_series_pinned
 from monee.model.grid import GasGrid, PowerGrid, WaterGrid
 from monee.model.node import Junction
 from monee.problem.core import OptimizationProblem
@@ -1040,21 +1040,42 @@ def pin_floating_hydraulic_gauges(network: Network, ignored_nodes):
                 model.pressure_squared_pu = Const(nominal**2)
 
 
+def _island_heat_reference_node(network: Network, island):
+    """Return the id of an island node whose temperature a grid-forming child
+    pins (a constant after the child overwrites, or a series-fixed Var), or
+    ``None``. A reference left free (``pin_temperature=False``, a non-leading
+    grid-forming source) is not a heat slack."""
+    for nid in island:
+        node = network.node_by_id(nid)
+        childs = network.childs_by_ids(node.child_ids)
+        if not any(isinstance(c.model, GridFormingMixin) and c.active for c in childs):
+            continue
+        t_pu = getattr(node.model, "t_pu", None)
+        if not isinstance(t_pu, Var) or _is_series_pinned(t_pu):
+            return nid
+    return None
+
+
 def mark_heat_balance_slacks(network: Network, ignored_nodes):
-    """Mark one grid-forming reference node per energized heat island so its
-    (dependent) nodal heat balance is dropped - the heat carrier's slack,
+    """Mark one temperature-pinned reference node per energized heat island so
+    its (dependent) nodal heat balance is dropped - the heat carrier's slack,
     mirroring the free mass-flow / angle slack the other carriers already have.
 
-    The nodal heat balances over a connected island are linearly dependent (one
-    is redundant); the grid-forming node absorbs the imbalance. Islands are
-    connected components of the active water subgraph; references are
-    ``GridFormingMixin`` children, matching the islanding extension's criterion.
+    Pinning the reference temperature removes one unknown, so one of the
+    island's nodal heat balances is redundant; the pinned node absorbs the
+    imbalance. A reference whose temperature stays free keeps its balance:
+    dropping it would leave that temperature undetermined and turn the node
+    into an unlimited heat source/sink at a floating temperature, where the
+    docs promise ``pin_temperature=False`` lets the temperature follow the
+    energy balance. Islands are connected components of the active water
+    subgraph; references are ``GridFormingMixin`` children, matching the
+    islanding extension's criterion. Runs after the child overwrites.
     """
     heat_ids = _carrier_node_ids(network, ignored_nodes, WaterGrid)
     if not heat_ids:
         return
     for island in _carrier_islands(network, heat_ids):
-        ref = _island_grid_forming_node(network, island)
+        ref = _island_heat_reference_node(network, island)
         if ref is not None:
             network.node_by_id(ref).model._drop_heat_balance = True
 
@@ -1120,6 +1141,18 @@ def mark_he_flow_prescription(network: Network, ignored_nodes):  # NOSONAR
         )
 
 
+def sync_compounds(network: Network) -> None:
+    """Push each compound's attributes onto its sub-components
+    (:meth:`~monee.model.core.CompoundModel.sync`): a compound attribute set
+    after ``create()`` (e.g. ``compound.model.regulation = 0``) is otherwise
+    only a build-time seed, which the timeseries driver syncs per step but a
+    single solve never saw. Only attributes the compound changed since it last
+    wrote them are pushed, so a value set on the sub-component itself (e.g. a
+    node series on a control node) is kept."""
+    for compound in network.compounds:
+        compound.model.sync()
+
+
 def prepare_solve_network(  # NOSONAR
     input_network: Network,
     optimization_problem=None,
@@ -1129,10 +1162,10 @@ def prepare_solve_network(  # NOSONAR
 ):
     """Backend-agnostic solve-time network preparation.
 
-    Copies *input_network*, runs each extension's ``prepare``, attaches the
-    effective formulations, locates the islanding config, computes the ignored
-    nodes (and pre-marks ignored components) and finally applies the
-    optimization problem. Returns ``(network, ignored_nodes, islanding_config)``.
+    Copies *input_network*, syncs its compounds, runs each extension's
+    ``prepare``, attaches the effective formulations, locates the islanding
+    config, computes the ignored nodes (and pre-marks ignored components) and
+    finally applies the optimization problem. Returns ``(network, ignored_nodes, islanding_config)``.
 
     The ignored-node computation runs when there is no optimization problem or
     ``exclude_unconnected_nodes`` is set; ``optimization_problem._apply`` runs
@@ -1145,6 +1178,7 @@ def prepare_solve_network(  # NOSONAR
     from monee.model.formulation.registry import attach_formulations
 
     network = input_network.copy()
+    sync_compounds(network)
     # Read by the islanding extension: injection gating / the energisation
     # objective only apply to plain flow solves - an optimization problem
     # brings its own shedding vars and runs _apply after prepare.
@@ -1161,7 +1195,13 @@ def prepare_solve_network(  # NOSONAR
     )
     ignored_nodes: set = set()
     if optimization_problem is None or exclude_unconnected_nodes:
-        ignored_nodes = find_ignored_nodes(network, islanding_config)
+        ignored_nodes = find_ignored_nodes(
+            network,
+            islanding_config,
+            switchable_backup=getattr(
+                optimization_problem, "_promotes_backup_lines", False
+            ),
+        )
         if ignored_nodes:
             mark_ignored_components(network, ignored_nodes)
             described = describe_pruning(network, ignored_nodes)
@@ -1523,6 +1563,9 @@ _BOUND_SKIP_ATTRS = frozenset({"regulation", "on_off", "direction"})
 _NODE_BOUND_ATTRS = frozenset(
     {"vm_pu", "t_pu", "pressure_pu", "vm_pu_squared", "pressure_squared_pu"}
 )
+# A gas junction inherits t_pu from Junction, but no gas formulation uses it:
+# in optimisation it is a free placeholder that solvers park at a bound.
+_GAS_NODE_BOUND_ATTRS = _NODE_BOUND_ATTRS - {"t_pu"}
 
 
 def _val(v) -> float | None:
@@ -1998,13 +2041,51 @@ def _bound_entries(network, ignored_nodes) -> list[ResultWarning]:
         entries += _model_bound_entries(
             node.model,
             f"{type(node.model).__name__}.{node.id}",
-            attrs=_NODE_BOUND_ATTRS,
+            attrs=(
+                _GAS_NODE_BOUND_ATTRS
+                if isinstance(node.grid, GasGrid)
+                else _NODE_BOUND_ATTRS
+            ),
         )
         for child in network.childs_by_ids(node.child_ids):
             if not ignore_child(child, ignored_nodes):
                 entries += _model_bound_entries(
                     child.model, f"{type(child.model).__name__}.{child.id}"
                 )
+    return entries
+
+
+# Liquid-water band of a heat network in K (0 to 200 degC). The nodal model
+# itself has no physical temperature limit, only the loose t_pu Var box.
+_WATER_T_PLAUSIBLE_K = (273.15, 473.15)
+
+
+def _water_temperature_entries(network, ignored_nodes) -> list[ResultWarning]:
+    lo, hi = _WATER_T_PLAUSIBLE_K
+    entries = []
+    for node in network.nodes:
+        if not isinstance(node.grid, WaterGrid) or ignore_node(
+            node, network, ignored_nodes
+        ):
+            continue
+        t_pu = _val(getattr(node.model, "t_pu", None))
+        if t_pu is None:
+            continue
+        t_k = t_pu * node.grid.t_ref_k
+        if lo <= t_k <= hi:
+            continue
+        entries.append(
+            ResultWarning(
+                "temperature",
+                f"water temperature {t_k - 273.15:.1f} degC lies outside "
+                "0..200 degC; the nodal heat model has no physical limit, so "
+                "this usually means a heat injection without mass flow (e.g. a "
+                "HeatGenerator at a low-flow junction) or a part of the loop "
+                "whose flows decouple it from every temperature reference",
+                component=f"{type(node.model).__name__}.{node.id}",
+                value=t_k,
+            )
+        )
     return entries
 
 
@@ -2206,6 +2287,9 @@ def validate_result(  # NOSONAR
         if uncertified is not None:
             entries.append(uncertified)
         entries += _capped(_bound_entries(network, ignored_nodes), "bound_active")
+        entries += _capped(
+            _water_temperature_entries(network, ignored_nodes), "temperature"
+        )
         pruned = _pruned_entry(network, ignored_nodes)
         if pruned is not None:
             entries.append(pruned)
@@ -2341,11 +2425,21 @@ def ignore_compound(compound, ignored_nodes):
     return ig
 
 
-def generate_real_topology(nx_net):
+def generate_real_topology(nx_net, switchable_backup: bool = False):
+    """Copy of *nx_net* without the edges that cannot carry flow: inactive
+    branches and branches pinned open (``on_off == 0``). With
+    *switchable_backup* a ``backup=True`` branch stays, since the optimization
+    problem promotes its ``on_off`` to a decision only after pruning."""
     net_copy = nx_net.copy()
     # keys=True targets the exact parallel edge - not always key 0.
     for u, v, key, data in nx_net.edges(keys=True, data=True):
         branch = data["internal_branch"]
+        if (
+            switchable_backup
+            and branch.active
+            and getattr(branch.model, "backup", False)
+        ):
+            continue
         if not branch.active or (
             hasattr(branch.model, "on_off")
             and type(branch.model.on_off) is not Var
@@ -2375,7 +2469,9 @@ def remove_cps(network: Network):
             network.remove_branch(branch.id)
 
 
-def find_ignored_nodes(network: Network, islanding_config=None):  # NOSONAR
+def find_ignored_nodes(  # NOSONAR
+    network: Network, islanding_config=None, switchable_backup: bool = False
+):
     """Return node IDs to exclude from the solve.
 
     Default: only ExtPowerGrid/ExtHydrGrid children are "leading". With
@@ -2383,7 +2479,9 @@ def find_ignored_nodes(network: Network, islanding_config=None):  # NOSONAR
     leading for an islanding-enabled carrier.
 
     Both cases use the real topology (active branches, on_off not fixed to 0;
-    switchable on_off Vars stay connected). A component with no leading child
+    switchable on_off Vars stay connected, and so do ``backup=True`` branches
+    when *switchable_backup* says the optimization problem will promote
+    them). A component with no leading child
     can never be energised - the connectivity arcs over its severed branches
     are capped at zero - so keeping it in the solve only leaves unservable
     loads (e.g. an optimization problem's priority floor) that render the
@@ -2395,7 +2493,9 @@ def find_ignored_nodes(network: Network, islanding_config=None):  # NOSONAR
     without_cps = network.copy()
     remove_cps(without_cps)
 
-    topology = generate_real_topology(without_cps._network_internal)
+    topology = generate_real_topology(
+        without_cps._network_internal, switchable_backup=switchable_backup
+    )
 
     components = nx.connected_components(topology)
     for component in components:
@@ -2460,12 +2560,22 @@ def find_ignored_nodes(network: Network, islanding_config=None):  # NOSONAR
     # nodes look like childless dead-ends here - but in the real solve the
     # compound re-attaches and carries flow through them. Ports whose grid
     # connection is genuinely gone are still caught by the
-    # connected-component check above.
+    # connected-component check above. The same holds for the power and gas
+    # ends of an active branch coupler (P2G, G2P, P2H/G2H-HG), which
+    # remove_cps strips as well: its injection anchors the end node like a
+    # child would. Its water end is left to the heat-only rule below: the HG
+    # couplers inject heat without mass.
     compound_attachment_node_ids = {
         node_id
         for compound in network.compounds
         if compound.active and isinstance(compound.model, MultiGridCompoundModel)
         for node_id in compound.connected_to.values()
+    } | {
+        node_id
+        for branch in network.branches
+        if branch.active and isinstance(branch.model, MultiGridBranchModel)
+        for node_id in (branch.from_node_id, branch.to_node_id)
+        if not isinstance(network.node_by_id(node_id).grid, WaterGrid)
     }
 
     def _has_real_active_child(int_node):
@@ -2656,24 +2766,37 @@ class StepState(InterStepState):
                 else:
                     self._pos_by_step[dropped_step] = self._dropped + i
 
-    def _network_for_step(self, step: int):
+    def _index_for_step(self, step: int):
         if not self._networks:
             return None
         if step < 0:
-            return self._networks[step] if -step <= len(self._networks) else None
+            return len(self._networks) + step if -step <= len(self._networks) else None
         # Absolute lookup by recorded step number; dropped/missing -> fallback.
         pos = self._pos_by_step.get(step)
         if pos is None:
             return None
-        return self._networks[pos - self._dropped]
+        return pos - self._dropped
+
+    def _network_for_step(self, step: int):
+        idx = self._index_for_step(step)
+        return None if idx is None else self._networks[idx]
 
     def get(self, component_id, attr: str, step: int = -1, model_type=None):
-        net = self._network_for_step(step)
-        if net is not None:
-            model = _find_model(net, component_id, attr, model_type)
-            if model is not None:
+        """Solved value of *attr* at *step*. A NaN there is the placeholder of
+        a component pruned or islanded at that step (``inject_nans``); its last
+        finite value before it is returned instead, as the warm start keeps it
+        (:func:`_copy_var_values`), so temporal state (storage, linepack, LTC)
+        carries across an outage. Falls back to ``initial_state``."""
+        idx = self._index_for_step(step)
+        if idx is not None:
+            for net in reversed(self._networks[: idx + 1]):
+                model = _find_model(net, component_id, attr, model_type)
+                if model is None:
+                    break
                 val = _extract_value(getattr(model, attr, None))
-                if val is not None:
+                if val is None:
+                    break
+                if not _is_nan_value(val):
                     return val
         return self._initial_state.get((component_id, attr))
 

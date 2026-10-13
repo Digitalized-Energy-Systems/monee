@@ -193,6 +193,14 @@ In this mode the builder additionally:
   generator buses according to ``node_heat_gen_share`` (set ``0.0`` for a
   slack-only plant).
 
+Each consumer is then a ``HeatLoad`` plus a design-flow ``Sink`` on its
+supply junction. A nodal heat load cools the junction's mixed stream, so the
+downstream supply pipe leaves at the cooled temperature too: along a line of
+consumers the supply temperature drops at every one of them (four 1 MW
+consumers on one line: 90, 82, 72, 57, 27 degC), instead of staying hot
+while each consumer cools only its own flow as the heat-exchanger branches
+of the default mode do.
+
 Automatic pipe sizing
 ---------------------
 

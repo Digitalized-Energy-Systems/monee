@@ -115,3 +115,59 @@ def test_load_shedding_with_disconnected_bus():
         "B3 load must be fully shed (regulation=0) since it is disconnected; "
         f"got regulation={disconnected_reg}"
     )
+
+
+def _build_net_with_open_backup_to_b3():
+    """``_build_net`` plus an open reserve line B1 -- B3: the only path that can
+    reconnect the islanded B3 load."""
+    pn = _build_net()
+    pn.branch(
+        PowerLine(
+            length_m=100,
+            r_ohm_per_m=7e-5,
+            x_ohm_per_m=7e-5,
+            parallel=1,
+            backup=True,
+            on_off=0,
+        ),
+        1,
+        3,
+    )
+    return pn
+
+
+def test_an_open_backup_line_is_not_pruned_before_it_can_close():
+    """Regression: the pruning topology dropped every ``on_off == 0`` branch, and
+    it runs before the load-shedding problem promotes backup lines, so the B3
+    island was excluded and the reserve line that could restore it never
+    entered the model."""
+    # GIVEN
+    pn = _build_net_with_open_backup_to_b3()
+    pn.apply_formulation(EL_MISOCP_FORMULATION)
+    problem = create_min_load_shedding_problem(check_t=False, check_pressure=False)
+
+    # WHEN
+    result = PyomoSolver().solve(
+        pn, exclude_unconnected_nodes=True, optimization_problem=problem
+    )
+
+    # THEN the reserve line closes and serves B3
+    assert result.success
+    lines = result.dataframes["PowerLine"]
+    assert lines.loc[lines["backup"], "on_off"].tolist() == [1]
+    assert math.isclose(
+        result.dataframes["PowerLoad"]["regulation"][1], 1.0, abs_tol=1e-4
+    )
+
+
+def test_a_plain_solve_still_prunes_behind_an_open_backup_line():
+    """Without a problem nothing can close the reserve line, so B3 stays out."""
+    # GIVEN
+    pn = _build_net_with_open_backup_to_b3()
+
+    # WHEN
+    result = GEKKOSolver().solve(pn)
+
+    # THEN
+    assert result.success
+    assert math.isnan(result.dataframes["Bus"]["vm_pu"][3])

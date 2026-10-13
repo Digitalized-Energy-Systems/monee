@@ -1230,3 +1230,63 @@ def test_stepper_history_supports_get_result_for_id():
         load_a, "p_mw", mm.PowerLoad
     )
     assert [round(v, 9) for v in series] == [0.4, 0.6]
+
+
+def test_Stepper_storage_state_survives_an_islanding_fail_and_restore():
+    """Regression: an islanded component is NaN-injected, and that NaN was read
+    back as the carried state, so every step after the restore failed with
+    Invalid_Number_Detected. The last finite value is carried instead."""
+    from monee.model.storage import ElectricStorage
+
+    # GIVEN a storage behind a line that fails at step 1 and returns at step 2
+    net = mm.Network()
+    b1 = mx.create_bus(net, base_kv=20.0)
+    b2 = mx.create_bus(net, base_kv=20.0)
+    mx.create_ext_power_grid(net, b1, p_mw=0, q_mvar=0)
+    mx.create_power_load(net, b2, p_mw=0.5, q_mvar=0.1)
+    sid = net.child_to(
+        ElectricStorage(
+            e_mwh_initial=2.0, e_mwh_max=4.0, p_max_mw=1.0, p_mw_initial=0.3
+        ),
+        b2,
+    )
+    lid = mx.create_line(
+        net, b1, b2, length_m=500, r_ohm_per_m=2e-4, x_ohm_per_m=4e-4, parallel=1
+    )
+    st = Stepper(net, on_step_error="raise", warm_start=False)
+
+    # WHEN
+    st.step(1.0)
+    after_first = st.state.get(sid, "e_mwh", model_type=ElectricStorage)
+    st.deactivate(lid)
+    st.step(1.0)
+    during_outage = st.state.get(sid, "e_mwh", model_type=ElectricStorage)
+    st.activate(lid)
+    restored = st.step(1.0)
+
+    # THEN the outage carries the pre-outage state and the restore solves
+    assert during_outage == pytest.approx(after_first)
+    assert not restored.failed
+    assert st.state.get(sid, "e_mwh", model_type=ElectricStorage) == pytest.approx(
+        after_first + 0.3
+    )
+
+
+def test_StepState_get_skips_nan_to_the_last_finite_value():
+    from monee.model.storage import ElectricStorage
+
+    def _net_with_soc(value):
+        net = mm.Network()
+        bus = mx.create_bus(net)
+        sid = net.child_to(
+            ElectricStorage(e_mwh_initial=1.0, e_mwh_max=4.0, p_max_mw=1.0), bus
+        )
+        net.child_by_id(sid).model.e_mwh = mm.Var(value)
+        return net, sid
+
+    state = StepState(initial_state=None)
+    for value in (1.5, float("nan"), float("nan")):
+        net, sid = _net_with_soc(value)
+        state.push(net)
+
+    assert state.get(sid, "e_mwh", model_type=ElectricStorage) == pytest.approx(1.5)

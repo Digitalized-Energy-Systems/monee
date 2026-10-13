@@ -253,8 +253,13 @@ def _named_constraints(steps: int):
 
         return _Solver()
 
-    original = pyo.SolverFactory
-    pyo.SolverFactory = _fake_factory
+    # The multi-period solve resolves its solver like the single-period one
+    # (PyomoSolver._make_solver, which may pick the pyscipopt bridge), so the
+    # capture hooks in there rather than at pyo.SolverFactory.
+    from monee.solver.pyo import PyomoSolver
+
+    original = PyomoSolver.__dict__["_make_solver"]
+    PyomoSolver._make_solver = staticmethod(_fake_factory)
     try:
         run_multi_period(
             net, td, steps=steps, dt_h=1.0, solver=PyomoMultiPeriodSolver()
@@ -266,7 +271,7 @@ def _named_constraints(steps: int):
             if o.name != "cons"
         ]
     finally:
-        pyo.SolverFactory = original
+        PyomoSolver._make_solver = original
     raise AssertionError("the assembled model never reached the solver")
 
 

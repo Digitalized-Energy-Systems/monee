@@ -635,3 +635,32 @@ def test_from_pandapower_max_i_ka_overrides_matpower_placeholder():
         assert round(float(v), 6) in mv_max_i_kas, (
             f"MV line rating {v} not present after import"
         )
+
+
+@pytest.mark.pptest
+def test_trafo_rating_comes_from_sn_mva_not_the_matpower_placeholder():
+    """Regression: to_mpc writes a 100 MVA RATE_A placeholder for a trafo
+    without ``max_loading_percent`` (CIGRE MV); the import kept it, so the
+    25 MVA trafos read ~4x below pandapower's own loading."""
+    import pandapower as pp
+    import pandapower.networks as pn
+
+    import monee
+    from monee.io.from_pandapower import from_pandapower_net
+
+    # GIVEN
+    ppn = pn.create_cigre_network_mv(with_der="pv_wind")
+    assert "max_loading_percent" not in ppn.trafo.columns
+    pp.runpp(ppn)
+
+    # WHEN
+    result = monee.run_energy_flow(from_pandapower_net(ppn))
+
+    # THEN
+    branches = result.dataframes["GenericPowerBranch"]
+    trafos = branches[branches["kind"] == "trafo"]
+    assert trafos["max_i_ka"].tolist() == pytest.approx([25 / (math.sqrt(3) * 110)] * 2)
+    loading = trafos[["loading_from_pu", "loading_to_pu"]].max(axis=1) * 100
+    assert loading.tolist() == pytest.approx(
+        ppn.res_trafo["loading_percent"].tolist(), abs=0.5
+    )

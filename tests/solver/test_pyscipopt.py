@@ -95,24 +95,14 @@ def test_build_result_gaplimit_is_optimal_within_tolerance():
     assert result.solver.termination_condition == TerminationCondition.optimal
 
 
-def test_build_result_gaplimit_without_incumbent_is_infeasible():
+def test_build_result_gaplimit_without_incumbent_is_a_failure():
     # GIVEN / WHEN
     result = PyscipoptSolver._build_result("gaplimit", has_solution=False)
 
-    # THEN
-    assert result.solver.status == SolverStatus.warning
-    assert result.solver.termination_condition == TerminationCondition.infeasible
-
-
-def test_build_result_limit_without_incumbent_is_infeasible():
-    """A limit hit with no incumbent must not be read back as a solution, so it
-    is reported as infeasible to surface a diagnostic instead."""
-    # GIVEN / WHEN
-    result = PyscipoptSolver._build_result("timelimit", has_solution=False)
-
-    # THEN
-    assert result.solver.status == SolverStatus.warning
-    assert result.solver.termination_condition == TerminationCondition.infeasible
+    # THEN no solution to read back, but no infeasibility verdict either
+    assert result.solver.status == SolverStatus.aborted
+    assert result.solver.termination_condition == TerminationCondition.other
+    assert result.solver.has_solution is False
 
 
 def _scip_executable_result(message):
@@ -309,3 +299,68 @@ def test_bridge_writeback_matches_a_second_identical_solve(monkeypatch):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@requires_pyscipopt
+def test_multi_period_scip_routes_to_the_bridge_without_classic_exe(monkeypatch):
+    """Regression: the Pyomo multi-period solver called ``pyo.SolverFactory``
+    directly, so ``run_multi_period(..., solver="scip")`` failed with "No
+    executable found for solver 'scip'" where the single-period path falls back
+    to the pyscipopt bridge."""
+    import monee.express as mx
+    from monee.simulation import TimeseriesData, run_multi_period
+
+    # GIVEN no standalone scip executable
+    monkeypatch.setattr(pyo_mod, "_classic_scip_available", lambda: False)
+    net = mx.create_multi_energy_network()
+    b0 = mx.create_bus(net)
+    b1 = mx.create_bus(net)
+    mx.create_line(net, b0, b1, length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
+    mx.create_ext_power_grid(net, b0)
+    mx.create_power_load(net, b1, p_mw=0.1, q_mvar=0.0, name="load")
+    td = TimeseriesData()
+    td.add_child_series_by_name("load", "p_mw", [0.1, 0.5])
+
+    # WHEN
+    result = run_multi_period(net, td, steps=2, dt_h=1.0, solver="scip")
+
+    # THEN
+    assert result.success
+    assert result.backend_used == "pyomo"
+
+
+def test_build_result_limit_without_incumbent_is_a_failure_not_a_verdict():
+    """Regression: a SCIP time limit without an incumbent was reported as
+    'infeasible' (and a MIS computed), a false verdict about the model.
+    gurobipy reports the same stop as aborted/maxTimeLimit without success."""
+    # GIVEN
+    result = PyscipoptSolver._build_result("timelimit", has_solution=False)
+
+    # WHEN
+    success, report, status, tc = pyo_mod._classify_solve_result(
+        result, None, "scip", phase_label="test"
+    )
+
+    # THEN
+    assert result.solver.termination_condition == TerminationCondition.maxTimeLimit
+    assert result.solver.status == SolverStatus.aborted
+    assert success is False
+    assert report is None
+
+
+def test_build_result_infeasible_or_unbounded_keeps_the_infeasibility_verdict():
+    """Regression: SCIP's 'inforunbd' is a proof about the model, not a limit
+    stop; it fell into the no-incumbent limit branch and lost the diagnosis."""
+    result = PyscipoptSolver._build_result("inforunbd", has_solution=False)
+
+    assert result.solver.termination_condition == TerminationCondition.infeasible
+
+
+def test_build_result_limit_with_incumbent_is_still_a_witness():
+    result = PyscipoptSolver._build_result("timelimit", has_solution=True)
+
+    success, _report, _status, _tc = pyo_mod._classify_solve_result(
+        result, None, "scip", phase_label="test"
+    )
+
+    assert success is True

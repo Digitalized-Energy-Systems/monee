@@ -312,6 +312,89 @@ def test_memoryless_network_uses_reuse_fast_path(monkeypatch):
     assert calls["reuse"] == 1
 
 
+def _spy_reuse(monkeypatch):
+    import monee.simulation.timeseries as tsmod
+
+    calls = {"reuse": 0}
+    orig = tsmod._run_casadi_reuse
+
+    def _spy(*a, **k):
+        calls["reuse"] += 1
+        return orig(*a, **k)
+
+    monkeypatch.setattr(tsmod, "_run_casadi_reuse", _spy)
+    return calls
+
+
+def test_reuse_fast_path_results_keep_their_own_network(monkeypatch):
+    """Regression: every step's SolverResult carried the driver's one live
+    network, so all result.network objects showed the last step."""
+    calls = _spy_reuse(monkeypatch)
+    net = _two_line_net()
+    td = _load_profile_td(net, 3)
+    load_id = next(c.id for c in net.childs if isinstance(c.model, mm.PowerLoad))
+
+    res = monee.run_timeseries(net, td, backend="casadi", simulation=True)
+
+    assert calls["reuse"] == 1
+    networks = [sr.result.network for sr in res.step_results]
+    assert len({id(n) for n in networks}) == 3
+    series = td._child_id_to_series[load_id]["p_mw"]
+    for step_net, expected in zip(networks, series):
+        p_mw = step_net.child_by_id(load_id).model.p_mw
+        assert float(getattr(p_mw, "value", p_mw)) == pytest.approx(expected)
+
+
+def test_an_isolating_on_off_series_skips_the_reuse_fast_path(monkeypatch):
+    """Regression: the build-once driver prunes once from the base on_off, so a
+    series that opens a radial pipe made that step infeasible instead of
+    pruning the isolated junction as the rebuild loop does."""
+    calls = _spy_reuse(monkeypatch)
+    net = mm.Network(mm.create_water_grid("water"))
+    w0, w1, w2 = (mx.create_water_junction(net) for _ in range(3))
+    mx.create_water_ext_grid(net, w0, t_k=356.0)
+    mx.create_water_pipe(net, w0, w1, diameter_m=0.2, length_m=500)
+    leaf = mx.create_water_pipe(net, w1, w2, diameter_m=0.1, length_m=300)
+    mx.create_water_sink(net, w1, mass_flow_kgs=3.0)
+    mx.create_water_sink(net, w2, mass_flow_kgs=1.0)
+    td = TimeseriesData()
+    td.add_branch_series(leaf, "on_off", [1, 0, 1])
+
+    res = monee.run_timeseries(net, td, backend="casadi", simulation=True)
+
+    assert calls["reuse"] == 0
+    assert res.failed_steps == []
+    pruned = [w.category for w in res.step_results[1].result.warnings]
+    assert "pruned" in pruned
+
+
+def test_compound_series_take_the_reuse_fast_path_and_match_the_rebuild_loop(
+    monkeypatch,
+):
+    """Regression: compound series disabled the fast path, and the driver itself
+    froze them, since the compound parameter never reached the control node."""
+    from monee.network import create_urban_district_net
+
+    net = create_urban_district_net()
+    chp = next(c for c in net.compounds if isinstance(c.model, mm.CHP))
+
+    def _td():
+        td = TimeseriesData()
+        td.add_compound_series(chp.id, "regulation", [1.0, 0.6, 0.3])
+        return td
+
+    reference = monee.run_timeseries(net, _td(), step_hooks=[lambda *a: None])
+    calls = _spy_reuse(monkeypatch)
+
+    fast = monee.run_timeseries(net, _td())
+
+    assert calls["reuse"] == 1
+    el_ref = reference.get_result_for(mm.CHPControlNode, "el_mw").to_numpy()
+    el_fast = fast.get_result_for(mm.CHPControlNode, "el_mw").to_numpy()
+    assert np.max(np.abs(el_fast - el_ref)) < 1e-6
+    assert el_fast[2, 0] == pytest.approx(0.3 * el_fast[0, 0], rel=1e-4)
+
+
 def test_temporal_network_skips_reuse_fast_path(monkeypatch):
     import monee.simulation.timeseries as tsmod
 

@@ -598,3 +598,36 @@ def test_a_backup_line_keeps_its_switching_decision_under_the_gate():
     }
     assert owned == {False: True, True: False}
     assert all(branch.model._islanding_branch_gated for branch in prepared.branches)
+
+
+def test_branch_flow_voltage_gate_bounds_only_the_squared_voltage():
+    """Regression: by equation time the branch-flow ``vm_pu`` report holds its
+    backend ``sqrt(vm_pu_squared)`` expression, which the gate mistook for a
+    decision variable; the resulting nonlinear rows broke gurobipy and the
+    Pyomo LP writer. Gating W alone already pins vm_pu = sqrt(W)."""
+    from types import SimpleNamespace
+
+    import pyomo.environ as pyo
+
+    from monee.model.formulation.miqcqp.convex.el import (
+        MISOCPElectricityNodeFormulation,
+    )
+
+    # GIVEN an injected branch-flow bus (W a variable, vm_pu = sqrt(W))
+    m = pyo.ConcreteModel()
+    m.w = pyo.Var(bounds=(0.81, 1.21))
+    m.e = pyo.Var(domain=pyo.Binary)
+    node = SimpleNamespace(
+        model=SimpleNamespace(
+            vm_pu=pyo.sqrt(m.w), vm_pu_squared=m.w, _islanding_voltage_gated=True
+        ),
+        grid=mm.PowerGrid(name="pg", sn_mva=1),
+        formulation=MISOCPElectricityNodeFormulation(),
+    )
+
+    # WHEN
+    eqs = mm.ElectricityIslandingMode()._voltage_gate_equations(node, m.e)
+
+    # THEN both gate rows are linear and bound W
+    assert len(eqs) == 2
+    assert all(eq.polynomial_degree() == 1 for eq in eqs)

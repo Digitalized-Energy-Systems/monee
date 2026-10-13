@@ -165,8 +165,8 @@ By default each successful step's solved values are also carried into the
 Stepper's working copy, so the next solve starts from the previous solution
 instead of the base network's initial values. On the CasADi backend such
 solves additionally run with IPOPT warm start options (a small initial
-barrier), which typically cuts the iteration count by half or more on
-repeated, similar steps. Islanded components keep their last solved values,
+barrier), which cuts the iteration count on small, smooth networks but can
+raise it several times on multi-energy networks (see below). Islanded components keep their last solved values,
 so a component that rejoins later starts from a sane point. Pass
 ``warm_start=False`` to solve every step from the base network's initial
 values instead.
@@ -182,11 +182,13 @@ network, so the default warm start writes solved values into it after every
 successful step; pass ``warm_start=False`` there if the network must stay
 strictly caller-owned.
 
-On large networks using the smooth gas and heat NLP formulations (several
-hundred nodes, such as the simbench based MES from the test suite) the
-warm start options that monee passes to IPOPT by default can backfire: iteration counts roughly
-double compared to cold starts, because the previous solution sits on the
-degenerate bounds of the pos/neg flow splits. For such networks either pass
+On multi-energy networks using the smooth gas and heat NLP formulations the
+warm start options that monee passes to IPOPT by default can backfire,
+because the previous solution sits on the degenerate bounds of the pos/neg
+flow splits: iteration counts roughly double on the simbench based MES from
+the test suite, and the bundled 32-node
+:func:`~monee.network.create_monee_benchmark_net` already needed 285-387
+iterations per step warm against 44-95 cold. For such networks either pass
 ``warm_start=False``, or keep the value carry-over but soften the warm
 options per solver instance:
 

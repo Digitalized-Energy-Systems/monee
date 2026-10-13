@@ -175,7 +175,8 @@ value.  All three constructor arguments control this anchor:
        ``default_t_init``.
    * - ``first_step_steady_state``
      - If ``True``, the first step emits ``net_heat == 0`` (a steady-state
-       heat balance) instead of anchoring.  MIP backends only.
+       heat balance) instead of anchoring, so step 0 reproduces the steady
+       energy flow. Works on the NLP (CasADi/IPOPT) and MIP backends.
 
 The anchor for each junction is resolved with this precedence:
 
@@ -199,9 +200,10 @@ The anchor for each junction is resolved with this precedence:
 
 .. note::
 
-   The default anchored mode is required for the NLP solvers
-   (GEKKO/IPOPT).  ``first_step_steady_state=True`` is supported on MIP
-   backends only; use it exclusively with a MIP-capable Pyomo solver.
+   Anchored mode is the default. ``first_step_steady_state=True`` is the
+   simplest way to avoid the warm-up transient on any backend; the
+   steady-state first step needs the per-step rebuild loop, so such a run
+   does not take the graph-reuse fast path.
 
 Choosing the horizon
 --------------------

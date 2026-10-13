@@ -113,6 +113,19 @@ def _grb_status_map(grb) -> dict[int, tuple[str, str]]:
     return out
 
 
+# gurobipy refuses any relational with a nonlinear expression on its left side
+# (``NLExpr.__le__`` & co. raise) before _add_temp_constr can rewrite it.
+_NL_FORM_ERROR = "Nonlinear constraints must take the form y=f(x)"
+_NL_FORM_HINT = (
+    "The gurobipy backend could not build a constraint with a nonlinear "
+    "expression on its left side (gurobipy only accepts 'y = f(x)'); typical "
+    "sources are the polar AC NLP electricity formulation (the default) and "
+    "problem limits on its nonlinear reports such as loading_from_pu. Pass a "
+    "formulation the backend handles, e.g. formulation='el_misocp' or "
+    "'nonconvex_miqcqp', or use solver='scip' / solver='ipopt'. See the "
+    "concepts/solvers docs page."
+)
+
 DEFAULT_GUROBI_PARAMS: dict = {
     "MIPGap": 1e-3,
     "TimeLimit": 300,
@@ -194,7 +207,9 @@ class GurobipySolver(SolverInterface):
 
     Args:
         params: extra Gurobi parameters merged over :data:`DEFAULT_GUROBI_PARAMS`
-            (e.g. ``{"TimeLimit": 60, "MIPGap": 1e-4}``).
+            (e.g. ``{"TimeLimit": 60, "MIPGap": 1e-4}``). :meth:`solve` also
+            takes a per-call ``solver_options`` dict merged over these, as the
+            Pyomo backend does; a ``None`` value drops the key (Gurobi default).
     """
 
     _BOUND_SNAP_TOL = 1e-9
@@ -559,15 +574,17 @@ class GurobipySolver(SolverInterface):
         for c in gm.getConstrs():
             if c.IISConstr:
                 constraints.append(c.ConstrName or f"c{c.index}")
-        for gc in gm.getGenConstrs():
+        # Unlike Constr, GenConstr and QConstr have no ``index``; number the
+        # unnamed ones by their position in the pool instead.
+        for i, gc in enumerate(gm.getGenConstrs()):
             if getattr(gc, "IISGenConstr", 0):
-                constraints.append(gc.GenConstrName or f"genc{gc.index}")
+                constraints.append(gc.GenConstrName or f"genc{i}")
         # Quadratic rows live in their own pool; without them an IIS whose
         # blocking constraint is e.g. a Weymouth or a bilinear heat balance
         # reports as bounds-only and reads like a mystery.
-        for qc in gm.getQConstrs():
+        for i, qc in enumerate(gm.getQConstrs()):
             if getattr(qc, "IISQConstr", 0):
-                constraints.append(qc.QCName or f"qc{qc.index}")
+                constraints.append(qc.QCName or f"qc{i}")
 
     @staticmethod
     def _collect_iis_bounds(gm, bounds: list[str]) -> None:
@@ -588,6 +605,7 @@ class GurobipySolver(SolverInterface):
         simulation: bool = False,
         formulation=None,
         strict: bool = False,
+        solver_options: dict | None = None,
         **kwargs,
     ):
         gp, GRB, nlfunc = _require_gurobipy()
@@ -607,7 +625,16 @@ class GurobipySolver(SolverInterface):
                 simulation=simulation,
                 formulation=formulation,
                 strict=strict,
+                params={
+                    key: val
+                    for key, val in {**self._params, **(solver_options or {})}.items()
+                    if val is not None
+                },
             )
+        except gp.GurobiError as exc:
+            if _NL_FORM_ERROR not in str(exc):
+                raise
+            raise NotImplementedError(_NL_FORM_HINT) from exc
         finally:
             gm.dispose()
 
@@ -623,9 +650,10 @@ class GurobipySolver(SolverInterface):
         simulation,
         formulation,
         strict=False,
+        params=None,
     ):
         gm.setParam("OutputFlag", 1 if debug else 0)
-        for key, val in self._params.items():
+        for key, val in (self._params if params is None else params).items():
             gm.setParam(key, val)
 
         # Two objective buckets for lexicographic mode (single sum otherwise).
@@ -821,6 +849,7 @@ class GurobipySolver(SolverInterface):
         quadratic/nonlinear objectives ``setObjectiveN`` cannot, and is the
         correct path for MISOCP/MIQCP models (see :meth:`_solve_lexicographic`)."""
         # Phase 1: user objective only - solved to the model's (tight) MIPGap.
+        mip_gap = gm.Params.MIPGap
         self._set_objective(gm, user_obj_exprs)
         gm.optimize()
         success, report, status_str, tc_str = self._classify(
@@ -830,7 +859,7 @@ class GurobipySolver(SolverInterface):
             return success, report, status_str, tc_str
 
         s_star = gm.ObjVal
-        slack = self._lex_cap_slack(s_star, self._params.get("MIPGap", 0.0))
+        slack = self._lex_cap_slack(s_star, mip_gap)
         self._add_temp_constr(gm, sum(user_obj_exprs) <= s_star + slack, name="lex_cap")
 
         self._set_objective(gm, aux_obj_exprs)
@@ -839,10 +868,7 @@ class GurobipySolver(SolverInterface):
             try:
                 gm.optimize()
             finally:
-                gm.setParam(
-                    "MIPGap",
-                    self._params.get("MIPGap", DEFAULT_GUROBI_PARAMS["MIPGap"]),
-                )
+                gm.setParam("MIPGap", mip_gap)
         else:
             gm.optimize()
         return self._classify(gm, phase_label="Lexicographic phase 2")
@@ -1486,9 +1512,12 @@ class GurobipyTimeseries:
         violations = compute_bound_violations(
             self._nodes, self._branches, self._compounds, self._network
         )
+        # The persistent model re-solves the same network object every step;
+        # hand out a snapshot so each step's result.network keeps its values.
+        network = self._network.copy()
         return SolverResult(
-            self._network,
-            self._network.as_result_dataframe_dict(),
+            network,
+            network.as_result_dataframe_dict(),
             self._last_objective,
             ok,
             violations,
