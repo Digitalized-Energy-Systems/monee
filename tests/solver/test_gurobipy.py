@@ -1155,3 +1155,34 @@ def test_run_timeseries_gurobipy_falls_back_when_build_unsupported(monkeypatch):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@requires_gurobi
+def test_solver_stats_report_the_gurobi_solve():
+    import monee
+    from monee.solver.gurobipy import GurobipySolver
+
+    result = monee.run_energy_flow_optimization(
+        _build_misocp_net(), _make_shedding_problem(), solver=GurobipySolver()
+    )
+
+    stats = result.solver_stats
+    assert result.success
+    assert set(stats) == {"obj", "bound", "gap", "runtime_s", "status", "nodes"}
+    assert stats["obj"] == pytest.approx(result.objective, rel=1e-6, abs=1e-6)
+    assert stats["bound"] <= stats["obj"] + 1e-6
+    assert stats["runtime_s"] >= 0
+
+
+@requires_gurobi
+def test_water_pipes_report_their_heat_loss_under_the_miqcqp_bundle():
+    import monee
+    from monee.solver.gurobipy import GurobipySolver
+
+    net, _, _, _ = create_water_loop(source_t_k=330)
+    net.apply_formulation(HEAT_NONCONVEX_MIQCQP_FORMULATION)
+
+    result = monee.run_energy_flow(net, solver=GurobipySolver())
+
+    assert result.success
+    assert result.get(mm.WaterPipe)["heat_loss_mw"].notna().all()

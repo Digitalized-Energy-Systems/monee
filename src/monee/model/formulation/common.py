@@ -7,9 +7,11 @@ PWL) lives entirely on the branch side, so the node formulations are defined
 once here and reused by ``nlp``, ``milp`` and ``miqcqp``.
 """
 
+from monee.model.branch import WaterPipe
 from monee.model.core import Const, Intermediate, IntermediateEq, PostProcess, Var
 from monee.model.phys.core.hydraulics import calc_pipe_area
 from monee.model.phys.nonlinear.gf import reference_gas_density
+from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
 
 from .core import NodeFormulation
 
@@ -35,6 +37,19 @@ def ensure_velocity_report(model, grid):
         model.velocity_mps = velocity_post_process(model, reference_gas_density(grid))
     elif hasattr(grid, "fluid_density_kg_per_m3"):
         model.velocity_mps = velocity_post_process(model, grid.fluid_density_kg_per_m3)
+        ensure_heat_loss_report(model, grid)
+
+
+def ensure_heat_loss_report(model, grid):
+    r"""Attach the ``heat_loss_mw`` report of a water pipe: the heat its water
+    loses to the ground, :math:`|\dot m| c_p (T_{in} - T_{out})` in MW. NaN
+    under formulations without inlet/outlet temperatures (McCormick MILP)."""
+    if isinstance(model, WaterPipe):
+        model.heat_loss_mw = PostProcess(
+            lambda v, k=SPECIFIC_HEAT_CAP_WATER * grid.t_ref_k / 1e6: (
+                v.mass_flow_mag_kgs * (v.t_in_pu - v.t_out_pu) * k
+            )
+        )
 
 
 _PSQ_SIMULATION_BOUNDS = (0, 3)

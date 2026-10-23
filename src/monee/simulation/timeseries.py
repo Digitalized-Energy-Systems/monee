@@ -456,6 +456,7 @@ class TimeseriesResult:
         backend_used: str | None = None,
         solver_used: str | None = None,
         index_offset: int = 0,
+        reuse_path: str | None = None,
     ) -> None:
         self._step_results = step_results
         self._datetime_index = datetime_index
@@ -466,6 +467,9 @@ class TimeseriesResult:
         #: (see :func:`monee.solver.dispatch.resolve_solver`).
         self.backend_used = backend_used
         self.solver_used = solver_used
+        #: Build-once reuse driver that solved the run (``"casadi"`` /
+        #: ``"gurobipy"``), ``None`` for the per-step rebuild loop.
+        self.reuse_path = reuse_path
         self._cache: dict[tuple, pandas.DataFrame] = {}
 
     @property
@@ -925,6 +929,7 @@ def _run_casadi_reuse(
         datetime_index=datetime_index,
         backend_used="casadi",
         solver_used="ipopt",
+        reuse_path="casadi",
     )
 
 
@@ -1034,6 +1039,7 @@ def _run_gurobipy_reuse(
         datetime_index=datetime_index,
         backend_used="gurobipy",
         solver_used="gurobi",
+        reuse_path="gurobipy",
     )
 
 
@@ -1174,6 +1180,7 @@ def run(  # NOSONAR
     progress_callback: Callable[[int, int], None] | None = None,
     datetime_index: pandas.DatetimeIndex | None = None,
     dt_h: float | None = None,
+    reuse: bool | str | None = None,
     **solver_kwargs,
 ) -> TimeseriesResult:
     """Run a timeseries simulation: copy net, apply timeseries, solve, collect.
@@ -1206,10 +1213,18 @@ def run(  # NOSONAR
     ``inter_step_equations`` (default ``None`` keeps the StepState default of
     1.0). ``datetime_index`` overrides ``dt_h`` with per-step intervals.
 
+    ``reuse`` selects the solve path: ``None`` (default) takes a build-once
+    reuse driver (CasADi graph reuse, gurobipy model reuse) whenever the run is
+    eligible and the per-step rebuild loop otherwise, ``False`` always rebuilds
+    every step, and ``"require"`` raises ``ValueError`` when no reuse driver
+    can take the run. ``TimeseriesResult.reuse_path`` records the path taken.
+
     ``step_hooks`` entries may be :class:`StepHook` instances (receiving both
     ``pre_run`` and ``post_run``) or plain callables, which only receive the
     post-run call ``hook(net_copy, step, step_state, step_result, base_net)``.
     """
+    if reuse not in (None, False, "require"):
+        raise ValueError(f"reuse must be None, False or 'require'; got {reuse!r}.")
     steps = _resolve_steps(steps, timeseries_data)
     if timeseries_data is None:
         timeseries_data = TimeseriesData()
@@ -1247,7 +1262,8 @@ def run(  # NOSONAR
     # re-solve each step with a warm start instead of rebuilding/recompiling the
     # whole model every step. Gated to the cases that produce identical results
     # (plain power flow, id-addressed memory-less series, no hooks/optimisation).
-    if solve_flag and _casadi_reuse_eligible(
+    try_reuse = solve_flag and reuse is not False
+    if try_reuse and _casadi_reuse_eligible(
         net,
         resolved_solver,
         optimization_problem,
@@ -1271,7 +1287,7 @@ def run(  # NOSONAR
     # the time-varying inputs (and carried inter-step state) per step instead of
     # reconstructing the whole model every step. Gated to the cases that produce
     # identical results (see :func:`_gurobipy_reuse_eligible`).
-    if solve_flag and _gurobipy_reuse_eligible(
+    if try_reuse and _gurobipy_reuse_eligible(
         net,
         resolved_solver,
         optimization_problem,
@@ -1294,6 +1310,13 @@ def run(  # NOSONAR
         )
         if reuse_result is not None:
             return reuse_result
+    if reuse == "require":
+        raise ValueError(
+            "run_timeseries(reuse='require'): no build-once reuse driver can take "
+            "this run (it needs a CasADi or gurobipy solver, no optimisation "
+            "problem or step hooks, and series/extensions the driver supports; "
+            "see the how-to/timeseries docs page)."
+        )
 
     step_results: list[StepResult] = []
     step_state = StepState()

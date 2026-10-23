@@ -569,6 +569,12 @@ class OptimizationProblem:
     def lex_objectives(self) -> bool:
         return self._lex_objectives
 
+    def add_hook(self, hook):
+        """Register ``hook(network)``, called on the network to solve when the
+        problem is applied, before controllable attributes become Vars (e.g. to
+        tighten Var bounds or mark components)."""
+        self._controllable_appliables.append(hook)
+
     @staticmethod
     def _promote_to_var(model, attribute: str, val, param: AttributeParameter | None):
         if param is not None:

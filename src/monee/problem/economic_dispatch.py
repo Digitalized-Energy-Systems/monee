@@ -324,9 +324,9 @@ def create_economic_dispatch_problem(
     if dispatch_coupling_points and (gas_on or heat_on):
         _add_coupling_points(problem, frozenset(enabled), ext_grid_cost_default)
     if include_storages:
-        problem._controllable_appliables.append(_storage_hook(gas_on))
+        problem.add_hook(_storage_hook(gas_on))
     _add_ramps(constraints, ramps, optional=gas_on or heat_on)
-    problem._controllable_appliables.append(_ignored_costs_hook(gas_on, heat_on))
+    problem.add_hook(_ignored_costs_hook(gas_on, heat_on))
 
     problem.objectives = objectives
     problem.constraints = constraints
@@ -358,7 +358,7 @@ def _add_power(
         # Bound the actual decision var (vm_pu under the AC NLP, vm_pu_squared
         # under MISOCP); a static bound on vm_pu alone is a no-op when it is
         # only a reporting Intermediate.
-        problem._controllable_appliables.append(make_vm_bounds_hook(bounds_vm))
+        problem.add_hook(make_vm_bounds_hook(bounds_vm))
 
     objectives.select(
         lambda m: isinstance(m, PowerGenerator),
@@ -404,7 +404,7 @@ def _add_gas(problem, objectives, gas_cost_default):
             if _is_gas_supply(child.model, child):
                 child.model._ed_mw_per_kgs = gas_mw_per_kgs(child.grid)
 
-    problem._controllable_appliables.append(_stamp_gas_factors)
+    problem.add_hook(_stamp_gas_factors)
     objectives.select(
         _is_gas_supply,
         optional=True,
@@ -454,9 +454,9 @@ def _add_heat_controls(problem, bounds_t_k):
             if _hx_generates(model):
                 model._ed_heat_generator = True
 
-    problem._controllable_appliables.append(_mark_heat_exchangers)
+    problem.add_hook(_mark_heat_exchangers)
     if bounds_t_k is not None:
-        problem._controllable_appliables.append(
+        problem.add_hook(
             make_water_temperature_bounds_hook(bounds_t_k)
         )
 
@@ -497,7 +497,7 @@ def _add_coupling_points(problem, enabled, ext_grid_cost_default):
         looked_for="coupling points whose carriers are dispatched",
     )
     if ext_grid_cost_default is None:
-        problem._controllable_appliables.append(_free_power_hook(_dispatched))
+        problem.add_hook(_free_power_hook(_dispatched))
 
 
 def _free_power_hook(dispatched):

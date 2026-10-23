@@ -79,9 +79,11 @@ def line_loading_limit(branch_model, side: str, max_loading: float, basis: str =
     return getattr(branch_model, f"loading_{side}_pu") <= max_loading
 
 
-def make_node_var_bounds_hook(node_type, attr, squared_attr, bounds):
-    """``_controllable_appliables`` hook bounding *attr* (and ``lo^2..hi^2`` on
-    *squared_attr*) on independent nodes of exactly *node_type*. Only Var-typed
+def make_node_var_bounds_hook(node_type, attr, squared_attr, bounds, grid_types=None):
+    """Problem hook (``OptimizationProblem.add_hook``) bounding *attr* (and
+    ``lo^2..hi^2`` on *squared_attr*) on independent nodes of exactly
+    *node_type*, restricted to
+    nodes on a grid of one of *grid_types* when given. Only Var-typed
     attributes are touched: whichever of the pair the formulation uses as its
     actual decision variable gets the bound, while reporting Intermediates are
     left alone (a static bound there would be a no-op)."""
@@ -91,6 +93,8 @@ def make_node_var_bounds_hook(node_type, attr, squared_attr, bounds):
         for component in network.all_components():
             model = component.model
             if type(model) is not node_type or not component.independent:
+                continue
+            if grid_types is not None and not isinstance(component.grid, grid_types):
                 continue
             v = getattr(model, attr, None)
             vsq = getattr(model, squared_attr, None)
@@ -113,8 +117,9 @@ _WATER_TEMPERATURE_ATTRS = ("t_pu", "t_from_pu", "t_to_pu", "t_in_pu", "t_out_pu
 
 
 def make_water_temperature_bounds_hook(bounds_t_k):
-    """``_controllable_appliables`` hook narrowing every temperature Var of a
-    water-grid component to ``bounds_t_k`` (K, converted with the component's
+    """Problem hook (``OptimizationProblem.add_hook``) narrowing every
+    temperature Var of a water-grid component to ``bounds_t_k`` (K, converted
+    with the component's
     grid ``t_ref_k``). Existing bounds are only tightened; a Var pinned outside
     the band (e.g. by a timeseries) keeps its pin. Multi-grid coupler control
     nodes are left alone."""

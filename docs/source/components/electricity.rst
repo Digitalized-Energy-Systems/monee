@@ -82,7 +82,7 @@ The per-unit impedance is ``r_ohm_per_m * length_m / (base_kv ** 2 / sn_mva)
                 *, max_i_ka=3.19, max_s_mva=None)
    mx.create_line(network, from_node_id, to_node_id, length_m, r_ohm_per_m, x_ohm_per_m,
                   parallel=1, constraints=None, grid=None, name=None, on_off=1,
-                  max_i_ka=None, max_s_mva=None)
+                  max_i_ka=None, max_s_mva=None, backup=False)
 
 .. list-table::
    :header-rows: 1
@@ -219,7 +219,8 @@ There is no tap changer model: ``tap`` is fixed at 1.
 
    mm.Trafo(vk_percent=12.2, vkr_percent=0.25, sn_trafo_mva=160, shift=0)
    mx.create_trafo(network, from_node_id, to_node_id, vk_percent=12.2, vkr_percent=0.25,
-                   sn_trafo_mva=160, shift=0, constraints=None, grid=None, name=None)
+                   sn_trafo_mva=160, shift=0, constraints=None, grid=None, name=None,
+                   max_i_ka=None)
 
 .. list-table::
    :header-rows: 1
@@ -244,6 +245,11 @@ There is no tap changer model: ``tap`` is fixed at 1.
      - Phase shift in radians (the MATPOWER importer converts degrees).
        Vector-group shifts of 150 degrees make the flat start of the
        nonlinear solvers unusable; keep them at 0 unless the study needs them.
+   * - ``max_i_ka``
+     - express ``None``
+     - Current rating in kA behind ``loading_*_pu``; ``None`` keeps the model
+       default of 3.19 kA. ``mm.Trafo`` takes no rating argument, so set
+       ``max_i_ka`` on the model when building it directly.
 
 .. results: Trafo
 

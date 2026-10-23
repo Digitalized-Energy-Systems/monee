@@ -1,3 +1,5 @@
+import copy
+
 import monee.model as mm
 from monee.model.extension.islanding import GridFormingGenerator, GridFormingSource
 
@@ -123,10 +125,12 @@ def create_line(
     on_off=1,
     max_i_ka=None,
     max_s_mva=None,
+    backup=False,
 ):
     """Add a :class:`PowerLine` between two buses; missing buses are auto-created.
     ``max_i_ka`` / ``max_s_mva`` set the thermal rating (model defaults apply
-    when omitted)."""
+    when omitted). ``backup=True`` marks a switchable line (e.g. a normally-open
+    tie with ``on_off=0``) that load shedding may close."""
     rating_kwargs = {}
     if max_i_ka is not None:
         rating_kwargs["max_i_ka"] = max_i_ka
@@ -138,6 +142,7 @@ def create_line(
             r_ohm_per_m,
             x_ohm_per_m,
             parallel,
+            backup=backup,
             on_off=on_off,
             **rating_kwargs,
         ),
@@ -237,6 +242,47 @@ def create_water_pipe(
         auto_node_creator=lambda: mm.Junction(),
         auto_grid_key=mm.WATER_KEY,
     )
+
+
+def split_pipe(network: mm.Network, branch_id, n):
+    """Replace the pipe *branch_id* by *n* equal segments in series, joined by
+    ``n - 1`` new junctions on its grid. Each segment is a copy of the pipe's
+    model with ``length_m / n`` (diameter, roughness, insulation unchanged),
+    named ``<pipe name>.<i>``. Returns the ``n + 1`` node ids along the chain,
+    from the pipe's from-node to its to-node; ``n = 1`` leaves the pipe as is.
+    Works for water and gas pipes."""
+    if n < 1:
+        raise ValueError(f"split_pipe needs n >= 1 segments, got {n!r}.")
+    branch = network.branch_by_id(branch_id)
+    if n == 1:
+        return [branch.from_node_id, branch.to_node_id]
+
+    def name(i):
+        return None if branch.name is None else f"{branch.name}.{i}"
+
+    chain = [branch.from_node_id]
+    chain += [
+        network.node(mm.Junction(), grid=branch.grid, name=name(i)) for i in range(1, n)
+    ]
+    chain.append(branch.to_node_id)
+    network.remove_branch(branch_id)
+    for i in range(n):
+        model = copy.deepcopy(branch.model)
+        model.length_m = branch.model.length_m / n
+        segment = network.branch_by_id(
+            network.branch(
+                model,
+                chain[i],
+                chain[i + 1],
+                formulation=branch.formulation,
+                constraints=list(branch.constraints),
+                grid=branch.grid,
+                name=name(i),
+            )
+        )
+        segment.formulation_pinned = branch.formulation_pinned
+        segment.active = branch.active
+    return chain
 
 
 def create_el_child(
@@ -1151,15 +1197,21 @@ def create_trafo(
     constraints=None,
     grid=None,
     name=None,
+    max_i_ka=None,
 ):
-    """Add a two-winding :class:`Trafo`. from-node = LV side, to-node = HV side."""
+    """Add a two-winding :class:`Trafo`. from-node = LV side, to-node = HV side.
+    ``max_i_ka`` sets the current rating behind the loading (model default when
+    omitted)."""
+    model = mm.Trafo(
+        vk_percent=vk_percent,
+        vkr_percent=vkr_percent,
+        sn_trafo_mva=sn_trafo_mva,
+        shift=shift,
+    )
+    if max_i_ka is not None:
+        model.max_i_ka = max_i_ka
     return network.branch(
-        mm.Trafo(
-            vk_percent=vk_percent,
-            vkr_percent=vkr_percent,
-            sn_trafo_mva=sn_trafo_mva,
-            shift=shift,
-        ),
+        model,
         from_node_id=from_node_id,
         to_node_id=to_node_id,
         constraints=constraints,

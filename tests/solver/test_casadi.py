@@ -779,3 +779,66 @@ def test_solve_solver_options_merge_over_instance_options():
     net, _ = _two_bus_net()
     solver = CasADiSolver(solver_options={"ipopt.max_iter": 3})
     assert solver.solve(net, solver_options={"ipopt.max_iter": 3000}).success
+
+
+def test_solver_stats_report_the_ipopt_solve():
+    net, _ = _two_bus_net()
+
+    stats = monee.run_energy_flow(net).solver_stats
+
+    assert stats["iters"] > 0
+    assert stats["build_s"] >= 0 and stats["solve_s"] >= 0
+
+
+def test_reuse_option_selects_and_reports_the_solve_path():
+    net = _two_line_net()
+
+    auto = monee.run_timeseries(
+        net, _load_profile_td(net, 3), backend="casadi", simulation=True
+    )
+    rebuilt = monee.run_timeseries(
+        net, _load_profile_td(net, 3), backend="casadi", simulation=True, reuse=False
+    )
+
+    assert auto.reuse_path == "casadi"
+    assert rebuilt.reuse_path is None
+    va = auto.get_result_for(mm.Bus, "vm_pu").to_numpy()
+    vr = rebuilt.get_result_for(mm.Bus, "vm_pu").to_numpy()
+    assert np.nanmax(np.abs(va - vr)) < 1e-6
+
+
+def test_reuse_require_raises_when_no_driver_can_take_the_run():
+    net = _two_line_net()
+
+    with pytest.raises(ValueError, match="reuse='require'"):
+        monee.run_timeseries(
+            net,
+            _load_profile_td(net, 2),
+            backend="casadi",
+            simulation=True,
+            reuse="require",
+            step_hooks=[lambda *a: None],
+        )
+    with pytest.raises(ValueError, match="reuse must be"):
+        monee.run_timeseries(net, _load_profile_td(net, 2), reuse="always")
+
+
+def test_water_pipes_report_their_heat_loss():
+    from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
+    from tests.util import create_water_loop
+
+    net, _, _, _ = create_water_loop(source_t_k=330)
+
+    result = monee.run_energy_flow(net)
+
+    pipes = result.get(mm.WaterPipe)
+    t_ref = net.branches[0].grid.t_ref_k
+    expected = (
+        pipes["mass_flow_mag_kgs"]
+        * SPECIFIC_HEAT_CAP_WATER
+        * (pipes["t_in_pu"] - pipes["t_out_pu"])
+        * t_ref
+        / 1e6
+    )
+    assert np.allclose(pipes["heat_loss_mw"], expected)
+    assert (pipes["heat_loss_mw"] > 0).all()

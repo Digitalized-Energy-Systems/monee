@@ -45,6 +45,7 @@ from monee.model.multi import (
     PowerToGas,
     PowerToHeatControlNode,
     PowerToHeatHG,
+    SubHE,
 )
 from monee.model.node import Junction
 from monee.problem.core import (
@@ -60,6 +61,7 @@ from monee.problem.utils import (
     line_loading_limit,
     make_node_var_bounds_hook,
     make_vm_bounds_hook,
+    make_water_temperature_bounds_hook,
 )
 
 WEIGHT_DEMAND = 1e3
@@ -445,7 +447,8 @@ def _make_auto_priority_floor_hook(  # NOSONAR
     max_line_loading: float | None,
     weight_for_load=None,
 ):
-    """Return a ``_controllable_appliables`` hook that retunes *weights*.
+    """Return a problem hook (``OptimizationProblem.add_hook``) that retunes
+    *weights*.
 
     Sets ``weights['demand'] = max(weights['demand'], alpha*A_max)`` and scales
     ``weights['generator']`` by the same factor so the user-set ratio is kept.
@@ -641,6 +644,12 @@ def _warn_replaced_demand_regulation(network):
     )
 
 
+def _mark_coupler_duty_exact(network):
+    for component in network.all_components():
+        if isinstance(component.model, SubHE) and component.active:
+            component.model._he_duty_exact = True
+
+
 def _demand_sink(component) -> bool:
     # Water sinks are hydraulic boundaries, not demands (see controllable_demands).
     return type(component.model) is not Sink or type(component.grid) is GasGrid
@@ -659,6 +668,9 @@ def create_min_load_shedding_problem(
     bounds_ext_gas=None,
     bounds_ext_heat=None,
     bounds_ext_heat_mw=None,
+    bounds_t_k=None,
+    pressure_grids=None,
+    exact_coupler_duty=False,
     regulation_ramp_limit=None,
     include_storages=False,
     include_ext_grids=True,
@@ -699,6 +711,18 @@ def create_min_load_shedding_problem(
     zero exchanged mass flow, so ``bounds_ext_heat`` (kg/s) does not limit
     its heat. ``(0, 0)`` makes the reference heat-neutral. Default ``None``.
 
+    ``bounds_t_k`` = (lo, hi) in K narrows every water temperature Var
+    (coupler internals included, multi-grid control nodes excluded) exactly
+    like ``bounds_t_k`` of the economic dispatch; the junctions' ``t_pu`` keeps
+    the ``bounds_t`` band when ``check_t`` is on. ``None`` (default) adds
+    nothing. ``pressure_grids`` restricts the ``bounds_pressure`` bound to
+    junctions on grids of these types, e.g. ``(GasGrid,)`` to leave water
+    pressures free; ``None`` (default) bounds every junction.
+    ``exact_coupler_duty=True`` makes the coupling points'
+    internal heat exchangers (``SubHE``) deliver exactly their rated duty times
+    regulation, as the economic dispatch does with heat enabled, instead of at
+    most that duty.
+
     ``lex_objectives`` (Pyomo only) solves in two phases: shed first, then
     formulation-tightening aux terms with the phase-1 optimum pinned.
     ``auto_priority_floor`` (default True) scales ``demand_weight`` to
@@ -719,7 +743,7 @@ def create_min_load_shedding_problem(
     }
 
     problem.controllable_demands(REGULATION_ATTR, optional=True)
-    problem._controllable_appliables.append(_warn_replaced_demand_regulation)
+    problem.add_hook(_warn_replaced_demand_regulation)
     problem.controllable_generators(REGULATION_ATTR, optional=True)
     problem.controllable_cps(REGULATION_ATTR, optional=True)
     problem.controllable_backup_lines(optional=True)
@@ -728,10 +752,10 @@ def create_min_load_shedding_problem(
     if include_storages:
         problem.controllable_storages()
 
-    problem._controllable_appliables.append(_attach_shed_headroom_validator)
+    problem.add_hook(_attach_shed_headroom_validator)
 
     if auto_priority_floor:
-        problem._controllable_appliables.append(
+        problem.add_hook(
             _make_auto_priority_floor_hook(
                 _weights,
                 alpha=priority_safety_factor,
@@ -745,14 +769,18 @@ def create_min_load_shedding_problem(
         # Bound the actual decision var (vm_pu under the AC NLP, vm_pu_squared
         # under MISOCP); a static bound on vm_pu alone is a no-op when it is
         # only a reporting Intermediate.
-        problem._controllable_appliables.append(make_vm_bounds_hook(bounds_vm))
+        problem.add_hook(make_vm_bounds_hook(bounds_vm))
     if check_pressure:
         # Bound the actual decision var (pressure_pu under NLP, pressure_squared_pu
         # under the linearised gas formulation); a static bound on pressure_pu is
         # a no-op when it is only a reporting Intermediate.
-        problem._controllable_appliables.append(
+        problem.add_hook(
             make_node_var_bounds_hook(
-                Junction, "pressure_pu", "pressure_squared_pu", bounds_pressure
+                Junction,
+                "pressure_pu",
+                "pressure_squared_pu",
+                bounds_pressure,
+                grid_types=pressure_grids,
             )
         )
     if check_t:
@@ -763,6 +791,10 @@ def create_min_load_shedding_problem(
             optional=True,
             looked_for="Junction nodes on a WaterGrid",
         )
+    if bounds_t_k is not None:
+        problem.add_hook(make_water_temperature_bounds_hook(bounds_t_k))
+    if exact_coupler_duty:
+        problem.add_hook(_mark_coupler_duty_exact)
 
     # Lookups go through _weights so the auto-priority-floor can retune.
     # When ``weight_for_load`` is set and applicable, the per-load
@@ -921,9 +953,7 @@ def create_min_load_shedding_problem(
             constraints.select_types(ExtPowerGrid).equation(
                 lambda m: m.p_mw >= bounds_ext_el[0]
             ).equation(lambda m: m.p_mw <= bounds_ext_el[1])
-            problem._controllable_appliables.append(
-                _make_ext_bounds_hook(ExtPowerGrid, "p_mw", bounds_ext_el)
-            )
+            problem.add_hook(_make_ext_bounds_hook(ExtPowerGrid, "p_mw", bounds_ext_el))
 
         if bounds_ext_gas is not None:
             constraints.select(
@@ -932,7 +962,7 @@ def create_min_load_shedding_problem(
             ).equation(lambda m: m.mass_flow_kgs >= bounds_ext_gas[0]).equation(
                 lambda m: m.mass_flow_kgs <= bounds_ext_gas[1]
             )
-            problem._controllable_appliables.append(
+            problem.add_hook(
                 _make_ext_bounds_hook(
                     ExtHydrGrid, "mass_flow_kgs", bounds_ext_gas, grid_type=GasGrid
                 )
@@ -945,7 +975,7 @@ def create_min_load_shedding_problem(
             ).equation(lambda m: m.mass_flow_kgs >= bounds_ext_heat[0]).equation(
                 lambda m: m.mass_flow_kgs <= bounds_ext_heat[1]
             )
-            problem._controllable_appliables.append(
+            problem.add_hook(
                 _make_ext_bounds_hook(
                     ExtHydrGrid, "mass_flow_kgs", bounds_ext_heat, grid_type=WaterGrid
                 )

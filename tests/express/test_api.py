@@ -464,3 +464,50 @@ def test_name_lands_on_the_container_not_on_the_model():
     assert not hasattr(load.model, "name")
     with pytest.raises(AttributeError):
         load.model.name
+
+
+def test_create_line_backup_and_create_trafo_rating():
+    net = mm.Network()
+    b0, b1 = mx.create_bus(net), mx.create_bus(net)
+
+    tie = mx.create_line(net, b0, b1, 100, 1e-4, 1e-4, backup=True, on_off=0)
+    trafo = mx.create_trafo(net, b0, b1, max_i_ka=0.4)
+
+    assert net.branch_by_id(tie).model.backup is True
+    assert net.branch_by_id(tie).model.on_off == 0
+    assert net.branch_by_id(trafo).model.max_i_ka == 0.4
+
+
+def test_split_pipe_replaces_a_pipe_by_equal_segments_in_series():
+    net = mm.Network()
+    a, b = mx.create_water_junction(net), mx.create_water_junction(net)
+    pipe = mx.create_water_pipe(
+        net, a, b, diameter_m=0.2, length_m=900, insulation_thickness_m=0.05, name="P"
+    )
+
+    chain = mx.split_pipe(net, pipe, 3)
+
+    segments = [br for br in net.branches if isinstance(br.model, mm.WaterPipe)]
+    assert chain[0] == a and chain[-1] == b and len(chain) == 4
+    assert {(s.from_node_id, s.to_node_id) for s in segments} == set(
+        zip(chain, chain[1:])
+    )
+    assert sorted(s.name for s in segments) == ["P.0", "P.1", "P.2"]
+    for s in segments:
+        assert s.model.length_m == pytest.approx(300)
+        assert s.model.diameter_m == 0.2
+        assert s.model.insulation_thickness_m == 0.05
+    assert mx.split_pipe(net, segments[0].id, 1) == [
+        segments[0].from_node_id,
+        segments[0].to_node_id,
+    ]
+
+
+def test_a_split_pipe_still_solves():
+    from tests.util import create_water_loop
+
+    net, n0, n1, _ = create_water_loop(source_t_k=330)
+    pipe = next(br.id for br in net.branches if br.from_node_id == n0)
+    mx.split_pipe(net, pipe, 4)
+
+    assert run_energy_flow(net).success

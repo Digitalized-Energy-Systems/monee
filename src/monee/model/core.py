@@ -732,6 +732,16 @@ class Component(ABC):
     def nid(self):
         return f"{self.model.__class__.__name__}-{self.id}".lower()
 
+    def set(self, **attrs):
+        """Set model attributes and return the component. A compound then
+        pushes them onto its sub-components (:meth:`CompoundModel.sync`); a
+        plain attribute write on a compound model would not reach them."""
+        for name, value in attrs.items():
+            setattr(self.model, name, value)
+        if isinstance(self.model, CompoundModel):
+            self.model.sync()
+        return self
+
     def equations(self, *args, **kwargs):
         model_eqs = self.model.equations(*args, **kwargs)
         form_eqs = (

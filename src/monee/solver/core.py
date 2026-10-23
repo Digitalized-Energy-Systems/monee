@@ -179,6 +179,13 @@ class SolverResult:
     returning them. The how-to/diagnose_infeasibility docs page explains each
     category.
 
+    Solver statistics
+    -----------------
+    ``solver_stats`` holds back-end figures of the solve: the gurobipy backend
+    reports ``obj``, ``bound``, ``gap``, ``runtime_s``, ``status`` and
+    ``nodes`` (NaN where Gurobi has none), CasADi ``iters``, ``build_s`` and
+    ``solve_s``; other back-ends leave it empty.
+
     Termination metadata
     --------------------
     ``solver_status`` and ``termination_condition`` mirror the Pyomo
@@ -230,6 +237,7 @@ class SolverResult:
     aux_objective: float | None = None
     residuals: float | None = None
     warnings: list = field(default_factory=list)
+    solver_stats: dict = field(default_factory=dict)
 
     def __post_init__(self):
         _clamp_regulation_noise(self.dataframes)

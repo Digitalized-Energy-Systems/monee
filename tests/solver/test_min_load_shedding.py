@@ -243,3 +243,90 @@ def test_a_full_regulation_does_not_warn():
         monee.run_energy_flow_optimization(_el_feeder(1.0), problem, solver="scip")
 
     assert not [w for w in caught if "replaces the regulation" in str(w.message)]
+
+
+def _prepared(net, problem):
+    import warnings
+
+    from monee.solver.core import prepare_solve_network
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        network, _, _ = prepare_solve_network(
+            net.copy(), optimization_problem=problem, formulation="el_misocp"
+        )
+    return network
+
+
+def _junction_pressure_bounds(network):
+    from monee.model.node import Junction
+
+    return {
+        (node.id, attr): (var.min, var.max)
+        for node in network.nodes
+        if type(node.model) is Junction
+        for attr in ("pressure_pu", "pressure_squared_pu")
+        if type(var := getattr(node.model, attr, None)) is Var
+    }
+
+
+def test_pressure_grids_bounds_only_junctions_on_the_listed_grids():
+    from monee.model.grid import GasGrid
+    from monee.model.node import Junction
+    from tests.util import create_g2h_net
+
+    net = create_g2h_net()
+    via_option = create_min_load_shedding_problem(
+        bounds_pressure=(0.8, 1.1), pressure_grids=(GasGrid,)
+    )
+    by_hand = create_min_load_shedding_problem(check_pressure=False)
+    by_hand.bounds(
+        (0.8**2, 1.1**2),
+        lambda m, g: type(m) is Junction and isinstance(g, GasGrid),
+        ["pressure_squared_pu"],
+    )
+
+    bounds = _junction_pressure_bounds(_prepared(net, via_option))
+
+    assert bounds == _junction_pressure_bounds(_prepared(net, by_hand))
+    assert (0.8**2, 1.1**2) in bounds.values()
+
+
+def test_bounds_t_k_narrows_every_water_temperature():
+    from monee.model.grid import WaterGrid
+    from tests.util import create_g2h_net
+
+    lo_k, hi_k = 280.0, 400.0
+    network = _prepared(
+        create_g2h_net(),
+        create_min_load_shedding_problem(bounds_t_k=(lo_k, hi_k), check_t=False),
+    )
+
+    narrowed = [
+        (var, component.grid.t_ref_k)
+        for component in network.all_components()
+        if isinstance(component.grid, WaterGrid)
+        for attr in ("t_pu", "t_from_pu", "t_to_pu", "t_in_pu", "t_out_pu")
+        if type(var := getattr(component.model, attr, None)) is Var
+    ]
+    assert narrowed
+    for var, t_ref in narrowed:
+        assert var.min >= lo_k / t_ref - 1e-12
+        assert var.max <= hi_k / t_ref + 1e-12
+
+
+def test_exact_coupler_duty_marks_the_coupler_heat_exchangers():
+    from monee.model.multi import SubHE
+    from tests.util import create_g2h_net
+
+    def marked(problem):
+        return [
+            c.model
+            for c in _prepared(create_g2h_net(), problem).all_components()
+            if getattr(c.model, "_he_duty_exact", False)
+        ]
+
+    exact = marked(create_min_load_shedding_problem(exact_coupler_duty=True))
+
+    assert exact and all(isinstance(m, SubHE) for m in exact)
+    assert marked(create_min_load_shedding_problem()) == []

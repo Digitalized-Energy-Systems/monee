@@ -323,8 +323,8 @@ pass ``max_i_ka=999`` to leave a line unlimited. Do not use ``None``: passing
 it to ``mx.create_line`` keeps the 3.19 kA default, and setting it on the
 model makes the default AC formulation fail with a ``TypeError`` because it
 divides by the rating to report ``loading_*_pu``.
-``mm.Trafo`` and ``mx.create_trafo`` take no rating argument; set
-``max_i_ka`` on the transformer model after creating it. Under an MVA rating
+``mm.Trafo`` takes no rating argument; pass ``max_i_ka`` to
+``mx.create_trafo`` or set it on the transformer model after creating it. Under an MVA rating
 the result columns ``loading_from_pu`` and ``loading_to_pu`` still report the
 current against ``max_i_ka``, so they do not show the limit that was enforced;
 check the apparent power directly.

@@ -200,3 +200,28 @@ def test_auto_delegates_the_backend_labels_to_the_primary():
 
     assert solver.backend_name == "casadi"
     assert solver.solver_name == "ipopt"
+
+
+@requires_casadi
+def test_auto_retries_on_a_fallback_instance_with_the_call_options(monkeypatch):
+    calls = []
+
+    class _SameBackendFallback:
+        backend_name, solver_name = "casadi", "ipopt"
+
+        def solve(self, net, **kwargs):
+            calls.append(kwargs.get("solver_options"))
+            return resolve_solver("scip").solve(
+                net, **{k: v for k, v in kwargs.items() if k != "solver_options"}
+            )
+
+    _force_ipopt_failure(monkeypatch)
+    result = run_energy_flow(
+        _el_net(),
+        solver=AutoSolver(fallback=_SameBackendFallback()),
+        solver_options={"ipopt.max_iter": 50},
+    )
+
+    assert result.success is True
+    assert result.fallback_from == "casadi/ipopt"
+    assert calls == [{"ipopt.max_iter": 50}]

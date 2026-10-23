@@ -529,3 +529,15 @@ def test_optional_bounds_zero_match_is_silent():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         problem._apply(net)
+
+
+def test_add_hook_runs_on_the_network_the_problem_is_applied_to():
+    net = mx.create_multi_energy_network()
+    mx.create_bus(net)
+    seen = []
+    problem = OptimizationProblem()
+
+    problem.add_hook(seen.append)
+    problem._apply(net)
+
+    assert seen == [net]

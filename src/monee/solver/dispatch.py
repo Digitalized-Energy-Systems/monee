@@ -175,10 +175,15 @@ class AutoSolver(SolverInterface):
     _backend_name = AUTO_SOLVER
     _solver_name = AUTO_SOLVER
 
-    def __init__(self, primary=None, fallback: str = AUTO_FALLBACK_SOLVER):
+    def __init__(self, primary=None, fallback=AUTO_FALLBACK_SOLVER):
+        """*fallback* is a Pyomo solver name or a solver instance, e.g. the
+        primary back-end with other options; an instance of the primary's
+        back-end also receives the call's ``solver_options``."""
         self._primary = primary if primary is not None else resolve_solver()
-        self._fallback_name = fallback
-        self._fallback = None
+        if isinstance(fallback, str):
+            self._fallback_name, self._fallback = fallback, None
+        else:
+            self._fallback_name, self._fallback = _solver_label(fallback), fallback
 
     @property
     def backend_name(self) -> str:
@@ -204,12 +209,7 @@ class AutoSolver(SolverInterface):
         return self._fallback
 
     def _primary_label(self) -> str:
-        solver = self._primary.solver_name
-        return (
-            f"{self._primary.backend_name}/{solver}"
-            if solver
-            else self._primary.backend_name
-        )
+        return _solver_label(self._primary)
 
     def solve(self, input_network, **kwargs):
         failure = None
@@ -247,11 +247,14 @@ class AutoSolver(SolverInterface):
             self._fallback_name,
         )
         # solver_options are back-end specific (``ipopt.*`` keys mean nothing to
-        # SCIP), so the retry runs on the fallback's own defaults.
-        fallback_kwargs = {k: v for k, v in kwargs.items() if k != "solver_options"}
-        fallback_result = self._fallback_solver().solve(
-            input_network, **fallback_kwargs
+        # SCIP), so a retry on another back-end runs on the fallback's defaults.
+        fallback = self._fallback_solver()
+        fallback_kwargs = (
+            kwargs
+            if fallback.backend_name == self._primary.backend_name
+            else {k: v for k, v in kwargs.items() if k != "solver_options"}
         )
+        fallback_result = fallback.solve(input_network, **fallback_kwargs)
         if result is None and not fallback_result.success:
             raise failure
         fallback_result.fallback_from = self._primary_label()
@@ -269,6 +272,11 @@ class AutoSolver(SolverInterface):
             fallback_result.success,
         )
         return fallback_result
+
+
+def _solver_label(solver) -> str:
+    name = solver.solver_name
+    return f"{solver.backend_name}/{name}" if name else solver.backend_name
 
 
 def _is_solver_instance(obj) -> bool:

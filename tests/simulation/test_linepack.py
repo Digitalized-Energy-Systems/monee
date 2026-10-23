@@ -428,3 +428,31 @@ def test_tree_linepack_per_pipe_override():
         ext_auto._initial_lp[pipes["branch_a"]],
         rel_tol=1e-9,
     )
+
+
+def test_first_step_steady_state_matches_a_run_anchored_at_the_steady_linepack():
+    flows = [0.2, 0.35, 0.1]
+    net, pipe_id, sink_id = _gas_net()
+
+    anchor = net.copy()
+    anchor.add_extension(GasLinepack())
+    steady_lp = run_energy_flow(anchor)[pipe_id]["linepack_kg"]
+
+    def linepack_run(ext):
+        n = net.copy()
+        n.add_extension(ext)
+        td = TimeseriesData()
+        td.add_child_series(sink_id, "mass_flow_kgs", flows)
+        result = run(n, td)
+        assert not result.failed_steps
+        return (
+            result.get_result_for_id(pipe_id, "linepack_kg").to_numpy(),
+            result.get_result_for_id(pipe_id, "net_pack_kgs").to_numpy(),
+        )
+
+    anchored = linepack_run(GasLinepack({pipe_id: {"linepack_kg_initial": steady_lp}}))
+    steady_first = linepack_run(GasLinepack(first_step_steady_state=True))
+
+    assert abs(steady_first[1][0]) < 1e-9
+    for a, b in zip(anchored, steady_first):
+        assert max(abs(x - y) for x, y in zip(a, b)) < 1e-6 * max(1.0, max(abs(a)))

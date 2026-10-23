@@ -1038,6 +1038,13 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
     def _active_models(self, network, nodes, branches, compounds, ignored_nodes):
         return iter_active_models(network, nodes, branches, compounds, ignored_nodes)
 
+    def _solver_stats(self) -> dict:
+        return {
+            "iters": self.last_iters,
+            "build_s": self.last_build_s,
+            "solve_s": self.last_solve_s,
+        }
+
     def _failed_result(  # NOSONAR
         self,
         network,
@@ -1094,6 +1101,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             backend_used=self.backend_name,
             solver_used=self.solver_name,
             infeasibility_report=report,
+            solver_stats=self._solver_stats(),
         )
         return validate_result(
             network, result, ignored_nodes=ignored_nodes, simulation=simulation
@@ -1301,6 +1309,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             aux_objective=(
                 None if user_objective is None else objective - user_objective
             ),
+            solver_stats=self._solver_stats(),
         )
         return validate_result(
             network,

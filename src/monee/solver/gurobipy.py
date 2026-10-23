@@ -131,6 +131,27 @@ DEFAULT_GUROBI_PARAMS: dict = {
     "TimeLimit": 300,
 }
 
+_SOLVER_STATS = (
+    ("obj", "ObjVal"),
+    ("bound", "ObjBound"),
+    ("gap", "MIPGap"),
+    ("runtime_s", "Runtime"),
+    ("status", "Status"),
+    ("nodes", "NodeCount"),
+)
+
+
+def _solver_stats(gm) -> dict:
+    """Final objective, dual bound, gap, runtime, status and node count of the
+    solved Gurobi model; NaN where Gurobi has none (no incumbent, an LP)."""
+    stats = {}
+    for key, attr in _SOLVER_STATS:
+        try:
+            stats[key] = float(getattr(gm, attr))
+        except Exception:  # noqa: BLE001 - attribute unavailable for this model
+            stats[key] = float("nan")
+    return stats
+
 
 def _require_gurobipy():
     """Import gurobipy lazily so a missing install doesn't break other backends."""
@@ -788,6 +809,7 @@ class GurobipySolver(SolverInterface):
             aux_objective=(
                 None if user_objective is None else obj_val - user_objective
             ),
+            solver_stats=_solver_stats(gm),
         )
         return validate_result(
             network,

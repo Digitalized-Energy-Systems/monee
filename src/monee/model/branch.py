@@ -326,6 +326,16 @@ class HeatExchanger(BranchModel):
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
 
+    def scale_duty(self, factor):
+        """Scale the duty by *factor*: the setpoint, the design flow and the
+        warm-start seeds derived from them, so a part-load duty solves like a
+        heat exchanger built for it (``regulation`` scales the duty within one
+        solve instead)."""
+        self.q_mw_set = self.q_mw_set * factor
+        self.mass_flow_design_kgs = self.mass_flow_design_kgs * factor
+        self._q_design_mw = self._q_design_mw * factor
+        self._mass_flow_seed_kgs = self._mass_flow_seed_kgs * factor
+
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         eqs = [
             IntermediateEq(
