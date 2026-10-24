@@ -4,6 +4,7 @@
 from .core import NetworkAspect
 from .ltc import LumpedThermalCapacitance
 from .linepack import GasLinepack
+from .plugflow import PlugFlowTransport
 from .islanding import (
     ElectricityIslandingMode,
     GasIslandingMode,

@@ -29,6 +29,13 @@ Lumped thermal capacitance
    :undoc-members:
    :show-inheritance:
 
+Plug-flow transport
+-------------------
+
+.. automodule:: monee.model.extension.plugflow
+   :members: PlugFlowTransport
+   :show-inheritance:
+
 Islanding
 ---------
 

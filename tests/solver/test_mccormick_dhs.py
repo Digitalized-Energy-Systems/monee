@@ -7,6 +7,7 @@ import pytest
 import monee.express as mx
 import monee.model as mm
 import monee.solver as ms
+from monee.model.formulation.bundles import make_convex_miqcqp_formulation
 
 NUM_PARTITIONS = 40
 T_PU_MIN_ENV = 0.82  # ~292 K (slightly above ambient)
@@ -138,6 +139,65 @@ def test_mccormick_dhs_plain_envelope_reduces_to_lp():
 
     juncs = result.get(mm.Junction)
     assert math.isclose(list(juncs["t_k"])[0], 360.0, abs_tol=1e-3)
+
+
+def _p2h_beside_a_generator(regulation):
+    """A power-to-heat unit whose hot junction also receives water heated by a
+    0.2 MW generator upstream; returns the net, the far junction and a tight
+    McCormick formulation."""
+    net = mm.Network(
+        el_model=mm.create_power_grid("power"),
+        water_model=mm.create_water_grid("heat", t_ref_k=356.0),
+    )
+    bus = mx.create_bus(net, base_kv=20)
+    mx.create_ext_power_grid(net, bus)
+    cold, gen, hot, far = (mx.create_water_junction(net) for _ in range(4))
+    mx.create_water_ext_grid(net, cold, t_k=333.15, pressure_pu=1.0)
+    for a, b in ((cold, gen), (gen, hot), (hot, far)):
+        mx.create_water_pipe(net, a, b, diameter_m=0.15, length_m=10)
+    mx.create_heat_generator(net, gen, q_mw=0.2)
+    net.child_to(mm.Sink(mass_flow_kgs=8.0), far)
+    mx.create_p2h(
+        net,
+        power_node_id=bus,
+        cold_node_id=cold,
+        hot_node_id=hot,
+        heat_energy_mw=0.5,
+        diameter_m=0.15,
+        efficiency=3.0,
+        regulation=regulation,
+    )
+    for grid in net.grids:
+        if isinstance(grid, mm.WaterGrid):
+            grid.t_pu_min_env, grid.t_pu_max_env = 0.85, 1.15
+    for branch in net.branches:
+        if isinstance(branch.model, mm.WaterPipe):
+            branch.model.m_U_design = 10.0
+    return net, far, make_convex_miqcqp_formulation(num_partitions=40)
+
+
+def test_an_idle_p2h_leaves_its_mixing_hot_junction_free():
+    # GIVEN an idle unit under a tight McCormick balance
+    net, far, formulation = _p2h_beside_a_generator(regulation=0.0)
+
+    # WHEN
+    result = ms.PyomoSolver().solve(net, formulation=formulation)
+
+    # THEN the generator's heat reaches the far end (the NLP gives 339.12 K);
+    # a temperature pin on the idle unit fixed the hot junction: infeasible
+    assert result.success
+    t_far = result.get(mm.Junction, index="id").loc[far, "t_pu"] * 356.0
+    assert math.isclose(t_far, 339.12, abs_tol=0.05)
+
+
+def test_a_running_subhe_coupling_unit_is_rejected():
+    # GIVEN a running unit: the McCormick balance has no enthalpy for its
+    # transfer branch yet, so it would solve infeasible or wrong
+    net, _, formulation = _p2h_beside_a_generator(regulation=1.0)
+
+    # WHEN / THEN
+    with pytest.raises(NotImplementedError, match="create_p2h_hg"):
+        ms.PyomoSolver().solve(net, formulation=formulation)
 
 
 if __name__ == "__main__":

@@ -6,8 +6,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from monee.model import (
+    Branch,
+    Child,
     CHPControlNode,
     CHPHGControlNode,
+    Component,
+    Compound,
     ExtHydrGrid,
     ExtPowerGrid,
     GasGrid,
@@ -15,11 +19,13 @@ from monee.model import (
     GasToHeatHG,
     GasToPower,
     GenericModel,
+    HeatExchanger,
     HeatExchangerGenerator,
     HeatExchangerLoad,
     HeatGenerator,
     HeatLoad,
     Network,
+    Node,
     PassiveHeatExchangerGenerator,
     PassiveHeatExchangerLoad,
     PowerGenerator,
@@ -33,6 +39,7 @@ from monee.model import (
     hx_is_consuming,
     hx_is_generating,
 )
+from monee.model.core import is_plain_number
 from monee.model.storage import ElectricStorage, GasStorage, ThermalStorage
 
 logger = logging.getLogger(__name__)
@@ -203,6 +210,16 @@ def _attach_data(data_attacher, models) -> dict:
     return {model: data_attacher(model) for model in models}
 
 
+def _extend_eqs(equations: list, result) -> None:
+    """Append one constraint, or every constraint of a returned list/tuple/
+    generator: the equation, comp_equation and temporal_equation lambdas may
+    return either."""
+    if hasattr(result, "__iter__") and not isinstance(result, str):
+        equations.extend(result)
+    else:
+        equations.append(result)
+
+
 class Objective:
     def __init__(self, selected_models_link) -> None:
         self._selected_models_link = selected_models_link
@@ -318,10 +335,14 @@ class Constraint:
         return self
 
     def equation(self, equation_lambda):
+        """Add ``equation_lambda(model) -> eq | list[eq]``, called once per
+        selected model."""
         self._equations.append(equation_lambda)
         return self
 
     def comp_equation(self, equation_lambda):
+        """Add ``equation_lambda(models) -> eq | list[eq]``, called once with
+        all selected models."""
         self._comp_equations.append(equation_lambda)
         return self
 
@@ -349,17 +370,18 @@ class Constraint:
         for equation in self._equations:
             if self._data_attacher is not None:
                 for item in _attach_data(self._data_attacher, selected_models).items():
-                    model_equations.append(equation(item))
+                    _extend_eqs(model_equations, equation(item))
             else:
                 for model in selected_models:
-                    model_equations.append(equation(model))
+                    _extend_eqs(model_equations, equation(model))
         for comp_equation in self._comp_equations:
             if self._data_attacher is not None:
-                model_equations.append(
-                    comp_equation(_attach_data(self._data_attacher, selected_models))
+                _extend_eqs(
+                    model_equations,
+                    comp_equation(_attach_data(self._data_attacher, selected_models)),
                 )
             else:
-                model_equations.append(comp_equation(selected_models))
+                _extend_eqs(model_equations, comp_equation(selected_models))
         return model_equations
 
     @property
@@ -376,11 +398,7 @@ class Constraint:
         model_equations = []
         for model, comp_id in self._selected_models_with_ids_link(network):
             for eq_fn in self._temporal_equations:
-                result = eq_fn(model, comp_id, temporal_state)
-                if hasattr(result, "__iter__") and not isinstance(result, str):
-                    model_equations.extend(result)
-                else:
-                    model_equations.append(result)
+                _extend_eqs(model_equations, eq_fn(model, comp_id, temporal_state))
         return model_equations
 
 
@@ -523,6 +541,36 @@ class AttributeParameter:
     integer: bool = False
 
 
+_HEAT_DUTY_MODES = ("exact", "at_most")
+
+
+def _same_as_first_period(model, comp_id, state, names):
+    # Only a multi-period state (PeriodState, which has current_t) holds the
+    # other periods' variables; a timeseries StepState holds solved floats.
+    if getattr(state, "current_t", None) is None:
+        return []
+    eqs = []
+    for name in names:
+        first = state.get(comp_id, name, step=0, model_type=type(model))
+        own = getattr(model, name, None)
+        if first is not None and first is not own:
+            eqs.append(own == first)
+    return eqs
+
+
+def _counterpart(network, component):
+    """The component of *network* with the category and id of *component*."""
+    for kind, find in (
+        (Node, network.node_by_id),
+        (Branch, network.branch_by_id),
+        (Child, network.child_by_id),
+        (Compound, network.compound_by_id),
+    ):
+        if isinstance(component, kind):
+            return find(component.id)
+    raise TypeError(f"Not a network component: {component!r}")
+
+
 # Regulation attribute parameter (0 to 1) used across load-shedding formulations.
 REGULATION_ATTR = [
     (
@@ -544,7 +592,9 @@ class OptimizationProblem:
     ``constraints``, then pass to :func:`run_multi_period` / :func:`run_mpc`.
     """
 
-    def __init__(self, debug=False, lex_objectives: bool = False) -> None:
+    def __init__(
+        self, debug=False, lex_objectives: bool = False, heat_duty: str = "exact"
+    ) -> None:
         """
         Args:
             debug: verbose logging during variable promotion.
@@ -552,7 +602,31 @@ class OptimizationProblem:
                 then formulation-tightening terms (``branch/node/child.minimize``)
                 with the phase-1 optimum pinned. Removes weight tuning. GEKKO
                 falls back to single-objective sum.
+            heat_duty: how heat exchangers (including the ``SubHE`` of the
+                coupling compounds) meet their duty ``q_mw * on_off``.
+                ``"exact"`` (default): exactly, as in a simulation; make
+                ``regulation`` (or ``q_mw_set``) controllable to turn the duty
+                into a decision. The ``SubHE`` of a unit left at a plain
+                ``regulation`` of 0 keeps ``"at_most"`` (its duty is zero
+                either way). ``"at_most"``: the duty is only an upper bound
+                on the delivered heat (on the injected heat for a generator),
+                pulled tight by a formulation objective term of 1 per MW, so an
+                objective that values heat above 1 per MW makes the exchangers
+                under-deliver; a shortfall is reported in ``result.violations``
+                as ``<Type>.<id>.q_mw_delivered_shortfall``. The load-shedding
+                problem uses ``"at_most"``, where the unmet duty is the heat
+                shed.
         """
+        if heat_duty not in _HEAT_DUTY_MODES:
+            raise ValueError(
+                f"heat_duty must be one of {_HEAT_DUTY_MODES}, got {heat_duty!r}"
+            )
+        self._heat_duty = heat_duty
+        # The network being solved while _apply runs the appliables (hooks).
+        self._applying = None
+        # Constraints declared by the problem's own helpers (design ties,
+        # candidate choices); evaluated next to the user's ``constraints``.
+        self._own_constraints = Constraints()
         self._controllable_appliables: list = []
         self._controllable_to_attr: dict[GenericModel, str] = {}
         self._bounds_for_controllables: list = []
@@ -568,6 +642,18 @@ class OptimizationProblem:
     @property
     def lex_objectives(self) -> bool:
         return self._lex_objectives
+
+    @property
+    def heat_duty(self) -> str:
+        return self._heat_duty
+
+    def _constraint_sets(self) -> list:
+        """The user's ``constraints`` and the problem's own, without empty ones."""
+        return [
+            c
+            for c in (self._constraints, self._own_constraints)
+            if c is not None and not c.empty
+        ]
 
     def add_hook(self, hook):
         """Register ``hook(network)``, called on the network to solve when the
@@ -604,8 +690,21 @@ class OptimizationProblem:
 
     def _apply(self, network: Network):
         self._controllable_to_attr.clear()
-        for appliable in self._controllable_appliables:
-            appliable(network)
+        duty_exact = []
+        if self._heat_duty == "exact":
+            duty_exact = [
+                component.model
+                for component in network.all_components()
+                if isinstance(component.model, HeatExchanger)
+            ]
+            for model in duty_exact:
+                model._he_duty_exact = True
+        self._applying = network
+        try:
+            for appliable in self._controllable_appliables:
+                appliable(network)
+        finally:
+            self._applying = None
         for model, attributes in self._controllable_to_attr.items():
             for attribute_param in attributes:
                 self._promote_attribute(model, attribute_param)
@@ -625,6 +724,13 @@ class OptimizationProblem:
             )
             if message is not None:
                 warnings.warn(message, stacklevel=2)
+        # Idleness is read only now, after hooks and controllables may have
+        # promoted a regulation: an exact zero duty at zero flow is a
+        # degenerate row (IPOPT), so an idle unit's SubHE keeps "at most".
+        idle = _idle_unit_models(network)
+        for model in duty_exact:
+            if id(model) in idle:
+                model._he_duty_exact = False
 
     def _promote_attribute(self, model, attribute_param):
         attribute, param = (
@@ -683,11 +789,37 @@ class OptimizationProblem:
         )
 
     def add_to_controllable(
-        self, model, attributes: list[str | tuple[str, AttributeParameter]]
+        self, component, attributes: list[str | tuple[str, AttributeParameter]]
     ):
-        if model not in self._controllable_to_attr:
-            self._controllable_to_attr[model] = []
-        self._controllable_to_attr[model] += attributes
+        """Make *attributes* of one component controllable (names or
+        ``(name, AttributeParameter)`` tuples).
+
+        Pass the :class:`~monee.model.core.Component` (``net.child_by_id(cid)``,
+        ``net.branch_by_id(bid)``, ...): every solve works on a copy of the
+        network, where the component is looked up by its category and id.
+        Inside a hook (:meth:`add_hook`) the model of the network being solved
+        is accepted as well."""
+        if self._applying is not None:
+            model = (
+                _counterpart(self._applying, component).model
+                if isinstance(component, Component)
+                else component
+            )
+            self._controllable_to_attr.setdefault(model, []).extend(attributes)
+            return self
+        if not isinstance(component, Component):
+            raise TypeError(
+                "add_to_controllable() needs the component (e.g. "
+                "net.child_by_id(cid)), not its model: the solve runs on a copy "
+                "of the network, which does not contain this model object. Or "
+                "use controllable(attributes, component_condition=...)."
+            )
+        self._controllable_appliables.append(
+            lambda network: self.add_to_controllable(
+                _counterpart(network, component), attributes
+            )
+        )
+        return self
 
     def bounds(
         self,
@@ -992,6 +1124,73 @@ class OptimizationProblem:
         )
         return self
 
+    def controllable_design(
+        self,
+        attributes: list[str | tuple[str, AttributeParameter]],
+        component_condition=lambda _: True,
+        optional=False,
+        looked_for=None,
+    ):
+        """Promote *attributes* like :meth:`controllable`, as design
+        (investment) decisions: :func:`~monee.simulation.run_multi_period`
+        gives each of them one value shared by every period (each
+        :func:`~monee.simulation.run_mpc` window decides it anew). Single
+        solves and timeseries treat them as ordinary controllables. Count a
+        design cost once with ``Objectives.select(...).when_period([0])``."""
+        self.controllable(
+            attributes, component_condition, optional=optional, looked_for=looked_for
+        )
+        names = [a[0] if isinstance(a, tuple) else a for a in attributes]
+        self._own_constraints.select(
+            component_condition, optional=True
+        ).temporal_equation(
+            lambda model, cid, state: _same_as_first_period(model, cid, state, names)
+        )
+        return self
+
+    def candidate_branches(self, groups, allow_none=False):
+        """Expansion planning over candidate branches: each group (an iterable
+        of branch ids, e.g. the standard sizes of one pipe or cable route,
+        built in parallel) builds exactly one of its branches, or at most one
+        with ``allow_none=True``. ``on_off`` becomes a binary design variable
+        (:meth:`controllable_design`), so a multi-period solve picks one
+        build for all periods."""
+        groups = [list(group) for group in groups]
+        ids = {bid for group in groups for bid in group}
+        self.controllable_design(
+            [
+                (
+                    "on_off",
+                    AttributeParameter(
+                        min=lambda attr, val: 0,
+                        max=lambda attr, val: 1,
+                        val=lambda attr, val: 1,
+                        integer=True,
+                    ),
+                )
+            ],
+            lambda _model, component: (
+                isinstance(component, Branch) and component.id in ids
+            ),
+            looked_for="the candidate branches",
+        )
+
+        def _one_built(models):
+            built = sum(model.on_off for model in models)
+            return built <= 1 if allow_none else built == 1
+
+        def _live_groups(network):
+            branches = [
+                [network.branch_by_id(bid) for bid in group] for group in groups
+            ]
+            return [
+                [b.model for b in group if b.active and not b.ignored]
+                for group in branches
+            ]
+
+        self._own_constraints.with_models(_live_groups).equation(_one_built)
+        return self
+
     @property
     def objectives(self):
         return self._objectives
@@ -1007,3 +1206,19 @@ class OptimizationProblem:
     @objectives.setter
     def objectives(self, objectives):
         self._objectives = objectives
+
+
+def _idle_unit_models(network) -> set[int]:
+    """Ids of the subcomponent models of compounds switched off by a plain
+    ``regulation`` of 0."""
+    return {
+        id(sub.model)
+        for compound in network.compounds
+        if any(
+            isinstance(node, Node)
+            and is_plain_number(getattr(node.model, "regulation", None))
+            and node.model.regulation == 0
+            for node in compound.subcomponents
+        )
+        for sub in compound.subcomponents
+    }

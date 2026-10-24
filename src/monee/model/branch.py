@@ -85,6 +85,12 @@ class PowerBranch(GenericPowerBranch, ABC):
 
 @model
 class PowerLine(PowerBranch):
+    """Line or cable from per-metre data; ``c_nf_per_m`` is the operating
+    capacitance, split as half the charging susceptance onto each end (pi model)."""
+
+    # Networks saved before line charging existed restore without the attribute.
+    c_nf_per_m = 0
+
     def __init__(
         self,
         length_m,
@@ -93,6 +99,7 @@ class PowerLine(PowerBranch):
         parallel,
         backup=False,
         on_off=1,
+        c_nf_per_m=0,
         **kwargs,
     ) -> None:
         super().__init__(1, 0, backup=backup, on_off=on_off, **kwargs)
@@ -100,6 +107,7 @@ class PowerLine(PowerBranch):
         self.r_ohm_per_m = r_ohm_per_m
         self.x_ohm_per_m = x_ohm_per_m
         self.parallel = parallel
+        self.c_nf_per_m = c_nf_per_m
 
     def calc_r_x(self, grid: PowerGrid, from_node_model, to_node_model):
         base_r = from_node_model.base_kv**2 / grid.sn_mva
@@ -107,13 +115,29 @@ class PowerLine(PowerBranch):
         br_x_pu = self.x_ohm_per_m * self.length_m / base_r / self.parallel
         return (br_r_pu, br_x_pu)
 
+    def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
+        base_r = from_node_model.base_kv**2 / grid.sn_mva
+        b_s_per_m = 2 * np.pi * grid.f_hz * self.c_nf_per_m * 1e-9
+        b_total_s = b_s_per_m * self.length_m * self.parallel
+        self.b_fr_pu = self.b_to_pu = b_total_s * base_r / 2
+        return super().equations(grid, from_node_model, to_node_model, **kwargs)
+
 
 @model
 class Trafo(PowerBranch):
+    """Two-winding transformer whose rated voltages equal the bus ``base_kv``, so
+    its per-unit impedance is ``vk_percent / 100 * sn_mva / sn_trafo_mva``.
+
+    ``tap`` is the off-nominal turns ratio at the from-node (an LV-side tap for
+    the usual from = LV wiring); the impedance sits on the to-node side. A
+    pandapower tap ``tap_pos`` with ``tap_step_percent`` on side ``s`` maps to
+    ``tap = 1 + tap_pos * tap_step_percent / 100`` with the from-node on side ``s``.
+    """
+
     def __init__(
-        self, vk_percent=12.2, vkr_percent=0.25, sn_trafo_mva=160, shift=0
+        self, vk_percent=12.2, vkr_percent=0.25, sn_trafo_mva=160, shift=0, tap=1.0
     ) -> None:
-        super().__init__(1, shift)
+        super().__init__(tap, shift)
         if (
             isinstance(vk_percent, (int, float))
             and isinstance(vkr_percent, (int, float))
@@ -126,13 +150,11 @@ class Trafo(PowerBranch):
         self.vk_percent = vk_percent
         self.vkr_percent = vkr_percent
         self.sn_trafo_mva = sn_trafo_mva
-        self.vn_trafo_lv = 1
 
-    def calc_r_x(self, grid: PowerGrid, lv_model, hv_model):
-        tap_lv = np.square(lv_model.base_kv / hv_model.base_kv) * grid.sn_mva
-        z_sc = self.vk_percent / 100.0 / self.sn_trafo_mva * tap_lv
-        r_sc = self.vkr_percent / 100.0 / self.sn_trafo_mva * tap_lv
-        x_sc = np.sign(z_sc) * np.sqrt((z_sc**2 - r_sc**2).astype(float))
+    def calc_r_x(self, grid: PowerGrid, from_node_model, to_node_model):
+        z_sc = self.vk_percent / 100.0 * grid.sn_mva / self.sn_trafo_mva
+        r_sc = self.vkr_percent / 100.0 * grid.sn_mva / self.sn_trafo_mva
+        x_sc = np.sign(z_sc) * np.sqrt(np.asarray(z_sc**2 - r_sc**2, dtype=float))
         return (r_sc, x_sc)
 
 

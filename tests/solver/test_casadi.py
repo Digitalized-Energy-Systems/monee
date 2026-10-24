@@ -395,23 +395,42 @@ def test_compound_series_take_the_reuse_fast_path_and_match_the_rebuild_loop(
     assert el_fast[2, 0] == pytest.approx(0.3 * el_fast[0, 0], rel=1e-4)
 
 
-def test_temporal_network_skips_reuse_fast_path(monkeypatch):
-    import monee.simulation.timeseries as tsmod
+def test_temporal_network_takes_reuse_fast_path_and_matches_the_rebuild_loop():
+    """Regression: any temporal coupling (storage, LTC, linepack) disabled the
+    graph reuse, as the driver carried no inter-step state. It now reads the
+    previous step's state as parameters; the first step, here the steady one
+    of first_step_steady_state, is solved by the rebuild loop."""
+    from monee.model.grid import GasGrid, WaterGrid
+    from monee.network import create_urban_district_net
 
-    calls = {"reuse": 0}
-    orig = tsmod._run_casadi_reuse
+    def _child(net, model_type, grid_type):
+        return next(
+            c.id
+            for n in net.nodes
+            if isinstance(n.grid, grid_type)
+            for c in net.childs_by_ids(n.child_ids)
+            if isinstance(c.model, model_type)
+        )
 
-    def _spy(*a, **k):
-        calls["reuse"] += 1
-        return orig(*a, **k)
+    def _run(reuse):
+        net = create_urban_district_net()
+        net.add_extension(mm.LumpedThermalCapacitance(first_step_steady_state=True))
+        net.add_extension(mm.GasLinepack(first_step_steady_state=True))
+        td = TimeseriesData()
+        supply = _child(net, mm.ExtHydrGrid, WaterGrid)
+        td.add_child_series(supply, "t_k", [356.0, 340.0, 340.0, 350.0])
+        gas_sink = _child(net, mm.Sink, GasGrid)
+        td.add_child_series(gas_sink, "mass_flow_kgs", [0.04, 0.12, 0.12, 0.04])
+        return monee.run_timeseries(net, td, dt_h=0.25, reuse=reuse)
 
-    monkeypatch.setattr(tsmod, "_run_casadi_reuse", _spy)
+    fast, rebuilt = _run("require"), _run(False)
 
-    net, sid = _el_net_with_storage()
-    td = TimeseriesData()
-    td.add_child_series(sid, "p_mw", [1.0, -0.5, 0.8])
-    monee.run_timeseries(net, td, steps=3, backend="casadi", simulation=True)
-    assert calls["reuse"] == 0  # storage = temporal coupling -> per-step loop
+    assert fast.reuse_path == "casadi"
+    assert fast.failed_steps == rebuilt.failed_steps == []
+    for model, attr in ((mm.Junction, "t_pu"), (mm.GasPipe, "linepack_kg")):
+        a = fast.get_result_for(model, attr).to_numpy()
+        b = rebuilt.get_result_for(model, attr).to_numpy()
+        assert np.max(np.abs(a - b)) < 1e-6 * np.max(np.abs(b))
 
 
 def test_resolve_multi_period_casadi_backend():
@@ -526,7 +545,7 @@ def _single_gas_pipe_net(mass_flow_kgs=0.12):
     return pn
 
 
-def test_relaxed_gas_formulation_warns_on_casadi():
+def test_relaxed_gas_formulation_is_restored_on_casadi():
     # GIVEN the epigraph-relaxed gas formulation solved on IPOPT, which relaxes
     # its direction binary.
     from monee.solver.core import reset_validation_summary_counts
@@ -537,10 +556,14 @@ def test_relaxed_gas_formulation_warns_on_casadi():
             _single_gas_pipe_net(), formulation="convex_miqcqp"
         )
 
-    # THEN the untightened relaxation is reported instead of silently returning
-    # a pressure drop that is several times the Weymouth value.
+    # THEN the slack epigraph is restored to the exact Weymouth state instead of
+    # returning a pressure drop that is several times the Weymouth value.
     assert result.success
-    assert any(w.category == "relaxation" for w in result.warnings)
+    assert not any(w.category == "relaxation" for w in result.warnings)
+    exact = monee.run_energy_flow(_single_gas_pipe_net())
+    assert result.get(mm.Junction)["pressure_pu"].to_list() == pytest.approx(
+        exact.get(mm.Junction)["pressure_pu"].to_list(), abs=1e-6
+    )
 
 
 def test_default_gas_formulation_does_not_warn(caplog):

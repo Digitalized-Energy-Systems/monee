@@ -122,6 +122,15 @@ def _is_hx_generator(model):
     return getattr(model, "_ed_heat_generator", False)
 
 
+def _switched_off(model):
+    """A coupler at a plain regulation of 0 has no range to dispatch. It stays
+    that plain 0: promoted to a Var fixed to [0, 0] it would hide from its
+    model that the unit is off, whose idle heat side then turns singular on
+    IPOPT (``Error_In_Step_Computation``)."""
+    regulation = getattr(model, "regulation", 1)
+    return is_plain_number(regulation) and regulation == 0
+
+
 def _cp_carriers(model):
     for classes, carriers in _CP_CARRIERS:
         if isinstance(model, classes):
@@ -274,7 +283,8 @@ def create_economic_dispatch_problem(
     ``regulation`` becomes a decision in [0, its current regulation] once all
     of its non-electric carriers are dispatched (CHP and gas-to-heat need gas
     and heat, power-to-heat needs heat, gas-to-power and power-to-gas need
-    gas). Couplers carry no price: fuel is paid where it enters the network.
+    gas); a coupler at regulation 0 stays switched off. Couplers carry no
+    price: fuel is paid where it enters the network.
 
     ``include_storages=True`` makes ElectricStorage (and GasStorage when gas
     is dispatched) controllable in run_multi_period / run_mpc; other solves
@@ -456,9 +466,7 @@ def _add_heat_controls(problem, bounds_t_k):
 
     problem.add_hook(_mark_heat_exchangers)
     if bounds_t_k is not None:
-        problem.add_hook(
-            make_water_temperature_bounds_hook(bounds_t_k)
-        )
+        problem.add_hook(make_water_temperature_bounds_hook(bounds_t_k))
 
 
 def _add_heat_objectives(objectives, heat_cost_default):
@@ -488,7 +496,12 @@ def _add_heat_objectives(objectives, heat_cost_default):
 def _add_coupling_points(problem, enabled, ext_grid_cost_default):
     def _dispatched(model, component):
         carriers = _cp_carriers(model)
-        return carriers is not None and carriers <= enabled and _live(component)
+        return (
+            carriers is not None
+            and carriers <= enabled
+            and _live(component)
+            and not _switched_off(model)
+        )
 
     problem.controllable(
         _CP_REGULATION,

@@ -9,9 +9,9 @@ The package is organised by optimization class first, sector second:
   McCormick district heating, fixed-flow heat exchanger).
 * :mod:`~monee.model.formulation.miqcqp.convex`: certifiable relaxations
   (branch-flow MISOCP, epigraph-relaxed Weymouth).
-* :mod:`~monee.model.formulation.miqcqp.nonconvex`: exact quadratic models
-  for global solvers (exact branch flow, exact Weymouth, bilinear
-  Darcy-Weisbach).
+* :mod:`~monee.model.formulation.miqcqp.nonconvex`: quadratic models for
+  global solvers (exact branch flow, exact Weymouth, bilinear Darcy-Weisbach
+  with epigraph-relaxed hydraulics).
 
 Core
 ----

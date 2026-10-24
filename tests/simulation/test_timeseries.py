@@ -1331,3 +1331,62 @@ def test_prescribed_replay_violation_raises_under_strict():
     with pytest.raises(ValidationError) as excinfo:
         run(net, td, dt_h=1.0, strict=True)
     assert any(w.category == "temporal" for w in excinfo.value.warnings)
+
+
+def test_compound_efficiency_series_reaches_the_heat_pump():
+    """Regression: a compound efficiency (an hourly COP) was silently ignored;
+    the control node kept the build-time value."""
+    from monee.simulation import run_timeseries
+
+    net = mm.Network()
+    bus = mx.create_bus(net)
+    mx.create_ext_power_grid(net, bus)
+    dhs = mx.dhs_structure(net, diameter_m=0.15, length_m=300, unidirectional=False)
+    seg = dhs.line(3, heat_exchanger_q_mw=[0, 0.3, 0.4])
+    dhs.attach_heat_plant(seg.supply.first, seg.return_.first, t_k=358.0)
+    hp = mx.create_p2h(
+        net,
+        bus,
+        cold_node_id=seg.return_.last,
+        hot_node_id=seg.supply.last,
+        heat_energy_mw=0.3,
+        diameter_m=0.1,
+        efficiency=3.0,
+    )
+    td = TimeseriesData()
+    td.add_compound_series(hp, "efficiency", [3.0, 4.0])
+
+    result = run_timeseries(net, td, steps=2)
+
+    heat = result.get_result_for(mm.PowerToHeatControlNode, "heat_mw").iloc[:, 0]
+    el = result.get_result_for(mm.PowerToHeatControlNode, "el_mw").iloc[:, 0]
+    assert heat.tolist() == pytest.approx([-0.3, -0.4], abs=1e-6)
+    assert el.tolist() == pytest.approx([0.1, 0.1], abs=1e-6)
+
+
+def test_lossy_storage_with_a_dispatch_series_integrates_its_efficiencies():
+    """Regression: the CasADi build-once path turned the series into a
+    parameter and crashed with AttributeError on the charge split."""
+    net = mm.Network()
+    b0, b1 = mx.create_bus(net), mx.create_bus(net)
+    mx.create_ext_power_grid(net, b0)
+    mx.create_line(net, b0, b1, 100, 1e-4, 1e-4)
+    storage = net.child_to(
+        mm.ElectricStorage(
+            e_mwh_initial=0.5,
+            e_mwh_max=2.0,
+            p_max_mw=0.5,
+            efficiency_charge=0.9,
+            efficiency_discharge=0.9,
+        ),
+        b1,
+    )
+    td = TimeseriesData()
+    td.add_child_series(storage, "p_mw", [0.2, -0.3, 0.1])
+
+    result = run(net, td, steps=3)
+
+    e_mwh = result.get_result_for_id(storage, "e_mwh")
+    assert e_mwh.tolist() == pytest.approx(
+        [0.5 + 0.18, 0.68 - 0.3 / 0.9, 0.68 - 0.3 / 0.9 + 0.09], abs=1e-6
+    )

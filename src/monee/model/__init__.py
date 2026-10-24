@@ -102,6 +102,7 @@ from .extension import (
     NetworkAspect,
     LumpedThermalCapacitance,
     GasLinepack,
+    PlugFlowTransport,
     GridFormingMixin,
     IslandingMode,
     NetworkIslandingConfig,

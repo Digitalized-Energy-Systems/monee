@@ -21,6 +21,7 @@ The heat-exchanger pair (:class:`McCormickHeatExchangerFormulation` /
 balance to HE branches so a network with HEs stays convex end to end.
 """
 
+import numbers
 import warnings
 from collections import deque
 
@@ -153,6 +154,12 @@ class FixedFlowHeatExchangerFormulation(BranchFormulation):
                 branch.mass_flow_mag_kgs
                 == branch.mass_flow_pos_kgs + branch.mass_flow_neg_kgs
             ]
+            if not isinstance(branch.on_off, numbers.Real):
+                # The nodal heat balance relies on a decision on_off gating
+                # the flow (node._heat_gate).
+                flow_eqs.append(
+                    branch.mass_flow_mag_kgs <= grid.max_mass_flow_kgs * branch.on_off
+                )
             balance_flow_kgs = branch.mass_flow_mag_kgs
         else:
             prescribed_kgs = self.prescribed_flow_kgs(branch)

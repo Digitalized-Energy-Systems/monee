@@ -425,7 +425,11 @@ custom branch has to declare a small set of expected attributes:
 
 - Call ``super().__init__()`` in your ``__init__``. It provides ``on_off``
   (default 1, in service), which the nodal balances multiply into every flow
-  term of the branch.
+  term of the branch. A switchable branch, whose ``on_off`` a problem makes a
+  decision variable, also has to gate its own flows with it
+  (``mass_flow_pos_kgs <= M * on_off`` and the same for
+  ``mass_flow_neg_kgs``): the nodal heat balance leaves a decision ``on_off``
+  out to stay bilinear.
 - A branch between electrical buses declares the terminal Vars ``p_from_mw``,
   ``q_from_mvar``, ``p_to_mw`` and ``q_to_mvar``; the bus power balance reads
   them unconditionally.
@@ -589,7 +593,7 @@ instance to the constructor (``Network(el_model=...)``,
 ``water_model=...``, ``gas_model=...``).
 
 - :class:`~monee.model.PowerGrid` ``(name, sn_mva=1, vm_pu_max=1.5,
-  vm_pu_min=0.5)``: electrical domain. ``Network.node()`` raises a bus's
+  vm_pu_min=0.5, f_hz=50)``: electrical domain. ``Network.node()`` raises a bus's
   ``vm_pu.min`` to ``grid.vm_pu_min`` whenever that bound is still ``0`` or
   unset. An exact zero lets the :math:`1/v_m` terms of the AC current equations
   blow up, so the floor keeps the NLP well-conditioned while still allowing

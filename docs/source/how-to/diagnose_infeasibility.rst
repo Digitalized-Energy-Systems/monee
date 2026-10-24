@@ -51,7 +51,10 @@ mistakes cause the vast majority of infeasible solves:
    **Disconnected nodes.** Buses or junctions that are topologically
    disconnected (e.g. because a line or pipe is deactivated) have no path to
    any slack and make the whole system unsolvable. Plain energy-flow solves
-   exclude such components automatically. For optimisation solves, attach an
+   exclude such components automatically and list each dropped island as a
+   frozenset of node ids in ``result.dropped_islands``; a coupler with a port
+   in a dropped island is switched off, and the ``pruned`` warning names it
+   with the dropped loads. For optimisation solves, attach an
    islanding config (see :doc:`islanding`), the preferred mechanism, or pass
    the legacy ``exclude_unconnected_nodes=True`` flag to the solve call. See
    :doc:`../problems/load_shedding` for how excluded components are reported.
@@ -197,14 +200,19 @@ finding is local, a ``component`` and a ``value`` with its magnitude:
        identity spans carriers and is skipped).
    * - ``served_delta``
      - A demand was served below its setpoint: a load or sink whose
-       regulation ended below 1, or, in optimisation mode, a fixed duty heat
-       exchanger whose delivered power fell short of its setpoint. In a
-       simulation the exchanger duty is an equation, so a heat exchanger
-       entry there means the solve stopped short.
+       regulation ended below 1, or, under ``heat_duty="at_most"`` (the
+       load-shedding problem), a fixed duty heat exchanger whose delivered
+       power fell short of its setpoint. Elsewhere the exchanger duty is an
+       equation, so a heat exchanger entry there means the solve stopped
+       short.
    * - ``relaxation``
      - A relaxed formulation ran and its relaxation is not tight (epigraph
        gap beyond the formulation's tolerance). The reported physics is then
-       not exact; solve with SCIP or Gurobi, or use a smooth formulation.
+       not exact; solve with SCIP or Gurobi, or use a smooth formulation. On
+       SCIP or Gurobi it names a gas island the post-solve restoration cannot
+       make exact (several pressure references, a compressor, linepack, or an
+       exact state outside the pressure bounds): re-solve with
+       ``formulation="gas_nonconvex_miqcqp"``.
    * - ``integrality``
      - Components carry a formulation with integer variables that the
        back-end relaxes (for example a direction binary on CasADi/IPOPT).
@@ -472,7 +480,11 @@ found so far, ``result.success`` is ``True``, and no report is attached. Check
 the log for the warning if your objective value looks suboptimal. A time limit
 that found no incumbent fails (``result.success`` is ``False``) with
 ``termination_condition="maxTimeLimit"`` and no report: it is not evidence of
-infeasibility, so raise the limit before diagnosing the model.
+infeasibility, so raise the limit before diagnosing the model. Either way
+``result.solver_stats`` carries the incumbent's ``obj``, the dual ``bound``
+and the ``gap``, NaN where the solver has none. ``run_multi_period`` follows
+the same rule: a limit stop with an incumbent returns it, one without raises
+a ``RuntimeError`` that names the termination.
 
 ----
 

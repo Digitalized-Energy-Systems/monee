@@ -98,6 +98,11 @@ td = TimeseriesData.from_dataframe(df, component_type="child", component_name="d
 
 ::::
 
+A compound series reaches the compound's control node: `regulation`, a CHP's
+`efficiency_power` and `efficiency_heat`, and the `efficiency` of a heat pump or
+boiler (for example an hourly COP). An efficiency keeps the input nameplate
+(electric or gas) and scales the heat output.
+
 ### Series must target settable inputs
 
 A series drives a model attribute as an input, so it should target a plain

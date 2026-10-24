@@ -8,8 +8,9 @@ Packages are organised by optimization class first, sector second:
   fixed-flow heat exchanger).
 * ``miqcqp.convex`` - certifiable relaxations (branch-flow MISOCP,
   epigraph-relaxed Weymouth).
-* ``miqcqp.nonconvex`` - exact quadratic models for global solvers
-  (exact branch flow, exact Weymouth, bilinear Darcy-Weisbach).
+* ``miqcqp.nonconvex`` - quadratic models for global solvers (exact branch
+  flow, exact Weymouth, bilinear Darcy-Weisbach with epigraph-relaxed
+  hydraulics).
 
 Sector constants and the sector-complete bundles
 (:data:`SMOOTH_NLP_FORMULATION`, :data:`CONVEX_MIQCQP_FORMULATION`,

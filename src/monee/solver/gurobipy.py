@@ -174,9 +174,10 @@ class GurobiIISReport:
     can be carried on :attr:`SolverResult.infeasibility_report` uniformly.
     """
 
-    def __init__(self, constraints: list[str], bounds: list[str]):
+    def __init__(self, constraints: list[str], bounds: list[str], note: str = ""):
         self.constraints = constraints
         self.bounds = bounds
+        self.note = note
 
     @staticmethod
     def _section(title: str, items: list[str], max_items: int) -> list[str]:
@@ -193,8 +194,15 @@ class GurobiIISReport:
             lines += self._section("Variable bounds", self.bounds, max_items)
         if self.constraints:
             lines += self._section("Constraints", self.constraints, max_items)
-        if not self.bounds and not self.constraints:
-            lines.append("  (empty IIS - model may be unbounded, not infeasible)")
+        if self.note:
+            lines.append(f"  ({self.note})")
+        elif not self.bounds and not self.constraints:
+            # Built only for a proven INFEASIBLE status (INF_OR_UNBD is
+            # re-solved first), so an empty set never means unbounded.
+            lines.append(
+                "  (empty IIS: Gurobi proved the model infeasible but flagged no "
+                "constraint or bound)"
+            )
         return "\n".join(lines)
 
     def __repr__(self) -> str:
@@ -231,11 +239,19 @@ class GurobipySolver(SolverInterface):
             (e.g. ``{"TimeLimit": 60, "MIPGap": 1e-4}``). :meth:`solve` also
             takes a per-call ``solver_options`` dict merged over these, as the
             Pyomo backend does; a ``None`` value drops the key (Gurobi default).
+        iis: compute an IIS (``computeIIS``) when a solve is proven
+            infeasible. ``False`` skips it; on large nonconvex models the IIS
+            can take far longer than the solve, which matters in sweeps that
+            expect infeasible cases.
     """
 
     _BOUND_SNAP_TOL = 1e-9
 
     _LEX_AUX_MIPGAP = 1e-2
+
+    # Gurobi stops on its presolved model's gap; uncrushing the incumbent can
+    # widen the reported gap slightly (seen up to 1.7x the tolerance).
+    _GAP_SLACK = 10.0
 
     # ``Var.Start`` only accelerates incumbent finding; per-step cost on this
     # backend is presolve/branching-dominated, so previous-solution seeding
@@ -243,12 +259,13 @@ class GurobipySolver(SolverInterface):
     # simbench MES.
     benefits_from_warm_start = False
 
-    def __init__(self, params: dict | None = None):
+    def __init__(self, params: dict | None = None, iis: bool = True):
         self._backend_name = "gurobipy"
         self._solver_name = "gurobi"
         self._params = dict(DEFAULT_GUROBI_PARAMS)
         if params:
             self._params.update(params)
+        self.iis = iis
         # Per-solve state, (re)initialised at the top of solve().
         self._simulation: bool = False
         self._gp = None
@@ -536,6 +553,21 @@ class GurobipySolver(SolverInterface):
         """``(solver_status, termination_condition)`` strings for a GRB status."""
         return _grb_status_map(self._GRB).get(status, ("unknown", "unknown"))
 
+    @classmethod
+    def _gap_unproven(cls, gm) -> bool:
+        """Whether a single-objective (minimised) solve's incumbent lies far
+        outside both MIPGap and MIPGapAbs of Gurobi's final bound. Gurobi's
+        non-convex branch and bound can empty its tree on numerically pruned
+        nodes and still report OPTIMAL with that gap."""
+        if gm.NumObj > 1:
+            return False
+        try:
+            obj, bound = gm.ObjVal, gm.ObjBound
+        except Exception:  # noqa: BLE001 - no bound: LP or continuous convex model
+            return False
+        tol = max(gm.Params.MIPGapAbs, gm.Params.MIPGap * abs(obj))
+        return obj - bound > cls._GAP_SLACK * tol + 1e-6 * max(1.0, abs(obj))
+
     def _classify(self, gm, *, phase_label: str):
         """Map a Gurobi status to ``(success, report, solver_status,
         termination_condition)``.  OPTIMAL -> silent success; INFEASIBLE -> IIS
@@ -556,6 +588,16 @@ class GurobipySolver(SolverInterface):
             gm.optimize()
             status = gm.Status
         solver_status, tc = self._status_strings(status)
+        if status == GRB.OPTIMAL and self._gap_unproven(gm):
+            _log.warning(
+                "%s returned OPTIMAL, but its incumbent %.10g is far outside "
+                "MIPGap/MIPGapAbs of its final bound %.10g; reporting it as a "
+                "feasible, unproven solution.",
+                phase_label,
+                gm.ObjVal,
+                gm.ObjBound,
+            )
+            return True, None, *_GRB_STATUS_TO_STRINGS["SUBOPTIMAL"]
         if status == GRB.OPTIMAL:
             return True, None, solver_status, tc
         if status == GRB.INFEASIBLE:
@@ -580,15 +622,22 @@ class GurobipySolver(SolverInterface):
         return False, None, solver_status, tc
 
     def _compute_iis(self, gm) -> GurobiIISReport:
+        if not self.iis:
+            return GurobiIISReport([], [], note="IIS not computed: iis=False")
         constraints: list[str] = []
         bounds: list[str] = []
+        note = ""
         try:
             gm.computeIIS()
             self._collect_iis_constraints(gm, constraints)
             self._collect_iis_bounds(gm, bounds)
+            # TimeLimit also caps computeIIS, which then returns what it has.
+            if not gm.IISMinimal:
+                note = "IIS computation stopped early; the set may not be minimal"
         except Exception as exc:  # pragma: no cover - IIS can itself fail
             _log.warning("Gurobi computeIIS failed: %s", exc)
-        return GurobiIISReport(constraints, bounds)
+            note = f"IIS computation failed: {exc}"
+        return GurobiIISReport(constraints, bounds, note)
 
     @staticmethod
     def _collect_iis_constraints(gm, constraints: list[str]) -> None:
@@ -874,11 +923,9 @@ class GurobipySolver(SolverInterface):
         mip_gap = gm.Params.MIPGap
         self._set_objective(gm, user_obj_exprs)
         gm.optimize()
-        success, report, status_str, tc_str = self._classify(
-            gm, phase_label="Lexicographic phase 1"
-        )
-        if not success:
-            return success, report, status_str, tc_str
+        phase1 = self._classify(gm, phase_label="Lexicographic phase 1")
+        if not phase1[0]:
+            return phase1
 
         s_star = gm.ObjVal
         slack = self._lex_cap_slack(s_star, mip_gap)
@@ -889,11 +936,17 @@ class GurobipySolver(SolverInterface):
             gm.setParam("MIPGap", self._LEX_AUX_MIPGAP)
             try:
                 gm.optimize()
+                # classified against the aux gap it was solved to
+                phase2 = self._classify(gm, phase_label="Lexicographic phase 2")
             finally:
                 gm.setParam("MIPGap", mip_gap)
         else:
             gm.optimize()
-        return self._classify(gm, phase_label="Lexicographic phase 2")
+            phase2 = self._classify(gm, phase_label="Lexicographic phase 2")
+        # an unproven user tier stays unproven whatever phase 2 reports
+        if phase2[0] and phase1[3] != "optimal":
+            return phase1
+        return phase2
 
     # --------- equation-building passes (mirror PyomoSolver) ---------
 
@@ -914,15 +967,8 @@ class GurobipySolver(SolverInterface):
         user_obj_exprs,
         period_index=None,
     ):
-        if optimization_problem.constraints is not None and (
-            not optimization_problem.constraints.empty
-        ):
-            self._add_equations(
-                gm,
-                optimization_problem.constraints.all(
-                    network, period_index=period_index
-                ),
-            )
+        for constraints in optimization_problem._constraint_sets():
+            self._add_equations(gm, constraints.all(network, period_index=period_index))
         obj = None
         for objective in (
             optimization_problem.objectives.all(network, period_index=period_index)

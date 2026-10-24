@@ -41,10 +41,11 @@ linepack work through the standard :func:`monee.run_timeseries` per-step loop.
 headline win on *memory-less* timeseries: it assembles the NLP + IPOPT solver
 **once**, with every time-varying input declared as a CasADi *parameter*, then
 re-solves each step by only setting the parameter vector and warm-starting from
-the previous step - no rebuild, no recompile, no subprocess per step. (This
-build-once reuse does not carry inter-step state, so :func:`monee.run_timeseries`
-only takes it for networks without temporal coupling and otherwise uses the
-per-step loop above.)
+the previous step - no rebuild, no recompile, no subprocess per step. Inter-step
+state (storage SOC, LTC temperatures, linepack) enters as further parameters
+valued from the last solved step, so :func:`monee.run_timeseries` takes it for
+temporally coupled networks too, after solving their first step with the
+per-step loop above.
 
 Scope
 -----
@@ -62,19 +63,24 @@ from __future__ import annotations
 import logging
 import math
 import time
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
 
 from monee.model import Const, Intermediate, MultiGridCompoundModel, Network, Var
-from monee.model.formulation.registry import warn_relaxed_integrality
+from monee.model.formulation.miqcqp.convex.gas import restore_exact_weymouth
+from monee.model.formulation.miqcqp.nonconvex.heat import restore_exact_heat_pressures
+from monee.model.formulation.registry import declare_vars, warn_relaxed_integrality
 from monee.problem.core import OptimizationProblem
 
 from .core import (
+    InterStepState,
     OperatorEquationAssembly,
     ResultWarning,
     SolverInterface,
     SolverResult,
+    StepState,
     apply_child_overwrites,
     apply_post_process_all,
     compute_bound_violations,
@@ -316,11 +322,17 @@ class CasModel:
     def Equation(self, eq):  # NOSONAR
         if isinstance(eq, _Rel):
             self.cons.append(eq)
-        elif eq is False:
+        elif isinstance(eq, (bool, np.bool_)):
             # Mirrors the Pyomo/Gurobipy backends (and core.filter_bool_eqs):
             # a False sentinel is a structurally infeasible constraint from an
             # over-deactivated component - drop it, but surface the error.
-            warn_false_equation(logger=_log)
+            if not eq:
+                warn_false_equation(logger=_log)
+        else:
+            raise TypeError(
+                f"Not a constraint: {type(eq).__name__} {eq!r}. Equations must be "
+                "relations built with ==, <= or >= (or a list of them)."
+            )
 
     def Equations(self, eqs):  # NOSONAR
         for eq in eqs:
@@ -391,13 +403,11 @@ _IPOPT_DEBUG_OPTS = {
 # (mu_init=0.1) pushes a near-optimal point far back into the interior and can
 # fail the step computation outright. Full warm-start mode keeps the point
 # (and its near-zero bound distances) as-is: the only tested set that never
-# failed nor drifted (<=1e-8 vs cold) from a near-solution start. Trade-off:
-# on LARGE smooth gas/heat NLPs (degenerate pos/neg flow bounds get near-zero
-# multipliers) it roughly doubles iterations vs a cold start - there, either
-# pass warm_start=False to the Stepper or override per instance with
-# solver_options={"ipopt.warm_start_init_point": "no", "ipopt.mu_init": 1e-5}
-# (~1.5x faster than cold, at the cost of occasional flat-start retries and
-# result staleness up to the warm constr_viol_tol).
+# failed nor drifted (<=1e-8 vs cold) from a near-solution start. It needs the
+# WHOLE point: a start that left the formulation Vars (signed flows, junction
+# pressures, exchanger temperatures) at their seeds is far from feasible, and
+# with mu_init=1e-6 IPOPT drops into restoration (30x the cold iterations);
+# declare_vars restores them from the persisted solution.
 _IPOPT_WARM_OPTS = {
     "ipopt.warm_start_init_point": "yes",
     "ipopt.mu_init": 1e-6,
@@ -496,6 +506,43 @@ def _flow_seed(r, reg, mag_index):
     if seed < r["lb"] or seed > r["ub"]:
         return None
     return seed
+
+
+START_POINTS = ("simulation", "flat")
+
+
+def _checked_start(start: str) -> str:
+    if start not in START_POINTS:
+        raise ValueError(f"start must be one of {START_POINTS}, got {start!r}")
+    return start
+
+
+def _solved_values(network) -> dict:
+    """``{(category, component id, attribute): value}`` of the solved variables
+    of *network*, keyed like the injection register."""
+    values = {}
+    for cat, comps in (
+        ("node", network.nodes),
+        ("child", network.childs),
+        ("branch", network.branches),
+        ("compound", network.compounds),
+    ):
+        for comp in comps:
+            for key, val in comp.model.__dict__.items():
+                v = val.value if isinstance(val, (Var, Intermediate)) else None
+                if isinstance(v, (int, float)) and math.isfinite(v):
+                    values[(cat, comp.id, key)] = float(v)
+    return values
+
+
+def _start_vector(reg, x0, values):
+    """*x0* with every entry *values* holds replaced, clipped to its bounds."""
+    x = np.array(x0).flatten()
+    for i, r in enumerate(reg):
+        v = values.get((r["cat"], r["comp_id"], r["key"]))
+        if v is not None:
+            x[i] = min(max(v / (r["scale"] or 1.0), r["lb"]), r["ub"])
+    return ca.DM(x)
 
 
 def _solve_with_retry(solver, nlp, opts, args, name, what, x0_alt=None):
@@ -939,7 +986,7 @@ def _swap_to_smooth(branch, smooth, simulation):
         for key, val in vars(model).items()
         if isinstance(val, Var)
     }
-    smooth.ensure_var(model, simulation=simulation, grid=grid)
+    declare_vars(smooth, model, simulation=simulation, grid=grid)
     for key, (lo, hi) in bounds.items():
         var = getattr(model, key, None)
         if isinstance(var, Var):
@@ -951,13 +998,18 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
     :class:`~monee.solver.core.OperatorEquationAssembly` equation passes; only
     variable injection, the solve, and the write-back are CasADi-specific."""
 
-    def __init__(self, solver_options: dict | None = None):
+    def __init__(self, solver_options: dict | None = None, start: str = "simulation"):
         """``solver_options`` are CasADi/IPOPT options merged over the module
-        defaults (e.g. ``{"ipopt.max_iter": 500, "ipopt.tol": 1e-8}``)."""
+        defaults (e.g. ``{"ipopt.max_iter": 500, "ipopt.tol": 1e-8}``).
+
+        ``start`` is the point an optimization starts from (see :meth:`solve`):
+        ``"simulation"`` (default) or ``"flat"``."""
         _require_casadi()
         self._backend_name = "casadi"
         self._solver_name = "ipopt"
         self.solver_options = dict(solver_options) if solver_options else {}
+        self.start = _checked_start(start)
+        self.last_start = None
 
         self._simulation: bool = False
         self._reg: list = []
@@ -1043,7 +1095,35 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             "iters": self.last_iters,
             "build_s": self.last_build_s,
             "solve_s": self.last_solve_s,
+            "start": self.last_start,
         }
+
+    def _simulation_values(self, input_network, formulation, solver_options):
+        """Solved values of a simulation of *input_network* at its setpoints,
+        or ``None`` when it does not converge. Its log output is muted: it is
+        a start point, and the optimization reports for itself."""
+        logger = logging.getLogger("monee")
+        level = logger.level
+        logger.setLevel(logging.CRITICAL)
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                # An explicit mu_strategy skips the retry chain: a start that
+                # does not converge at once is not worth three more solves.
+                result = CasADiSolver(self.solver_options, start="flat").solve(
+                    input_network.copy(),
+                    simulation=True,
+                    formulation=formulation,
+                    solver_options={
+                        "ipopt.mu_strategy": "monotone",
+                        **(solver_options or {}),
+                    },
+                )
+        except Exception:  # noqa: BLE001 - any failure falls back to the flat start
+            return None
+        finally:
+            logger.setLevel(level)
+        return _solved_values(result.network) if result.success else None
 
     def _failed_result(  # NOSONAR
         self,
@@ -1118,11 +1198,25 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         formulation=None,
         solver_options: dict | None = None,
         strict: bool = False,
+        start: str | None = None,
     ) -> SolverResult:
         """``solver_options`` are per-call CasADi/IPOPT options merged over the
         instance options and the module defaults (e.g.
         ``{"ipopt.max_iter": 500}``); the top-level ``run_*`` helpers forward
         the kwarg here.
+
+        ``start`` (per call, overriding the instance's) picks the point an
+        optimization starts from. ``"simulation"`` first solves the network
+        as a simulation at its current setpoints and starts IPOPT from that
+        physically consistent state; when that simulation or IPOPT from its
+        point does not converge, the solve runs from the flat start as before
+        (a warm-started or temporally coupled solve keeps its usual start).
+        ``"flat"`` starts from the formulations' seeds, every pipe at zero
+        flow. The heat transport is nonconvex and a pipe at zero flow
+        delivers water at ground temperature, so from the flat start IPOPT
+        often stops at a local optimum with pipes idle and a penalised slack
+        covering the network losses. Either way IPOPT certifies local
+        optimality only; ``solver_stats["start"]`` records the start used.
 
         A solve that does not converge returns a ``success=False``
         :class:`~monee.solver.core.SolverResult` whose ``solver_status`` is
@@ -1235,16 +1329,39 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         solver = ca.nlpsol("monee_casadi", "ipopt", nlp, opts)
         self.last_build_s = time.perf_counter() - t0
 
+        args = {"x0": x0, "lbx": lbx, "ubx": ubx, "lbg": lbg, "ubg": ubg}
         t0 = time.perf_counter()
-        sol, stats = _solve_with_retry(
-            solver,
-            nlp,
-            opts,
-            {"x0": x0, "lbx": lbx, "ubx": ubx, "lbg": lbg, "ubg": ubg},
-            "monee_casadi",
-            "solve",
-            x0_alt=None if warm else _consistent_flow_x0(reg, x0),
-        )
+        sol = None
+        if (
+            _checked_start(self.start if start is None else start) == "simulation"
+            and optimization_problem is not None
+            and step_state is None
+            and not warm
+        ):
+            values = self._simulation_values(input_network, formulation, solver_options)
+            if values is not None:
+                self.last_start = "simulation"
+                sol, stats = _solve_with_retry(
+                    solver,
+                    nlp,
+                    opts,
+                    {**args, "x0": _start_vector(reg, x0, values)},
+                    "monee_casadi",
+                    "solve",
+                )
+                if not stats.get("success", False):
+                    sol = None  # the established flat-start chain gets its turn
+        if sol is None:
+            self.last_start = "flat"
+            sol, stats = _solve_with_retry(
+                solver,
+                nlp,
+                opts,
+                args,
+                "monee_casadi",
+                "solve",
+                x0_alt=None if warm else _consistent_flow_x0(reg, x0),
+            )
         self.last_solve_s = time.perf_counter() - t0
         self.last_engine_s = self.last_build_s + self.last_solve_s
         success = bool(stats.get("success", False))
@@ -1322,6 +1439,26 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         )
 
 
+class _ParamStepState(InterStepState):
+    """Previous-step state as CasADi parameters, so inter-step equations
+    are built once; :class:`CasADiTimeseries` values them per step."""
+
+    def __init__(self, dt_h: float):
+        self.dt_h = dt_h
+        self.params: dict = {}  # (component_id, attr, model_type) -> SX
+
+    def get(self, component_id, attr: str, step: int = -1, model_type=None):
+        if step != -1:
+            raise NotImplementedError(
+                "The CasADi build-once timeseries driver carries only the "
+                f"previous step's state (step=-1); got step={step!r}."
+            )
+        key = (component_id, attr, model_type)
+        if key not in self.params:
+            self.params[key] = ca.SX.sym(f"prev{len(self.params)}")
+        return CasSym(self.params[key])
+
+
 class CasADiTimeseries:
     """Build-once / re-solve-per-step timeseries driver on the CasADi backend.
 
@@ -1336,8 +1473,11 @@ class CasADiTimeseries:
     Scope mirrors :class:`CasADiSolver`: electricity AC, plain power flow
     (``optimization_problem=None``). Time-varying attributes come from a
     :class:`~monee.simulation.timeseries.TimeseriesData` (child/node/branch id
-    series). Inter-step temporal coupling is *not* supported - only memory-less
-    per-step inputs (loads, generation).
+    series). Inter-step coupling (storage, LTC, linepack) reads the previous
+    step's state as parameters of length-``dt_h`` steps, valued from the last
+    solved step; the step before the first one solved here comes from
+    :meth:`carry_state` (the first step of a run, whose models fall back to
+    their initial state, needs the per-step loop).
     """
 
     def __init__(  # NOSONAR
@@ -1348,6 +1488,7 @@ class CasADiTimeseries:
         simulation=True,
         steps=None,
         solver_options: dict | None = None,
+        dt_h: float = 1.0,
     ):
         _require_casadi()
         timeseries_data.validate_bound(input_network, strict=False)
@@ -1382,6 +1523,10 @@ class CasADiTimeseries:
         mark_slacks_and_prescriptions(network, ignored)
 
         inject_vars(cs._inject, nodes, branches, compounds, network, ignored)
+        # step_state=None: only the marking, the warm start is the previous x
+        for ext in network.extensions:
+            ext.activate_timeseries(network, ignored, step_state=None)
+        cs.mark_temporal_components(network, ignored)
 
         objs: list = []
         cs.init_branches(branches)
@@ -1389,8 +1534,15 @@ class CasADiTimeseries:
         cs.process_equations_branches(m, network, branches, ignored, objs)
         cs.process_equations_compounds(m, network, compounds, ignored)
         cs.process_internal_oxf_components(m, network)
+        self._state = _ParamStepState(dt_h)
+        cs.process_inter_step_equations(
+            m, network, nodes, branches, compounds, ignored, self._state
+        )
         for ext in network.extensions:
+            m.Equations(ext.inter_step_equations(network, ignored, self._state))
+            m.Equations(ext.inter_temporal_equations(network, ignored, self._state))
             m.Equations(ext.equations(network, ignored))
+        self._prev = []  # carried values, see carry_state
         for expr in objs:
             m.Obj(expr)
 
@@ -1398,11 +1550,8 @@ class CasADiTimeseries:
         self._network, self._nodes = network, nodes
         self._branches, self._compounds, self._ignored = branches, compounds, ignored
         self._var_entries = reg
-        P = (
-            ca.vertcat(*[p[2] for p in self._params])
-            if self._params
-            else ca.SX.zeros(0)
-        )
+        psx = [p[2] for p in self._params] + list(self._state.params.values())
+        P = ca.vertcat(*psx) if psx else ca.SX.zeros(0)
         X, x0, lbx, ubx, g, lbg, ubg, f = _assemble_nlp_vectors(reg, m)
         self._lbx, self._ubx = lbx, ubx
         self._x = x0  # warm-start state
@@ -1501,11 +1650,27 @@ class CasADiTimeseries:
             self._network, self._nodes, self._branches, self._compounds, self._ignored
         )
 
+    def carry_state(self, network) -> None:
+        """Take the inter-step state from *network*, the solved step before
+        the next one solved here."""
+        state = StepState()
+        state.push(network)
+        self._prev = [
+            state.get(cid, attr, model_type=mt) for cid, attr, mt in self._state.params
+        ]
+
     # ------------------------------------------------------------------ #
     def _solve_step(self, t):
         """Set the parameter vector for step *t*, re-solve (warm-started), and
         scatter the solution into the network models. Returns the solve stats."""
-        pvals = ca.DM([float(p[3][t]) for p in self._params])
+        prev = self._prev
+        if len(prev) != len(self._state.params) or None in prev:
+            raise ValueError(
+                f"timeseries step {t} needs the previous step's state; solve "
+                "the first step with the per-step loop and pass its network to "
+                "carry_state."
+            )
+        pvals = ca.DM([float(p[3][t]) for p in self._params] + prev)
         self._p = pvals
         t0 = time.perf_counter()
         sol, stats = _solve_with_retry(
@@ -1539,6 +1704,8 @@ class CasADiTimeseries:
         apply_post_process_all(
             self._nodes, self._branches, self._compounds, self._network
         )
+        if stats.get("success", False):
+            self.carry_state(self._network)
         return solve_s, stats
 
     def step_result(self, t) -> SolverResult:
@@ -1794,6 +1961,8 @@ class CasADiMultiPeriodSolver:
             fname="intval_mp",
         )
         for net_t in net_copies:
+            restore_exact_weymouth(net_t)
+            restore_exact_heat_pressures(net_t)
             apply_post_process_all(net_t.nodes, net_t.branches, net_t.compounds, net_t)
 
         objective = float(sol["f"]) if m.obj_terms else 0.0

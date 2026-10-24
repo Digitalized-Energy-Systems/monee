@@ -1,12 +1,14 @@
 """Smooth Darcy-Weisbach water/heat formulations: non-convex NLPs, binary-free."""
 
+import numbers
+
 import monee.model.phys.core.hydraulics as hydraulicsmodel
 import monee.model.phys.nonlinear.hf as ohfmodel
 import monee.model.phys.nonlinear.smooth as smoothmodel
 import monee.model.phys.nonlinear.wf as owfmodel
 from monee.model.core import Const, Var
 
-from ..common import ensure_velocity_report
+from ..common import ensure_velocity_report, pipe_outlet_law
 from ..core import BranchFormulation
 from ..milp.heat import FixedFlowHeatExchangerFormulation
 from .gas import FRICTION_MODELS, _ensure_friction_vars, _pin, _seed_mag
@@ -52,7 +54,11 @@ def _flow_and_pressure_eqs(
         branch.mass_flow_pos_kgs == 0.5 * (mag + signed),  # NOSONAR
         branch.mass_flow_neg_kgs == 0.5 * (mag - signed),  # NOSONAR
     ]
-    if not kwargs.get("simulation", False):
+    # A decision on_off must gate the flow in any mode: the nodal heat
+    # balance relies on it (node._heat_gate).
+    if not kwargs.get("simulation", False) or not isinstance(
+        branch.on_off, numbers.Real
+    ):
         eqs += [
             signed <= f_max_local * branch.on_off,
             -signed <= f_max_local * branch.on_off,
@@ -149,12 +155,7 @@ class SmoothDarcyWeisbachBranchFormulation(BranchFormulation):
             self, branch, grid, from_node_model, to_node_model, **kwargs
         )
         UA_C = _ua_per_cp(branch)
-        eqs += [
-            branch.alpha * (mag + UA_C) == mag,
-            branch.t_out_pu
-            == branch.temperature_ext_k / grid.t_ref_k
-            + branch.alpha * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref_k),
-        ]
+        eqs += [branch.alpha * (mag + UA_C) == mag, *pipe_outlet_law(branch, grid)]
         eqs += _temperature_transport_eqs(branch, from_node_model, to_node_model)
         if getattr(branch, "unidirectional", False) and not kwargs.get(
             "simulation", False

@@ -34,6 +34,7 @@ class PowerGrid(Grid):
     sn_mva: float = 1
     vm_pu_max: float = 1.5
     vm_pu_min: float = 0.5
+    f_hz: float = 50
 
 
 @model

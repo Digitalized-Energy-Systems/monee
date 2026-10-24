@@ -158,7 +158,7 @@ sector-complete bundles cover the whole network with one consistent class:
     from monee.model.formulation import (
         SMOOTH_NLP_FORMULATION,       # pure NLP across all carriers
         CONVEX_MIQCQP_FORMULATION,    # certifiable relaxations everywhere
-        NONCONVEX_MIQCQP_FORMULATION, # exact quadratic models everywhere
+        NONCONVEX_MIQCQP_FORMULATION, # exact el/gas, epigraph heat hydraulics
     )
 
 The pre-restructure names (``AC_NETWORK_FORMULATION``,
@@ -196,11 +196,15 @@ remain importable but are deprecated.
 
       The branch pi-model charging admittance
       (``g_fr_pu``/``b_fr_pu``/``g_to_pu``/``b_to_pu``, populated by the
-      MATPOWER and CIM importers) is modelled as a shunt injection linear in
-      ``vm_pu_squared``, so the cone, the voltage drop and the loss equations
-      all act on the series flows. ``current_pu_squared`` and the reported
-      ``i_from_ka``/``i_to_ka``/``loading_*_pu`` are therefore series
-      quantities and exclude the charging current. A transformer phase shift
+      MATPOWER and CIM importers and by ``create_line(c_nf_per_m=...)``) is
+      modelled as a shunt injection linear in ``vm_pu_squared``, so the cone,
+      the voltage drop and the loss equations all act on the series flows.
+      ``current_pu_squared`` is therefore the series current. The reported
+      ``i_from_ka``/``i_to_ka``/``loading_*_pu`` and the current-based loading
+      limit use the terminal current (series plus shunt current), which is
+      linear in the lifted variables, as an AC solve or pandapower does. A
+      switchable branch keeps its charging energised, so it reports the
+      charging current while switched off by its decision. A transformer phase shift
       (``branch.shift``) has no representation in a magnitude-only branch-flow
       model and is ignored; only the magnitude ratio ``tap`` enters.
 
@@ -235,6 +239,14 @@ remain importable but are deprecated.
       derive from :math:`\ell` and are not physical there either. Read
       exactness off the resistive branches, or re-solve at a zero gap.
 
+      A residual above one percent on a resistive branch is a ``relaxation``
+      finding of its own: the loss term prices that cone, so the reported
+      flows, losses and voltages are not AC-feasible. It is the classic
+      failure of the relaxation when the network must absorb a surplus (a
+      must-run injection with a capped export): the solve burns it in
+      fictitious losses instead. Re-solve with
+      ``EL_NONCONVEX_MIQCQP_FORMULATION`` or the AC NLP.
+
       Do not evaluate the cone with the terminal flows
       ``p_from_mw``/``q_from_mvar``: on a branch with charging admittance the
       pi-shunt injection is included in the terminals and the gap reads
@@ -259,12 +271,15 @@ remain importable but are deprecated.
       ``EL_NONCONVEX_MIQCQP_FORMULATION``
 
       The branch-flow model with the SOC pinned to equality
-      ``P² + Q² = (W/tap²)·ell``, exact AC power flow in the lifted
-      variables, a non-convex MIQCQP for global solvers (SCIP, Gurobi).
+      ``P² + Q² = (W/tap²)·ell``, a non-convex MIQCQP for global solvers
+      (SCIP, Gurobi). On a radial network it is exact AC power flow in the
+      lifted variables. On a meshed network it is still the angle-relaxed
+      model: the cycle consistency of the voltage angles stays dropped, so
+      its optimum can lie below the AC optimum as described above.
 
       It subclasses the MISOCP branch formulation, so the decision variables,
-      the pi-shunt handling, the series-current reporting and the phase-shift
-      limitation described above all apply unchanged.
+      the pi-shunt handling, the terminal-current reporting and the
+      phase-shift limitation described above all apply unchanged.
 
       *Best for:* exact mixed-integer AC studies without trigonometric terms.
 
@@ -276,7 +291,12 @@ remain importable but are deprecated.
       MIQCQP. Pressure is represented as *pressure-squared* (p²), flow
       direction by a binary plus a convex epigraph relaxation
       ``m² ≤ m_squared`` that ``minimize()`` keeps tight with a small
-      ε-tightening term. Friction is pinned to the turbulent Swamee-Jain
+      ε-tightening term when nothing else is minimised. Next to an economic
+      objective that term sits below the MIP gap, so after the solve every
+      slack gas island with one pinned pressure gets the exact Weymouth state
+      of its solved injections
+      (:func:`~monee.model.formulation.miqcqp.convex.gas.restore_exact_weymouth`);
+      the ``relaxation`` result warning names any island it cannot restore. Friction is pinned to the turbulent Swamee-Jain
       asymptote per pipe, accurate for typical gas distribution (Re ≳ 10⁴),
       but it under-estimates the pressure drop in the laminar regime.
 
@@ -332,8 +352,13 @@ remain importable but are deprecated.
 
       ``HEAT_NONCONVEX_MIQCQP_FORMULATION`` *(default)*
 
-      Darcy-Weisbach hydraulics (epigraph-relaxed, like the gas side) with
-      full heat-transfer modelling: per-pipe inlet/outlet temperatures,
+      Darcy-Weisbach hydraulics (epigraph-relaxed, like the gas side: only an
+      ε term pulls the pressure drop tight, so after an optimisation
+      :func:`~monee.model.formulation.miqcqp.nonconvex.heat.restore_exact_heat_pressures`
+      recomputes the exact pressures on pressure islands whose pipes form a
+      tree with one pinned pressure, and the ``relaxation`` warning reports a
+      slack meshed island, whose flow split, temperatures and losses are not
+      physical either) with full heat-transfer modelling: per-pipe inlet/outlet temperatures,
       insulation losses and external-temperature influence, with a direction
       binary for temperature upwinding. The temperature side carries true
       continuous bilinears (``alpha·mag``, ``direction·t``), making the model
@@ -383,7 +408,11 @@ remain importable but are deprecated.
       (``McCormickHeatExchangerFormulation`` /
       ``McCormickPassiveHeatExchangerFormulation``) so the sector has no
       non-convex fallback; pass ``include_heat_exchangers=False`` for the
-      legacy pipes-only apply.
+      legacy pipes-only apply. Coupling units built on an internal heat
+      exchanger (``create_p2h``, ``create_g2h``, ``create_chp``) are not
+      supported yet and raise a ``NotImplementedError`` while running; use
+      their HG variants (``create_p2h_hg``, ``create_g2h_hg``,
+      ``create_chp_hg``).
 
       Because it is a relaxation, check the worst-case gap before raising
       ``num_partitions``:
@@ -424,9 +453,9 @@ remain importable but are deprecated.
 
       ``NONCONVEX_MIQCQP_FORMULATION``
 
-      Exact branch flow + exact Weymouth + bilinear Darcy-Weisbach: the exact
-      quadratic models across all carriers, with no trigonometric terms, for
-      global MIQCQP solvers (SCIP, Gurobi).
+      Exact branch flow + exact Weymouth + bilinear Darcy-Weisbach, with no
+      trigonometric terms, for global MIQCQP solvers (SCIP, Gurobi). The heat
+      hydraulics stay epigraph-relaxed (see the water / heat tab above).
 
 ----
 

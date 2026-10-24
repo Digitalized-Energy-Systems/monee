@@ -34,7 +34,7 @@ and conventions: :doc:`../concepts/conventions`.
 
 .. code-block:: python
 
-   mm.PowerGrid(name, sn_mva=1, vm_pu_max=1.5, vm_pu_min=0.5)
+   mm.PowerGrid(name, sn_mva=1, vm_pu_max=1.5, vm_pu_min=0.5, f_hz=50)
    mm.create_power_grid(name, sn_mva=1)
 
 .. list-table::
@@ -57,6 +57,10 @@ and conventions: :doc:`../concepts/conventions`.
        extension and the load-shedding problem. Under the default AC
        formulation a bus carries its own 0.5 to 1.5 bounds; tighten them with
        the problem's ``bounds_vm``.
+   * - ``f_hz``
+     - 50
+     - System frequency in Hz; turns a line's ``c_nf_per_m`` into its charging
+       susceptance.
 
 .. component: GasGrid | create_gas_grid
 

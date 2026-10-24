@@ -126,11 +126,13 @@ def create_line(
     max_i_ka=None,
     max_s_mva=None,
     backup=False,
+    c_nf_per_m=0,
 ):
     """Add a :class:`PowerLine` between two buses; missing buses are auto-created.
     ``max_i_ka`` / ``max_s_mva`` set the thermal rating (model defaults apply
     when omitted). ``backup=True`` marks a switchable line (e.g. a normally-open
-    tie with ``on_off=0``) that load shedding may close."""
+    tie with ``on_off=0``) that load shedding may close. ``c_nf_per_m`` is the
+    line capacitance in nF/m (charging susceptance)."""
     rating_kwargs = {}
     if max_i_ka is not None:
         rating_kwargs["max_i_ka"] = max_i_ka
@@ -144,6 +146,7 @@ def create_line(
             parallel,
             backup=backup,
             on_off=on_off,
+            c_nf_per_m=c_nf_per_m,
             **rating_kwargs,
         ),
         from_node_id=from_node_id,
@@ -1198,15 +1201,18 @@ def create_trafo(
     grid=None,
     name=None,
     max_i_ka=None,
+    tap=1.0,
 ):
     """Add a two-winding :class:`Trafo`. from-node = LV side, to-node = HV side.
     ``max_i_ka`` sets the current rating behind the loading (model default when
-    omitted)."""
+    omitted). ``tap`` is the off-nominal turns ratio at the from-node; see
+    :class:`~monee.model.branch.Trafo`."""
     model = mm.Trafo(
         vk_percent=vk_percent,
         vkr_percent=vkr_percent,
         sn_trafo_mva=sn_trafo_mva,
         shift=shift,
+        tap=tap,
     )
     if max_i_ka is not None:
         model.max_i_ka = max_i_ka

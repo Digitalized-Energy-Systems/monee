@@ -364,3 +364,77 @@ def test_build_result_limit_with_incumbent_is_still_a_witness():
     )
 
     assert success is True
+
+
+# --------------------------------------------------------------------------- #
+# Limit stops report the incumbent and the dual bound
+# --------------------------------------------------------------------------- #
+
+
+def _nonconvex_shedding(solver_options, net_factory):
+    import monee
+
+    return monee.run_energy_flow_optimization(
+        net_factory(),
+        create_min_load_shedding_problem(
+            bounds_vm=(0.9, 1.1),
+            bounds_pressure=(0.5, 1.5),
+            bounds_t=(0.5, 1.5),
+            include_ext_grids=False,
+            include_storages=False,
+        ),
+        solver=PyomoSolver("scip"),
+        formulation="nonconvex_miqcqp",
+        solver_options=solver_options,
+    )
+
+
+@requires_pyscipopt
+def test_scip_time_limit_reports_the_dual_bound():
+    """Regression: a time-limited SCIP solve gave no figure at all, so a study
+    could not check that the bound brackets another solver's optimum."""
+    from monee.network.mes import create_mv_multi_cigre
+
+    # GIVEN a nonconvex shedding problem SCIP needs about a minute to prove
+    # WHEN
+    result = _nonconvex_shedding({"limits/time": 1.0}, create_mv_multi_cigre)
+
+    # THEN
+    stats = result.solver_stats
+    assert result.termination_condition == "maxTimeLimit"
+    assert math.isfinite(stats["bound"])
+    if result.success:
+        assert stats["obj"] >= stats["bound"]
+    else:
+        assert math.isnan(stats["obj"])
+
+
+@requires_pyscipopt
+def test_scip_limit_stop_returns_the_incumbent_with_bound_and_gap():
+    from monee.network.mes import create_monee_benchmark_net
+
+    # GIVEN SCIP stopped at its first solution, far from the bound
+    # WHEN
+    result = _nonconvex_shedding({"limits/solutions": 1}, create_monee_benchmark_net)
+
+    # THEN
+    stats = result.solver_stats
+    assert result.success
+    assert result.termination_condition == "maxTimeLimit"
+    assert stats["obj"] == pytest.approx(result.objective)
+    assert stats["bound"] < stats["obj"]
+    assert stats["gap"] == pytest.approx(
+        (stats["obj"] - stats["bound"]) / abs(stats["obj"])
+    )
+    assert stats["gap"] > 0.5
+
+
+@requires_pyscipopt
+def test_scip_optimum_reports_a_closed_gap():
+    # GIVEN / WHEN
+    result = _nonconvex_shedding({}, create_urban_district_net)
+
+    # THEN
+    assert result.termination_condition == "optimal"
+    assert result.solver_stats["obj"] == pytest.approx(result.objective)
+    assert result.solver_stats["gap"] < 1e-6

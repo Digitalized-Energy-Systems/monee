@@ -9,9 +9,10 @@ from monee.model.phys.nonlinear.gf import reference_gas_density
 
 
 class _Values:
-    def __init__(self, pos, neg):
+    def __init__(self, pos, neg, diameter_m=0.15):
         self.mass_flow_pos_kgs = pos
         self.mass_flow_neg_kgs = neg
+        self.diameter_m = diameter_m
 
 
 class _Pipe:

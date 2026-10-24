@@ -148,6 +148,9 @@ junctions thermal inertia. In a single-step solve GasLinepack still reports
 ``linepack_kg`` (the stored mass at the solved pressure) with
 ``net_pack_kgs`` pinned to 0; the temporal coupling activates only in a
 timeseries. LumpedThermalCapacitance adds no equations in a single step.
+:class:`~monee.model.extension.plugflow.PlugFlowTransport` moves the water
+through the pipes with its transport delay instead (sequential timeseries
+only; use one of the two).
 :doc:`../concepts/temporal_extensions` has the physics and worked examples.
 
 .. code-block:: python
@@ -155,3 +158,5 @@ timeseries. LumpedThermalCapacitance adds no equations in a single step.
    net.add_extension(mm.GasLinepack(overrides=None))
    net.add_extension(mm.LumpedThermalCapacitance(default_t_init=None, t_init_overrides=None,
                                                  first_step_steady_state=False))
+   # or, for the transport delay of fronts:
+   # net.add_extension(mm.PlugFlowTransport(smoothing=1e-5))

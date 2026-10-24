@@ -182,30 +182,11 @@ network, so the default warm start writes solved values into it after every
 successful step; pass ``warm_start=False`` there if the network must stay
 strictly caller-owned.
 
-On multi-energy networks using the smooth gas and heat NLP formulations the
-warm start options that monee passes to IPOPT by default can backfire,
-because the previous solution sits on the degenerate bounds of the pos/neg
-flow splits: iteration counts roughly double on the simbench based MES from
-the test suite, and the bundled 32-node
-:func:`~monee.network.create_monee_benchmark_net` already needed 285-387
-iterations per step warm against 44-95 cold. For such networks either pass
-``warm_start=False``, or keep the value carry-over but soften the warm
-options per solver instance:
-
-.. code-block:: python
-
-   from monee.solver import CasADiSolver
-
-   solver = CasADiSolver(solver_options={
-       "ipopt.warm_start_init_point": "no",
-       "ipopt.mu_init": 1e-5,
-   })
-   c = Stepper(net, solver=solver)
-
-This measured about 1.4x faster than cold starts on the simbench MES, at
-the cost of occasional failed steps (each self-heals with a flat start
-retry) and warm results only being feasible to the warm tolerance rather
-than converging as tightly as cold ones.
+The carry-over includes the variables a formulation declares on the solve
+copy only (signed flows, junction pressures, exchanger temperatures), so a
+step whose data did not change re-converges in zero or one IPOPT iterations
+(the bundled 32-node :func:`~monee.network.create_monee_benchmark_net`: 0-1
+iterations per step warm against 56 cold).
 
 ----
 

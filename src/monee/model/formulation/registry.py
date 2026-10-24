@@ -19,6 +19,7 @@ Resolution order per component (most specific wins):
 import warnings
 from collections.abc import Sequence
 
+from ..core import Var
 from .bundles import (
     CONVEX_MIQCQP_FORMULATION,
     DEFAULT_SIMULATION_FORMULATION,
@@ -194,6 +195,28 @@ def warn_relaxed_integrality(network, backend_name: str = "the selected back-end
     return affected
 
 
+def declare_vars(formulation, model, simulation: bool = False, grid=None) -> None:
+    """``formulation.ensure_var``, then put back the values a previous solve
+    persisted (``_solved_values``, see :func:`monee.solver.core.persist_solution`)
+    into every Var it declared or re-seeded: it does so at fixed seeds on every
+    solve, which would leave a warm start inconsistent. Vars it left alone keep
+    their own value, so data written into them is never overridden."""
+    # Holding the Vars keeps a replaced one alive, so its id cannot be reused.
+    before = {
+        id(v): (v, v.value) for v in model.__dict__.values() if isinstance(v, Var)
+    }
+    formulation.ensure_var(model, simulation=simulation, grid=grid)
+    solved = getattr(model, "_solved_values", None)
+    if not solved:
+        return
+    for key, val in model.__dict__.items():
+        if not isinstance(val, Var) or key not in solved:
+            continue
+        held = before.get(id(val))
+        if held is None or held[1] != val.value:
+            val.value = solved[key]
+
+
 def attach_formulations(
     network,
     formulation=None,
@@ -231,8 +254,8 @@ def attach_formulations(
             )
         component.formulation = effective
         if effective is not None:
-            effective.ensure_var(
-                component.model, simulation=simulation, grid=component.grid
+            declare_vars(
+                effective, component.model, simulation=simulation, grid=component.grid
             )
     if not supports_integrality:
         warn_relaxed_integrality(network)

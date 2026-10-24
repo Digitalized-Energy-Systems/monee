@@ -282,10 +282,18 @@ def _shed_headroom_validator(network, result):
     (an island fed by a grid-forming unit is a supply limit, not a solver
     artefact), or when every reachable slack sits at its import bound.
     Inactive, ignored and pruned loads are structural losses and never counted
-    here.
+    here. A proven optimum of a global back-end (termination ``optimal`` on
+    Gurobi or SCIP) has no better point to miss, so the shed there comes from
+    a binding limit and the check stays silent.
     """
-    from monee.solver.core import ResultWarning
+    from monee.solver.core import _INTEGRALITY_ENFORCING_SOLVERS, ResultWarning
 
+    if (
+        getattr(result, "termination_condition", None) == "optimal"
+        and (getattr(result, "solver_used", None) or "").lower()
+        in _INTEGRALITY_ENFORCING_SOLVERS
+    ):
+        return []
     islands = _island_of_node(network)
     shed: dict[tuple, float] = {}
     shed_loads: dict[tuple, list] = {}
@@ -452,16 +460,8 @@ def _make_auto_priority_floor_hook(  # NOSONAR
 
     Sets ``weights['demand'] = max(weights['demand'], alpha*A_max)`` and scales
     ``weights['generator']`` by the same factor so the user-set ratio is kept.
-
-    When ``weight_for_load`` is supplied, per-load weights returned by the
-    callback may be smaller than ``weights['demand']``.  To preserve the
-    auto-floor contract (every load's shed cost dominates aux), the hook
-    samples the minimum effective weight across all demand-class models
-    and, if it is below the floor, scales every weight up by
-    ``floor / min_w``.  Generator weights and the per-load callback's
-    returns are both lifted by the same scale via the ``weights["scale"]``
-    multiplier consulted in ``weight_fn`` - the user-set load-priority
-    *ratios* are preserved.
+    A number returned by ``weight_for_load`` is explicit and never rescaled; one
+    the lift leaves below the lifted default is warned about.
     """
     _log = logging.getLogger(__name__)
     base_weights = dict(weights)
@@ -473,48 +473,6 @@ def _make_auto_priority_floor_hook(  # NOSONAR
         a_max = _aux_objective_upper_bound(network, max_line_loading=max_line_loading)
         floor = alpha * a_max
 
-        if weight_for_load is not None:
-            # Sample the minimum effective per-load weight.  We consider
-            # every model that ``weight_fn`` would route through
-            # ``weight_for_load`` (consuming demand-class models only).
-            min_w: float | None = None
-            for model in network.all_models():
-                if _is_consuming_demand(model):
-                    try:
-                        w = weight_for_load(model)
-                    except Exception:
-                        w = None
-                    if w is None:
-                        # Model falls back to ``weights['demand']``.
-                        w = weights["demand"]
-                    if min_w is None or float(w) < min_w:
-                        min_w = float(w)
-            if min_w is not None and min_w < floor:
-                scale = floor / min_w if min_w > 0 else 1.0
-                # ``weights['scale']`` multiplies BOTH the callback return
-                # AND the default ``weights['demand']`` - see ``weight_fn``.
-                weights["scale"] = weights.get("scale", 1.0) * scale
-                weights["generator"] = weights["generator"] * scale
-                if debug:
-                    _log.warning(
-                        "Auto priority floor (per-load): A_max=%.3g, alpha=%.3g, "
-                        "min_w=%.3g -> scale x%.3g (generator weight scaled too)",
-                        a_max,
-                        alpha,
-                        min_w,
-                        scale,
-                    )
-            elif debug:
-                _log.warning(
-                    "Auto priority floor (per-load): A_max=%.3g, alpha*A_max=%.3g "
-                    "already covered by per-load min_w=%.3g - no change.",
-                    a_max,
-                    floor,
-                    min_w or 0.0,
-                )
-            return
-
-        # Legacy path: no per-load callback, scale the single demand weight.
         old_demand = weights["demand"]
         if floor > old_demand:
             scale = floor / old_demand if old_demand > 0 else 1.0
@@ -530,6 +488,8 @@ def _make_auto_priority_floor_hook(  # NOSONAR
                     weights["demand"],
                     scale,
                 )
+            if weight_for_load is not None:
+                _warn_inverted_priorities(network, weight_for_load, old_demand, floor)
         elif debug:
             _log.warning(
                 "Auto priority floor: A_max=%.3g, alpha*A_max=%.3g already "
@@ -540,6 +500,34 @@ def _make_auto_priority_floor_hook(  # NOSONAR
             )
 
     return _hook
+
+
+def _warn_inverted_priorities(network, weight_for_load, old_demand, floor):
+    """Warn about explicit load weights in ``[old_demand, floor)``: meant to rank
+    at or above the default loads, they now rank below the lifted default."""
+    inverted = []
+    for component in network.all_components():
+        if not component.active or not _is_consuming_demand(component.model):
+            continue
+        try:
+            w = weight_for_load(component.model)
+        except Exception:
+            continue
+        if w is not None and old_demand <= float(w) < floor:
+            inverted.append(
+                getattr(component, "name", None)
+                or f"{type(component.model).__name__}({component.id})"
+            )
+    if inverted:
+        shown = ", ".join(inverted[:8]) + (", ..." if len(inverted) > 8 else "")
+        warnings.warn(
+            f"auto_priority_floor lifted demand_weight from {old_demand:.4g} to "
+            f"{floor:.4g}, but weight_for_load gives {len(inverted)} load(s) an "
+            f"explicit weight in between, so they are now shed before the "
+            f"default loads: {shown}. Return weights of at least {floor:.4g}, or "
+            "pass auto_priority_floor=False.",
+            stacklevel=2,
+        )
 
 
 def _shedding_mw(model, gas_mw_factor=None, cp_rated_mw=None):  # NOSONAR
@@ -726,7 +714,8 @@ def create_min_load_shedding_problem(
     ``lex_objectives`` (Pyomo only) solves in two phases: shed first, then
     formulation-tightening aux terms with the phase-1 optimum pinned.
     ``auto_priority_floor`` (default True) scales ``demand_weight`` to
-    ``alpha * A_max`` so the shed term dominates aux terms regardless of network size.
+    ``alpha * A_max`` so the shed term dominates aux terms regardless of network size;
+    a weight returned by ``weight_for_load`` is used as given, never rescaled.
 
     ``include_coupling_points`` (default False) extends the demand-side of the
     objective to coupling-point components (CHP / CHPHG / G2H / P2H control
@@ -734,12 +723,14 @@ def create_min_load_shedding_problem(
     penalised at ``demand_weight * cp_input_rated_mw * (1 - regulation)`` -
     i.e. treated like a load on its input carrier (gas or power).
     """
-    problem = OptimizationProblem(debug=debug, lex_objectives=lex_objectives)
+    # The unmet duty of a heat exchanger is the heat shed (_shedding_mw).
+    problem = OptimizationProblem(
+        debug=debug, lex_objectives=lex_objectives, heat_duty="at_most"
+    )
 
     _weights = {
         "demand": float(demand_weight),
         "generator": float(generator_weight),
-        "scale": 1.0,
     }
 
     problem.controllable_demands(REGULATION_ATTR, optional=True)
@@ -797,29 +788,24 @@ def create_min_load_shedding_problem(
         problem.add_hook(_mark_coupler_duty_exact)
 
     # Lookups go through _weights so the auto-priority-floor can retune.
-    # When ``weight_for_load`` is set and applicable, the per-load
-    # weight it returns takes precedence - multiplied by the auto-
-    # floor scale so per-load weights and the legacy demand weight
-    # share the same aux-dominance lift.
     def weight_fn(model):
-        scale = _weights.get("scale", 1.0)
         if weight_for_load is not None and _is_consuming_demand(model):
             try:
                 w = weight_for_load(model)
             except Exception:
                 w = None
             if w is not None:
-                return float(w) * scale
+                return float(w)
         if isinstance(model, _DEMAND_TYPES):
-            return _weights["demand"] * scale
+            return _weights["demand"]
         # CPs are penalised at the demand weight when include_coupling_points
         # is on - the input draw is treated as a load on its input carrier.
         if isinstance(model, _COUPLING_POINT_TYPES):
-            return _weights["demand"] * scale
+            return _weights["demand"]
         # Bare HeatExchanger / PassiveHeatExchanger: route by sign of q_mw_set.
         if isinstance(model, (HeatExchanger, PassiveHeatExchanger)):
             key = "generator" if hx_is_generating(model) else "demand"
-            return _weights[key] * scale
+            return _weights[key]
         if isinstance(model, _GENERATOR_TYPES):
             return _weights["generator"]
         return 1
@@ -982,7 +968,7 @@ def create_min_load_shedding_problem(
             )
 
         if bounds_ext_heat_mw is not None:
-            bound_water_slack_heat(constraints, bounds_ext_heat_mw)
+            bound_water_slack_heat(constraints, bounds_ext_heat_mw, exact=True)
 
     if regulation_ramp_limit is not None:
         constraints.regulation_ramp(regulation_ramp_limit)

@@ -22,7 +22,7 @@ def _dhs_net(q_mw_per_hx=(0.15, Q_SET_MW)):
 def _hx_price_problem():
     """Objective that pays for the exchanger's temperature drop, i.e. one that
     outbids the duty pull closing ``q_mw_delivered <= q_mw``."""
-    problem = mp.OptimizationProblem()
+    problem = mp.OptimizationProblem(heat_duty="at_most")
     objectives = mp.Objectives()
     objectives.select(lambda m: isinstance(m, mm.HeatExchangerLoad)).data(
         lambda m: 60.0 * (m.t_in_pu - m.t_out_pu)
@@ -69,7 +69,7 @@ def _chp_net():
 
 
 def _sub_he_price_problem():
-    problem = mp.OptimizationProblem()
+    problem = mp.OptimizationProblem(heat_duty="at_most")
     objectives = mp.Objectives()
     objectives.select(lambda m: isinstance(m, SubHE)).data(
         lambda m: -100.0 * m.q_mw_delivered

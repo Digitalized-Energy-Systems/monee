@@ -382,7 +382,11 @@ def test_hx_generator_promoted_and_duties_exact():
     assert (hx.q_mw_set.min, hx.q_mw_set.max) == (-0.6, 0)
     assert hx._he_duty_exact
     assert hx._ed_heat_generator
-    assert not getattr(power.branch_by_id(hx_id).model, "_he_duty_exact", False)
+    # Without heat dispatch the exchanger keeps its fixed duty, exactly (the
+    # OptimizationProblem default), and is no heat unit.
+    power_hx = power.branch_by_id(hx_id).model
+    assert power_hx._he_duty_exact
+    assert not getattr(power_hx, "_ed_heat_generator", False)
 
 
 def test_consumer_promoted_by_another_rule_is_not_a_heat_unit():

@@ -227,3 +227,30 @@ def test_pinned_direction_components_do_not_warn(recwarn):
 
     # THEN
     assert not [w for w in recwarn if "relaxes integer variables" in str(w.message)]
+
+
+def test_declare_vars_restores_persisted_values_only_where_ensure_var_reseeded():
+    # GIVEN a model holding a persisted solution and a formulation that
+    # declares one Var afresh and re-seeds another, leaving a third alone
+    from monee.model.formulation.registry import declare_vars
+
+    class Model:
+        pass
+
+    class Formulation:
+        def ensure_var(self, model, simulation=False, grid=None):
+            model.fresh = mm.Var(0.0)
+            model.reseeded.value = 1.0
+
+    model = Model()
+    model.reseeded = mm.Var(2.0)
+    model.held = mm.Var(7.0)  # e.g. a value the caller wrote between solves
+    model._solved_values = {"fresh": 3.0, "reseeded": 4.0, "held": 5.0}
+
+    # WHEN
+    declare_vars(Formulation(), model)
+
+    # THEN the formulation's Vars start from the solution, the held one is kept
+    assert model.fresh.value == 3.0
+    assert model.reseeded.value == 4.0
+    assert model.held.value == 7.0

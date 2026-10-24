@@ -1,6 +1,12 @@
 """Unit tests for the load-shedding local-optimality headroom check."""
 
+from types import SimpleNamespace
+
+import pytest
+
+import monee
 import monee.express as mx
+import monee.model as mm
 from monee.model.core import Var
 from monee.problem.min_load_shedding import (
     _attach_shed_headroom_validator,
@@ -8,6 +14,7 @@ from monee.problem.min_load_shedding import (
     create_min_load_shedding_problem,
 )
 from monee.solver.core import SolverResult, validate_result
+from monee.solver.pyo import _pyscipopt_available
 
 
 def _el_net(regulation, ext_p_mw=0.0):
@@ -85,3 +92,55 @@ def test_gas_sink_shed_converts_to_mw_and_warns():
     assert entries[0].category == "shed_headroom"
     assert "gas demand" in entries[0].message
     assert entries[0].value > 0.5
+
+
+@pytest.mark.parametrize(
+    ("termination", "solver", "warns"),
+    [
+        ("optimal", "gurobi", False),
+        ("optimal", "scip", False),
+        ("feasible", "gurobi", True),
+        ("optimal", "ipopt", True),
+    ],
+)
+def test_proven_global_optimum_stays_silent(termination, solver, warns):
+    net, _, _ = _el_net(regulation=0.5)
+    result = SimpleNamespace(termination_condition=termination, solver_used=solver)
+    assert bool(_shed_headroom_validator(net, result)) is warns
+
+
+def _trafo_limited_net():
+    net = mx.create_multi_energy_network()
+    hv = mx.create_bus(net, base_kv=110)
+    lv = mx.create_bus(net, base_kv=20)
+    mx.create_ext_power_grid(net, hv)
+    mx.create_trafo(
+        net, lv, hv, vk_percent=12, sn_trafo_mva=25, max_i_ka=25 / (3**0.5 * 20)
+    )
+    mx.create_power_load(net, lv, p_mw=30.0, q_mvar=0.0)
+    return net
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "warns"),
+    [
+        pytest.param(
+            {"solver": "scip", "formulation": "el_misocp"},
+            False,
+            marks=pytest.mark.skipif(
+                not _pyscipopt_available(), reason="pyscipopt missing"
+            ),
+        ),
+        ({"solver": "ipopt"}, True),
+    ],
+)
+def test_transformer_limited_shed_warns_only_without_a_proof(kwargs, warns):
+    problem = create_min_load_shedding_problem(
+        max_line_loading=1.0, check_pressure=False, check_t=False
+    )
+
+    result = monee.run_energy_flow_optimization(_trafo_limited_net(), problem, **kwargs)
+
+    assert result.success
+    assert 0.8 < result.get(mm.PowerLoad)["regulation"].iloc[0] < 0.85
+    assert any(w.category == "shed_headroom" for w in result.warnings) is warns

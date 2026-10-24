@@ -330,3 +330,52 @@ def test_exact_coupler_duty_marks_the_coupler_heat_exchangers():
 
     assert exact and all(isinstance(m, SubHE) for m in exact)
     assert marked(create_min_load_shedding_problem()) == []
+
+
+def test_a_deactivated_coupler_stays_off():
+    # GIVEN a gas boiler taken out by deactivation (a regulation of 0 is a
+    # standby the shedding may dispatch) and a heat slack too small for the
+    # loads, so switching the boiler back on would serve them
+    import pytest
+
+    import monee.express as mx
+    import monee.model as mm
+    from monee.solver.pyo import _pyscipopt_available
+
+    if not _pyscipopt_available():
+        pytest.skip("pyscipopt missing")
+    net = mm.Network()
+    dhs = mx.dhs_structure(net, diameter_m=0.15, length_m=300, unidirectional=False)
+    seg = dhs.line(3, heat_exchanger_q_mw=[0, 0.3, 0.4])
+    dhs.attach_heat_plant(seg.supply.first, seg.return_.first, t_k=358.0)
+    gas = mx.create_gas_junction(net)
+    mx.create_gas_ext_grid(net, gas)
+    boiler = mx.create_g2h(
+        net,
+        gas_node_id=gas,
+        cold_node_id=seg.return_.nodes[-1],
+        hot_node_id=seg.supply.nodes[-1],
+        heat_energy_mw=0.5,
+        diameter_m=0.15,
+        efficiency=0.9,
+    )
+    net.deactivate_by_id(mm.Compound, boiler)
+    problem = create_min_load_shedding_problem(
+        bounds_ext_heat_mw=(-0.2, None), check_pressure=False
+    )
+
+    # WHEN
+    result = monee.run_energy_flow_optimization(
+        net, problem, solver="scip", formulation="nonconvex_miqcqp"
+    )
+
+    # THEN the boiler stays off and the loads are shed instead
+    assert result.success
+    control = next(
+        n.model
+        for n in result.network.nodes
+        if isinstance(n.model, GasToHeatControlNode)
+    )
+    assert control.regulation == 0
+    delivered = result.dataframes["HeatExchangerLoad"]["q_mw_delivered"].sum()
+    assert delivered < 0.7 - 1e-3

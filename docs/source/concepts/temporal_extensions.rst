@@ -2,7 +2,7 @@
 Temporal extensions
 ====================
 
-Two built-in :doc:`network_aspects` model time-dependent physics that a
+Three built-in :doc:`network_aspects` model time-dependent physics that a
 steady-state solve cannot capture:
 
 .. grid:: 1 2 2 2
@@ -15,6 +15,13 @@ steady-state solve cannot capture:
       Smooths temperature propagation: a supply-temperature step-change
       arrives at downstream junctions with a delay and a rounded wavefront.
 
+   .. grid-item-card:: PlugFlowTransport
+      :shadow: sm
+
+      Transport delay of the water in district heating pipes (node method).
+      A supply-temperature front travels with the pipe's residence time and
+      keeps its shape; sequential timeseries only.
+
    .. grid-item-card:: GasLinepack
       :shadow: sm
 
@@ -22,9 +29,11 @@ steady-state solve cannot capture:
       itself act as a short-term storage buffer, absorbing demand peaks
       without requiring immediate upstream response.
 
-Both extensions work identically in :doc:`timeseries` simulation and
-:doc:`multi_period` optimization: the same ``net.add_extension()`` call
-activates them for any solve mode.
+LumpedThermalCapacitance and GasLinepack work identically in
+:doc:`timeseries` simulation and :doc:`multi_period` optimization: the same
+``net.add_extension()`` call activates them for any solve mode.
+PlugFlowTransport needs the solved previous step and runs in the sequential
+:doc:`timeseries` loop and the :class:`~monee.simulation.Stepper` only.
 
 Under the hood both are plain :class:`~monee.model.extension.core.NetworkAspect`
 subclasses and rely only on the standard temporal hooks (explained in full in
@@ -201,9 +210,11 @@ The anchor for each junction is resolved with this precedence:
 .. note::
 
    Anchored mode is the default. ``first_step_steady_state=True`` is the
-   simplest way to avoid the warm-up transient on any backend; the
-   steady-state first step needs the per-step rebuild loop, so such a run
-   does not take the graph-reuse fast path.
+   simplest way to avoid the warm-up transient on any backend. The CasADi
+   graph-reuse fast path of :func:`~monee.run_timeseries` solves the first
+   step with the per-step loop and carries its state into the build-once
+   graph, so it applies in both modes; the gurobipy model reuse needs
+   anchored mode.
 
 Choosing the horizon
 --------------------
@@ -231,6 +242,68 @@ warm-up or the still-decaying transient instead of the response.  Estimate
 choosing ``steps`` and ``dt_h``, and lengthen the horizon (or start from a
 ``default_t_init`` at the operating point) until the metric stops changing.
 
+Numerical diffusion
+-------------------
+
+A junction with thermal mass is a well-mixed tank, so a front that crosses
+:math:`n` junctions with time constants :math:`\tau_i` (stepped with
+:math:`\Delta t`) arrives after :math:`\sum \tau_i`, but spread over
+:math:`\sigma = \sqrt{\sum \tau_i^2 + \Delta t \sum \tau_i}`. That is right
+for the stored energy and the mean delay, and wrong for the shape: a cold plug
+of a few minutes that travels hours through a district heating network arrives
+as a shallow wave of hours, whatever the step size, and splitting the pipes
+only shrinks the first term. Use :class:`PlugFlowTransport <monee.model.extension.plugflow.PlugFlowTransport>`
+when the shape of a front matters.
+
+----
+
+PlugFlowTransport
+=================
+
+Each water pipe holds its water as an ordered sequence of parcels (mass,
+entry temperature, age). In a step the outflow is the first
+:math:`|\dot m| \Delta t` of the parcels at the downstream end; each parcel
+cools with monee's steady attenuation law for its residence time :math:`a`,
+
+.. math::
+
+   T = T_\text{ext} + \frac{T_\text{entry} - T_\text{ext}}{1 + UA \, a / (M c_p)},
+
+which is the steady pipe law when :math:`a = M / \dot m`, so constant inputs
+reproduce the steady energy flow exactly. Junctions mix instantaneously (the
+node method). The outflow is a piecewise-linear function of the step's own
+flow (its kinks smoothed over ``smoothing`` pipe volumes, default
+:math:`10^{-5}`), so flow changes and reversals within the step are followed
+without lag; a pipe fed by a single pipe receives that pipe's outflow parcels
+in order, so a front keeps its shape across junctions. Behind a mixing
+junction (several feeds, an injection, heat added or taken there, or a pinned
+temperature) the inflow of a step is one parcel at the junction's
+interval-mean temperature, so a front is resolved there at the step size. A
+pipe holds at most 32 parcels; beyond that the neighbours closest in
+temperature merge (mass and heat kept), which keeps fronts and the size of
+each step's equations bounded however small the step.
+
+The attenuation law is the first-order form of the exponential decay
+:math:`\exp(-UA \, a / (M c_p))` of the Lagrangian node method, kept so that
+plug flow and the steady pipe law agree. The two match while the residence
+time is short against the pipe's thermal time constant :math:`M c_p / UA`;
+water that stands for one time constant keeps half of its excess over the
+ground temperature instead of :math:`1/e`, so long stagnation in small,
+lightly insulated pipes cools too slowly.
+
+.. code-block:: python
+
+   from monee.model import PlugFlowTransport
+
+   net.add_extension(PlugFlowTransport())
+   # step 0 is the steady energy flow; later steps move the pipe contents
+   result = run_timeseries(net, td, steps=96, dt_h=0.25)
+
+Restrictions: attach it instead of LumpedThermalCapacitance (both would
+store the pipe water); it needs an NLP back-end (CasADi/IPOPT, GEKKO, Pyomo
+with IPOPT) and a pipe formulation with the attenuation law (the default
+smooth and the bilinear Darcy-Weisbach formulations), and raises otherwise.
+
 ----
 
 GasLinepack
@@ -246,8 +319,10 @@ A pipeline of volume *V* and gas density *ρ* stores mass:
    \text{linepack\_kg} \;=\; V \cdot \rho
    \;=\; \frac{\pi}{4} d^2 L \;\cdot\; \rho(p_\text{avg}, T)
 
-The density *ρ* is derived from the average of the two endpoint pressures via
-the ideal-gas equation of state.  ``GasLinepack`` constrains ``linepack_kg``
+The density is the real-gas :math:`\rho = p M / (Z R T)` at the pipe's mean
+pressure. Under the NLP formulation that is the exact mean of a steady
+isothermal pipe, :math:`\tfrac{2}{3}(p_i^2 + p_i p_j + p_j^2)/(p_i + p_j)`; the
+MILP and convex formulations use their linearised mean.  ``GasLinepack`` constrains ``linepack_kg``
 to equal this product at every step, so stored mass automatically follows
 pipeline pressure as demand varies over a timeseries or multi-period run.
 
@@ -391,11 +466,12 @@ Auto-computed capacity
 ----------------------
 
 ``GasLinepack`` derives per-pipe capacities from the grid's thermodynamic
-parameters using the ideal-gas equation of state:
+parameters using the same real-gas equation of state, with the grid's
+compressibility :math:`Z`:
 
 .. math::
 
-   \rho(p, T) \;=\; \frac{p \cdot M}{R \cdot T}
+   \rho(p, T) \;=\; \frac{p \cdot M}{Z \cdot R \cdot T}
 
 .. list-table::
    :header-rows: 1

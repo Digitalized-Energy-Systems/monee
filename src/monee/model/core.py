@@ -284,6 +284,35 @@ class PostProcess:
         new.value = self.value
         return new
 
+    def _inputs(self) -> list[str]:
+        read = []
+
+        class _Probe:
+            def __getattr__(self, name):
+                read.append(name)
+                return 1.0
+
+        try:
+            self.fn(_Probe())
+        except Exception:  # noqa: BLE001 - naming the inputs is best effort
+            pass
+        return list(dict.fromkeys(read))
+
+    def _not_an_expression(self, *_args):
+        raise TypeError(
+            "A PostProcess report cannot appear in a constraint or objective: it "
+            "is computed from the solved values after the solve and is not a "
+            "solver variable. Use the decision variable it is computed from "
+            f"instead: {', '.join(self._inputs()) or 'none found'} (for a "
+            "temperature in K, m.t_pu * t_ref_k). See the "
+            "how-to/temperature_floor docs page."
+        )
+
+    __lt__ = __le__ = __gt__ = __ge__ = _not_an_expression
+    __add__ = __radd__ = __sub__ = __rsub__ = _not_an_expression
+    __mul__ = __rmul__ = __truediv__ = __rtruediv__ = _not_an_expression
+    __neg__ = __pow__ = _not_an_expression
+
 
 def store_unknown_kwargs(model, kwargs):
     """Warn about keywords no model attribute claims and return them unchanged.
@@ -726,6 +755,10 @@ class Component(ABC):
 
     @property
     def tid(self):
+        """Network-wide unique key, e.g. ``"child-3"``. ``id`` is unique per
+        category only (node 3 and child 3 can coexist; branch ids are
+        ``(from, to, key)`` tuples), so select by ``tid`` or check the
+        category (``isinstance(component, mm.Child)``) along with ``id``."""
         return f"{self.__class__.__name__}-{self.id}".lower()
 
     @property

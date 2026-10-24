@@ -1290,3 +1290,23 @@ def test_StepState_get_skips_nan_to_the_last_finite_value():
         state.push(net)
 
     assert state.get(sid, "e_mwh", model_type=ElectricStorage) == pytest.approx(1.5)
+
+
+def test_Stepper_warm_start_carries_formulation_vars():
+    """The smooth formulations re-declare signed flows, junction pressures and
+    exchanger temperatures on every solve. A warm start that left them at their
+    seeds sent IPOPT into restoration (~400 iterations per step against 56 cold
+    on this net); with the whole solution carried, an unchanged step is free."""
+    pytest.importorskip("casadi")
+    from monee.network import create_monee_benchmark_net
+    from monee.solver import CasADiSolver
+
+    solver = CasADiSolver()
+    stepper = Stepper(create_monee_benchmark_net(), solver=solver)
+    stepper.step(dt_h=1.0)
+    cold_iters = solver.last_iters
+
+    sr = stepper.step(dt_h=1.0)
+
+    assert sr.result.success
+    assert solver.last_iters <= 2 < cold_iters

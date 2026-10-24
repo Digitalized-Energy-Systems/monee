@@ -166,6 +166,62 @@ def test_auto_priority_floor_preserves_demand_generator_ratio():
     assert w_gen / w_load == pytest.approx(user_ratio, rel=1e-9)
 
 
+def test_auto_priority_floor_never_rescales_explicit_load_weights():
+    # GIVEN one load with an explicit weight below the floor, the rest default
+    net = create_urban_district_net()
+    net.apply_formulation(EL_MISOCP_FORMULATION)
+    floor = 10.0 * _aux_objective_upper_bound(net, max_line_loading=1.5)
+    from monee.model import PowerGenerator, PowerLoad
+
+    tagged, untagged = [m for m in network_models(net) if isinstance(m, PowerLoad)][:2]
+    explicit = floor / 4
+    prob = create_min_load_shedding_problem(
+        demand_weight=1.0,
+        generator_weight=1e-4,
+        weight_for_load={tagged: explicit}.get,
+    )
+
+    # WHEN
+    prob._apply(net)
+
+    # THEN the explicit weight is used as given; the defaults are floored
+    assert _objective_weight(prob, tagged) == explicit
+    assert _objective_weight(prob, untagged) == pytest.approx(floor, rel=1e-9)
+    gen = _probe_model(net, PowerGenerator)
+    assert _objective_weight(prob, gen) == pytest.approx(1e-4 * floor, rel=1e-9)
+
+
+def test_a_tagged_load_weight_reaches_the_solve_on_the_copied_network():
+    # GIVEN the hospital on the far bus, which equal weights shed first, tagged
+    # as the load-shedding docs show (the solve runs on a network copy)
+    import monee
+    import monee.express as mx
+    import monee.model as mm
+
+    net = mx.create_multi_energy_network()
+    sub, b1, b2 = mx.create_bus(net), mx.create_bus(net), mx.create_bus(net)
+    mx.create_line(net, sub, b1, 500, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
+    mx.create_line(net, b1, b2, 500, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
+    mx.create_ext_power_grid(net, sub)
+    hospital = mx.create_power_load(net, b2, p_mw=0.4, q_mvar=0.0, name="hospital")
+    mx.create_power_load(net, b1, p_mw=0.4, q_mvar=0.0, name="warehouse")
+    net.child_by_id(hospital).model._priority_weight = 1e5
+    problem = create_min_load_shedding_problem(
+        bounds_ext_el=(-0.5, 0.0),
+        weight_for_load=lambda model: getattr(model, "_priority_weight", None),
+        check_pressure=False,
+        check_t=False,
+    )
+
+    # WHEN
+    result = monee.run_energy_flow_optimization(net, problem)
+
+    # THEN the warehouse is shed and the hospital kept
+    regulation = result.get(mm.PowerLoad).set_index("name")["regulation"]
+    assert regulation["hospital"] == pytest.approx(1.0, abs=1e-4)
+    assert regulation["warehouse"] < 0.5
+
+
 # --------------------------------------------------------------------------- #
 # 3. Behavioural test - auto floor protects weighted mode under aux scaling
 # --------------------------------------------------------------------------- #
@@ -256,3 +312,20 @@ def _total_power_load_shed(network):
         if isinstance(m, PowerLoad) and reg_val is not None:
             shed_total += m.p_mw * (1 - reg_val)
     return shed_total
+
+
+def test_auto_priority_floor_warns_about_an_explicit_weight_it_inverts():
+    # GIVEN explicit weights above the floor, between the default and the
+    # floor ("shed after the defaults"), and below the default
+    from monee.model import PowerLoad
+
+    net = create_restoration_benchmark(misocp=True)
+    loads = [m for m in network_models(net) if isinstance(m, PowerLoad)]
+    loads[0]._w, loads[1]._w, loads[2]._w = 2e3, 1e9, 10.0
+    prob = create_min_load_shedding_problem(
+        weight_for_load=lambda m: getattr(m, "_w", None)
+    )
+
+    # WHEN / THEN only the weight the lift ranks below the defaults is named
+    with pytest.warns(UserWarning, match=r"gives 1 load\(s\)"):
+        prob._apply(net)

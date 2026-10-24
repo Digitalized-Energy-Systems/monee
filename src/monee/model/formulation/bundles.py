@@ -9,9 +9,11 @@ optimization class:
 * :data:`CONVEX_MIQCQP_FORMULATION` - convex relaxations a MISOCP/MIQCQP
   solver can certify: branch-flow MISOCP + epigraph-relaxed Weymouth +
   McCormick district heating (incl. convex heat-exchanger variants).
-* :data:`NONCONVEX_MIQCQP_FORMULATION` - the exact quadratic models for
-  global solvers (SCIP, Gurobi): exact branch flow + exact Weymouth +
-  bilinear Darcy-Weisbach.
+* :data:`NONCONVEX_MIQCQP_FORMULATION` - quadratic models for global solvers
+  (SCIP, Gurobi): exact branch flow + exact Weymouth + bilinear
+  Darcy-Weisbach, whose hydraulics are epigraph-relaxed (restored exactly on
+  tree islands after the solve, see
+  :func:`~monee.model.formulation.miqcqp.nonconvex.heat.restore_exact_heat_pressures`).
 * :data:`DEFAULT_SIMULATION_FORMULATION` - the deliberate hybrid
   :class:`~monee.model.network.Network` applies by default (polar-AC NLP +
   relaxed Weymouth + bilinear Darcy-Weisbach; continuous backends swap the gas
@@ -324,17 +326,15 @@ Convex MIQCQP formulation
 
 Uses MISOCP relaxation for electricity, convex weymouth relaxation, and
 McCormick-Heat relaxation (MILP)
-
-Exact quadratic models across all three carriers - for global MIQCQP
-solvers (SCIP, Gurobi). No relaxation gap, no trigonometric terms.
 """
 CONVEX_MIQCQP_FORMULATION = make_convex_miqcqp_formulation()
 
 """
 Nonconvex MIQCQP formulation
 
-Exact quadratic models across all three carriers - for global MIQCQP
-solvers (SCIP, Gurobi). No relaxation gap, no trigonometric terms.
+Quadratic models for global MIQCQP solvers (SCIP, Gurobi), no trigonometric
+terms. Electricity and gas are exact; the heat hydraulics are epigraph-relaxed
+and restored exactly only on tree islands, meshed ones are reported.
 """
 NONCONVEX_MIQCQP_FORMULATION = combine(
     EL_NONCONVEX_MIQCQP_FORMULATION,

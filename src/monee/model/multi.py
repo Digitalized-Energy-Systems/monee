@@ -143,6 +143,7 @@ class GenericTransferBranch(MultiGridBranchModel):
         eqs = []
         if _carries(grids, WaterGrid):
             if _mccormick_balance(from_node_model) or _mccormick_balance(to_node_model):
+                _reject_active_unit_under_mccormick(from_node_model, to_node_model)
                 # H-space nodal balance (McCormickHeatNodeFormulation): the
                 # temperature identity is this branch's only thermal coupling.
                 eqs += [self.t_from_pu == self.t_to_pu]
@@ -163,8 +164,59 @@ class GenericTransferBranch(MultiGridBranchModel):
         return eqs
 
 
+def _heat_mix_row(node, heat_energy_eqs, heat_to_branches):
+    """The control node's enthalpy balance, or a temperature pin for a unit
+    switched off by a plain ``regulation`` of 0: with no flow through it the
+    balance is the row 0 == 0 and leaves the node temperature undetermined.
+    The pin passes the inflowing water through unheated: from the transfer
+    branch that brings it in (CHP, gas-to-heat) or from the inlet of the
+    SubHE (power-to-heat), so it stays inside any temperature bound the
+    network meets and is exact when water flows through the idle unit. A
+    power-to-heat node under the McCormick balance (its SubHE carries
+    ``H_out_mw``) keeps the balance: there the transfer branch's temperature
+    identity ties the node to the hot junction, which a pin would fix."""
+    if not _is_zeroed(node.regulation):
+        return junction_mass_flow_balance(heat_energy_eqs)
+    transfer = next(
+        (b for b in heat_to_branches if isinstance(b, GenericTransferBranch)), None
+    )
+    if transfer is not None:
+        return node.t_pu == transfer.t_to_pu
+    sub_he = next((b for b in heat_to_branches if isinstance(b, SubHE)), None)
+    if sub_he is not None and "H_out_mw" in sub_he.vars:
+        return junction_mass_flow_balance(heat_energy_eqs)
+    return node.t_pu == (1 if sub_he is None else sub_he.t_in_pu)
+
+
 def _mccormick_balance(node_model) -> bool:
     return bool(getattr(node_model, "_mccormick_dhs_active", False))
+
+
+def _reject_active_unit_under_mccormick(from_node_model, to_node_model):
+    """Raise for a running SubHE coupling unit (P2H, G2H, CHP) on a McCormick
+    heat balance; an idle one exchanges nothing and solves correctly.
+
+    shortcut: the H-space balance gets no enthalpy from the transfer branch,
+    and the SubHE's ``H_out`` uses the design flow even when the network sets
+    it, so an active unit solves infeasible or wrong; upgrade when compound
+    units get McCormick support."""
+    control = next(
+        (
+            m
+            for m in (from_node_model, to_node_model)
+            if isinstance(m, MultiGridNodeModel)
+        ),
+        None,
+    )
+    if control is not None and not _is_zeroed(control.regulation):
+        raise NotImplementedError(
+            f"{type(control).__name__}: a coupling unit built on a SubHE "
+            "(create_p2h, create_g2h, create_chp) is not supported by the "
+            "McCormick heat balance yet. Use the heat-generator variant "
+            "(create_p2h_hg, create_g2h_hg, create_chp_hg) or a heat "
+            "formulation without the McCormick balance (e.g. "
+            "formulation='nonconvex_miqcqp')."
+        )
 
 
 def _pressure_squared_eq(node):
@@ -216,7 +268,11 @@ class _RegulatedCompound:
     :meth:`sync` pushes a compound attribute onto the control node only when it
     changed since the compound last wrote it there (``create()`` or the
     previous push), so a value set on the control node itself, directly or by
-    a node series, is kept instead of being reset to the unchanged seed."""
+    a node series, is kept instead of being reset to the unchanged seed.
+    ``_SYNCED`` lists the further (compound, control-node) attribute pairs it
+    pushes; an efficiency keeps the input nameplate and scales the output."""
+
+    _SYNCED = ()
 
     def _seed(self, node_attr, value):
         """Record *value* as written to the control node's *node_attr*."""
@@ -260,6 +316,8 @@ class _RegulatedCompound:
     def sync(self):
         if not self._active:
             return
+        for attr, node_attr in self._SYNCED:
+            self._push(node_attr, getattr(self, attr))
         self._push("regulation", self.regulation)
 
 
@@ -361,7 +419,7 @@ class GasToHeatControlNode(MultiGridNodeModel, Junction):
         )
         return [
             junction_mass_flow_balance(heat_eqs),
-            junction_mass_flow_balance(heat_energy_eqs),
+            _heat_mix_row(self, heat_energy_eqs, heat_to_branches),
             junction_mass_flow_balance(gas_eqs),
             sub_he.q_mw
             == -self.efficiency_heat
@@ -465,7 +523,7 @@ class PowerToHeatControlNode(MultiGridNodeModel, Junction, Bus):
         )
         return [
             junction_mass_flow_balance(heat_eqs),
-            junction_mass_flow_balance(heat_energy_eqs),
+            _heat_mix_row(self, heat_energy_eqs, heat_to_branches),
             self.el_mw == self.load_p_mw * self.regulation,
             sub_he.q_mw == -self.efficiency * self.load_p_mw * self.regulation,
             self.heat_mw == sub_he.q_mw,
@@ -578,7 +636,7 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
         )
         return [
             junction_mass_flow_balance(heat_eqs),
-            junction_mass_flow_balance(heat_energy_eqs),
+            _heat_mix_row(self, heat_energy_eqs, heat_to_branches),
             junction_mass_flow_balance(gas_eqs),
             power_balance_equation(power_eqs[0]),
             power_balance_equation(power_eqs[1]),
@@ -600,6 +658,11 @@ class CHPControlNode(MultiGridNodeModel, Junction, Bus):
 
 @model
 class CHP(_GasRegulatedCompound, MultiGridCompoundModel):
+    _SYNCED = (
+        ("efficiency_power", "efficiency_power"),
+        ("efficiency_heat", "efficiency_heat"),
+    )
+
     def __init__(
         self,
         diameter_m: float,
@@ -633,8 +696,8 @@ class CHP(_GasRegulatedCompound, MultiGridCompoundModel):
         hhv = gas_node.grid.higher_heating_value_kwh_per_kg
         self._control_node = CHPControlNode(
             self._seed("gas_mass_flow_kgs", self.mass_flow_kgs),
-            self.efficiency_power,
-            self.efficiency_heat,
+            self._seed("efficiency_power", self.efficiency_power),
+            self._seed("efficiency_heat", self.efficiency_heat),
             hhv,
             regulation=self._seed("regulation", self.regulation),
         )
@@ -682,6 +745,8 @@ class CHP(_GasRegulatedCompound, MultiGridCompoundModel):
 
 @model
 class GasToHeat(_RegulatedCompound, MultiGridCompoundModel):
+    _SYNCED = (("efficiency", "efficiency_heat"),)
+
     def __init__(
         self, heat_energy_mw, diameter_m, temperature_ext_k, efficiency, regulation=1
     ) -> None:
@@ -708,7 +773,7 @@ class GasToHeat(_RegulatedCompound, MultiGridCompoundModel):
         )
         self._control_node = GasToHeatControlNode(
             self.gas_mass_flow_kgs,
-            self.efficiency,
+            self._seed("efficiency_heat", self.efficiency),
             hhv,
             regulation=self._seed("regulation", self.regulation),
         )
@@ -742,6 +807,8 @@ class GasToHeat(_RegulatedCompound, MultiGridCompoundModel):
 
 @model
 class PowerToHeat(_RegulatedCompound, MultiGridCompoundModel):
+    _SYNCED = (("efficiency", "efficiency"),)
+
     def __init__(
         self,
         heat_energy_mw,
@@ -771,7 +838,7 @@ class PowerToHeat(_RegulatedCompound, MultiGridCompoundModel):
         self._control_node = PowerToHeatControlNode(
             self.load_p_mw,
             self.load_q_mvar,
-            self.efficiency,
+            self._seed("efficiency", self.efficiency),
             regulation=self._seed("regulation", self.regulation),
         )
         node_id_control = network.node(
@@ -989,6 +1056,8 @@ class CHPHG(_GasRegulatedCompound, MultiGridCompoundModel):
     :class:`SubHG` child at ``heat_node`` instead of via an HX branch. No
     ``heat_return_node`` / ``diameter_m`` required."""
 
+    _SYNCED = CHP._SYNCED
+
     def __init__(
         self,
         efficiency_power: float,
@@ -1018,8 +1087,8 @@ class CHPHG(_GasRegulatedCompound, MultiGridCompoundModel):
         self._sub_hg = SubHG()
         self._control_node = CHPHGControlNode(
             self._seed("gas_mass_flow_kgs", self.mass_flow_kgs),
-            self.efficiency_power,
-            self.efficiency_heat,
+            self._seed("efficiency_power", self.efficiency_power),
+            self._seed("efficiency_heat", self.efficiency_heat),
             hhv,
             self._sub_hg,
             q_mvar=self.q_mvar,

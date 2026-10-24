@@ -88,3 +88,106 @@ def test_a_branch_coupler_anchors_its_leaf_gas_junction():
     p2g = result.get(mm.PowerToGas).iloc[0]
     assert not p2g["ignored"]
     assert p2g["to_mass_flow_kgs"] == pytest.approx(-0.005)
+
+
+def _gas_fed_boiler_net(sink_kgs=0.0, boiler_regulation=0.0):
+    """A gas island whose city gate is out, feeding a boiler of a heat network."""
+    net = mm.Network(
+        el_model=mm.create_power_grid("power"),
+        gas_model=mm.create_gas_grid("gas", type="lgas"),
+        water_model=mm.create_water_grid("heat"),
+    )
+    g0, g1 = mx.create_gas_junction(net), mx.create_gas_junction(net)
+    mx.create_gas_pipe(net, g0, g1, diameter_m=0.1, length_m=100)
+    gate = mx.create_gas_ext_grid(net, g0)
+    if sink_kgs:
+        mx.create_sink(net, g1, mass_flow_kgs=sink_kgs, name="bakery")
+    ret, sup = mx.create_water_junction(net), mx.create_water_junction(net)
+    mx.create_water_ext_grid(net, ret, t_k=333.15)
+    mx.create_water_pipe(net, sup, ret, diameter_m=0.3, length_m=20)
+    mx.create_g2h(
+        net,
+        gas_node_id=g1,
+        cold_node_id=ret,
+        hot_node_id=sup,
+        heat_energy_mw=1.0,
+        diameter_m=0.2,
+        efficiency=0.9,
+        regulation=boiler_regulation,
+    )
+    net.deactivate_by_id(mm.ExtHydrGrid, gate)
+    return net, {g0, g1}
+
+
+def test_source_less_island_without_injections_is_dropped_and_listed():
+    net, gas_island = _gas_fed_boiler_net()
+
+    result = monee.run_energy_flow(net, exclude_unconnected_nodes=True)
+
+    assert result.success
+    assert result.dropped_islands == [frozenset(gas_island)]
+
+
+def test_dropped_island_names_its_loads_and_the_coupler_switched_off():
+    net, gas_island = _gas_fed_boiler_net(sink_kgs=0.01, boiler_regulation=0.5)
+
+    result = monee.run_energy_flow(net, exclude_unconnected_nodes=True)
+
+    assert result.success
+    assert result.dropped_islands == [frozenset(gas_island)]
+    pruned = next(w for w in result.warnings if w.category == "pruned")
+    assert "Sink(1) 'bakery'" in pruned.message
+    assert "GasToHeat(0) [rule: coupler switched off" in pruned.message
+    assert result.get(mm.GasToHeatControlNode)["heat_mw"].iloc[0] == pytest.approx(
+        0.0, abs=1e-6
+    )
+
+
+def test_heat_network_with_every_unit_and_consumer_off_solves():
+    """Regression (resilience V1, gas supply cut): every substation shed and
+    every producer off. The off producers' heat ports still bridged the return
+    pipes to the reference in the pruning graph, so the return stayed in the
+    solve without a slack and IPOPT stopped at Not_Enough_Degrees_Of_Freedom."""
+    net = mm.Network(
+        el_model=mm.create_power_grid("power"),
+        gas_model=mm.create_gas_grid("gas", type="lgas"),
+        water_model=mm.create_water_grid("heat"),
+    )
+    gas = mx.create_gas_junction(net)
+    mx.create_gas_ext_grid(net, gas)
+    bus = mx.create_bus(net)
+    mx.create_ext_power_grid(net, bus)
+    sup, mid, cold, ret_boiler, ret_hp = (
+        mx.create_water_junction(net) for _ in range(5)
+    )
+    mx.create_water_ext_grid(net, sup, t_k=358.15)
+    mx.create_water_pipe(net, sup, mid, diameter_m=0.15, length_m=300)
+    substation = mx.create_heat_exchanger(net, mid, cold, q_mw=0.5)
+    mx.create_water_pipe(net, ret_boiler, cold, diameter_m=0.15, length_m=300)
+    mx.create_water_pipe(net, cold, ret_hp, diameter_m=0.15, length_m=300)
+    boiler = mx.create_g2h(
+        net,
+        gas,
+        cold_node_id=ret_boiler,
+        hot_node_id=sup,
+        heat_energy_mw=1.0,
+        diameter_m=0.15,
+        efficiency=0.9,
+    )
+    hp = mx.create_p2h(
+        net,
+        bus,
+        cold_node_id=ret_hp,
+        hot_node_id=sup,
+        heat_energy_mw=1.0,
+        diameter_m=0.15,
+        efficiency=3.0,
+    )
+    net.deactivate_by_id(mm.Branch, substation)
+    net.deactivate_by_id(mm.Compound, boiler)
+    net.deactivate_by_id(mm.Compound, hp)
+
+    result = monee.run_energy_flow(net, exclude_unconnected_nodes=True)
+
+    assert result.success
+    assert frozenset({ret_boiler, cold, ret_hp}) in result.dropped_islands

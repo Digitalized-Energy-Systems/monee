@@ -174,9 +174,9 @@ def test_simple_trafo():
     assert len(pn.as_dataframe_dict()) == 5
 
     assert result.dataframes["Bus"]["vm_pu"][0] == 1
-    assert math.isclose(
-        result.dataframes["Bus"]["vm_pu"][1], 0.9840819483, abs_tol=1e-3
-    )
+    # pandapower runpp gives 0.999962; the old 0.98408 came from an impedance
+    # scaled by (10 kV / 1 kV)^2.
+    assert math.isclose(result.dataframes["Bus"]["vm_pu"][1], 0.999962, abs_tol=1e-5)
 
 
 def test_two_lines_example():

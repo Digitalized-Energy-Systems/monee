@@ -128,3 +128,24 @@ def test_set_pushes_a_compound_attribute_onto_its_control_node():
     assert compound.set(regulation=0.3) is compound
     assert compound.model.regulation == 0.3
     assert node.model.regulation == 0.3
+
+
+@pytest.mark.parametrize(
+    "use",
+    [
+        lambda r: r >= 338.15,
+        lambda r: 338.15 <= r,
+        lambda r: r - 338.15,
+        lambda r: 2 * r,
+        lambda r: -r,
+    ],
+)
+def test_a_post_process_in_an_expression_names_its_decision_variable(use):
+    """Regression: ``m.t_k >= 338.15`` in a constraint raised the bare
+    "'>=' not supported between instances of 'PostProcess' and 'float'"."""
+    from monee.model.core import PostProcess
+
+    t_k = PostProcess(lambda v, tref=356.0: v.t_pu * tref)
+
+    with pytest.raises(TypeError, match="computed from instead: t_pu"):
+        use(t_k)

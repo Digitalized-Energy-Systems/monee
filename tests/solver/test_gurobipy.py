@@ -146,6 +146,64 @@ def test_var_value_passes_through_finite_solution():
     assert GurobipySolver._var_value(_GoodVar()) == 3.5
 
 
+class _FakeGRB:
+    OPTIMAL, INFEASIBLE, INF_OR_UNBD = 2, 3, 4
+
+
+class _FakeOptimalModel:
+    """What gurobipy 13 returned on a cs_resilience load-shedding MIQCQP: status
+    OPTIMAL, one node, incumbent 894.98 against its own bound -7.20."""
+
+    Status, NumObj, SolCount = _FakeGRB.OPTIMAL, 1, 3
+
+    def __init__(self, obj, bound, mip_gap=1e-3, mip_gap_abs=10.0):
+        self.ObjVal, self.ObjBound = obj, bound
+        self.Params = type("P", (), {"MIPGap": mip_gap, "MIPGapAbs": mip_gap_abs})
+
+
+def _classify_fake(gm):
+    from monee.solver.gurobipy import GurobipySolver
+
+    solver = GurobipySolver()
+    solver._GRB = _FakeGRB
+    return solver._classify(gm, phase_label="test")
+
+
+def test_optimal_status_with_open_gap_is_reported_as_feasible():
+    """Regression: an OPTIMAL status whose incumbent is outside MIPGap and
+    MIPGapAbs of the final bound was reported as ``optimal``."""
+    # GIVEN / WHEN
+    success, report, status_str, tc_str = _classify_fake(
+        _FakeOptimalModel(obj=894.9826601379245, bound=-7.202768637527697)
+    )
+
+    # THEN the incumbent is kept as a witness, but not called optimal
+    assert success is True
+    assert report is None
+    assert (status_str, tc_str) == ("warning", "feasible")
+
+
+@pytest.mark.parametrize(
+    ("obj", "bound", "mip_gap_abs"),
+    [
+        (1502.771203, 1492.774933, 10.0),  # within MIPGapAbs, not MIPGap
+        (2.0e5, 1.999e5 + 1, 10.0),  # within MIPGap, not MIPGapAbs
+        (-7.202775950978321, -7.20279656101593, 10.0),  # closed
+        # uncrushing the presolved incumbent widened a 0.1 % gap to 0.17 %
+        (18.541535651034792, 18.510072954121597, 1e-10),
+        (0.7533848681031718, 0.7558977169568095, 1e-10),  # ... or crossed it
+    ],
+)
+def test_optimal_status_within_the_gap_tolerance_stays_optimal(obj, bound, mip_gap_abs):
+    # GIVEN / WHEN
+    _, _, status_str, tc_str = _classify_fake(
+        _FakeOptimalModel(obj, bound, mip_gap_abs=mip_gap_abs)
+    )
+
+    # THEN
+    assert (status_str, tc_str) == ("ok", "optimal")
+
+
 def test_sanitize_name_strips_gurobi_unsafe_chars():
     # GIVEN
     from monee.solver.gurobipy import GurobipySolver
@@ -187,8 +245,9 @@ def test_iis_report_summary_handles_empty():
     # WHEN
     summary = GurobiIISReport(constraints=[], bounds=[]).summary()
 
-    # THEN
+    # THEN the report exists only for a proven INFEASIBLE status
     assert "empty IIS" in summary
+    assert "unbounded" not in summary
 
 
 def test_iis_report_summary_marks_truncation():
@@ -437,6 +496,63 @@ def test_per_call_solver_options_reach_the_gurobi_model():
     assert _solve(solver_options={"TimeLimit": None}).success
 
 
+def _heat_feeder(n_loads=3):
+    """60 degC reference on the return, a 1.5 MW producer and a feeder of
+    1.5 km pipes with a 0.6 MW substation at every junction: heat is short."""
+    import monee.express as mx
+
+    net = mm.Network()
+    r = mx.create_water_junction(net)
+    mx.create_water_ext_grid(net, r, t_k=333.15, pin_temperature=True)
+    prev = mx.create_water_junction(net)
+    mx.create_heat_exchanger(net, r, prev, q_mw=-1.5)
+    for _ in range(n_loads):
+        s = mx.create_water_junction(net)
+        mx.create_water_pipe(
+            net, prev, s, diameter_m=0.1, length_m=1500, temperature_ext_k=283.15
+        )
+        mx.create_heat_exchanger(net, s, r, q_mw=0.6)
+        prev = s
+    return net
+
+
+@requires_gurobi
+def test_heat_shedding_bound_is_proven_at_the_root():
+    """Regression: the heat-neutral reference cap summed the bilinear m*T nodal
+    balances, whose relaxation creates heat, so Gurobi needed thousands of
+    nodes (cs_resilience: time limits on every heat-shedding case)."""
+    import monee
+    from monee.problem.min_load_shedding import create_min_load_shedding_problem
+
+    # GIVEN a feeder that can serve only part of its heat demand
+    net = _heat_feeder()
+
+    # WHEN load shedding runs with a heat-neutral reference and one B&B node
+    result = monee.run_energy_flow_optimization(
+        net,
+        create_min_load_shedding_problem(
+            check_vm=False,
+            check_pressure=False,
+            bounds_t=(0.9, 1.2),
+            bounds_ext_heat_mw=(0.0, 0.0),
+            bounds_t_k=(283.15, 363.15),
+        ),
+        solver="gurobi",
+        formulation="nonconvex_miqcqp",
+        solver_options={"NodeLimit": 1},
+    )
+
+    # THEN the root relaxation already proves the optimum, and the delivered
+    # heat is the production minus the pipe losses
+    assert result.termination_condition == "optimal"
+    duties = sum(
+        result.get(t)["q_mw_delivered"].sum()
+        for t in (mm.HeatExchangerGenerator, mm.HeatExchangerLoad)
+    )
+    loss = result.get(mm.WaterPipe)["heat_loss_mw"].sum()
+    assert duties + loss == pytest.approx(0.0, abs=1e-4)
+
+
 @requires_gurobi
 def test_polar_nlp_load_shedding_raises_a_clear_error():
     """Regression: gurobipy rejects ``loading_from_pu <= max`` (an NLExpr on the
@@ -650,6 +766,31 @@ def test_lexicographic_disables_dual_reductions():
     assert seen["DualReductions"] == 0
 
 
+@requires_gurobi
+def test_two_phase_lex_keeps_an_unproven_user_tier_unproven():
+    """Regression: phase 2's status replaced phase 1's, so a time-limited or
+    unproven user tier came back ``optimal`` after a proven aux pass."""
+    from monee.solver.gurobipy import GurobipySolver, _require_gurobipy
+
+    # GIVEN a phase 1 that ends unproven and a phase 2 that ends optimal
+    solver = GurobipySolver()
+    gp, GRB, nlfunc = _require_gurobipy()
+    solver._gp, solver._GRB, solver._nlfunc = gp, GRB, nlfunc
+    m = gp.Model()
+    m.setParam("OutputFlag", 0)
+    x, y = m.addVar(lb=1, ub=2), m.addVar(lb=0, ub=1)
+    outcomes = iter(
+        [(True, None, "aborted", "maxTimeLimit"), (True, None, "ok", "optimal")]
+    )
+    solver._classify = lambda gm, phase_label: next(outcomes)
+
+    # WHEN
+    outcome = solver._solve_lexicographic_two_phase(m, [x], [y])
+
+    # THEN
+    assert outcome == (True, None, "aborted", "maxTimeLimit")
+
+
 # --------------------------------------------------------------------------- #
 # Simulation mode + warm-start round-trip
 # --------------------------------------------------------------------------- #
@@ -726,6 +867,87 @@ def test_infeasible_model_reports_iis():
     assert tc_str == "infeasible"
     summary = report.summary()
     assert "impossible_c" in summary or "x_var" in summary
+
+
+def _infeasible_nonconvex_model(gp):
+    """Two variables, proven infeasible at once, whose IIS takes minutes."""
+    m = gp.Model()
+    m.setParam("OutputFlag", 0)
+    x = m.addVar(lb=0, ub=2, name="x_var")
+    z = m.addVar(lb=-10, ub=10, name="z_var")
+    m.addQConstr(x * x - z * z == 3.5, name="q1")
+    m.addQConstr(x * z == 1.9, name="q2")
+    m.addConstr(x + z >= 4.5, name="c")
+    m.optimize()
+    return m
+
+
+@requires_gurobi
+def test_iis_false_skips_the_iis_of_an_infeasible_model():
+    import time
+
+    from monee.solver.gurobipy import GurobipySolver, _require_gurobipy
+
+    # GIVEN
+    solver = GurobipySolver(iis=False)
+    gp, GRB, nlfunc = _require_gurobipy()
+    solver._gp, solver._GRB, solver._nlfunc = gp, GRB, nlfunc
+    m = _infeasible_nonconvex_model(gp)
+
+    # WHEN
+    start = time.perf_counter()
+    success, report, _status, tc_str = solver._classify(m, phase_label="test")
+
+    # THEN
+    assert time.perf_counter() - start < 1.0
+    assert success is False
+    assert tc_str == "infeasible"
+    assert "iis=False" in report.summary()
+
+
+@requires_gurobi
+def test_interrupted_iis_says_it_may_not_be_minimal():
+    from monee.solver.gurobipy import GurobipySolver, _require_gurobipy
+
+    # GIVEN an IIS computation capped by TimeLimit
+    gp, _GRB, _nlfunc = _require_gurobipy()
+    m = _infeasible_nonconvex_model(gp)
+    m.setParam("TimeLimit", 0.0)
+
+    # WHEN
+    summary = GurobipySolver()._compute_iis(m).summary()
+
+    # THEN
+    assert "may not be minimal" in summary
+    assert "unbounded" not in summary
+
+
+@requires_gurobi
+@pytest.mark.parametrize("integer", [False, True])
+def test_real_optimal_solve_is_classified_optimal(integer):
+    """The open-gap check reads ObjBound/Params off a real model: an LP (no
+    ObjBound) and a MIP stopped at a loose MIPGapAbs stay ``optimal``."""
+    from monee.solver.gurobipy import GurobipySolver, _require_gurobipy
+
+    # GIVEN a small knapsack
+    solver = GurobipySolver()
+    gp, GRB, nlfunc = _require_gurobipy()
+    solver._gp, solver._GRB, solver._nlfunc = gp, GRB, nlfunc
+    m = gp.Model()
+    m.setParam("OutputFlag", 0)
+    m.setParam("MIPGapAbs", 5.0)
+    w = [3.1, 4.7, 2.2, 5.9, 1.3, 6.4]
+    x = m.addVars(len(w), ub=1, vtype=GRB.INTEGER if integer else GRB.CONTINUOUS)
+    m.addConstr(gp.quicksum(wi * x[i] for i, wi in enumerate(w)) <= 10.0)
+    m.setObjective(-gp.quicksum((i + 2) * x[i] for i in range(len(w))) + 100.0)
+
+    # WHEN
+    m.optimize()
+    success, _, status_str, tc_str = solver._classify(m, phase_label="test")
+
+    # THEN
+    assert success is True
+    assert (status_str, tc_str) == ("ok", "optimal")
 
 
 @requires_gurobi

@@ -1,17 +1,31 @@
 r"""Bilinear Darcy-Weisbach water/heat formulations: non-convex MIQCQPs.
 
-The hydraulics mirror the gas-side epigraph relaxation, but the temperature
-side carries true continuous bilinears (:math:`alpha \cdot mag`, :math:`alpha \cdot t_{in}`,
+The hydraulics are epigraph-relaxed like the gas side: the pressure drop uses
+:math:`m_{sq} \ge m^2`, which only the small :math:`\varepsilon` objective term
+pulls tight, so under an economic objective pressure drops can come out too
+large. :func:`restore_exact_heat_pressures` restores the exact pressures after
+the solve on islands whose pipes form a tree; meshed islands keep the relaxed
+state, where nothing enforces the loop pressure law, so their flow split (and
+with it the temperatures and losses) is not physical either; the relaxation
+check reports them. The temperature side carries
+true continuous bilinears (:math:`alpha \cdot mag`, :math:`alpha \cdot t_{in}`,
 :math:`direction \cdot t`), so the model needs a global MIQCQP solver.
 """
+
+import math
+
+import networkx as nx
 
 import monee.model.phys.core.hydraulics as hydraulicsmodel
 import monee.model.phys.nonlinear.hf as ohfmodel
 import monee.model.phys.nonlinear.wf as owfmodel
-from monee.model.core import Const, Var
+from monee.model.branch import HeatExchanger
+from monee.model.core import Const, Var, value
+from monee.model.grid import WaterGrid
 
-from ...common import ensure_velocity_report
+from ...common import ensure_velocity_report, pipe_outlet_law
 from ...core import BranchFormulation
+from ..convex.gas import RESTORE_GAP_TOL, RelaxedWeymouthBranchFormulation, _set
 
 
 def _pin_friction_const(model):
@@ -76,6 +90,8 @@ def _direction_temp_mix_eqs(branch, from_node_model, to_node_model):
 class BilinearDarcyWeisbachBranchFormulation(BranchFormulation):
     # See RelaxedWeymouthBranchFormulation for rationale.
     EPIGRAPH_TIGHTENING_EPS = 1e-5
+    RELAXATION_GAP_TOL = RelaxedWeymouthBranchFormulation.RELAXATION_GAP_TOL
+    relaxation_gap = RelaxedWeymouthBranchFormulation.relaxation_gap
 
     def ensure_var(self, model, simulation=False, grid=None):
         model.t_in_pu = Var(1, min=0.3, max=2, name="t_in_pu")
@@ -110,10 +126,7 @@ class BilinearDarcyWeisbachBranchFormulation(BranchFormulation):
             + [
                 branch.alpha * (branch.mass_flow_mag_kgs + UA_C)
                 == branch.mass_flow_mag_kgs,
-                branch.t_out_pu
-                == branch.temperature_ext_k / grid.t_ref_k
-                + branch.alpha
-                * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref_k),
+                *pipe_outlet_law(branch, grid),
             ]
             + _direction_temp_mix_eqs(branch, from_node_model, to_node_model)
         )
@@ -217,9 +230,7 @@ class PwlDarcyWeisbachBranchFormulation(BranchFormulation):
             == K * (branch.phi_pwl_neg - branch.phi_pwl_pos),
             branch.alpha * (branch.mass_flow_mag_kgs + UA_C)
             == branch.mass_flow_mag_kgs,
-            branch.t_out_pu
-            == branch.temperature_ext_k / grid.t_ref_k
-            + branch.alpha * (branch.t_in_pu - branch.temperature_ext_k / grid.t_ref_k),
+            *pipe_outlet_law(branch, grid),
         ] + _direction_temp_mix_eqs(branch, from_node_model, to_node_model)
 
 
@@ -256,3 +267,82 @@ class BilinearPassiveHeatExchangerFormulation(BilinearDarcyWeisbachBranchFormula
             ]
             + _direction_temp_mix_eqs(branch, from_node_model, to_node_model)
         )
+
+
+def _exact_drop_pu(branch):
+    """``p_from - p_to`` in pu of the exact Darcy-Weisbach law at the solved flows."""
+    model, grid = branch.model, branch.grid
+    resistance = owfmodel.darcy_weisbach_resistance(
+        model.length_m,
+        model.diameter_m,
+        grid.fluid_density_kg_per_m3,
+        value(model.friction) / grid.pressure_ref_pa,
+    )
+    return -resistance * (
+        value(model.mass_flow_pos_kgs) ** 2 - value(model.mass_flow_neg_kgs) ** 2
+    )
+
+
+def restore_exact_heat_pressures(network) -> int:
+    r"""Replace a slack Darcy-Weisbach epigraph by the exact pressures of the solved flows.
+
+    As for the Weymouth epigraph
+    (:func:`~monee.model.formulation.miqcqp.convex.gas.restore_exact_weymouth`),
+    :math:`m_{sq} \ge m^2` binds only through the :math:`\varepsilon` term, so an
+    optimisation can return pressure drops that are too large. Heat exchangers
+    carry no pressure law, so water pressures form islands of the branches that
+    do. On an island whose branches are all epigraph branches forming a tree
+    with exactly one pinned pressure, the mass balance fixes the flows: the exact
+    state keeps them, sets :math:`m_{sq} = m^2` and propagates the pressures from
+    the pinned node. The violation report then checks the restored pressures
+    against their bounds. Meshed islands keep their relaxed values, flows
+    included (the loop pressure law is not enforced), which the relaxation
+    check of :func:`monee.solver.core.validate_result` reports.
+    Returns the number of restored branches."""
+    pipes, coupled = [], set()
+    for b in network.branches:
+        if not b.active or b.ignored:
+            continue
+        ends = (b.from_node_id, b.to_node_id)
+        if isinstance(b.formulation, BilinearDarcyWeisbachBranchFormulation):
+            if value(b.model.on_off) > 0.5:
+                pipes.append(b)
+        elif not isinstance(b.model, HeatExchanger) and all(
+            isinstance(network.node_by_id(n).grid, WaterGrid) for n in ends
+        ):
+            coupled.update(ends)
+    graph = nx.MultiGraph((b.from_node_id, b.to_node_id) for b in pipes)
+    restored = 0
+    for island in nx.connected_components(graph):
+        members = [b for b in pipes if b.from_node_id in island]
+        refs = [
+            n
+            for n in island
+            if not isinstance(network.node_by_id(n).model.pressure_pu, Var)
+        ]
+        if (
+            island & coupled
+            or len(refs) != 1
+            or len(members) != len(island) - 1
+            or any(math.isnan(value(b.model.mass_flow_pos_kgs)) for b in members)
+            or max(b.formulation.relaxation_gap(b.model) for b in members)
+            <= RESTORE_GAP_TOL
+        ):
+            continue
+        by_ends = {frozenset((b.from_node_id, b.to_node_id)): b for b in members}
+        pressure = {refs[0]: value(network.node_by_id(refs[0]).model.pressure_pu)}
+        for u, v in nx.bfs_edges(nx.Graph(graph.subgraph(island)), refs[0]):
+            b = by_ends[frozenset((u, v))]
+            drop = _exact_drop_pu(b)
+            pressure[v] = (
+                pressure[u] - drop if u == b.from_node_id else pressure[u] + drop
+            )
+        for b in members:
+            model = b.model
+            _set(model.mass_flow_pos_kgs_squared, value(model.mass_flow_pos_kgs) ** 2)
+            _set(model.mass_flow_neg_kgs_squared, value(model.mass_flow_neg_kgs) ** 2)
+        for n, p in pressure.items():
+            if n != refs[0]:
+                network.node_by_id(n).model.pressure_pu.value = p
+        restored += len(members)
+    return restored

@@ -84,14 +84,25 @@ def _ell_physics_max(branch, w_max: float) -> float:
 
 
 _ELL_THERMAL_HEADROOM = 3.0
+# fictitious loss |Z| * excess ell [pu] below which a cone residual is noise;
+# measured noise stays below 3e-6, a surplus burned in losses is O(0.1) and up
+_CONE_SLACK_FLOOR = 1e-4
 
 
 def _ell_max(branch, w_max: float, i_base_from: float, i_base_to: float) -> float:
-    r"""Tightest available per-unit :math:`|I|^2` bound: voltage-derived, capped by the
-    thermal rating (with headroom) when ``max_i_ka`` is available."""
+    r"""Per-unit :math:`|I|^2` bound of the row ``ell <= ell_max * on_off``:
+    voltage-derived, which cuts no AC-feasible point. Only a switchable branch
+    caps it at ``_ELL_THERMAL_HEADROOM`` times its thermal rating, assuming it
+    never carries more: as the big-M of a binary the voltage-derived bound
+    explodes on near-zero-impedance lines (~1e9) and wrecks the conditioning
+    badly enough that SCIP/Gurobi spuriously prove infeasibility, while for a
+    fixed status it is a plain bound."""
     ell = _ell_physics_max(branch, w_max)
+    if isinstance(branch.on_off, numbers.Real):
+        return ell
     max_i_ka = getattr(branch, "max_i_ka", None)
-    if max_i_ka and max_i_ka > 0:
+    # A decision rating (controllable max_i_ka) gives no constant bound.
+    if isinstance(max_i_ka, numbers.Real) and max_i_ka > 0:
         i_base = min(i_base_from, i_base_to)
         ell_thermal = (_ELL_THERMAL_HEADROOM * max_i_ka / i_base) ** 2
         ell = min(ell, ell_thermal)
@@ -142,14 +153,36 @@ def _series_flows(branch, grid, from_node_model, to_node_model, tap):
     )
 
 
+def shunt_per_mw(branch, grid, end):
+    """``(g, b)`` of the pi-shunt at ``end`` ("fr"/"to") per MW of flow, gated like
+    the shunt injection in :func:`_series_flows`."""
+    gate = _shunt_gate(branch) / grid.sn_mva
+    return (
+        gate * getattr(branch, f"g_{end}_pu", 0.0),
+        gate * getattr(branch, f"b_{end}_pu", 0.0),
+    )
+
+
+def terminal_current_pu_squared(ell, p_mw, q_mvar, p_series_mw, q_series_mvar, shunt):
+    r"""Per-unit :math:`|I|^2` at a branch end: the series current plus the shunt
+    current :math:`(g + jb)V`, which reduces to
+    :math:`\ell + g(P + P^{ser}) - b(Q + Q^{ser})` - linear, so a cap on it keeps
+    the model convex. ``shunt`` comes from :func:`shunt_per_mw`."""
+    g, b = shunt
+    if not (g or b):
+        return ell
+    return ell + g * (p_mw + p_series_mw) - b * (q_mvar + q_series_mvar)
+
+
 class MISOCPElectricityBranchFormulation(BranchFormulation):
     """Branch-flow (BFM) MISOCP line/trafo model.
 
     The pi-model charging admittance (``g_fr_pu``/``b_fr_pu``/``g_to_pu``/
     ``b_to_pu``) enters as a shunt injection linear in ``vm_pu_squared``; the SOC,
     voltage-drop and loss equations see the resulting series flows.
-    ``current_pu_squared`` and the reported ``i_*_ka``/``loading_*_pu`` are
-    therefore series quantities and exclude the charging current.
+    ``current_pu_squared`` is therefore the series current; the reported
+    ``i_*_ka``/``loading_*_pu`` and the loading limit add the shunt current
+    (:func:`terminal_current_pu_squared`), as a polar-AC solve or pandapower does.
 
     Known limitation: the branch-flow model works on voltage/current magnitudes
     only, so a transformer phase shift (``branch.shift``) cannot be represented
@@ -167,11 +200,28 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         whatever slack the solver's MIP gap accepts. Such a residual certifies
         nothing about exactness - and the ``i_*_ka`` / ``loading_*_pu`` reported
         for that branch are not physical - so it is kept apart from the genuine
-        relaxation gap of the resistive branches.
+        relaxation gap of the resistive branches (:meth:`relaxation_slack`).
         """
-        model = branch.model
-        if value(model.br_r_pu) > 0:
+        if value(branch.model.br_r_pu) > 0:
             return 0.0
+        return self._cone_slack(branch, network)
+
+    def relaxation_slack(self, branch, network) -> float:
+        r"""Relative SOC-cone residual of a resistive branch, 0.0 otherwise.
+
+        :meth:`minimize` prices the cone there, so a residual means the solve
+        is not AC-feasible: it burned power in fictitious losses (a surplus
+        with nowhere to go breaks exactness) or :math:`r \cdot \ell` sat below
+        the solver's MIP gap. A residual whose fictitious loss
+        :math:`|Z| \cdot \Delta\ell` stays below ``_CONE_SLACK_FLOOR`` is skipped:
+        on a branch with almost no current the relative residual is solver
+        noise."""
+        if value(branch.model.br_r_pu) <= 0:
+            return 0.0
+        return self._cone_slack(branch, network, loss_floor=_CONE_SLACK_FLOOR)
+
+    def _cone_slack(self, branch, network, loss_floor=0.0) -> float:
+        model = branch.model
         w_from = value(network.node_by_id(branch.from_node_id).model.vm_pu_squared)
         ell = value(model.current_pu_squared)
         p_ser = value(model.p_series_from_mw)
@@ -181,9 +231,13 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         tap = _branch_tap(model)
         lhs = w_from / (tap * tap) * ell
         sn_mva = branch.grid.sn_mva
-        return (lhs - (p_ser / sn_mva) ** 2 - (q_ser / sn_mva) ** 2) / max(
-            abs(lhs), 1e-6
-        )
+        residual = lhs - (p_ser / sn_mva) ** 2 - (q_ser / sn_mva) ** 2
+        if loss_floor and w_from > 0:
+            excess_ell = residual * tap * tap / w_from
+            z = math.hypot(value(model.br_r_pu), value(model.br_x_pu))
+            if z * excess_ell < loss_floor:
+                return 0.0
+        return residual / max(abs(lhs), 1e-6)
 
     def ensure_var(self, branch, simulation=False, grid=None):
         branch.current_pu_squared = Var(1, min=0)
@@ -222,21 +276,40 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         i_base_from = grid.sn_mva / (SQRT_3 * from_node_model.base_kv) / tap
         i_base_to = grid.sn_mva / (SQRT_3 * to_node_model.base_kv)
         ell_phys = _ell_max(branch, w_max, i_base_from, i_base_to)
-        i_mag_pu = sqrt_impl(branch.current_pu_squared)
-        # loading^2 = current_pu_squared \cdot (I_base/max_i_ka)^2 is linear in current_pu_squared.
-        # Used by line_loading_limit() instead of the sqrt-bearing form.
+        # line_loading_limit() caps the linear terminal_current_pu_squared with
+        # these I_base instead of the sqrt-bearing form.
         # max_i_ka is expressed in the from-side voltage basis (io/matpower.py:
         # rate_a/(sqrt3*V_from)), so the to-side rated current is
         # max_i_ka*V_from/V_to and the to-side loading scale reduces to
         # i_base_from*tap (= sn/(sqrt3*V_from)); dividing i_to_ka by the raw
         # max_i_ka inflated a transformer's loading_to_pu by the voltage ratio.
         # For a line (equal base_kv, tap=1) both forms are identical.
-        branch._misocp_loading_from_scale_squared = (i_base_from / branch.max_i_ka) ** 2
-        branch._misocp_loading_to_scale_squared = (
-            i_base_from * tap / branch.max_i_ka
-        ) ** 2
+        branch._misocp_loading_from_i_base_ka = i_base_from
+        branch._misocp_loading_to_i_base_ka = i_base_from * tap
         p_ser_from, q_ser_from, p_ser_to, q_ser_to = _series_flows(
             branch, grid, from_node_model, to_node_model, tap
+        )
+        branch._misocp_shunt_from_per_mw = shunt_per_mw(branch, grid, "fr")
+        branch._misocp_shunt_to_per_mw = shunt_per_mw(branch, grid, "to")
+        i_from_pu = sqrt_impl(
+            terminal_current_pu_squared(
+                branch.current_pu_squared,
+                branch.vars["p_from_mw"],
+                branch.vars["q_from_mvar"],
+                p_ser_from * grid.sn_mva,
+                q_ser_from * grid.sn_mva,
+                branch._misocp_shunt_from_per_mw,
+            )
+        )
+        i_to_pu = sqrt_impl(
+            terminal_current_pu_squared(
+                branch.current_pu_squared,
+                branch.vars["p_to_mw"],
+                branch.vars["q_to_mvar"],
+                p_ser_to * grid.sn_mva,
+                q_ser_to * grid.sn_mva,
+                branch._misocp_shunt_to_per_mw,
+            )
         )
         vd = voltage_drop(
             from_node_model.vars["vm_pu_squared"],
@@ -267,13 +340,13 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
                 branch.current_pu_squared,
                 branch.br_x_pu,
             ),
-            # |I_ka| = \sqrt{current_pu_squared} \cdot I_base, i.e. the series current;
-            # the charging current of the pi-shunt is not included in either report.
-            IntermediateEq("i_from_ka", i_mag_pu * i_base_from),
-            IntermediateEq("i_to_ka", i_mag_pu * i_base_to),
-            IntermediateEq("loading_from_pu", i_mag_pu * i_base_from / branch.max_i_ka),
+            IntermediateEq("i_from_ka", i_from_pu * i_base_from),
+            IntermediateEq("i_to_ka", i_to_pu * i_base_to),
             IntermediateEq(
-                "loading_to_pu", i_mag_pu * i_base_from * tap / branch.max_i_ka
+                "loading_from_pu", i_from_pu * i_base_from / branch.max_i_ka
+            ),
+            IntermediateEq(
+                "loading_to_pu", i_to_pu * i_base_from * tap / branch.max_i_ka
             ),
             # Series flows of the pi-model (terminal flow minus the shunt
             # injection): the quantities the SOC cone actually constrains, so a

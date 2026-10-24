@@ -489,6 +489,8 @@ def model_to_dict(model, include_solve_state=False):
     """
     result = {}
     for key, value in model.__dict__.items():
+        if key == "_solved_values" and not include_solve_state:
+            continue
         if _encodable(value):
             result[key] = _encode_value(value, include_solve_state)
         elif not key.startswith("_"):

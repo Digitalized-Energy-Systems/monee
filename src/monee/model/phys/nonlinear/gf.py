@@ -68,7 +68,8 @@ def linearized_pressure_pu(grid, psq_pu_from, psq_pu_to):
 
     :math:`p \approx p_0 + (p_{sq} - p_0^2) / (2 p_0)`, affine in ``pressure_squared_pu``,
     so it keeps the density / gauge-offset expressions linear (MILP) or conic
-    (convex MIQCQP); the NLP also uses it for its density estimate."""
+    (convex MIQCQP); the NLP also uses it for the density of pipes without
+    linepack."""
     p0 = grid.nominal_pressure_pu
     x0 = p0**2
     p_from = p0 + (1 / (2 * p0)) * (psq_pu_from - x0)
@@ -77,13 +78,26 @@ def linearized_pressure_pu(grid, psq_pu_from, psq_pu_to):
     return p_from, p_to, p_avg
 
 
-def ideal_gas_density_eq(density_var, grid, p_avg_pu, pressure_ambient_pa):
-    r"""Ideal-gas density constraint :math:`\rho = p_{abs} M / (R T)` with the
-    ABSOLUTE pressure :math:`p_{abs} = p_{ref} \cdot p_{avg} + p_{amb}` (gauge ``p_avg``
+def gas_density(grid, pressure_abs_pa):
+    r"""Real-gas density :math:`\rho = p M / (Z R T)` [kg/m^3] at an ABSOLUTE
+    pressure, with the grid's compressibility :math:`Z`."""
+    ideal = pressure_abs_pa * grid.molar_mass / (grid.universal_gas_constant * grid.t_k)
+    return ideal / grid.compressibility
+
+
+def mean_pressure_pu(p_i, p_j):
+    r"""Mean pressure of a steady isothermal pipe between ABSOLUTE end pressures,
+    :math:`\frac{2}{3}(p_i^2 + p_i p_j + p_j^2)/(p_i + p_j)`."""
+    return 2.0 / 3.0 * (p_i * p_i + p_i * p_j + p_j * p_j) / (p_i + p_j)
+
+
+def gas_density_eq(density_var, grid, p_avg_pu, pressure_ambient_pa):
+    r"""Density constraint :math:`\rho =` :func:`gas_density` at the ABSOLUTE
+    pressure :math:`p_{abs} = p_{ref} \cdot p_{avg} + p_{amb}` (gauge ``p_avg``
     times the reference pressure plus the ambient offset)."""
-    return density_var == (grid.pressure_ref_pa * p_avg_pu + pressure_ambient_pa) * (
-        grid.molar_mass
-    ) / (grid.universal_gas_constant * grid.t_k)
+    return density_var == gas_density(
+        grid, grid.pressure_ref_pa * p_avg_pu + pressure_ambient_pa
+    )
 
 
 def calc_c_squared(diameter_m, length_m, t_k, compressibility, r_specific=R_specific):

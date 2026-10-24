@@ -21,6 +21,7 @@ from monee.model import (
     IntermediateEq,
     MultiGridBranchModel,
     MultiGridCompoundModel,
+    MultiGridNodeModel,
     Network,
     Node,
     PostProcess,
@@ -28,6 +29,8 @@ from monee.model import (
     WaterPipe,
 )
 from monee.model.child import GridFormingMixin, _is_series_pinned
+from monee.model.formulation.miqcqp.convex.gas import restore_exact_weymouth
+from monee.model.formulation.miqcqp.nonconvex.heat import restore_exact_heat_pressures
 from monee.model.grid import GasGrid, PowerGrid, WaterGrid
 from monee.model.node import Junction
 from monee.problem.core import OptimizationProblem
@@ -183,8 +186,10 @@ class SolverResult:
     -----------------
     ``solver_stats`` holds back-end figures of the solve: the gurobipy backend
     reports ``obj``, ``bound``, ``gap``, ``runtime_s``, ``status`` and
-    ``nodes`` (NaN where Gurobi has none), CasADi ``iters``, ``build_s`` and
-    ``solve_s``; other back-ends leave it empty.
+    ``nodes`` (NaN where Gurobi has none), Pyomo ``obj``, ``bound`` and
+    ``gap`` (NaN where the solver has none, e.g. ``obj`` after a time limit
+    without an incumbent), CasADi ``iters``, ``build_s`` and ``solve_s``;
+    other back-ends leave it empty.
 
     Termination metadata
     --------------------
@@ -210,6 +215,14 @@ class SolverResult:
     A ``regulation`` column that misses [0, 1] by at most
     :data:`REGULATION_NOISE_FLOOR` is snapped onto the bound in ``dataframes``;
     the component itself keeps the solver's own value.
+
+    Dropped islands
+    ---------------
+    ``dropped_islands`` lists, as frozensets of node ids, the islands the solve
+    excluded because they hold no slack or source (no ``ExtPowerGrid`` /
+    ``ExtHydrGrid``, nor a grid-forming child under islanding). Their
+    components appear as NaN/ignored in the frames, a coupler with a port in
+    one is switched off, and the ``pruned`` warning names them all.
 
     Frame index
     -----------
@@ -238,6 +251,7 @@ class SolverResult:
     residuals: float | None = None
     warnings: list = field(default_factory=list)
     solver_stats: dict = field(default_factory=dict)
+    dropped_islands: list = field(default_factory=list)
 
     def __post_init__(self):
         _clamp_regulation_noise(self.dataframes)
@@ -593,14 +607,14 @@ class SolverInterface(ABC):
         """Evaluate user-defined temporal constraints from the optimization problem."""
         if optimization_problem is None:
             return
-        constraints = optimization_problem.constraints
-        if constraints is None or not constraints.has_temporal:
-            return
-        eqs = constraints.all_temporal(
-            network, temporal_state, period_index=period_index
-        )
-        if eqs:
-            self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
+        for constraints in optimization_problem._constraint_sets():
+            if not constraints.has_temporal:
+                continue
+            eqs = constraints.all_temporal(
+                network, temporal_state, period_index=period_index
+            )
+            if eqs:
+                self._add_equations(solver_obj, filter_intermediate_eqs(eqs))
 
 
 def as_iter(possible_iter):
@@ -785,14 +799,10 @@ class OperatorEquationAssembly:
         optimization_problem,
         period_index=None,
     ):
-        if optimization_problem.constraints is not None and (
-            not optimization_problem.constraints.empty
-        ):
+        for constraints in optimization_problem._constraint_sets():
             m.Equations(
                 filter_bool_eqs(
-                    optimization_problem.constraints.all(
-                        network, period_index=period_index
-                    ),
+                    constraints.all(network, period_index=period_index),
                     context="optimization problem constraint",
                 )
             )
@@ -1243,7 +1253,12 @@ def finalize_solution(
     nodes, branches, compounds, network: Network, input_network: Network
 ) -> dict[str, float]:
     """Post-solve trio: evaluate post-processes, persist solved values back into
-    *input_network* (warm start) and return the bound-violation report."""
+    *input_network* (warm start) and return the bound-violation report. A slack
+    gas or water epigraph is first replaced by the exact state
+    (:func:`~monee.model.formulation.miqcqp.convex.gas.restore_exact_weymouth`,
+    :func:`~monee.model.formulation.miqcqp.nonconvex.heat.restore_exact_heat_pressures`)."""
+    restore_exact_weymouth(network)
+    restore_exact_heat_pressures(network)
     apply_post_process_all(nodes, branches, compounds, network)
     persist_solution(network, input_network)
     return compute_bound_violations(nodes, branches, compounds, network)
@@ -1453,6 +1468,21 @@ def _copy_var_values(src, dst) -> None:
                 if not hasattr(dst_attr, "_start_value"):
                     dst_attr._start_value = dst_attr.value
                 dst_attr.value = val.value
+    # Formulation Vars (signed flows, junction pressures, ...) are re-declared
+    # at seed values by ``ensure_var`` on every solve and have no counterpart on
+    # the caller's model, so their solved values travel here; a warm start that
+    # left them at their seeds is inconsistent (see attach_formulations).
+    solved = {
+        **getattr(dst, "_solved_values", {}),
+        **getattr(src, "_solved_values", {}),
+        **{
+            key: val.value
+            for key, val in src.__dict__.items()
+            if isinstance(val, Var) and not _is_nan_value(val.value)
+        },
+    }
+    if solved:
+        dst._solved_values = solved
 
 
 def persist_solution(solved_copy: Network, original: Network) -> None:
@@ -1574,6 +1604,9 @@ _NODE_BOUND_ATTRS = frozenset(
 # A gas junction inherits t_pu from Junction, but no gas formulation uses it:
 # in optimisation it is a free placeholder that solvers park at a bound.
 _GAS_NODE_BOUND_ATTRS = _NODE_BOUND_ATTRS - {"t_pu"}
+# A coupler control node inherits Bus voltages that no equation reads: the power
+# side enters through lossless transfer branches.
+_COUPLER_NODE_BOUND_ATTRS = _NODE_BOUND_ATTRS - {"vm_pu", "vm_pu_squared"}
 
 
 def _val(v) -> float | None:
@@ -1802,12 +1835,26 @@ def _relaxation_flow_floor(branch) -> float:
     return _RELAXATION_FLOW_FLOOR_ABS
 
 
+_HEAT_RELAXATION_ADVICE = (
+    "Exact water pressures are restored after the solve only on pressure "
+    "islands whose pipes form a tree with one pinned pressure; on this island "
+    "the pressure drops stay relaxed (too large) and, on a meshed island, the "
+    "flow split with its temperatures and losses is not physical either. "
+    "Re-solve with "
+    "formulation='heat_nlp' (or 'smooth_nlp') for exact hydraulics"
+)
+
+
 def _relaxation_advice(solver_used) -> str:
     used = (solver_used or "").lower()
     if used in _INTEGRALITY_ENFORCING_SOLVERS:
         return (
-            f"The relaxation stayed slack even under solver='{used}'; solve "
-            "with formulation='smooth_nlp' / 'gas_nlp' for exact physics"
+            f"The relaxation stayed slack even under solver='{used}' and its "
+            "exact state could not be restored after the solve (that needs a "
+            "gas island bounded by pipes only, with exactly one pinned pressure "
+            "and no linepack, whose exact state keeps the pressure bounds); "
+            "re-solve with formulation='gas_nonconvex_miqcqp' (exact Weymouth, "
+            "same solver)"
         )
     return (
         "Solve with a MIQCQP solver (e.g. solver='scip') or with "
@@ -1815,36 +1862,97 @@ def _relaxation_advice(solver_used) -> str:
     )
 
 
+def _epigraph_flow(model, flow) -> float:
+    """The larger of the net flow and the flow the epigraph's squared flow
+    implies: a slack epigraph on an idle pipe is a pressure drop at zero flow,
+    not noise."""
+    squared = (_val(getattr(model, "mass_flow_pos_kgs_squared", None)) or 0.0) - (
+        _val(getattr(model, "mass_flow_neg_kgs_squared", None)) or 0.0
+    )
+    return max(abs(flow), math.sqrt(abs(squared)))
+
+
 def _relaxation_entry(network, solver_used=None) -> ResultWarning | None:
     """Worst untight convex-relaxation gap, or ``None``.
 
-    A branch whose net flow magnitude is below 0.1% of its carrier's
+    A branch whose net flow magnitude, and the one its epigraph's squared flow
+    implies, are below 0.1% of its carrier's
     ``max_mass_flow_kgs`` (0.02 kg/s when the grid has no cap) is skipped:
     the gap is relative and meaningless at negligible flow. The finding
     still fires whenever the flow exceeds that floor and the gap exceeds
     the formulation's ``RELAXATION_GAP_TOL``; the advice never recommends
     the solver that produced the result.
     """
-    worst_id, worst_gap, tol = None, 0.0, None
+    worst, worst_gap, tol = None, 0.0, None
     for branch in network.branches:
         formulation = getattr(branch, "formulation", None)
         gap_of = getattr(formulation, "relaxation_gap", None)
         if gap_of is None:
             continue
         flow = _val(getattr(branch.model, "mass_flow_kgs", None))
-        if flow is not None and abs(flow) < _relaxation_flow_floor(branch):
+        if flow is not None and _epigraph_flow(
+            branch.model, flow
+        ) < _relaxation_flow_floor(branch):
             continue
         gap = gap_of(branch.model)
         if gap > worst_gap:
-            worst_id, worst_gap, tol = branch.id, gap, formulation.RELAXATION_GAP_TOL
+            worst, worst_gap, tol = branch, gap, formulation.RELAXATION_GAP_TOL
     if tol is None or worst_gap <= tol:
         return None
+    advice = (
+        _HEAT_RELAXATION_ADVICE
+        if isinstance(worst.grid, WaterGrid)
+        else _relaxation_advice(solver_used)
+    )
     return ResultWarning(
         "relaxation",
         f"convex relaxation not tight: {100 * worst_gap:.1f}% epigraph gap "
-        f"(tolerance {100 * tol:.1f}%). {_relaxation_advice(solver_used)}",
-        component=f"branch {worst_id}",
+        f"(tolerance {100 * tol:.1f}%). {advice}",
+        component=f"branch {worst.id}",
         value=worst_gap,
+    )
+
+
+def _worst_slack(network, method):
+    """``(branch id, slack, tolerance)`` of the largest ``formulation.<method>
+    (branch, network)`` over the branches, ``(None, 0.0, None)`` without any."""
+    worst_id, worst_slack, tol = None, 0.0, None
+    for branch in network.branches:
+        formulation = getattr(branch, "formulation", None)
+        slack_of = getattr(formulation, method, None)
+        if slack_of is None:
+            continue
+        slack = slack_of(branch, network)
+        if slack > worst_slack:
+            worst_id, worst_slack, tol = (
+                branch.id,
+                slack,
+                formulation.RELAXATION_GAP_TOL,
+            )
+    return worst_id, worst_slack, tol
+
+
+def _cone_relaxation_entry(network) -> ResultWarning | None:
+    """Worst branch-flow SOC-cone slack on a resistive branch, or ``None``.
+
+    The ``r * ell`` loss term prices these cones, so unlike
+    :func:`_uncertified_relaxation_entry` a slack one is a finding about the
+    physics: the reported state is not AC-feasible."""
+    worst_id, worst_slack, tol = _worst_slack(network, "relaxation_slack")
+    if tol is None or worst_slack <= tol:
+        return None
+    return ResultWarning(
+        "relaxation",
+        f"branch-flow SOC relaxation not tight: {100 * worst_slack:.1f}% cone "
+        f"gap (tolerance {100 * tol:.1f}%), so the reported flows, losses and "
+        "voltages are not AC-feasible. The relaxation is exact on a radial "
+        "network whose objective rewards lower losses; a surplus the network "
+        "must absorb (must-run injection, capped export) is burned in "
+        "fictitious losses instead, and on a low-resistance branch r * ell can "
+        "sit below the MIP gap. Re-solve with formulation='el_nonconvex_miqcqp' "
+        "(exact, same solver) or 'el_nlp' (AC, IPOPT)",
+        component=f"branch {worst_id}",
+        value=worst_slack,
     )
 
 
@@ -1859,19 +1967,7 @@ def _uncertified_relaxation_entry(network) -> ResultWarning | None:
     violation, but it does mean the branch certifies no exactness and its
     derived reports are meaningless, so it is surfaced rather than hidden.
     """
-    worst_id, worst_slack, tol = None, 0.0, None
-    for branch in network.branches:
-        formulation = getattr(branch, "formulation", None)
-        slack_of = getattr(formulation, "uncertified_relaxation_slack", None)
-        if slack_of is None:
-            continue
-        slack = slack_of(branch, network)
-        if slack > worst_slack:
-            worst_id, worst_slack, tol = (
-                branch.id,
-                slack,
-                formulation.RELAXATION_GAP_TOL,
-            )
+    worst_id, worst_slack, tol = _worst_slack(network, "uncertified_relaxation_slack")
     if tol is None or worst_slack <= tol:
         return None
     return ResultWarning(
@@ -1896,6 +1992,7 @@ _PRUNE_RULE_HEAT_ONLY = (
     "pipe or mass-flow child there is no enthalpy stream to balance the heat "
     "against"
 )
+_PRUNE_RULE_CUT_COUPLER = "coupler switched off, a port lies in an excluded island"
 _PRUNE_MAX_LABELS = 8
 
 
@@ -1915,7 +2012,17 @@ def describe_pruning(network, ignored_nodes) -> tuple[str, int] | None:
     ]
     pruned_branches = [b for b in network.branches if b.active and b.ignored]
     pruned_childs = [c for c in network.childs if c.active and c.ignored]
-    total = len(pruned_nodes) + len(pruned_branches) + len(pruned_childs)
+    cut_couplers = [
+        c
+        for c in network.compounds
+        if c.active and set(c.connected_to.values()) & set(ignored_nodes)
+    ]
+    total = (
+        len(pruned_nodes)
+        + len(pruned_branches)
+        + len(pruned_childs)
+        + len(cut_couplers)
+    )
     if total == 0:
         return None
 
@@ -1938,6 +2045,8 @@ def describe_pruning(network, ignored_nodes) -> tuple[str, int] | None:
     by_rule: dict[str, list[str]] = {}
     for comp in pruned_nodes + pruned_childs + pruned_branches:
         by_rule.setdefault(rule_of(comp), []).append(_component_label(comp))
+    for comp in cut_couplers:
+        by_rule.setdefault(_PRUNE_RULE_CUT_COUPLER, []).append(_component_label(comp))
     parts = []
     for rule, labels in by_rule.items():
         shown = ", ".join(labels[:_PRUNE_MAX_LABELS])
@@ -2046,14 +2155,14 @@ def _bound_entries(network, ignored_nodes) -> list[ResultWarning]:
     for node in network.nodes:
         if ignore_node(node, network, ignored_nodes):
             continue
+        if isinstance(node.grid, GasGrid):
+            attrs = _GAS_NODE_BOUND_ATTRS
+        elif isinstance(node.model, MultiGridNodeModel):
+            attrs = _COUPLER_NODE_BOUND_ATTRS
+        else:
+            attrs = _NODE_BOUND_ATTRS
         entries += _model_bound_entries(
-            node.model,
-            f"{type(node.model).__name__}.{node.id}",
-            attrs=(
-                _GAS_NODE_BOUND_ATTRS
-                if isinstance(node.grid, GasGrid)
-                else _NODE_BOUND_ATTRS
-            ),
+            node.model, f"{type(node.model).__name__}.{node.id}", attrs=attrs
         )
         for child in network.childs_by_ids(node.child_ids):
             if not ignore_child(child, ignored_nodes):
@@ -2245,6 +2354,17 @@ def reset_validation_summary_counts() -> None:
     _summary_counts.clear()
 
 
+def relaxation_entries(network, solver_used=None) -> list[ResultWarning]:
+    """The ``relaxation`` findings of a solved network: an untight gas or heat
+    epigraph the restore could not replace and slack branch-flow cones."""
+    found = (
+        _relaxation_entry(network, solver_used),
+        _cone_relaxation_entry(network),
+        _uncertified_relaxation_entry(network),
+    )
+    return [entry for entry in found if entry is not None]
+
+
 def _emit_validation_summary(n_findings: int, summary: str) -> None:
     message = (
         f"Result validation: {n_findings} finding(s) ({summary}). Inspect "
@@ -2281,6 +2401,7 @@ def validate_result(  # NOSONAR
     how-to/diagnose_infeasibility docs page explains each category.
     """
     ignored_nodes = ignored_nodes or set()
+    result.dropped_islands = list(getattr(network, "_dropped_islands", ()))
     entries: list[ResultWarning] = list(extra_warnings or [])
     if result.success:
         entries += _carrier_balance_entries(network, ignored_nodes)
@@ -2288,12 +2409,7 @@ def validate_result(  # NOSONAR
             _served_delta_entries(network, ignored_nodes, result.violations),
             "served_delta",
         )
-        relaxation = _relaxation_entry(network, result.solver_used)
-        if relaxation is not None:
-            entries.append(relaxation)
-        uncertified = _uncertified_relaxation_entry(network)
-        if uncertified is not None:
-            entries.append(uncertified)
+        entries += relaxation_entries(network, result.solver_used)
         entries += _capped(_bound_entries(network, ignored_nodes), "bound_active")
         entries += _capped(
             _water_temperature_entries(network, ignored_nodes), "temperature"
@@ -2465,7 +2581,7 @@ def remove_cps(network: Network):
     ]
     for comp in relevant_compounds:
         network.remove_compound(comp.id)
-        if "heat_return_node_id" in comp.connected_to:
+        if comp.active and "heat_return_node_id" in comp.connected_to:
             heat_return_node = network.node_by_id(
                 comp.connected_to["heat_return_node_id"]
             )
@@ -2498,6 +2614,7 @@ def find_ignored_nodes(  # NOSONAR
     ignored_nodes = set()
     pruning_rules: dict = {}
     network._pruning_rules = pruning_rules
+    network._dropped_islands = []
     without_cps = network.copy()
     remove_cps(without_cps)
 
@@ -2543,6 +2660,7 @@ def find_ignored_nodes(  # NOSONAR
                 break
         if not component_leading:
             ignored_nodes.update(component)
+            network._dropped_islands.append(frozenset(component))
             for node_id in component:
                 pruning_rules[node_id] = _PRUNE_RULE_NO_LEAD
 

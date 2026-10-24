@@ -106,12 +106,21 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
             grid, branch, gas_density_kg_per_m3, getattr(grid, "v_max_mps", 20.0)
         )
 
-        # Linearise \sqrt{p} around nominal pressure for the density estimate.
-        _, _, p_avg = ogfmodel.linearized_pressure_pu(
-            grid,
-            from_node_model.vars["pressure_squared_pu"],
-            to_node_model.vars["pressure_squared_pu"],
-        )
+        p_amb = getattr(grid, "pressure_ambient_pa", 0.0)
+        psq_from = from_node_model.vars["pressure_squared_pu"]
+        psq_to = to_node_model.vars["pressure_squared_pu"]
+        if hasattr(branch, "linepack_kg"):
+            # Linepack is the gas mass, so it needs the exact mean pressure; other
+            # pipes only report the density and keep the cheap linearisation.
+            amb_pu = p_amb / grid.pressure_ref_pa
+            p_avg = (
+                ogfmodel.mean_pressure_pu(
+                    sqrt_impl(psq_from) + amb_pu, sqrt_impl(psq_to) + amb_pu
+                )
+                - amb_pu
+            )
+        else:
+            p_avg = ogfmodel.linearized_pressure_pu(grid, psq_from, psq_to)[2]
 
         signed = branch.mass_flow_kgs
         mag = branch.mass_flow_mag_kgs
@@ -143,11 +152,10 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
                 signed <= f_max_local * branch.on_off,
                 -signed <= f_max_local * branch.on_off,
             ]
-        p_amb = getattr(grid, "pressure_ambient_pa", 0.0)
         eqs += [
             smoothmodel.weymouth_pressure(
-                psq_pu_i=from_node_model.vars["pressure_squared_pu"],
-                psq_pu_j=to_node_model.vars["pressure_squared_pu"],
+                psq_pu_i=psq_from,
+                psq_pu_j=psq_to,
                 p_pu_i=from_node_model.vars["pressure_pu"],
                 p_pu_j=to_node_model.vars["pressure_pu"],
                 drop_term=drop_term,
@@ -161,8 +169,6 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
                 pressure_ambient_pa=p_amb,
             ),
             # density uses ABSOLUTE pressure = (gauge p_avg)*p_ref + p_ambient
-            ogfmodel.ideal_gas_density_eq(
-                branch.gas_density_kg_per_m3, grid, p_avg, p_amb
-            ),
+            ogfmodel.gas_density_eq(branch.gas_density_kg_per_m3, grid, p_avg, p_amb),
         ]
         return eqs + friction_eqs

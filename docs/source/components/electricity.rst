@@ -72,17 +72,20 @@ PowerLine
 
 Overhead line or cable between two buses, given as ohmic parameters per metre.
 The per-unit impedance is ``r_ohm_per_m * length_m / (base_kv ** 2 / sn_mva)
-/ parallel`` with the from-bus ``base_kv``.
+/ parallel`` with the from-bus ``base_kv``. A capacitance ``c_nf_per_m`` adds
+the pi-model charging susceptance ``2 * pi * f_hz * c_nf_per_m * 1e-9 *
+length_m * parallel * base_kv ** 2 / sn_mva``, half at each end. The AC, MISOCP
+and exact branch-flow formulations all use it.
 
 .. component: PowerLine | create_line
 
 .. code-block:: python
 
    mm.PowerLine(length_m, r_ohm_per_m, x_ohm_per_m, parallel, backup=False, on_off=1,
-                *, max_i_ka=3.19, max_s_mva=None)
+                c_nf_per_m=0, *, max_i_ka=3.19, max_s_mva=None)
    mx.create_line(network, from_node_id, to_node_id, length_m, r_ohm_per_m, x_ohm_per_m,
                   parallel=1, constraints=None, grid=None, name=None, on_off=1,
-                  max_i_ka=None, max_s_mva=None, backup=False)
+                  max_i_ka=None, max_s_mva=None, backup=False, c_nf_per_m=0)
 
 .. list-table::
    :header-rows: 1
@@ -121,6 +124,10 @@ The per-unit impedance is ``r_ohm_per_m * length_m / (base_kv ** 2 / sn_mva)
    * - ``max_s_mva``
      - ``None``
      - Optional apparent-power rating in MVA used by loading constraints.
+   * - ``c_nf_per_m``
+     - 0
+     - Operating capacitance per metre in nF/m (pandapower's
+       ``c_nf_per_km / 1000``).
 
 .. results: PowerLine
 
@@ -182,6 +189,9 @@ The per-unit impedance is ``r_ohm_per_m * length_m / (base_kv ** 2 / sn_mva)
    * - ``backup``
      - input
      - Reserve-line flag.
+   * - ``c_nf_per_m``
+     - input
+     - Capacitance per metre in nF/m.
    * - ``tap``
      - internal
      - Always 1 for a line.
@@ -192,14 +202,14 @@ The per-unit impedance is ``r_ohm_per_m * length_m / (base_kv ** 2 / sn_mva)
      - internal
      - Shunt conductance at the from-end, 0 for a line.
    * - ``b_fr_pu``
-     - internal
-     - Shunt susceptance at the from-end, 0 for a line.
+     - derived
+     - Half the charging susceptance in per unit, from ``c_nf_per_m``.
    * - ``g_to_pu``
      - internal
      - Shunt conductance at the to-end, 0 for a line.
    * - ``b_to_pu``
-     - internal
-     - Shunt susceptance at the to-end, 0 for a line.
+     - derived
+     - Equal to ``b_fr_pu``.
 
 Read the table with ``result.get(mm.PowerLine)``. Losses are
 ``p_from_mw + p_to_mw`` per row.
@@ -207,20 +217,25 @@ Read the table with ``result.get(mm.PowerLine)``. Losses are
 Trafo
 -----
 
-Two-winding transformer. The from-node is the low-voltage bus and the
-to-node the high-voltage bus. The per-unit impedance the model computes is
-``r = vkr_percent / 100 / sn_trafo_mva * (base_kv_lv / base_kv_hv) ** 2 * sn_mva``
-and ``x = sqrt(z ** 2 - r ** 2)`` with ``z`` from ``vk_percent`` the same way.
-There is no tap changer model: ``tap`` is fixed at 1.
+Two-winding transformer. ``create_trafo`` documents the from-node as the
+low-voltage bus and the to-node as the high-voltage bus; both orientations give
+the same flows at ``tap=1``. The rated voltages are taken equal to the bus
+``base_kv`` values, so the per-unit impedance is
+``r = vkr_percent / 100 * sn_mva / sn_trafo_mva`` and ``x = sqrt(z ** 2 - r ** 2)``
+with ``z`` from ``vk_percent`` the same way. An off-nominal ratio (a fixed tap
+position) is the ``tap`` argument: the turns ratio at the from-node, with the
+impedance on the to-node side. A pandapower tap ``tap_pos`` with
+``tap_step_percent`` on side ``s`` is ``tap = 1 + tap_pos * tap_step_percent / 100``
+with the from-node on side ``s``, so an HV-side tap needs from = HV.
 
 .. component: Trafo | create_trafo
 
 .. code-block:: python
 
-   mm.Trafo(vk_percent=12.2, vkr_percent=0.25, sn_trafo_mva=160, shift=0)
+   mm.Trafo(vk_percent=12.2, vkr_percent=0.25, sn_trafo_mva=160, shift=0, tap=1.0)
    mx.create_trafo(network, from_node_id, to_node_id, vk_percent=12.2, vkr_percent=0.25,
                    sn_trafo_mva=160, shift=0, constraints=None, grid=None, name=None,
-                   max_i_ka=None)
+                   max_i_ka=None, tap=1.0)
 
 .. list-table::
    :header-rows: 1
@@ -245,6 +260,9 @@ There is no tap changer model: ``tap`` is fixed at 1.
      - Phase shift in radians (the MATPOWER importer converts degrees).
        Vector-group shifts of 150 degrees make the flat start of the
        nonlinear solvers unusable; keep them at 0 unless the study needs them.
+   * - ``tap``
+     - 1.0
+     - Off-nominal turns ratio at the from-node (see above).
    * - ``max_i_ka``
      - express ``None``
      - Current rating in kA behind ``loading_*_pu``; ``None`` keeps the model
@@ -312,11 +330,8 @@ There is no tap changer model: ``tap`` is fixed at 1.
      - internal
      - Fixed at ``False``.
    * - ``tap``
-     - internal
-     - Fixed at 1; there is no tap changer.
-   * - ``vn_trafo_lv``
-     - internal
-     - Fixed at 1.
+     - input
+     - Off-nominal turns ratio at the from-node.
    * - ``g_fr_pu``
      - internal
      - Shunt conductance at the from-end, 0.

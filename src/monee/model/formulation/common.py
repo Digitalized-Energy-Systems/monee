@@ -19,10 +19,14 @@ from .core import NodeFormulation
 def velocity_post_process(model, fluid_density_kg_per_m3):
     r"""Deterministic velocity report :math:`v = \dot m / (\rho A)` for a pipe-like
     branch, as a :class:`PostProcess` so it adds no solver variable/equation.
-    ``fluid_density_kg_per_m3`` is the (reference) density the velocity caps use."""
-    scale = fluid_density_kg_per_m3 * calc_pipe_area(model.diameter_m)
+    ``fluid_density_kg_per_m3`` is the (reference) density the velocity caps use.
+    The area is taken from the solved ``diameter_m``, which a problem may have
+    promoted to a decision variable after this report was attached."""
     return PostProcess(
-        lambda v, s=scale: (v.mass_flow_pos_kgs - v.mass_flow_neg_kgs) / s
+        lambda v, rho=fluid_density_kg_per_m3: (
+            (v.mass_flow_pos_kgs - v.mass_flow_neg_kgs)
+            / (rho * calc_pipe_area(v.diameter_m))
+        )
     )
 
 
@@ -77,6 +81,17 @@ def _psq_bounds(model, simulation, grid):
     else:
         hi = getattr(grid, "pressure_squared_pu_max", hi)
     return lo, hi
+
+
+def pipe_outlet_law(branch, grid) -> list:
+    r"""Steady insulation loss :math:`t_{out} = T_{ext} + \alpha (t_{in} - T_{ext})`
+    of a water pipe; empty while
+    :class:`~monee.model.extension.plugflow.PlugFlowTransport` states the
+    outlet temperature of the step instead."""
+    if getattr(branch, "_plug_flow_active", False):
+        return []
+    t_ext = branch.temperature_ext_k / grid.t_ref_k
+    return [branch.t_out_pu == t_ext + branch.alpha * (branch.t_in_pu - t_ext)]
 
 
 class GasNodeFormulation(NodeFormulation):

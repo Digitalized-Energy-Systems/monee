@@ -239,3 +239,45 @@ def test_lex_user_objective_is_optimal_independent_of_aux_scale():
 
     # Lex's shed cannot exceed legacy's (lex is a tighter user-tier optimisation)
     assert shed_lex <= shed_legacy + 1e-6
+
+
+def test_lex_reports_the_user_tier_of_an_unproven_phase_one():
+    """Phase 1 stops at a time limit with an incumbent, phase 2 proves its own
+    optimum: the result keeps phase 1's status, and the stats describe the user
+    tier (phase 1's incumbent and bound), not the aux objective."""
+    import types
+
+    import pyomo.environ as pyo
+    from pyomo.opt import SolverStatus, TerminationCondition
+
+    pm = pyo.ConcreteModel()
+    pm.x = pyo.Var(initialize=0.0)
+    pm.y = pyo.Var(initialize=0.0)
+    pm.user_obj_exprs, pm.aux_obj_exprs = [pm.x], [pm.y]
+    phases = iter(
+        [
+            (2.0, 5.0, SolverStatus.aborted, TerminationCondition.maxTimeLimit, 1.0),
+            (2.0, 3.0, SolverStatus.ok, TerminationCondition.optimal, 3.0),
+        ]
+    )
+
+    class _Scripted:
+        options = {}
+
+        def solve(self, model, **_):
+            x, y, status, tc, bound = next(phases)
+            model.x.value, model.y.value = x, y
+            return types.SimpleNamespace(
+                solver=types.SimpleNamespace(
+                    status=status, termination_condition=tc, has_solution=True
+                ),
+                problem=types.SimpleNamespace(lower_bound=bound),
+            )
+
+    _, success, _, _, tc, stats = _PyomoSolverCls()._solve_lexicographic(
+        pm, _Scripted(), "scripted", {}
+    )
+
+    assert success
+    assert tc == "maxTimeLimit"
+    assert stats == pytest.approx({"obj": 2.0, "bound": 1.0, "gap": 0.5})

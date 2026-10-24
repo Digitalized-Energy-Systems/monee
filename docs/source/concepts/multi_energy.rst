@@ -377,6 +377,9 @@ Prefer the HG variants when
   ``node_based_heat_loads=True`` in the :mod:`monee.network` heat builders),
   where they are required: this formulation owns the nodal heat balance and
   only understands node-based heat injections, not heat-exchanger branches.
+  A running ``create_p2h``, ``create_g2h`` or ``create_chp`` unit raises a
+  ``NotImplementedError`` there; one at a regulation of 0 exchanges nothing
+  and solves.
 
 .. testcode::
 

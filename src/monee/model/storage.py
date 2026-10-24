@@ -13,6 +13,7 @@ in energy-flow solves. Call :meth:`make_controllable` (or
 
 from __future__ import annotations
 
+import numbers
 from typing import TYPE_CHECKING
 
 from .core import ChildModel, Var, is_plain_number, model
@@ -125,7 +126,14 @@ class _SocStorage(ChildModel):
         reg = self.regulation
         unity = _unity_regulation(reg)
         if self._lossy:
-            if isinstance(dispatch, (int, float)):
+            if not self._controllable:
+                if not isinstance(dispatch, numbers.Real):
+                    # e.g. a CasADi build-once parameter: no sign to pick the
+                    # efficiency by; run_timeseries falls back to its loop
+                    raise NotImplementedError(
+                        "A lossy storage with a fixed dispatch needs a plain "
+                        "number to choose the charge or discharge efficiency."
+                    )
                 # Plain energy flow: fixed dispatch - sign-based efficiency.
                 p = float(dispatch)
                 delta = (

@@ -1,4 +1,5 @@
 import math
+import numbers
 
 from .core import (
     Intermediate,
@@ -87,6 +88,16 @@ class Bus(NodeModel):
             power_balance_equation(signed_ap, sn),
             power_balance_equation(signed_rp, sn),
         ]
+
+
+def _heat_gate(branch_vars):
+    """``on_off`` factor of a branch's heat-balance terms. A fixed status
+    multiplies the flows once. A decision variable is left out: the branch
+    formulations already gate their flows with it (``m <= M * on_off``), and
+    multiplying it in would lift the bilinear ``m * t`` terms to degree three,
+    which quadratic solvers (gurobipy, Pyomo's LP writers) cannot take."""
+    on_off = branch_vars.get("on_off", 1)
+    return on_off if isinstance(on_off, numbers.Real) else 1
 
 
 @model
@@ -182,26 +193,24 @@ class Junction(NodeModel):
                 vs = bm.vars
                 if "mass_flow_pos_kgs" not in vs or "mass_flow_neg_kgs" not in vs:
                     continue
-                on_off = vs.get("on_off", 1)
+                on_off = _heat_gate(vs)
                 mpos = vs["mass_flow_pos_kgs"] * on_off
                 mneg = vs["mass_flow_neg_kgs"] * on_off
 
                 t_in = vs["t_from_pu"]
-                t_out = self.t_pu * on_off
-                terms.append(mneg * t_out - mpos * t_in)
+                terms.append(mneg * t_n - mpos * t_in)
 
             # node is TO-end of these branches
             for bm in to_branch_models:
                 vs = bm.vars
                 if "mass_flow_pos_kgs" not in vs or "mass_flow_neg_kgs" not in vs:
                     continue
-                on_off = vs.get("on_off", 1)
+                on_off = _heat_gate(vs)
                 mpos = vs["mass_flow_pos_kgs"] * on_off
                 mneg = vs["mass_flow_neg_kgs"] * on_off
 
                 t_in = vs["t_to_pu"]  # inflow at to-end
-                t_out = self.t_pu * on_off
-                terms.append(-mneg * t_in + mpos * t_out)
+                terms.append(-mneg * t_in + mpos * t_n)
 
             for nm in child_models:
                 vs = nm.vars

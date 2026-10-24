@@ -440,6 +440,52 @@ silently skipped in single-period solves.
 
 ----
 
+Design decisions (expansion planning)
+=====================================
+
+An investment is decided once and has to work in every period.
+``controllable_design`` promotes attributes like ``controllable`` and gives
+each one value shared by all periods of the horizon; ``candidate_branches``
+builds on it for the usual expansion-planning encoding: build every standard
+size (or cable type) of a route as a parallel candidate branch, and the
+problem switches exactly one of each group on, with ``on_off`` a binary
+design variable. Count the investment once with ``when_period([0])`` and the
+operation in every period:
+
+.. code-block:: python
+
+   import monee.express as mx
+   import monee.model as mm
+   from monee.problem import Objectives, OptimizationProblem
+
+   annuity = {0.10: 120.0, 0.15: 160.0, 0.20: 210.0}  # diameter -> cost per year
+   cands = {d: mx.create_water_pipe(net, j0, j1, diameter_m=d, length_m=300)
+            for d in annuity}
+   ids = set(cands.values())
+
+   prob = OptimizationProblem()
+   prob.candidate_branches([ids])  # allow_none=True: at most one
+
+   obj = Objectives()
+   obj.select(
+       lambda m, c: isinstance(c, mm.Branch) and c.id in ids
+   ).when_period([0]).calculate(
+       lambda models: sum(annuity[m.diameter_m] * m.on_off for m in models)
+   )
+   # ... plus the operating cost of every period
+   prob.objectives = obj
+
+   result = run_multi_period(net, td, optimization_problem=prob,
+                             solver="gurobi", formulation="nonconvex_miqcqp")
+
+Every period of ``result`` then reports the same ``on_off``. Each window of
+``run_mpc`` decides a design anew; single solves and ``run_timeseries`` treat
+design attributes as ordinary controllables. The branch formulations gate a
+switched-off candidate's flow, so the models stay quadratic and the global
+MIQCQP solvers (``solver="gurobi"`` or ``"scip"``) take them.
+
+----
+
 Solver selection
 ================
 
@@ -474,6 +520,26 @@ The default is CasADi when installed, with GEKKO as the automatic fallback.
              net, td, solver=PyomoMultiPeriodSolver()
          )
 
+On the Pyomo back-end, ``solver_options`` sets the solver's own options, for
+example a time limit and a gap for Gurobi; they go to the solver as given,
+without the single-period presets. A solve stopped at a limit with an
+incumbent returns it instead of raising: ``success`` is ``True``,
+``termination_condition`` names the limit (``"maxTimeLimit"``) and
+``solver_stats`` holds ``obj``, ``bound`` and ``gap``:
+
+.. code-block:: python
+
+   result = run_multi_period(net, td, optimization_problem=prob,
+                             solver="gurobi", formulation="nonconvex_miqcqp",
+                             solver_options={"TimeLimit": 900, "MIPGap": 1e-4})
+   if result.termination_condition != "optimal":
+       print("stopped at", result.termination_condition,
+             "gap", result.solver_stats["gap"])
+
+``PyomoMultiPeriodSolver("gurobi", {"TimeLimit": 900})`` keeps the options on
+the solver instance. A limit stop without an incumbent raises a
+``RuntimeError`` that names the termination.
+
 ----
 
 API quick reference
@@ -498,6 +564,8 @@ Runner functions
      - Override t=-1 values used by ``inter_temporal_equations``
    * - ``run_multi_period(..., optimization_problem=prob)``
      - Pass an ``OptimizationProblem`` to declare free variables and objectives
+   * - ``run_multi_period(..., solver_options={...})``
+     - Solver options on the Pyomo back-end, e.g. ``{"TimeLimit": 900}``
    * - ``run_mpc(net, td, total_steps, horizon, execution_steps, ...)``
      - Rolling-horizon MPC
 
@@ -523,6 +591,8 @@ Results
    * - ``MultiPeriodResult.objective``
      - Global objective value. For run_mpc this is a sum over rolling windows
        and overcounts when execution_steps is less than horizon
+   * - ``MultiPeriodResult.solver_stats``
+     - ``obj``, ``bound`` and ``gap`` of the solve (Pyomo back-end)
    * - ``GekkoMultiPeriodSolver``
      - GEKKO / IPOPT backend (fallback when CasADi is unavailable)
    * - ``CasADiMultiPeriodSolver``

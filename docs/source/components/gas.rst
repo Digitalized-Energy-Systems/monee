@@ -135,7 +135,7 @@ mass_flow_neg_kgs``, negative for flow from the from-node to the to-node.
      - Mean velocity in m/s with the sign of the flow, ``mass_flow_kgs / (rho * A)`` with the grid's reference density. Optimisation solves cap the mass flow at the grid ``v_max_mps``; a simulation does not.
    * - ``gas_density_kg_per_m3``
      - solved
-     - Gas density along the pipe.
+     - Gas density along the pipe, ``p * M / (Z * R * T)`` at the pipe's mean pressure.
    * - ``reynolds_scaled``
      - internal
      - Reynolds number divided by 1e6 when the formulation uses ``friction_model="nonlinear"``; 0 under the default constant friction model.

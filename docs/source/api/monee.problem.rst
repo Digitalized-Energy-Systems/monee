@@ -8,13 +8,22 @@ Problem definitions
 
    A custom objective is summed into the same objective as the terms the
    formulations add to tighten their own relaxations, and those terms are
-   unscaled physical quantities (the heat-exchanger duty pull is in MW). An
-   objective with large coefficients can therefore outbid them, most visibly by
-   letting a fixed-duty heat exchanger under-deliver. ``result.objective`` is
-   the combined value; ``result.user_objective`` reports your part alone and
-   ``result.aux_objective`` the formulation part. See
-   :doc:`../problems/load_shedding` for the duty shortfall this can cause and how
-   it is reported.
+   unscaled physical quantities. An objective with large coefficients can
+   therefore outbid them. ``result.objective`` is the combined value;
+   ``result.user_objective`` reports your part alone and
+   ``result.aux_objective`` the formulation part.
+
+.. note::
+
+   Heat duty. ``OptimizationProblem(heat_duty="exact")``, the default, makes
+   every heat exchanger deliver exactly its duty ``q_mw * on_off``, as in a
+   simulation; make ``regulation`` or ``q_mw_set`` controllable to turn the
+   duty into a decision. ``heat_duty="at_most"`` states the duty as an upper
+   bound that a formulation term of 1 per MW pulls tight, so an objective that
+   values heat above 1 per MW makes the exchangers under-deliver. The
+   load-shedding problem uses ``"at_most"``, where the unmet duty is the heat
+   shed; see :doc:`../problems/load_shedding` for how a shortfall is
+   reported.
 
 .. note::
 
@@ -28,6 +37,12 @@ Problem definitions
    ``component.grid``, ``component.active`` or ``component.id``). Ignore the
    second argument when you do not need it, for example
    ``lambda m, _c: isinstance(m, PowerGenerator)``.
+
+   Component ids are unique per category only: node 3 and child 3 can both
+   exist, so ``lambda m, c: c.id == 3`` selects both. Select by the network
+   wide key ``c.tid`` (``"node-3"``, ``"child-3"``) or test the category as
+   well, ``isinstance(c, mm.Child) and c.id == 3``. Branch ids are
+   ``(from, to, key)`` tuples and never collide with node or child ids.
 
    A one argument predicate receives each selector's historical argument: the
    model on ``objectives.select``, the ``Component`` container on

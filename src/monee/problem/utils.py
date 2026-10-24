@@ -4,10 +4,14 @@ Cross-cutting helpers used by load-shedding / dispatch problems.
 
 from __future__ import annotations
 
+import numbers
+
 import networkx as nx
 
+from monee.model.branch import HeatExchanger, WaterPipe
 from monee.model.child import ExtHydrGrid
-from monee.model.core import Var
+from monee.model.core import Var, is_plain_number
+from monee.model.formulation.miqcqp.convex.el import terminal_current_pu_squared
 from monee.model.grid import (
     DEFAULT_GAS_HHV_KWH_PER_KG,
     KGPS_KWHPERKG_TO_MW,
@@ -20,13 +24,16 @@ from monee.model.multi import (
     GasToHeatControlNode,
     GasToHeatHG,
     GasToPower,
+    GenericTransferBranch,
     PowerToGas,
     PowerToHeatControlNode,
     PowerToHeatHG,
+    SubHE,
     _heat_branches,
 )
 from monee.model.node import Bus
 from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
+from monee.model.phys.nonlinear.wf import pipe_insulation_ua
 
 # Fallback HHV (kWh/kg) when a gas grid is missing ``higher_heating_value_kwh_per_kg``.
 _HHV_DEFAULT = DEFAULT_GAS_HHV_KWH_PER_KG
@@ -47,7 +54,9 @@ def line_loading_limit(branch_model, side: str, max_loading: float, basis: str =
     keep their existing current-based behaviour.
 
     ``basis="current"`` caps current as |I| <= max_loading * max_i_ka (the
-    original behaviour). Unbounded ratings drop the constraint.
+    original behaviour). Unbounded ratings drop the constraint. A rating that
+    is a decision variable (a controllable ``max_i_ka``) is kept in the
+    constraint.
     """
     if side not in ("from", "to"):
         raise ValueError(f"side must be 'from' or 'to', got {side!r}")
@@ -64,18 +73,25 @@ def line_loading_limit(branch_model, side: str, max_loading: float, basis: str =
         # No MVA rating on this branch: fall through to the current basis.
 
     max_i_ka = getattr(branch_model, "max_i_ka", None)
-    if max_i_ka is None or max_i_ka >= _UNBOUND_MAX_I_KA:
+    rating_fixed = isinstance(max_i_ka, numbers.Real)
+    if max_i_ka is None or (rating_fixed and max_i_ka >= _UNBOUND_MAX_I_KA):
         return True
-    # Under the branch-flow formulations current_pu_squared is the SERIES current,
-    # so this caps the terminal current only up to the pi-shunt charging current.
-    # Branches that carry charging (MATPOWER, CIM) reach this code only when they
-    # have no max_s_mva, and both importers leave those unrated.
-    scale_attr = f"_misocp_loading_{side}_scale_squared"
-    if hasattr(branch_model, scale_attr):
-        scale_sq = getattr(branch_model, scale_attr)
-        if scale_sq <= 0:
-            return True
-        return branch_model.current_pu_squared <= (max_loading * max_loading) / scale_sq
+    i_base_attr = f"_misocp_loading_{side}_i_base_ka"
+    if hasattr(branch_model, i_base_attr):
+        i_base = getattr(branch_model, i_base_attr)
+        i_sq = terminal_current_pu_squared(
+            branch_model.current_pu_squared,
+            getattr(branch_model, f"p_{side}_mw"),
+            getattr(branch_model, f"q_{side}_mvar"),
+            getattr(branch_model, f"p_series_{side}_mw"),
+            getattr(branch_model, f"q_series_{side}_mvar"),
+            getattr(branch_model, f"_misocp_shunt_{side}_per_mw"),
+        )
+        if not rating_fixed:
+            # Multiplied out, so the decision rating is not a divisor.
+            return i_sq * i_base**2 <= (max_loading * max_i_ka) ** 2
+        scale_sq = (i_base / max_i_ka) ** 2
+        return i_sq <= (max_loading * max_loading) / scale_sq
     return getattr(branch_model, f"loading_{side}_pu") <= max_loading
 
 
@@ -237,7 +253,7 @@ def _node_heat_terms(network, node):
     )
 
 
-def water_slack_heat_terms(network):
+def water_slack_heat_terms(network, exact=False):
     """``[(slack_child, q_mw)]``: the heat each water :class:`ExtHydrGrid`
     supplies to its island, as an expression over the solver variables.
 
@@ -247,7 +263,9 @@ def water_slack_heat_terms(network):
     pipe losses minus all other heat injection. Positive means the slack
     supplies heat, negative that it absorbs a surplus. Water leaving through a
     Sink or ConsumeHydrGrid counts as returned to the plant at its own
-    temperature, and the enthalpy of a hot water Source counts as slack heat."""
+    temperature, and the enthalpy of a hot water Source counts as slack heat.
+    ``exact=True`` writes the sum with every branch's exact heat where each
+    branch of the island has one (:func:`_island_heat_mw_exact`)."""
     terms = []
     for island in _water_islands(network):
         slack = _island_slack(network, island)
@@ -258,17 +276,112 @@ def water_slack_heat_terms(network):
             for node_id in island
         )
         scale_mw_per_kgs = SPECIFIC_HEAT_CAP_WATER * slack.grid.t_ref_k / 1e6
-        terms.append((slack, scale_mw_per_kgs * total))
+        exact_mw = _island_heat_mw_exact(network, island) if exact else None
+        terms.append(
+            (slack, scale_mw_per_kgs * total if exact_mw is None else exact_mw)
+        )
     return terms
 
 
-def bound_water_slack_heat(constraints, bounds_mw):
+def _exact_branch_heat_mw(branch):
+    """Heat a water branch takes out of the water [MW], ``c m (T_in - T_out)``,
+    in exact closed form: an exchanger's duty, zero for a compound's loss-free
+    transfer link, or a MIQCQP pipe's loss ``UA alpha (T_in - T_ext)`` (equal
+    through ``alpha (m + UA/c) = m``). None for branches without one (smooth
+    NLP pipes, passive exchangers)."""
+    model = branch.model
+    vs = model.vars
+    if isinstance(model, GenericTransferBranch):
+        return 0
+    if isinstance(model, HeatExchanger) and "q_mw_delivered" in vs:
+        return vs["q_mw_delivered"]
+    if (
+        isinstance(model, WaterPipe)
+        and "alpha" in vs
+        and not is_plain_number(vs.get("direction", 1))
+    ):
+        return (
+            pipe_insulation_ua(model)
+            * vs["alpha"]
+            * (vs["t_in_pu"] * branch.grid.t_ref_k - model.temperature_ext_k)
+            / 1e6
+        )
+    return None
+
+
+def _island_heat_mw_exact(network, island):  # NOSONAR
+    """The island sum of :func:`water_slack_heat_terms` with each branch's
+    enthalpy flows replaced by its exact heat (:func:`_exact_branch_heat_mw`).
+    Equal on every solution, but the relaxation of the bilinear ``m T``
+    balances does not conserve energy, so the summed form lets a relaxed
+    network deliver heat without producing it or losing any in its pipes.
+    None when a branch has no exact form or a node a heat regulariser."""
+    total = 0
+    for branch in network.branches:
+        if not (
+            _live(branch)
+            and not _switched_off(branch)
+            and branch.from_node_id in island
+            and branch.to_node_id in island
+        ):
+            continue
+        if "t_from_pu" not in branch.model.vars and not isinstance(branch.model, SubHE):
+            continue
+        heat = _exact_branch_heat_mw(branch)
+        if heat is None:
+            return None
+        total = total + heat
+    for node_id in island:
+        node = network.node_by_id(node_id)
+        water = isinstance(node.grid, WaterGrid)
+        if water and getattr(node.grid, "node_heat_reg_kgs", 0.0):
+            return None
+        from_models = [
+            network.branch_by_id(b).model
+            for b in node.from_branch_ids
+            if _live(network.branch_by_id(b))
+        ]
+        to_models = [
+            network.branch_by_id(b).model
+            for b in node.to_branch_ids
+            if _live(network.branch_by_id(b))
+        ]
+        if not water:
+            from_models, to_models = (
+                _heat_branches(from_models),
+                _heat_branches(to_models),
+            )
+        if not any("t_to_pu" in m.vars for m in from_models + to_models):
+            continue
+        heat_children = (
+            [
+                child.model.vars
+                for child in network.childs_by_ids(node.child_ids)
+                if _live(child) and "mass_flow_kgs" not in child.model.vars
+            ]
+            if water
+            else []
+        )
+        for vs in heat_children:
+            if "q_mw_heat" in vs:
+                total = total + vs["q_mw_heat"] * vs.get("regulation", 1)
+        for m in to_models:
+            if "q_mw_heat" in m.vars:
+                total = total + m.vars["q_mw_heat"] * m.vars.get("on_off", 1)
+    return total
+
+
+def bound_water_slack_heat(constraints, bounds_mw, exact=False):
     """Bound the heat every water :class:`ExtHydrGrid` supplies to its island
     (:func:`water_slack_heat_terms`) to ``bounds_mw = (lo, hi)`` in MW, load
-    convention (supply negative); a ``None`` side is left open."""
+    convention (supply negative); a ``None`` side is left open. ``exact`` uses
+    the branch form, which keeps a relaxation with regulated exchanger duties
+    energy-conserving but adds a bilinear loss term per pipe."""
     lo, hi = bounds_mw
     exchange = constraints.with_models(
-        lambda network: [q_mw for _, q_mw in water_slack_heat_terms(network)]
+        lambda network: [
+            q_mw for _, q_mw in water_slack_heat_terms(network, exact=exact)
+        ]
     )
     if lo is not None:
         exchange.equation(lambda q_mw: -q_mw >= lo)

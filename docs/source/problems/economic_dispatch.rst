@@ -396,7 +396,11 @@ power external grid. Its ``regulation`` becomes a decision (12) once every
 non-electric carrier it touches is dispatched: CHP and gas to heat need gas
 and heat, power to heat needs heat, gas to power and power to gas need gas.
 The upper bound is the regulation the unit had when the problem was applied,
-so a derated unit, or one a timeseries sets to part load, keeps that limit.
+so a derated unit, or one a timeseries sets to part load, keeps that limit,
+and a unit at regulation 0 stays switched off instead of becoming a decision
+fixed to zero. The regulation a unit carries into the dispatch is therefore its
+availability, not its schedule: set it to 1 to let the optimiser choose the
+operating point freely, below 1 for a derating, and 0 for an outage.
 With ``ext_grid_cost_default`` unset, power from the external grid is free,
 which makes the merit order of every unit with an electric side degenerate;
 the builder warns in that case. ``dispatch_coupling_points=False`` keeps
@@ -424,6 +428,17 @@ island, water that leaves through a :class:`~monee.model.child.Sink` or a
 :class:`~monee.model.child.ConsumeHydrGrid` counts as returned to the plant
 at its own temperature, and the enthalpy of a water
 :class:`~monee.model.child.Source` counts as slack heat.
+
+The minimum load shedding problem writes its ``bounds_ext_heat_mw`` bound as
+the same sum branch by branch with each branch's exact heat when every pipe of
+the island runs a MIQCQP heat formulation: exchanger duties
+``q_mw_delivered`` and pipe losses
+:math:`UA\, \alpha\, (T_\text{in} - T_\text{ext})`. Both forms agree on every
+solution, but a global solver relaxes the bilinear :math:`\dot m\, T` terms
+of the nodal form one by one, and that relaxation can deliver heat that no
+unit produces or shed heat that no network forces; the branch form keeps it
+energy-conserving. The economic dispatch keeps the nodal form: its duties are
+fixed, and the branch form would only add a bilinear loss term per pipe.
 
 A negative :math:`H_w` means the slack absorbs a surplus, which a district
 heating plant usually cannot sell. The default ``bounds_ext_heat_mw=(None,
@@ -544,6 +559,14 @@ its own price. A ``cost`` on a component whose carrier is not dispatched, on
 a consuming exchanger or on a water source is never read, and the builder
 warns about it.
 
+Per-period prices are ``cost`` series of the priced components, in
+:func:`~monee.simulation.run_timeseries` as in
+:func:`~monee.simulation.run_multi_period`. This includes the external grids:
+``td.add_child_series(ext_grid_id, "cost", prices)`` gives the import and
+export price of every period (``add_objective_data`` is an alias). The
+series replaces ``ext_grid_cost_default``, which still has to be a number,
+because ``None`` leaves the exchange out of the objective altogether.
+
 Signs and the load convention
 =============================
 
@@ -559,6 +582,14 @@ the dispatch objective is written against it:
   external price above a generator's cost therefore makes exporting
   profitable, and the optimiser will run that generator at full capacity to
   sell; bound the exchange with ``ext_grid_bounds`` if that is not intended.
+- A negative external price works the other way round: import earns money
+  and export costs it, so the optimiser curtails every generator it can,
+  renewables at ``cost=0`` included (``p_mw`` is a decision from 0 to the
+  capacity), and imports as much as the limits allow. Under the MISOCP
+  relaxation it can even take more than the demand and lose it as fictitious
+  line losses, a relaxation that is not tight; check such periods with the
+  NLP formulation, bound the import with ``ext_grid_bounds``, or clip the
+  price at 0 if curtailment at negative prices is not intended.
 - ``ext_grid_bounds`` is stated in the same convention: to cap the import at
   ``X`` MW while forbidding export, pass ``(-X, 0.0)``. Writing it with the
   signs flipped, ``(0.0, X)``, does not fail: it silently forbids importing

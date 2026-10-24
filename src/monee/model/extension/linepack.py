@@ -2,7 +2,8 @@ r"""
 Gas linepack extension.
 
 Pipelines act as distributed storage: :math:`\text{linepack\_kg} = V_{pipe} \cdot \rho_{avg}` with
-:math:`\rho = p \cdot M / (R \cdot T)`. Between timesteps,
+the real-gas :math:`\rho = p \cdot M / (Z \cdot R \cdot T)` at the pipe's mean pressure
+(the exact steady isothermal mean under the NLP formulation). Between timesteps,
 :math:`\text{net\_pack\_kgs}(t) \cdot \Delta t = \text{linepack\_kg}(t) - \text{linepack\_kg}(t-1)` - positive = charging.
 Each endpoint junction sees :math:`+0.5 \cdot \text{net\_pack\_kgs}` (outflow-positive convention).
 
@@ -16,6 +17,7 @@ import math
 from monee.model.branch import GasPipe
 from monee.model.core import Var, set_initial_value
 from monee.model.grid import GasGrid
+from monee.model.phys.nonlinear.gf import gas_density
 
 from .core import NetworkAspect
 
@@ -42,11 +44,6 @@ class GasLinepack(NetworkAspect):
         self._initial_lp: dict[int, float] = {}
         self._active_branches: set[int] = set()
         self._timeseries_active: bool = False
-
-    @staticmethod
-    def _density(grid: GasGrid, pressure_pa: float) -> float:
-        """Return gas density [kg/m^3] via the ideal-gas EoS."""
-        return pressure_pa * grid.molar_mass / (grid.universal_gas_constant * grid.t_k)
 
     @staticmethod
     def _nominal_pressure(grid: GasGrid) -> float:
@@ -87,8 +84,8 @@ class GasLinepack(NetworkAspect):
             grid: GasGrid = branch.grid
             v_pipe = math.pi / 4 * bm.diameter_m**2 * bm.length_m
 
-            rho_nominal = self._density(grid, self._nominal_pressure(grid))
-            rho_max = self._density(grid, self._max_pressure(grid))
+            rho_nominal = gas_density(grid, self._nominal_pressure(grid))
+            rho_max = gas_density(grid, self._max_pressure(grid))
             auto_initial = v_pipe * rho_nominal
             auto_max = v_pipe * rho_max
 

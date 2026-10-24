@@ -7,7 +7,7 @@ import types
 
 import pyomo.environ as pyo
 from pyomo.core.expr.numvalue import NumericValue
-from pyomo.opt import SolverStatus, TerminationCondition
+from pyomo.opt import OptSolver, SolverStatus, TerminationCondition
 
 from monee.model import (
     Const,
@@ -176,14 +176,15 @@ class PyscipoptSolver:
                         "reported values are the variable initializations."
                     )
 
-            return self._build_result(status, has_solution)
+            return self._build_result(status, has_solution, sm.getDualbound())
         finally:
             shutil.rmtree(tmpdir, ignore_errors=True)
 
     @staticmethod
-    def _build_result(status: str, has_solution: bool):
+    def _build_result(status: str, has_solution: bool, lower_bound=math.nan):
         """Map a SCIP status string onto the ``(status, termination_condition)``
-        pair that :func:`_classify_solve_result` inspects."""
+        pair that :func:`_classify_solve_result` inspects, with SCIP's dual
+        bound where Pyomo's own results keep it."""
         if status == "optimal":
             solver_status, tc = SolverStatus.ok, TerminationCondition.optimal
         elif status == "infeasible":
@@ -225,7 +226,8 @@ class PyscipoptSolver:
                 status=solver_status,
                 termination_condition=tc,
                 has_solution=has_solution,
-            )
+            ),
+            problem=types.SimpleNamespace(lower_bound=lower_bound),
         )
 
 
@@ -257,6 +259,68 @@ class PyomoPWLImpl:
             warn_domain_coverage=False,
         )
         setattr(pm, name, pw)
+
+
+# Only limit-type terminations come with a feasible incumbent worth using.
+# Anything else (infeasibleOrUnbounded, unbounded, error, solverFailure...) has
+# no witness: declaring success there means downstream code reads the variable
+# *initializations* as a solution.
+_WITNESS_TERMINATIONS = frozenset(
+    {
+        TerminationCondition.maxTimeLimit,
+        TerminationCondition.maxIterations,
+        TerminationCondition.maxEvaluations,
+        TerminationCondition.feasible,
+        TerminationCondition.optimal,
+        TerminationCondition.locallyOptimal,
+        TerminationCondition.globallyOptimal,
+    }
+)
+
+
+def _has_witness(result) -> bool:
+    """Whether the solve left a feasible incumbent in the model."""
+    return result.solver.termination_condition in _WITNESS_TERMINATIONS and getattr(
+        result.solver, "has_solution", True
+    )
+
+
+def _solve_and_load(solver, pm, **kwargs):
+    """``solver.solve`` that loads the incumbent only when there is one: Pyomo's
+    own loading raises on a limit stop without an incumbent, losing the bound."""
+    if not isinstance(solver, OptSolver):
+        return solver.solve(pm, **kwargs)
+    result = solver.solve(pm, load_solutions=False, **kwargs)
+    # Direct interfaces (gurobi_direct) insert an empty solution entry even
+    # without an incumbent; they report the true count here.
+    n_solutions = getattr(result.problem, "number_of_solutions", None)
+    result.solver.has_solution = len(result.solution) > 0 and n_solutions != 0
+    if result.solver.has_solution:
+        pm.solutions.load_from(result)
+    return result
+
+
+def _finite(value) -> float:
+    try:
+        value = float(value)
+    except (TypeError, ValueError):
+        return math.nan
+    # SCIP and Gurobi report a missing bound as +-1e20 / +-1e100.
+    return value if abs(value) < 1e20 else math.nan
+
+
+def _solver_stats(result, pm, success: bool) -> dict:
+    """``obj``, dual ``bound`` and relative ``gap`` (Gurobi's
+    ``|obj - bound| / |obj|``) of the last minimisation on *pm*; NaN where the
+    solver reports none, e.g. no incumbent after a time limit."""
+    objective = next(pm.component_data_objects(pyo.Objective, active=True), None)
+    obj = (
+        _finite(pyo.value(objective, exception=False))
+        if success and objective is not None
+        else math.nan
+    )
+    bound = _finite(getattr(getattr(result, "problem", None), "lower_bound", None))
+    return {"obj": obj, "bound": bound, "gap": abs(obj - bound) / max(abs(obj), 1e-10)}
 
 
 def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
@@ -296,21 +360,7 @@ def _classify_solve_result(result, pm, solver_name: str, *, phase_label: str):
             report.summary(max_items=50),
         )
         return False, report, status_str, tc_str
-    # Only limit-type terminations come with a feasible incumbent worth using.
-    # Anything else (infeasibleOrUnbounded, unbounded, error, solverFailure...)
-    # has no witness: declaring success there means downstream code reads the
-    # variable *initializations* as a solution.
-    witness_terminations = {
-        TerminationCondition.maxTimeLimit,
-        TerminationCondition.maxIterations,
-        TerminationCondition.maxEvaluations,
-        TerminationCondition.feasible,
-        TerminationCondition.optimal,
-        TerminationCondition.locallyOptimal,
-        TerminationCondition.globallyOptimal,
-    }
-    # The pyscipopt bridge says whether a limit stop carries an incumbent.
-    if tc in witness_terminations and getattr(result.solver, "has_solution", True):
+    if _has_witness(result):
         _log.warning(
             "%s returned non-ok status (status=%s, termination=%s); "
             "using witness solution.",
@@ -607,18 +657,19 @@ class PyomoSolver(SolverInterface):
             solve_kwargs["warmstart"] = True
 
         if lex_objectives:
-            result, success, report, status_str, tc_str = self._solve_lexicographic(
-                pm, solver, solver_name, solve_kwargs
+            result, success, report, status_str, tc_str, stats = (
+                self._solve_lexicographic(pm, solver, solver_name, solve_kwargs)
             )
         else:
             self._attach_combined_obj(pm)
-            result = solver.solve(pm, **solve_kwargs)
+            result = _solve_and_load(solver, pm, **solve_kwargs)
             success, report, status_str, tc_str = _classify_solve_result(
                 result,
                 pm,
                 solver_name,
                 phase_label="Pyomo solve",
             )
+            stats = _solver_stats(result, pm, success)
 
         withdraw_vars(
             PyomoSolver.withdraw_pyomo_vars_attr, nodes, branches, compounds, network
@@ -657,6 +708,7 @@ class PyomoSolver(SolverInterface):
             aux_objective=(
                 None if user_objective is None else obj_val - user_objective
             ),
+            solver_stats=stats,
         )
         return validate_result(
             network,
@@ -688,13 +740,15 @@ class PyomoSolver(SolverInterface):
     def _solve_lexicographic(self, pm, solver, solver_name, solve_kwargs):
         """Two-phase lex: minimise ``sum user`` then ``sum aux`` under
         ``sum user <= S* + slack``. Combined ``pm.obj`` attached (deactivated)
-        for backwards-compatible ``pyo.value(pm.obj)``."""
+        for backwards-compatible ``pyo.value(pm.obj)``. The returned solver
+        stats are phase 1's, the user tier; a phase 1 that was not optimal
+        keeps its status."""
         pm.obj_user = pyo.Objective(expr=sum(pm.user_obj_exprs), sense=pyo.minimize)
         pm.obj_aux = pyo.Objective(expr=sum(pm.aux_obj_exprs), sense=pyo.minimize)
         pm.obj_aux.deactivate()
 
         # Phase 1: user objective only.
-        result = solver.solve(pm, **solve_kwargs)
+        result = _solve_and_load(solver, pm, **solve_kwargs)
         success, report, status_str, tc_str = _classify_solve_result(
             result,
             pm,
@@ -703,7 +757,9 @@ class PyomoSolver(SolverInterface):
         )
         if not success:
             self._attach_combined_obj(pm, active=False)
-            return result, success, report, status_str, tc_str
+            stats = _solver_stats(result, pm, success)
+            return result, success, report, status_str, tc_str, stats
+        stats, status1, tc1 = _solver_stats(result, pm, success), status_str, tc_str
 
         s_star = pyo.value(pm.obj_user, exception=False)
         if s_star is None:
@@ -714,7 +770,7 @@ class PyomoSolver(SolverInterface):
         pm.obj_user.deactivate()
         pm.obj_aux.activate()
 
-        result = solver.solve(pm, **solve_kwargs)
+        result = _solve_and_load(solver, pm, **solve_kwargs)
         success, report, status_str, tc_str = _classify_solve_result(
             result,
             pm,
@@ -723,7 +779,12 @@ class PyomoSolver(SolverInterface):
         )
 
         self._attach_combined_obj(pm, active=False)
-        return result, success, report, status_str, tc_str
+        if not success:
+            stats = _solver_stats(result, pm, success)
+        elif tc1 != str(TerminationCondition.optimal):
+            # an unproven user tier stays unproven whatever phase 2 reports
+            status_str, tc_str = status1, tc1
+        return result, success, report, status_str, tc_str, stats
 
     def process_internal_oxf_components(self, pm, network):
         for constraint in network.constraints:
@@ -740,15 +801,8 @@ class PyomoSolver(SolverInterface):
         optimization_problem: OptimizationProblem,
         period_index=None,
     ):
-        if optimization_problem.constraints is not None and (
-            not optimization_problem.constraints.empty
-        ):
-            self._add_equations(
-                pm,
-                optimization_problem.constraints.all(
-                    network, period_index=period_index
-                ),
-            )
+        for constraints in optimization_problem._constraint_sets():
+            self._add_equations(pm, constraints.all(network, period_index=period_index))
 
         obj = fold_sum(
             optimization_problem.objectives.all(network, period_index=period_index)

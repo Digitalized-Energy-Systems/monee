@@ -117,7 +117,5 @@ class PwlWeymouthBranchFormulation(BranchFormulation):
             abs_psq_diff * grid.pressure_ref_pa**2 * c_sq * branch.on_off
             == branch.phi_pwl_neg - branch.phi_pwl_pos,
             #
-            ogfmodel.ideal_gas_density_eq(
-                branch.gas_density_kg_per_m3, grid, p_avg, p_amb
-            ),
+            ogfmodel.gas_density_eq(branch.gas_density_kg_per_m3, grid, p_avg, p_amb),
         ]

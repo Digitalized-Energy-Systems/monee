@@ -66,8 +66,11 @@ def swamee_jain(reynolds_var, diameter_m, roughness_m, log_func):
 
 def friction_at_high_re(diameter_m: float, roughness_m: float) -> float:
     r"""Turbulent asymptote :math:`f = 0.25 / \log_{10}(\varepsilon / (3.7 \cdot D))^2` (Swamee-Jain at :math:`Re \to \infty`).
-    Within a few % of Colebrook for :math:`Re \gtrsim 10^4`; under-estimates pressure drop in
-    laminar (:math:`Re < 2300`). Returns 0 for degenerate inputs (:math:`D \le 0`, :math:`\varepsilon \ge 3.7 \cdot D`)."""
+    A lower bound on the Colebrook factor that is close only in fully rough flow (large
+    :math:`Re \cdot \varepsilon / D`); in smooth or transitional turbulent flow it under-estimates
+    the pressure drop substantially (a gas distribution grid gave a 69 % larger drop with
+    Colebrook), and far more in laminar flow (:math:`Re < 2300`). Use ``friction_model="nonlinear"``
+    where that matters. Returns 0 for degenerate inputs (:math:`D \le 0`, :math:`\varepsilon \ge 3.7 \cdot D`)."""
     if diameter_m <= 0 or roughness_m <= 0:
         return 0.0
     term1 = roughness_m / diameter_m / 3.7

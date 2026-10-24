@@ -22,6 +22,17 @@ def darcy_friction(reynolds_var):
     return 64 / (reynolds_var + 1)
 
 
+def darcy_weisbach_resistance(
+    pipe_length, diameter_m, fluid_density_kg_per_m3, friction
+):
+    A = calc_pipe_area(diameter_m)  # pipe cross-section [m^2]
+    return (
+        friction
+        * (pipe_length / diameter_m)
+        * (1.0 / (2.0 * fluid_density_kg_per_m3 * A**2))
+    )
+
+
 def darcy_weisbach_equation(
     p_i,
     p_j,
@@ -34,12 +45,8 @@ def darcy_weisbach_equation(
     friction=None,
     **kwargs,
 ):
-    A = calc_pipe_area(diameter_m)  # pipe cross-section [m^2]
-
-    resistance = (
-        friction
-        * (pipe_length / diameter_m)
-        * (1.0 / (2.0 * fluid_density_kg_per_m3 * A**2))
+    resistance = darcy_weisbach_resistance(
+        pipe_length, diameter_m, fluid_density_kg_per_m3, friction
     )
 
     # on_off gates the pressure coupling exactly like gf.pipe_weymouth: an off

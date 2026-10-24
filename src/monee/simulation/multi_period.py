@@ -14,6 +14,8 @@ import pandas
 from monee.model import Network
 from monee.model.core import Var
 from monee.model.extension.islanding.core import NetworkIslandingConfig
+from monee.model.formulation.miqcqp.convex.gas import restore_exact_weymouth
+from monee.model.formulation.miqcqp.nonconvex.heat import restore_exact_heat_pressures
 from monee.model.formulation.registry import attach_formulations
 from monee.simulation.result_utils import (
     build_attribute_frame as _build_attribute_frame,
@@ -45,12 +47,15 @@ from monee.simulation.timeseries import (
 # surface (the simulation layer renders the same kind of result tables).
 from monee.solver.core import (
     SolverResult,
+    _emit_validation_summary,
     _find_model,
     apply_child_overwrites,
+    apply_post_process_all,
     find_ignored_nodes,
     inject_vars,
     mark_ignored_components,
     mark_slacks_and_prescriptions,
+    relaxation_entries,
     sync_compounds,
     withdraw_vars,
 )
@@ -203,6 +208,13 @@ class MultiPeriodResult:
         aux_objective: ``objective - user_objective`` (the internal auxiliary
             terms); ``None`` whenever ``user_objective`` is.
         success: ``True`` if the solver reported a feasible solution.
+        solver_stats: Back-end figures of the horizon-wide solve; the Pyomo
+            back-end reports ``obj``, ``bound`` and ``gap`` (NaN where the
+            solver has none), the others leave it empty.
+        period_warnings: Per period, the ``relaxation``
+            :class:`~monee.solver.core.ResultWarning` entries of a convex
+            relaxation left slack after the exact restore (``warnings``
+            flattens them; ``get_period_result(t).warnings`` holds period t's).
     """
 
     def __init__(
@@ -216,8 +228,11 @@ class MultiPeriodResult:
         solver_status: str | None = None,
         termination_condition: str | None = None,
         user_objective: float | None = None,
+        solver_stats: dict | None = None,
     ) -> None:
         self._net_copies = net_copies
+        self.solver_stats = solver_stats or {}
+        self.period_warnings: list[list] = [[] for _ in net_copies]
         self.objective = objective
         self.user_objective = user_objective
         self.aux_objective = (
@@ -241,6 +256,10 @@ class MultiPeriodResult:
     @property
     def T(self) -> int:  # NOSONAR
         return len(self._net_copies)
+
+    @property
+    def warnings(self) -> list:
+        return [w for period in self.period_warnings for w in period]
 
     def _make_index(self, _labels=None) -> pandas.Index:
         # The full-period index is used regardless of *_labels*: every period
@@ -291,6 +310,7 @@ class MultiPeriodResult:
             termination_condition=self.termination_condition,
             backend_used=self.backend_used,
             solver_used=self.solver_used,
+            warnings=list(self.period_warnings[t]),
         )
 
     def _temporal_lines(self) -> list[str]:  # NOSONAR
@@ -675,6 +695,9 @@ class GekkoMultiPeriodSolver:
                 net_t.compounds,
                 net_t,
             )
+            restore_exact_weymouth(net_t)
+            restore_exact_heat_pressures(net_t)
+            apply_post_process_all(net_t.nodes, net_t.branches, net_t.compounds, net_t)
 
         return MultiPeriodResult(
             net_copies,
@@ -691,10 +714,19 @@ class GekkoMultiPeriodSolver:
 
 class PyomoMultiPeriodSolver:
     """Multi-period optimizer on Pyomo + pluggable MILP/NLP. Same two-pass
-    structure as :class:`GekkoMultiPeriodSolver`."""
+    structure as :class:`GekkoMultiPeriodSolver`.
 
-    def __init__(self, solver_name: str = "scip"):
+    ``solver_options`` (e.g. ``{"TimeLimit": 900, "MIPGap": 1e-4}``) are passed
+    to the solver as given; :meth:`solve_multi_period` takes a per-call dict
+    merged over them, where ``None`` drops a key. Unlike the single-period
+    :class:`~monee.solver.pyo.PyomoSolver`, no module presets apply. A solve
+    stopped at a limit with an incumbent returns it with ``success=True``, its
+    ``termination_condition`` (e.g. ``maxTimeLimit``) and ``obj``/``bound``/
+    ``gap`` in ``solver_stats``."""
+
+    def __init__(self, solver_name: str = "scip", solver_options: dict | None = None):
         self._solver_name = solver_name
+        self._solver_options = dict(solver_options or {})
         self._backend_name = "pyomo"
 
     def solve_multi_period(
@@ -708,12 +740,18 @@ class PyomoMultiPeriodSolver:
         initial_state: dict | None = None,
         terminal_state: dict | None = None,
         formulation=None,
+        solver_options: dict | None = None,
     ) -> MultiPeriodResult:
         """Build and solve a multi-period optimization in a single Pyomo model."""
         import pyomo.environ as pyo
-        from pyomo.opt import SolverStatus, TerminationCondition
+        from pyomo.opt import SolverStatus
 
-        from monee.solver.pyo import PyomoSolver
+        from monee.solver.pyo import (
+            PyomoSolver,
+            _has_witness,
+            _solve_and_load,
+            _solver_stats,
+        )
 
         steps = _resolve_steps(steps, timeseries_data)
         if timeseries_data is not None:
@@ -781,22 +819,27 @@ class PyomoMultiPeriodSolver:
         # Same resolution as the single-period backend: falls back to the
         # pyscipopt bridge when only the SCIP Python bindings are installed.
         solver = PyomoSolver._make_solver(self._solver_name)
-        solve_result = solver.solve(pm)
+        for key, value in {**self._solver_options, **(solver_options or {})}.items():
+            if value is not None:
+                solver.options[key] = value
+        solve_result = _solve_and_load(solver, pm)
 
-        _ok_terminations = {
-            TerminationCondition.optimal,
-            TerminationCondition.locallyOptimal,
-            TerminationCondition.globallyOptimal,
-            TerminationCondition.feasible,
-        }
-        _failed = (
-            solve_result.solver.status
-            not in (
-                SolverStatus.ok,
-                SolverStatus.warning,
+        status = solve_result.solver.status
+        tc = solve_result.solver.termination_condition
+        _failed = status not in (
+            SolverStatus.ok,
+            SolverStatus.warning,
+            SolverStatus.aborted,
+        ) or not _has_witness(solve_result)
+        stats = _solver_stats(solve_result, pm, not _failed)
+        if not _failed and status == SolverStatus.aborted:
+            _log.warning(
+                "Multi-period Pyomo/%s solve stopped at a limit (termination=%s); "
+                "using its incumbent, gap %.3g to the bound.",
+                self._solver_name,
+                tc,
+                stats["gap"],
             )
-            or solve_result.solver.termination_condition not in _ok_terminations
-        )
         if _failed:
             from monee.solver.infeasibility import diagnose_infeasibility
 
@@ -824,7 +867,7 @@ class PyomoMultiPeriodSolver:
             )
             raise RuntimeError(
                 f"Multi-period Pyomo/{self._solver_name} solve failed "
-                f"(T={steps} periods, status={solve_result.solver.status}).\n"
+                f"(T={steps} periods, status={status}, termination={tc}).\n"
                 f"Common causes:\n"
                 f"  - Problem is physically infeasible (conflicting bounds or "
                 f"insufficient supply).\n"
@@ -843,6 +886,9 @@ class PyomoMultiPeriodSolver:
                 net_t.compounds,
                 net_t,
             )
+            restore_exact_weymouth(net_t)
+            restore_exact_heat_pressures(net_t)
+            apply_post_process_all(net_t.nodes, net_t.branches, net_t.compounds, net_t)
 
         user_objective = None
         if pm.user_obj_exprs:
@@ -855,7 +901,10 @@ class PyomoMultiPeriodSolver:
             datetime_index=datetime_index,
             backend_used=self._backend_name,
             solver_used=self._solver_name,
+            solver_status=str(status),
+            termination_condition=str(tc),
             user_objective=user_objective,
+            solver_stats=stats,
         )
 
 
@@ -924,6 +973,7 @@ def run_multi_period(
     initial_state: dict | None = None,
     terminal_state: dict | None = None,
     formulation=None,
+    solver_options: dict | None = None,
 ) -> MultiPeriodResult:
     """Run a single-shot multi-period optimisation. Cross-period coupling goes
     through the ``inter_temporal_equations`` and ``inter_period_equations``
@@ -935,8 +985,23 @@ def run_multi_period(
     A series that targets a solver ``Var`` attribute warns up front, the same
     way :func:`monee.simulation.run_timeseries` does: such a series only pins
     the Var through its bounds, in every period at once, which commonly makes
-    the single-shot solve infeasible. See the how-to/timeseries docs page."""
+    the single-shot solve infeasible. See the how-to/timeseries docs page.
+
+    ``solver_options`` (Pyomo back-end only, e.g. ``{"TimeLimit": 900}`` with
+    ``solver="gurobi"``) go to the solver as given, see
+    :class:`PyomoMultiPeriodSolver`; a limit stop with an incumbent returns it
+    with its gap in ``result.solver_stats``."""
     solver = resolve_multi_period_solver(solver, backend=backend)
+    extra = {}
+    if solver_options:
+        if not isinstance(solver, PyomoMultiPeriodSolver):
+            raise ValueError(
+                "solver_options apply to the Pyomo multi-period back-end only; "
+                f"this run resolved to {type(solver).__name__}. Pass a Pyomo "
+                "solver name such as solver='gurobi' or solver='scip', or "
+                "backend='pyomo'."
+            )
+        extra["solver_options"] = solver_options
 
     if timeseries_data is not None:
         timeseries_data.validate_bound(network, strict=False)
@@ -945,7 +1010,7 @@ def run_multi_period(
     _validate_state_keys(initial_state, network, "initial_state")
     _validate_state_keys(terminal_state, network, "terminal_state")
 
-    return solver.solve_multi_period(
+    result = solver.solve_multi_period(
         network,
         timeseries_data=timeseries_data,
         steps=steps,
@@ -955,7 +1020,18 @@ def run_multi_period(
         initial_state=initial_state,
         terminal_state=terminal_state,
         formulation=formulation,
+        **extra,
     )
+    if isinstance(result, MultiPeriodResult) and result.success:
+        result.period_warnings = [
+            relaxation_entries(net_t, result.solver_used)
+            for net_t in result._net_copies
+        ]
+        if result.warnings:
+            _emit_validation_summary(
+                len(result.warnings), f"relaxation x{len(result.warnings)}"
+            )
+    return result
 
 
 def _validate_mpc_window_sizes(execution_steps: int, horizon: int) -> None:

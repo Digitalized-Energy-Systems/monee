@@ -2,6 +2,10 @@
 
 import math
 
+import pytest
+
+import monee
+import monee.express as mx
 import monee.model as mm
 from monee.model import Network
 from monee.model.branch import GenericPowerBranch
@@ -9,7 +13,9 @@ from monee.model.child import ExtPowerGrid, PowerLoad
 from monee.model.formulation import EL_MISOCP_FORMULATION
 from monee.model.grid import PowerGrid
 from monee.model.node import Bus
+from monee.problem import create_economic_dispatch_problem
 from monee.solver import PyomoSolver
+from tests.solver.test_gurobipy import requires_gurobi
 
 SN_MVA = 1.0
 B_SHUNT = 0.088
@@ -92,3 +98,40 @@ def test_charging_changes_the_slack_reactive_injection():
     assert abs(with_shunt["q_from_mvar"] - without_shunt["q_from_mvar"]) > 0.01, (
         "zeroing the line charging must change the branch-flow solution"
     )
+
+
+def _charged_line_dispatch(**solve):
+    net = mm.Network(el_model=mm.create_power_grid("power", sn_mva=1.0))
+    b0, b1 = mx.create_bus(net, base_kv=20.0), mx.create_bus(net, base_kv=20.0)
+    mx.create_ext_power_grid(net, b0, vm_pu=1.0, cost=10)
+    mx.create_line(
+        net,
+        b0,
+        b1,
+        length_m=5000,
+        r_ohm_per_m=1.61e-4,
+        x_ohm_per_m=1.17e-4,
+        c_nf_per_m=0.3,
+        max_i_ka=0.1,
+    )
+    mx.create_power_load(net, b1, p_mw=5.0, q_mvar=2.0)
+    mx.create_power_generator(net, b1, p_mw=5.0, q_mvar=0.0, cost=100)
+    result = monee.run_energy_flow_optimization(
+        net, create_economic_dispatch_problem(ext_grid_cost_default=10), **solve
+    )
+    assert result.success
+    line = result.get(mm.PowerLine).iloc[0]
+    import_mw = result.get(mm.ExtPowerGrid)["p_mw"].iloc[0]
+    return import_mw, line["loading_from_pu"], line["loading_to_pu"]
+
+
+@requires_gurobi
+@pytest.mark.parametrize("formulation", ["el_misocp", "el_nonconvex_miqcqp"])
+def test_loading_limit_caps_the_terminal_current_like_ac(formulation):
+    ac = _charged_line_dispatch()
+    assert ac[2] == pytest.approx(1.0, abs=1e-6)
+    assert ac[1] < 0.98, "the charging current must make the two ends differ"
+
+    branch_flow = _charged_line_dispatch(solver="gurobi", formulation=formulation)
+
+    assert branch_flow == pytest.approx(ac, abs=1e-6)

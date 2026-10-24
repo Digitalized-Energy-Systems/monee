@@ -18,6 +18,9 @@ shed is measured against the full setpoint. A part load encoded in a demand's
 ``regulation`` (for example a timeseries driving a heat exchanger) is therefore
 dropped, and the problem warns when it happens: write the demand into the
 setpoint (``p_mw``, ``q_mw_set``, ``q_mw_heat``, ``mass_flow_kgs``) instead.
+The same holds for generators and coupling units: one at a regulation of 0 is
+a standby the optimiser may switch on. To keep a unit out of service, for
+example in an outage study, deactivate it (``net.deactivate_by_id``).
 
 Mathematical formulation
 ========================
@@ -246,12 +249,11 @@ The weights put a price on each MW not served:
 
 .. math::
 
-   W_k = \gamma\, \omega_k, \qquad
-   \omega_k =
+   W_k =
    \begin{cases}
-   \text{callback}(k) & k \in \mathcal{D} \text{ consumes and the callback returns a number} \\
-   w_d & k \in \mathcal{D} \text{ otherwise, or } k \in \mathcal{C} \\
-   w_g & k \in \mathcal{G}
+   \omega_k = \text{callback}(k) & k \in \mathcal{D} \text{ consumes and the callback returns a number} \\
+   \gamma\, w_d & k \in \mathcal{D} \text{ otherwise, or } k \in \mathcal{C} \\
+   \gamma\, w_g & k \in \mathcal{G}
    \end{cases}
 
 with :math:`w_d` = ``demand_weight`` (default :math:`10^3`) and :math:`w_g` =
@@ -266,22 +268,22 @@ dominant over the auxiliary terms :math:`A(x)` however large the network is:
 
 .. math::
 
-   \gamma = \max\!\Big(1,\; \frac{\alpha\, A_\text{max}}{\omega_\text{min}}\Big)
+   \gamma = \max\!\Big(1,\; \frac{\alpha\, A_\text{max}}{w_d}\Big)
 
-with :math:`\alpha` = ``priority_safety_factor`` (default 10),
+with :math:`\alpha` = ``priority_safety_factor`` (default 10) and
 :math:`A_\text{max}` an estimate of the largest :math:`|A(x)|` computed from the
-network data before the solve, and :math:`\omega_\text{min}` the smallest
-demand weight (:math:`w_d` without a callback). The same :math:`\gamma`
-multiplies every weight, so the ratios you chose are preserved. With
-``auto_priority_floor=False``, :math:`\gamma = 1`.
+network data before the solve. The same :math:`\gamma` multiplies :math:`w_d`
+and :math:`w_g`, so their ratio is preserved. A weight :math:`\omega_k` the
+callback returns is explicit and never rescaled, so objective terms you add
+yourself keep their price relative to it; ``debug=True`` logs
+:math:`A_\text{max}` to check it against. With ``auto_priority_floor=False``,
+:math:`\gamma = 1`.
 
-The floor works per MW. When it lifts the weights, one MW of shed at the
-smallest weight costs at least :math:`\alpha\,A_\text{max}`, so a shed of
-:math:`1/\alpha` MW or more (0.1 MW at the default) costs at least
-:math:`A_\text{max} \ge |A(x)|`. Smaller sheds carry no such guarantee. With
-a callback and ``include_coupling_points=True``, coupling points are weighted
-:math:`\gamma w_d`, which is below this floor when
-:math:`w_d < \omega_\text{min}`.
+The floor works per MW. One MW of shed at :math:`\gamma\, w_d` costs at least
+:math:`\alpha\,A_\text{max}`, so a shed of :math:`1/\alpha` MW or more
+(0.1 MW at the default) costs at least :math:`A_\text{max} \ge |A(x)|`.
+Smaller sheds, and callback weights below :math:`\alpha\,A_\text{max}`, carry
+no such guarantee.
 
 .. note::
 
@@ -311,13 +313,7 @@ a callback and ``include_coupling_points=True``, coupling points are weighted
    by a constraint and the estimate can fall short. It assumes at most
    100 kg/s for any hydraulic flow that has no upper bound of its own.
 
-   With a callback, :math:`\omega_\text{min}` is taken over every consuming
-   demand model in the network, including inactive and ignored loads and
-   water-grid sinks, so such a component with a low weight can lift
-   :math:`\gamma`; if that minimum is zero or negative, :math:`\gamma = 1`. In
-   the callback case generating heat exchangers receive :math:`\gamma^2 w_g`
-   instead of :math:`\gamma\, w_g`. Without a callback and :math:`w_d \le 0`
-   the formula does not apply: the demand, coupling-point and consuming heat
+   With :math:`w_d \le 0` the formula does not apply: the demand, coupling-point and consuming heat
    exchanger weights are set directly to :math:`\alpha A_\text{max}`, and
    :math:`w_g` stays unscaled.
 
@@ -531,7 +527,8 @@ Keyword reference
    * - ``weight_for_load``
      - :math:`\omega_k`
      - Callback ``(model) -> float | None`` returning a per-load shed weight
-       for priority ordering. ``None`` falls back to ``demand_weight``.
+       for priority ordering, used as given (never rescaled by the priority
+       floor). ``None`` falls back to ``demand_weight``.
        Default: ``None``. See
        :ref:`problems/load_shedding:Prioritising individual loads`.
    * - ``bounds_vm``
@@ -609,8 +606,8 @@ Keyword reference
        :ref:`problems/load_shedding:Lexicographic variant`.
    * - ``auto_priority_floor`` / ``priority_safety_factor``
      - :math:`\gamma`, :math:`\alpha`
-     - Lift the weights so that one MW of shed at the smallest weight costs at
-       least :math:`\alpha\,A_\text{max}`. Defaults: ``True`` / ``10.0``. See
+     - Lift ``demand_weight`` and ``generator_weight`` so that one MW of shed
+       at the demand weight costs at least :math:`\alpha\,A_\text{max}`. Defaults: ``True`` / ``10.0``. See
        :ref:`problems/load_shedding:Weights`.
    * - ``debug``
      -
@@ -626,7 +623,9 @@ priority ordering (keep the hospital, shed the warehouse first), pass
 shed weight, or ``None`` to fall back to ``demand_weight``. A convenient
 pattern is to tag the models with a custom attribute when building the
 network, as the :ref:`worked example <problems/load_shedding:Worked example>`
-does:
+does. The solve runs on a copy of the network, so the callback receives the
+copied models: a tag travels with them, a dictionary keyed by the original
+models never matches.
 
 .. code-block:: python
 
@@ -643,9 +642,11 @@ does:
 
 The callback is consulted only for members of :math:`\mathcal{D}`; generators,
 including generating heat exchangers, are not passed to it and use
-:math:`w_g`. The auto priority floor multiplies every weight by the same
-:math:`\gamma`, so the ratios you choose are preserved, with the one exception
-listed under :ref:`problems/load_shedding:Weights`.
+:math:`w_g`. The numbers it returns are used as given: the auto priority floor
+lifts only :math:`w_d` and :math:`w_g` (see
+:ref:`problems/load_shedding:Weights`). A returned weight between
+``demand_weight`` and the lifted :math:`w_d` would rank its load below the
+default loads, so the problem warns, naming those loads.
 
 Shedding coupling points
 ------------------------
@@ -724,8 +725,10 @@ or cross-checking with a mixed-integer backend, settles it. It can also be
 legitimate. A voltage, pressure, temperature or loading limit can bind inside
 the island while the slack still has room, in which case more import would not
 help; inspect the node and branch tables for the binding limit. The check stays
-silent for islands without an external grid of that carrier and for loads
-that are inactive, ignored or excluded, and it does not run for
+silent for islands without an external grid of that carrier, for loads that
+are inactive, ignored or excluded, and for a proven optimum of a global
+back-end (termination ``optimal`` on Gurobi or SCIP), where only a binding
+limit can explain the shed. It does not run for
 :func:`~monee.simulation.multi_period.run_multi_period`.
 
 ----
@@ -777,9 +780,11 @@ which unwraps ``Var`` and passes plain floats through unchanged; see
    Inspect the ``dataframes`` dict for per-component voltage, pressure, and
    temperature to understand why curtailment was needed.
 
-In optimisation mode, heat exchangers with a fixed ``regulation`` are a
-special case, because their duty is stated as an inequality
-(``q_mw_delivered <= q_mw``) that only an objective term pulls tight. A user
+In the load-shedding problem (``heat_duty="at_most"`` of
+:class:`~monee.problem.OptimizationProblem`; the default ``"exact"`` pins the
+duty), heat exchangers with a fixed ``regulation`` are a special case,
+because their duty is stated as an inequality (``q_mw_delivered <= q_mw``)
+that only an objective term pulls tight. A user
 objective can outweigh that pull and leave an exchanger delivering less than
 its setpoint while the solve still reports success. In a simulation the duty
 is a hard equation, so a shortfall there means the solve stopped short of

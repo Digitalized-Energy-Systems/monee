@@ -2,12 +2,14 @@
 
 import math
 
+import pytest
+
 import monee.model as mm
 from monee import GasLinepack, run_energy_flow
-from monee.simulation.timeseries import TimeseriesData, run
+from monee.simulation.timeseries import StepHook, TimeseriesData, run
 
 
-def _gas_net():
+def _gas_net(diameter_m=0.5):
     """Linear gas network (source - pipe - sink); returns (net, pipe_id, sink_id)."""
     net = mm.Network(mm.create_gas_grid("gas", type="lgas"))
     net.activate_grid(mm.GAS)
@@ -18,7 +20,7 @@ def _gas_net():
     n0 = net.node(mm.Junction(), mm.GAS, child_ids=[source_id])
     n1 = net.node(mm.Junction(), mm.GAS, child_ids=[sink_id])
 
-    pipe_id = net.branch(mm.GasPipe(diameter_m=0.5, length_m=5000), n0, n1)
+    pipe_id = net.branch(mm.GasPipe(diameter_m=diameter_m, length_m=5000), n0, n1)
 
     return net, pipe_id, sink_id
 
@@ -57,11 +59,11 @@ def test_linepack_auto_capacity():
 
     grid = net.grids[0]
     v_pipe = math.pi / 4 * 0.5**2 * 5000
-    R, M, T = grid.universal_gas_constant, grid.molar_mass, grid.t_k
-    rho_nominal = grid.pressure_ref_pa * grid.nominal_pressure_pu * M / (R * T)
-    rho_max = (
-        grid.pressure_ref_pa * math.sqrt(grid.pressure_squared_pu_max) * M / (R * T)
-    )
+    # Real-gas density: before 2.3.0 the compressibility Z was missing here.
+    ZRT = grid.compressibility * grid.universal_gas_constant * grid.t_k
+    M = grid.molar_mass
+    rho_nominal = grid.pressure_ref_pa * grid.nominal_pressure_pu * M / ZRT
+    rho_max = grid.pressure_ref_pa * math.sqrt(grid.pressure_squared_pu_max) * M / ZRT
     expected_initial = v_pipe * rho_nominal
     expected_max = v_pipe * rho_max
 
@@ -139,12 +141,12 @@ def test_linepack_timeseries_mass_conservation():
 
 
 def test_linepack_source_flow_reduced_by_discharge():
-    # GIVEN
-    net, pipe_id, sink_id = _gas_net()
+    # GIVEN a DN150 pipe whose discharge is well above solver noise
+    net, pipe_id, sink_id = _gas_net(diameter_m=0.15)
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    td.add_child_series(sink_id, "mass_flow_kgs", [0.1, 0.12])
+    td.add_child_series(sink_id, "mass_flow_kgs", [0.3, 0.6])
 
     # WHEN
     result = run(net, td)
@@ -156,9 +158,9 @@ def test_linepack_source_flow_reduced_by_discharge():
     npk = result.get_result_for_id(pipe_id, "net_pack_kgs")
     src_feed_1 = float(-src_flow.iloc[1][0])
     npk1 = float(npk.iloc[1])
-    demand_1 = 0.12
+    demand_1 = 0.6
 
-    assert npk1 < 0, f"Linepack should discharge at step 1 (npk={npk1})"
+    assert npk1 < -1e-3, f"Linepack should discharge at step 1 (npk={npk1})"
 
     # Discharge must reduce the source feed below demand, not increase it.
     assert src_feed_1 < demand_1, (
@@ -174,11 +176,11 @@ def test_linepack_source_flow_reduced_by_discharge():
 
 def test_linepack_buffers_demand_variation():
     # GIVEN
-    net, pipe_id, sink_id = _gas_net()
+    net, pipe_id, sink_id = _gas_net(diameter_m=0.15)
     net.add_extension(GasLinepack())
 
     td = TimeseriesData()
-    td.add_child_series(sink_id, "mass_flow_kgs", [0.1, 0.11, 0.35])
+    td.add_child_series(sink_id, "mass_flow_kgs", [0.3, 0.6])
 
     # WHEN
     result = run(net, td)
@@ -195,7 +197,48 @@ def test_linepack_buffers_demand_variation():
     assert lp1 < lp0, (
         f"Linepack should decrease when demand rises: {lp0:.1f} -> {lp1:.1f}"
     )
-    assert npk1 < 0, f"net_pack_kgs should be negative when discharging: {npk1:.6f}"
+    assert npk1 < -1e-3, f"net_pack_kgs should be negative when discharging: {npk1:.6f}"
+
+
+class _CloseSource(StepHook):
+    def __init__(self, source_id):
+        self.source_id = source_id
+
+    def pre_run(self, base_net, step, step_state):
+        if step == 1:
+            source = base_net.child_by_id(self.source_id).model
+            source.mass_flow_kgs = 0.0
+            source.free_pressure_bounds = (0.5, 1.2)
+
+
+def test_linepack_after_source_cut_off_matches_an_isothermal_tank():
+    # GIVEN a DN300 pipe feeding 0.1 kg/s, whose source closes for 30 minutes
+    m_kgs, dt_s, d_m, l_m = 0.1, 1800.0, 0.3, 5000.0
+    net = mm.Network(mm.create_gas_grid("gas", type="lgas"))
+    net.activate_grid(mm.GAS)
+    source_id = net.child(mm.ExtHydrGrid())
+    n0 = net.node(mm.Junction(), mm.GAS, child_ids=[source_id])
+    n1 = net.node(mm.Junction(), mm.GAS, child_ids=[net.child(mm.Sink(m_kgs))])
+    pipe_id = net.branch(mm.GasPipe(diameter_m=d_m, length_m=l_m), n0, n1)
+    net.add_extension(GasLinepack(first_step_steady_state=True))
+
+    # WHEN
+    result = run(net, steps=2, step_hooks=[_CloseSource(source_id)], dt_h=dt_s / 3600)
+
+    # THEN the pipe loses the withdrawn mass and its mean pressure falls like a
+    # closed real-gas volume: dp = m t Z R T / (V M)
+    assert not result.failed_steps
+    lp = result.get_result_for_id(pipe_id, "linepack_kg")
+    assert lp.iloc[0] - lp.iloc[1] == pytest.approx(m_kgs * dt_s, rel=1e-6)
+
+    p = result.get_result_for(mm.Junction, "pressure_pa")
+    p_mean = [2 / 3 * (a * a + a * b + b * b) / (a + b) for a, b in zip(p[n0], p[n1])]
+    grid = net.node_by_id(n0).grid
+    volume = math.pi / 4 * d_m**2 * l_m
+    dp_tank = (
+        m_kgs * dt_s * grid.compressibility * grid.universal_gas_constant * grid.t_k
+    ) / (volume * grid.molar_mass)
+    assert p_mean[0] - p_mean[1] == pytest.approx(dp_tank, rel=0.01)
 
 
 def _branching_gas_net():

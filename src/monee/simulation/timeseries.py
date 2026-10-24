@@ -858,9 +858,11 @@ def _only_reuse_kwargs(solver_kwargs) -> bool:
     return not (set(solver_kwargs) - {"simulation", "formulation"})
 
 
-def _reuse_step_loop(ts, steps, on_step_error, progress_callback) -> list["StepResult"]:
+def _reuse_step_loop(
+    ts, steps, on_step_error, progress_callback, start=0
+) -> list["StepResult"]:
     step_results: list[StepResult] = []
-    for step in range(steps):
+    for step in range(start, steps):
         try:
             sr = StepResult(step=step, result=ts.step_result(step))
         except Exception as exc:
@@ -875,25 +877,42 @@ def _reuse_step_loop(ts, steps, on_step_error, progress_callback) -> list["StepR
 
 
 def _casadi_reuse_eligible(
-    net, solver, optimization_problem, step_hooks, timeseries_data, solver_kwargs
+    net,
+    solver,
+    optimization_problem,
+    step_hooks,
+    timeseries_data,
+    solver_kwargs,
+    datetime_index=None,
 ) -> bool:
     """Whether the build-once / re-solve CasADi graph-reuse path can replace the
     per-step rebuild loop and produce identical results.
 
-    The parametric reuse driver only handles memory-less series on a plain
-    power flow (id- and name-addressed, compound series included:
-    ``CasADiTimeseries._declare_params`` declares them all), so it is gated to
-    exactly those cases; anything else (optimisation problem, step hooks
-    observing temporal state, temporal coupling in the network, or solver
-    kwargs it cannot honour) falls back to the standard loop.
+    The parametric reuse driver handles series on a plain power flow (id- and
+    name-addressed, compound series included:
+    ``CasADiTimeseries._declare_params`` declares them all) and carries the
+    previous step's state of temporally coupled networks at a constant
+    ``dt_h``; anything else (optimisation problem, step hooks observing
+    temporal state, per-step intervals from a ``datetime_index`` under
+    temporal coupling, a temporally coupled model without variables, or
+    solver kwargs it cannot honour) falls back to the standard loop.
     """
     if not _is_casadi_solver(solver):
         return False
     if optimization_problem is not None or step_hooks:
         return False
-    # The reuse driver carries no inter-step state, so any temporal coupling
-    # (storage/linepack/LTC) must go through the per-step loop instead.
-    if _network_has_temporal_coupling(net):
+    if datetime_index is not None and _network_has_temporal_coupling(net):
+        return False
+    # the loop checks the constraints of such a model against the replayed
+    # values (_temporal_replay_violations); the build-once graph cannot
+    if any(
+        not _declares_var(c.model)
+        and any(
+            hasattr(owner, "inter_temporal_equations")
+            for owner in (c.model, getattr(c, "formulation", None))
+        )
+        for c in net.iter_all_components()
+    ):
         return False
     if _td_switches_topology(timeseries_data, net):
         return False
@@ -909,21 +928,50 @@ def _run_casadi_reuse(
     progress_callback,
     datetime_index,
     solver_kwargs,
-) -> "TimeseriesResult":
+    dt_h=None,
+) -> "TimeseriesResult | None":
     """Build the CasADi NLP + IPOPT solver once and re-solve each step with a
     warm start (no per-step rebuild/recompile). Equivalent results to the
-    standard loop for the gated cases (see :func:`_casadi_reuse_eligible`)."""
+    standard loop for the gated cases (see :func:`_casadi_reuse_eligible`).
+    A temporally coupled run solves its first step, whose models fall back to
+    their initial state, with the standard loop. Returns ``None`` when the
+    driver cannot represent the run, so the caller uses the standard loop."""
     from monee.solver.casadi import CasADiTimeseries
 
-    ts = CasADiTimeseries(
-        net,
-        timeseries_data,
-        formulation=solver_kwargs.get("formulation"),
-        simulation=solver_kwargs.get("simulation", False),
-        steps=steps,
-        solver_options=solver.solver_options,
+    try:
+        ts = CasADiTimeseries(
+            net,
+            timeseries_data,
+            formulation=solver_kwargs.get("formulation"),
+            simulation=solver_kwargs.get("simulation", False),
+            steps=steps,
+            solver_options=solver.solver_options,
+            dt_h=1.0 if dt_h is None else dt_h,
+        )
+    except (ValueError, NotImplementedError) as exc:
+        _log.debug("run_timeseries: CasADi build-once driver unavailable (%s)", exc)
+        return None
+    step_results = []
+    if _network_has_temporal_coupling(net):
+        first = run(
+            net,
+            timeseries_data,
+            steps=1,
+            solver=solver,
+            on_step_error=on_step_error,
+            progress_callback=progress_callback
+            and (lambda step, _n: progress_callback(step, steps)),
+            dt_h=dt_h,
+            reuse=False,
+            **solver_kwargs,
+        ).step_results[0]
+        if first.failed:
+            return None
+        ts.carry_state(first.result.network)
+        step_results.append(first)
+    step_results += _reuse_step_loop(
+        ts, steps, on_step_error, progress_callback, start=len(step_results)
     )
-    step_results = _reuse_step_loop(ts, steps, on_step_error, progress_callback)
     return TimeseriesResult(
         step_results,
         datetime_index=datetime_index,
@@ -1261,7 +1309,7 @@ def run(  # NOSONAR
     # CasADi graph-reuse fast path: build the NLP + IPOPT solver once and
     # re-solve each step with a warm start instead of rebuilding/recompiling the
     # whole model every step. Gated to the cases that produce identical results
-    # (plain power flow, id-addressed memory-less series, no hooks/optimisation).
+    # (see :func:`_casadi_reuse_eligible`).
     try_reuse = solve_flag and reuse is not False
     if try_reuse and _casadi_reuse_eligible(
         net,
@@ -1270,9 +1318,10 @@ def run(  # NOSONAR
         step_hooks,
         timeseries_data,
         solver_kwargs,
+        datetime_index,
     ):
         _log.debug("run_timeseries: using CasADi build-once graph-reuse fast path")
-        return _run_casadi_reuse(
+        reuse_result = _run_casadi_reuse(
             net,
             resolved_solver,
             timeseries_data,
@@ -1281,7 +1330,10 @@ def run(  # NOSONAR
             progress_callback,
             datetime_index,
             solver_kwargs,
+            dt_h,
         )
+        if reuse_result is not None:
+            return reuse_result
 
     # gurobipy model-reuse fast path: build the gurobipy model once and re-bound
     # the time-varying inputs (and carried inter-step state) per step instead of

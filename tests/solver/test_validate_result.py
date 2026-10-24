@@ -282,7 +282,7 @@ def test_relaxation_entry_never_recommends_the_running_solver():
     assert entry is not None
     assert "e.g. solver='scip'" not in entry.message
     assert "even under solver='scip'" in entry.message
-    assert "gas_nlp" in entry.message
+    assert "gas_nonconvex_miqcqp" in entry.message
 
     entry_ipopt = _relaxation_entry(network, "ipopt")
     assert "e.g. solver='scip'" in entry_ipopt.message
@@ -465,3 +465,33 @@ def test_the_unused_t_pu_of_a_gas_junction_is_not_reported_as_binding():
     flagged = [w.component for w in _bound_entries(net, set())]
 
     assert flagged == [f"Junction.{water}"]
+
+
+def test_the_unused_voltage_of_a_coupler_control_node_is_not_reported():
+    """Regression: a P2H control node inherits Bus voltages that no equation
+    reads, so Gurobi parked its vm_pu_squared at 0.25 and every coupled
+    dispatch reported it as bound_active."""
+    import monee.express as mx
+    from monee.model.formulation.registry import attach_formulations
+    from monee.solver.core import _bound_entries
+
+    net = mm.Network()
+    bus = mx.create_bus(net)
+    cold, hot = mx.create_water_junction(net), mx.create_water_junction(net)
+    mx.create_p2h(
+        net,
+        bus,
+        cold_node_id=cold,
+        hot_node_id=hot,
+        heat_energy_mw=1.0,
+        diameter_m=0.1,
+        efficiency=3.0,
+    )
+    attach_formulations(net, "el_misocp")
+    for node in net.nodes:
+        if hasattr(node.model, "vm_pu_squared"):
+            node.model.vm_pu_squared.value = 0.25
+
+    flagged = [w.component for w in _bound_entries(net, set())]
+
+    assert flagged == [f"Bus.{bus}"]

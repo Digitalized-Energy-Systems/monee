@@ -66,6 +66,9 @@ The routing rules (implemented in :func:`~monee.solver.resolve_solver` in
 - ``"gurobi"`` routes to the native in-memory gurobipy back-end when
   ``gurobipy`` is importable and the solve is single-period. Multi-period
   solves, or an environment without ``gurobipy``, use Pyomo's Gurobi plugin.
+  Both take the quadratic formulations (``nonconvex_miqcqp``, ``el_misocp``
+  ...), switchable branches included; another Pyomo plugin name (for example
+  ``"gurobi_direct"``) is forwarded to Pyomo unchanged.
 - Any other name (``"scip"``, ``"glpk"``, ``"cbc"``, …) is forwarded to
   Pyomo's ``SolverFactory``.
 - ``backend="casadi"`` / ``"gekko"`` / ``"pyomo"`` / ``"gurobipy"`` overrides
@@ -423,13 +426,9 @@ occasionally fails the step computation. The Stepper therefore hints the
 CasADi back-end (``CasADiSolver.set_warm_start_hint``, a no-op on the other
 back-ends) whenever the injected values are a previous solution, and that
 solve runs with IPOPT warm start options (``mu_init=1e-6``, small bound
-pushes) instead. Whether that pays off depends on the network: on small
-power-only nets it saves iterations, but on multi-energy networks the
-previous solution sits on the degenerate bounds of the pos/neg flow splits
-and the warm options can multiply the iteration count (the bundled 32-node
-:func:`~monee.network.create_monee_benchmark_net` needed 285-387 IPOPT
-iterations per step warm against 44-95 cold). See
-:doc:`../how-to/stepper` for the softened options or ``warm_start=False``.
+pushes) instead. Those options need the whole previous point, including
+the variables a formulation declares on the solve copy only; the persisted
+solution carries them (see :doc:`../how-to/stepper`).
 
 ----
 
@@ -481,8 +480,10 @@ monee's back-ends pass their own preset options to each solver:
   of grinding on the optimality proof. Override per call with the
   ``solver_options`` keyword, which ``run_energy_flow``,
   ``run_energy_flow_optimization``, ``run_timeseries`` and the ``Stepper``
-  forward to the backend (``run_multi_period`` and ``run_mpc`` do not take
-  it):
+  forward to the backend. ``run_multi_period`` takes it too on the Pyomo
+  back-end, or ``PyomoMultiPeriodSolver(name, solver_options)``; there the
+  options go to the solver as given, without the presets (``run_mpc`` does
+  not take it):
 
   .. code-block:: python
 
@@ -501,13 +502,24 @@ monee's back-ends pass their own preset options to each solver:
   an incumbent reports ``"aborted"`` / ``"maxTimeLimit"``, so scripts can
   tell a tolerance stop from a real timeout. A time limit without an
   incumbent reports the same status with ``success=False``; it says nothing
-  about feasibility.
+  about feasibility. ``result.solver_stats`` holds ``obj``, the dual
+  ``bound`` and the relative ``gap`` in both cases (NaN where the solver has
+  none, e.g. ``obj`` without an incumbent). A multi-period solve stopped at a
+  limit returns its incumbent the same way, with ``success=True``, instead of
+  raising.
 - gurobipy: the native back-end runs with ``MIPGap=1e-3`` and
   ``TimeLimit=300`` (``DEFAULT_GUROBI_PARAMS`` in ``monee.solver.gurobipy``).
   Pass ``GurobipySolver(params={...})`` to merge in any other Gurobi
   parameter, or the per-call ``solver_options`` keyword as above (merged over
   the instance parameters; ``None`` drops a key), e.g.
-  ``solver="gurobi", solver_options={"TimeLimit": 30}``.
+  ``solver="gurobi", solver_options={"TimeLimit": 30}``. Gurobi can end a
+  non-convex solve with status OPTIMAL while its incumbent lies far outside
+  ``MIPGap`` and ``MIPGapAbs`` of its own final bound; monee reports a solve
+  whose gap exceeds ten times that tolerance as ``"warning"`` /
+  ``"feasible"``. A gap slightly above the tolerance stays ``"optimal"``:
+  Gurobi stops on the gap of its presolved model, and mapping the incumbent
+  back can widen the reported gap. ``result.solver_stats`` holds the
+  objective, bound and gap.
 
 IPOPT's default monotone barrier is sensitive to the starting point: on a model
 that is perfectly feasible it can still fail the step computation or the
@@ -517,6 +529,22 @@ CasADi back-end therefore retries a solve that ends on anything other than
 and keeps the better of the two outcomes. A solve that only reaches the
 acceptable level after the retry is reported with
 ``solver_status="warning"``.
+
+The starting point also decides *which* optimum IPOPT finds. An optimization
+on the CasADi back-end therefore first solves the network as a simulation at
+its current setpoints and starts IPOPT there (``start="simulation"``, the
+default of ``CasADiSolver`` and of the per-call keyword); if that simulation,
+or IPOPT from its point, does not converge, the solve falls back to the
+formulations' flat seeds (``start="flat"``), and
+``result.solver_stats["start"]`` says which start was used. The flat start
+puts every pipe at zero flow, where an idle pipe delivers water at ground
+temperature: on district heating networks IPOPT then often stops with pipes
+idle and a penalised slack covering the losses. A better start is no
+certificate: ``Solve_Succeeded`` means a local optimum. Solving once with
+each start is a cheap test, since two different objectives prove that the
+problem has several local optima; only a global solver (``solver="scip"`` on
+``formulation="nonconvex_miqcqp"``) certifies the optimum, see
+:doc:`../tutorials/mes_local_optima`.
 
 ----
 
@@ -630,7 +658,9 @@ result as ``result.infeasibility_report``. The GEKKO back-end raises a
 :class:`~monee.solver.GekkoSolveError` carrying a parsed APMonitor report in its
 ``.report`` attribute. The native gurobipy back-end attaches a
 :class:`~monee.solver.gurobipy.GurobiIISReport` (the irreducible inconsistent
-subsystem from ``computeIIS``) to ``result.infeasibility_report``. The CasADi
+subsystem from ``computeIIS``) to ``result.infeasibility_report``;
+``GurobipySolver(iis=False)`` skips that computation, which on a large
+non-convex model can take far longer than the solve. The CasADi
 back-end attaches a :class:`~monee.solver.casadi.CasADiFailureReport` with the
 IPOPT return status to the same attribute (and raises the same text under
 ``strict=True``). See

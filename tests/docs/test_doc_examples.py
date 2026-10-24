@@ -107,6 +107,7 @@ def run_page(page: str):
         "problems/load_shedding.rst",
         "problems/economic_dispatch.rst",
         "how-to/express_structures.rst",
+        "how-to/temperature_floor.rst",
         pytest.param(
             "how-to/district_heating.rst",
             marks=pytest.mark.skipif(

@@ -54,6 +54,15 @@ Run a mass-flow-prescribed consumer next to a CHP or P2H with the bypass
 pattern, and drive the loop to part load from a demand profile.
 :::
 
+:::{grid-item-card} Temperature floor at selected junctions
+:link: temperature_floor
+:link-type: doc
+:shadow: sm
+
+Keep the supply temperature at chosen substations above a minimum with a
+constraint on `t_pu`, or set a grid-wide floor with `bounds`.
+:::
+
 :::{grid-item-card} Timeseries simulation
 :link: timeseries
 :link-type: doc
@@ -158,6 +167,7 @@ troubleshooting
 diagnose_infeasibility
 islanding
 district_heating
+temperature_floor
 timeseries
 stepper
 multi_period

@@ -17,7 +17,7 @@ import math
 from monee.model.child import GridFormingMixin
 from monee.model.core import Var, set_initial_value
 from monee.model.grid import WaterGrid
-from monee.model.node import Junction
+from monee.model.node import Junction, _heat_gate
 from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
 
 from .core import NetworkAspect
@@ -247,7 +247,7 @@ def _branch_ignored(branch, ignored_nodes) -> bool:
 
 
 def _plain_flows(bvars):
-    on_off = bvars.get("on_off", 1)
+    on_off = _heat_gate(bvars)
     return (
         bvars["mass_flow_pos_kgs"] * on_off,
         bvars["mass_flow_neg_kgs"] * on_off,

@@ -69,8 +69,11 @@ $$C^2 = \frac{\pi^2 D^5}{16 \, L \, R \, T_\text{gas} \, Z}$$
 
 where *D* is the inner diameter, *L* is the pipe length, *R* is the specific
 gas constant, *T*\_gas is the gas temperature, and *Z* is the compressibility
-factor. Gas density along each pipe is computed from the ideal-gas law
-using the average pressure between the two endpoints.
+factor. Gas density along each pipe is the real-gas
+$\rho = p M / (Z R T)$ at the average pressure between the two endpoints: the
+exact mean of a steady isothermal pipe,
+$\tfrac{2}{3}(p_i^2 + p_i p_j + p_j^2)/(p_i + p_j)$, on pipes with linepack
+under the NLP formulation, and the linearised mean elsewhere.
 
 | Variable | Symbol | Unit |
 |---|---|---|
@@ -90,7 +93,9 @@ is split into two non-negative variables $\dot{m}_{ij}$ / $\dot{m}_{ji}$
 convention `direction == 0` means *forward* flow, carried by
 `mass_flow_neg_kgs`. The squared flows enter through a convex epigraph relaxation
 kept tight by a small objective term, so MIQCP solvers recognise the problem
-as a MISOCP.
+as a MISOCP. Under an economic objective that term is negligible and the
+epigraph comes back slack; the solve then replaces it by the exact Weymouth
+state of the solved injections (`restore_exact_weymouth`).
 
 That split fixes the sign of the reported flow: every hydraulic branch reports
 `mass_flow_kgs = mass_flow_pos_kgs - mass_flow_neg_kgs`, so `mass_flow_kgs`
@@ -196,7 +201,7 @@ smooth NLP gas and water/heat formulations (`GAS_NLP_FORMULATION`,
 
 | Mode | Friction factor | When to use |
 |---|---|---|
-| `constant` (default) | Per-pipe constant: the turbulent Swamee-Jain asymptote $f = 0.25 / \log_{10}\!\big(\tfrac{\epsilon}{3.7 D}\big)^2$ | Turbulent networks (Re ≳ 10⁴). It is the fully rough limit, so it is a lower bound: in a district heating network (Re 10⁵ to 10⁶, ε = 0.1 mm) the Reynolds-dependent factor (`nonlinear`) is 5 to 10 % higher, and so is the pressure drop |
+| `constant` (default) | Per-pipe constant: the turbulent Swamee-Jain asymptote $f = 0.25 / \log_{10}\!\big(\tfrac{\epsilon}{3.7 D}\big)^2$ | Turbulent networks (Re ≳ 10⁴). It is the fully rough limit, so it is a lower bound: in a district heating network (Re 10⁵ to 10⁶, ε = 0.1 mm) the Reynolds-dependent factor (`nonlinear`) is 5 to 10 % higher, and so is the pressure drop; in the gas grid of a district case study the Colebrook drop was 69 % higher |
 | `hybrid` | Hagen-Poiseuille laminar term ($64/\mathrm{Re}$, linear in flow) plus the fully-rough turbulent term; matches pandapipes' default Nikuradse law and stays QCQP-representable | Mixed laminar/turbulent networks where a closed-form variable friction is enough |
 | `pwl` | Piecewise function of the flow: a cubic-spline interpolation of the full drop term over log-spaced breakpoints | Laminar-heavy networks needing a variable friction without a Reynolds closure |
 | `nonlinear` | Smooth sigmoid blend of the laminar law and Swamee-Jain, Reynolds-coupled | Laminar-heavy networks solved as pure NLPs |

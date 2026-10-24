@@ -1,3 +1,5 @@
+__version__ = "2.3.0"
+
 import monee.model as mm
 import monee.solver as ms
 import monee.problem as mp
@@ -7,6 +9,7 @@ from monee.model.extension import (
     NetworkAspect,
     LumpedThermalCapacitance,
     GasLinepack,
+    PlugFlowTransport,
     GridFormingMixin,
     IslandingMode,
     NetworkIslandingConfig,
@@ -278,7 +281,7 @@ def solve_load_shedding_problem(
         network (Network): The network to optimize, representing the system's topology and parameters.
         demand_weight: Objective weight per shed demand unit.
         generator_weight: Objective weight per shed generation unit.
-        weight_for_load: Optional callable ``weight_for_load(model)`` returning a per-load weight (None falls back to ``demand_weight``).
+        weight_for_load: Optional callable ``weight_for_load(model)`` returning a per-load weight, used as given and never rescaled by the priority floor (None falls back to ``demand_weight``).
         bounds_vm (tuple): Per-unit voltage-magnitude bounds (min, max) for the electrical subsystem.
         bounds_pressure (tuple): Per-unit pressure bounds (min, max) for the gas subsystem.
         bounds_t (tuple): Per-unit temperature bounds (min, max) for the thermal subsystem.
