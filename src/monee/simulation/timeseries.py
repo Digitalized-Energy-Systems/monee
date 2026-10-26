@@ -1,4 +1,5 @@
 import logging
+import warnings
 from abc import ABC
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -7,7 +8,17 @@ from typing import Any
 import pandas
 
 from monee.model import Network
-from monee.model.core import Branch, Child, Compound, Node, Var
+from monee.model.core import (
+    Branch,
+    Child,
+    Compound,
+    CompoundModel,
+    Const,
+    Intermediate,
+    Node,
+    PostProcess,
+    Var,
+)
 from monee.simulation.core import solve
 from monee.simulation.result_utils import (
     build_attribute_frame as _build_attribute_frame,
@@ -20,6 +31,9 @@ from monee.simulation.result_utils import (
 )
 from monee.simulation.result_utils import (
     build_type_stats_html as _build_type_stats_html,
+)
+from monee.simulation.result_utils import (
+    split_id_key as _split_id_key,
 )
 from monee.simulation.result_utils import (
     wrap_result_html as _wrap_result_html,
@@ -36,15 +50,23 @@ _log = logging.getLogger(__name__)
 
 _STEP_FAILED_MSG = "Step %d failed: %s"
 
-_SERIES_ATTRS = (
-    "_node_id_to_series",
-    "_child_id_to_series",
-    "_child_name_to_series",
-    "_branch_id_to_series",
-    "_branch_name_to_series",
-    "_compound_id_to_series",
-    "_compound_name_to_series",
+_SERIES_KINDS = (
+    ("node id", "_node_id_to_series", Node, None),
+    ("child id", "_child_id_to_series", Child, None),
+    ("child name", "_child_name_to_series", Child, "name"),
+    ("branch id", "_branch_id_to_series", Branch, None),
+    ("branch name", "_branch_name_to_series", Branch, "name"),
+    ("compound id", "_compound_id_to_series", Compound, None),
+    ("compound name", "_compound_name_to_series", Compound, "name"),
 )
+_SERIES_ATTRS = tuple(attr for _, attr, _, _ in _SERIES_KINDS)
+
+
+def _var_attrs(model, series_dict: dict, key, kinds=Var) -> list[str]:
+    if key is None:
+        return []
+    attrs = series_dict.get(key, ())
+    return [attr for attr in attrs if isinstance(getattr(model, attr, None), kinds)]
 
 
 def _unsuccessful_solve_error(step: int, result) -> RuntimeError:
@@ -189,6 +211,10 @@ class TimeseriesData:
             current.max = value
         else:
             setattr(model, attr, value)
+        # A compound attribute is only a build-time seed; without this push the
+        # new value never reaches the sub-component carrying the equations.
+        if isinstance(model, CompoundModel):
+            model.sync()
 
     def _apply_series(self, comp, timestep: int, id_dict, name_dict=None) -> None:
         if comp.id in id_dict:
@@ -235,6 +261,100 @@ class TimeseriesData:
         for comp in net.iter_all_components():
             self._dispatch[type(comp)](self, comp, timestep)
 
+    def _registered(self) -> tuple[tuple[str, dict], ...]:
+        return tuple((kind, getattr(self, attr)) for kind, attr, _, _ in _SERIES_KINDS)
+
+    def series_labels(self) -> list[str]:
+        """Human-readable ``"<kind> <key>"`` labels of all registered series."""
+        return [f"{kind} {key!r}" for kind, d in self._registered() for key in d]
+
+    def slice(self, start: int, stop: int) -> "TimeseriesData":
+        """New :class:`TimeseriesData` with every registered series cut to the
+        positional window ``[start, stop)``. The explicit way to fit a long
+        profile to a shorter run horizon (see also :meth:`head`)."""
+        if self._length is None:
+            raise ValueError(
+                "Cannot slice: no series registered. See the how-to/timeseries "
+                "docs page."
+            )
+        if not 0 <= start < stop <= self._length:
+            raise ValueError(
+                f"slice({start}, {stop}) is out of range for series of length "
+                f"{self._length}; 0 <= start < stop <= length is required. "
+                "See the how-to/timeseries docs page."
+            )
+        new_td = TimeseriesData()
+        for attr in _SERIES_ATTRS:
+            # list(...) first: a pandas Series would slice by label, not by
+            # position, and later per-step reads are positional.
+            setattr(
+                new_td,
+                attr,
+                {
+                    key: {a: list(series)[start:stop] for a, series in attrs.items()}
+                    for key, attrs in getattr(self, attr).items()
+                },
+            )
+        new_td._length = stop - start
+        return new_td
+
+    def head(self, n: int) -> "TimeseriesData":
+        """First *n* steps of every registered series (``slice(0, n)``)."""
+        return self.slice(0, n)
+
+    def unbound_keys(self, net: Network) -> list[str]:
+        """Registered keys (ids and names) that match no component of *net*,
+        as human-readable ``"<kind> <key>"`` labels."""
+        present: dict[tuple[type, str | None], set] = {
+            (cat, key_attr): set() for _, _, cat, key_attr in _SERIES_KINDS
+        }
+        for comp in net.iter_all_components():
+            cat = type(comp)
+            present[(cat, None)].add(comp.id)
+            name = getattr(comp, "name", None)
+            if name is not None and (cat, "name") in present:
+                present[(cat, "name")].add(name)
+        return [
+            f"{kind} {key!r}"
+            for kind, attr, cat, key_attr in _SERIES_KINDS
+            for key in getattr(self, attr)
+            if key not in present[(cat, key_attr)]
+        ]
+
+    def validate_bound(self, net: Network, strict: bool = True) -> list[str]:
+        """Check that every registered series binds to a component of *net* and
+        return the unmatched keys. Raises ``KeyError`` listing them; the run
+        drivers pass ``strict=False``, which logs them as a warning instead."""
+        unbound = self.unbound_keys(net)
+        if unbound:
+            message = (
+                "Timeseries series registered for components that do not exist "
+                f"in the network: {', '.join(sorted(unbound))}. "
+                "Such a series is never applied. "
+                "See the how-to/timeseries docs page."
+            )
+            if strict:
+                raise KeyError(message)
+            warnings.warn(message, stacklevel=2)
+        return unbound
+
+    def var_targets(self, net: Network, kinds=Var) -> list[tuple[str, Any, str, Any]]:
+        """Registered series whose target attribute is a solver ``Var`` on the
+        bound component's model, as ``(kind, key, attribute, model)`` tuples.
+        In a simulation such a series does not act as an input: the solver
+        owns the Var's value (see :func:`run`). *kinds* selects other
+        attribute types instead (e.g. the reporting-only ``PostProcess``)."""
+        lookups: dict[type, list[tuple[str, dict, str | None]]] = {}
+        for kind, attr, cat, key_attr in _SERIES_KINDS:
+            lookups.setdefault(cat, []).append((kind, getattr(self, attr), key_attr))
+        hits: list[tuple[str, Any, str, Any]] = []
+        for comp in net.iter_all_components():
+            for kind, series_dict, key_attr in lookups[type(comp)]:
+                key = comp.id if key_attr is None else getattr(comp, key_attr, None)
+                for attr in _var_attrs(comp.model, series_dict, key, kinds):
+                    hits.append((kind, key, attr, comp.model))
+        return hits
+
     @staticmethod
     def _merge_component_data(target: dict, source: dict) -> dict:
         """Attribute-level merge with target-wins semantics on conflicts."""
@@ -247,16 +367,31 @@ class TimeseriesData:
         return result
 
     def extend(self, td: "TimeseriesData") -> None:
-        """Merge *td*; self wins on attribute conflicts. Raises on length mismatch."""
+        """Merge *td*; self wins on attribute conflicts. Unequal lengths merge
+        by truncating every series (on both sides) to the shorter length, with
+        a single warning; use :meth:`head`/:meth:`slice` to pick the window
+        explicitly instead."""
         if (
             td._length is not None
             and self._length is not None
             and td._length != self._length
         ):
-            raise ValueError(
-                f"Cannot extend: incoming TimeseriesData has length {td._length} "
-                f"but this object has length {self._length}."
+            shorter = min(self._length, td._length)
+            warnings.warn(
+                f"Merging TimeseriesData of unequal lengths ({self._length} "
+                f"and {td._length}): every series is truncated to the shorter "
+                f"length {shorter}. Truncate explicitly with head({shorter}) "
+                "or slice(start, stop) to choose the window. See the "
+                "how-to/timeseries docs page.",
+                stacklevel=2,
             )
+            if td._length > shorter:
+                td = td.head(shorter)
+            else:
+                trimmed = self.head(shorter)
+                for attr in _SERIES_ATTRS:
+                    setattr(self, attr, getattr(trimmed, attr))
+                self._length = shorter
         for attr in _SERIES_ATTRS:
             setattr(
                 self,
@@ -291,13 +426,23 @@ class TimeseriesData:
 
 @dataclass
 class StepResult:
-    """Outcome of a single timeseries step."""
+    """Outcome of a single timeseries step.
+
+    :class:`~monee.simulation.stepper.Stepper` fills the timing fields: *dt_h*
+    is the interval the caller asked for, *effective_dt_h* the one the solve
+    integrated over (they differ when a failed step's interval was carried
+    forward) and *t_h* the clock time at the start of the step. They stay
+    ``None`` for :func:`monee.run_timeseries` results, whose interval is the
+    run-wide ``dt_h`` / ``datetime_index``."""
 
     step: int
     result: Any
     failed: bool = False
     skipped: bool = False
     error: Exception | None = None
+    dt_h: float | None = None
+    effective_dt_h: float | None = None
+    t_h: float | None = None
 
 
 class TimeseriesResult:
@@ -310,13 +455,21 @@ class TimeseriesResult:
         datetime_index: pandas.DatetimeIndex | None = None,
         backend_used: str | None = None,
         solver_used: str | None = None,
+        index_offset: int = 0,
+        reuse_path: str | None = None,
     ) -> None:
         self._step_results = step_results
         self._datetime_index = datetime_index
+        # Subtracted from absolute step numbers before indexing datetime_index;
+        # the Stepper uses it to accept a window-sized index under max_history.
+        self._index_offset = index_offset
         #: Backend and solver convention selected for this timeseries run
         #: (see :func:`monee.solver.dispatch.resolve_solver`).
         self.backend_used = backend_used
         self.solver_used = solver_used
+        #: Build-once reuse driver that solved the run (``"casadi"`` /
+        #: ``"gurobipy"``), ``None`` for the per-step rebuild loop.
+        self.reuse_path = reuse_path
         self._cache: dict[tuple, pandas.DataFrame] = {}
 
     @property
@@ -339,6 +492,8 @@ class TimeseriesResult:
 
     def _make_index(self, step_indices: list[int]) -> pandas.Index:
         if self._datetime_index is not None:
+            if self._index_offset:
+                step_indices = [s - self._index_offset for s in step_indices]
             return self._datetime_index[step_indices]
         # Label rows by step number (not positionally) so rows stay aligned
         # after skipped/failed steps or bounded history.
@@ -357,15 +512,24 @@ class TimeseriesResult:
         self._cache[model_type, attribute] = df
         return df
 
-    def __getitem__(self, component_id) -> pandas.DataFrame:
-        """All result attributes for *component_id* across every successful step."""
-        return _build_component_frame(self._frames(), component_id, self._make_index)
+    def __getitem__(self, key) -> pandas.DataFrame:
+        """All result attributes for a component across every successful step.
+        *key* is the component id, or ``(id, model_type)`` when the id is
+        shared by several component categories."""
+        component_id, model_type = _split_id_key(key)
+        return _build_component_frame(
+            self._frames(), component_id, self._make_index, model_type
+        )
 
-    def get_result_for_id(self, component_id, attribute: str) -> pandas.Series:
+    def get_result_for_id(
+        self, component_id, attribute: str, model_type=None
+    ) -> pandas.Series:
         """Series of *attribute* for *component_id* across successful steps.
-        Yields ``None`` where the component is absent (e.g. islanded out)."""
+        Yields ``None`` where the component is absent (e.g. islanded out).
+        Component ids are unique per category only; *model_type* selects one
+        when the id matches several."""
         return _build_id_series(
-            self._frames(), component_id, attribute, self._make_index
+            self._frames(), component_id, attribute, self._make_index, model_type
         )
 
     def summary(self):
@@ -382,8 +546,8 @@ class TimeseriesResult:
         if n_skipped:
             status_parts.append(f"{n_skipped} skipped")
 
-        SEP = "─" * 68
-        lines = [f"TimeseriesResult  {' · '.join(status_parts)}", SEP]
+        SEP = "-" * 68
+        lines = [f"TimeseriesResult  {' | '.join(status_parts)}", SEP]
 
         # Component-type summary from first successful step
         successful = self._successful()
@@ -407,10 +571,10 @@ class TimeseriesResult:
                     s = _col_summary(vis_num[col])
                     if s is None:
                         continue
-                    parts.append(f"{col} ∈ {s}" if "[" in s else f"{col} = {s}")
-                row = f"  {type_name:<22} ×{n_comp:>2}"
+                    parts.append(f"{col} in {s}" if "[" in s else f"{col} = {s}")
+                row = f"  {type_name:<22} x{n_comp:>2}"
                 if parts:
-                    row += "  │  " + "  ·  ".join(parts[:3])
+                    row += "  |  " + "  ;  ".join(parts[:3])
                 lines.append(row)
         else:
             lines.append("  (no successful steps)")
@@ -427,13 +591,13 @@ class TimeseriesResult:
         status_parts = [f"{n_total} step{'s' if n_total != 1 else ''}"]
         if n_failed:
             status_parts.append(f"{n_failed} failed")
-        title = f"TimeseriesResult  {' · '.join(status_parts)}"
+        title = f"TimeseriesResult  {' | '.join(status_parts)}"
 
         if not successful:
             return title + "\n  (no successful steps)"
 
         last = successful[-1]
-        SEP = "─" * 68
+        SEP = "-" * 68
         lines = [title, f"  [showing step {last.step}]"]
         for type_name, df in last.result.dataframes.items():
             vis = _display_df(df)
@@ -461,7 +625,7 @@ class TimeseriesResult:
             extra_parts.append(f"<span style='color:#c00'>{n_failed} failed</span>")
         if n_skipped:
             extra_parts.append(f"<span style='color:#888'>{n_skipped} skipped</span>")
-        status_html = " &nbsp;·&nbsp; ".join(extra_parts) if extra_parts else ""
+        status_html = " &nbsp;&middot;&nbsp; ".join(extra_parts) if extra_parts else ""
 
         sections = []
         successful = self._successful()
@@ -477,7 +641,7 @@ class TimeseriesResult:
         return _wrap_result_html(
             "TimeseriesResult",
             f"<span style='font-weight:normal;color:#555'>{step_info}</span>"
-            + (f" &nbsp;·&nbsp; {status_html}" if status_html else ""),
+            + (f" &nbsp;&middot;&nbsp; {status_html}" if status_html else ""),
             sections,
         )
 
@@ -552,6 +716,95 @@ def _network_has_temporal_coupling(net: Network) -> bool:  # NOSONAR
     return False
 
 
+def _declares_var(model, depth: int = 1) -> bool:
+    """True if *model* (or, up to *depth* levels down, one of its sub-models)
+    carries a solver ``Var`` attribute."""
+    for value in vars(model).values():
+        if isinstance(value, Var):
+            return True
+        if depth and hasattr(value, "__dict__") and _declares_var(value, depth - 1):
+            return True
+    return False
+
+
+def _temporal_replay_violations(net: Network, step_state, step: int) -> list:
+    """Result warnings for ``inter_temporal_equations`` that evaluate to a
+    constant ``False`` at *step*.
+
+    Every term of such a constraint is a prescribed (replayed) value, so the
+    backends drop it as structurally infeasible (``Equation``'s ``eq is False``
+    branch) and the step still reports success. Detecting it here keeps a
+    prescribed series that violates the model's own temporal constraint from
+    passing silently.
+
+    Only models that declare no ``Var`` are examined: for those the equations
+    built here are exactly the ones the backend builds after variable injection,
+    so a ``False`` really is a decided-and-violated constraint. A model with a
+    ``Var`` would compare its un-injected placeholder and yield ``False`` for
+    any constraint at all.
+    """
+    entries = []
+    for component in net.iter_all_components():
+        if not getattr(component, "ignored", False):
+            _component_replay_violations(component, step_state, step, entries)
+    return entries
+
+
+def _component_replay_violations(component, step_state, step: int, entries) -> None:
+    from monee.solver.core import as_iter
+
+    for owner, args in (
+        (component.model, (step_state, component.id)),
+        (component.formulation, (component.model, step_state, component.id)),
+    ):
+        method = getattr(owner, "inter_temporal_equations", None)
+        if method is None:
+            continue
+        if _declares_var(component.model):
+            return
+        try:
+            eqs = list(as_iter(method(*args)))
+        except Exception:  # noqa: BLE001 - the solve reports it properly
+            continue
+        entries.extend(
+            _replay_violation_warning(component, index, step)
+            for index, eq in enumerate(eqs)
+            if eq is False
+        )
+
+
+def _replay_violation_warning(component, index: int, step: int):
+    from monee.solver.core import ResultWarning
+
+    return ResultWarning(
+        "temporal",
+        f"step {step}: inter_temporal_equations[{index}] of "
+        f"{type(component.model).__name__} is violated by the "
+        "prescribed series; every term is a replayed value, so "
+        "the constraint is dropped instead of enforced. See "
+        "the how-to/timeseries docs page on prescribed-replay "
+        "semantics.",
+        component=str(component.id),
+    )
+
+
+def _report_temporal_replay_violations(entries, result, strict: bool) -> None:
+    """Attach *entries* to ``result.warnings`` and surface them; under *strict*
+    raise the same :class:`ValidationError` a strict solve would raise."""
+    from monee.solver.core import ValidationError
+
+    if not entries:
+        return
+    result.warnings.extend(entries)
+    if strict:
+        raise ValidationError(result.warnings)
+    warnings.warn(
+        "Prescribed timeseries values violate inter-temporal constraints: "
+        + "; ".join(str(entry) for entry in entries),
+        stacklevel=4,
+    )
+
+
 def _dt_h_at_step(datetime_index, step: int) -> float | None:
     """Inter-step interval in hours at *step* derived from *datetime_index*:
     later steps use the interval to the prior timestamp, the first step borrows
@@ -569,14 +822,35 @@ def _dt_h_at_step(datetime_index, step: int) -> float | None:
 
 
 def _td_has_name_or_compound_series(td: TimeseriesData) -> bool:
-    """True if *td* carries series the build-once reuse drivers do not wire
-    (only id-addressed child/node/branch series are declared as parameters)."""
+    """True if *td* carries series the gurobipy build-once driver does not
+    wire (it declares only id-addressed child/node/branch series as
+    parameters; the CasADi driver handles name and compound series too)."""
     return bool(
         td._child_name_to_series
         or td._branch_name_to_series
         or td._compound_id_to_series
         or td._compound_name_to_series
     )
+
+
+def _td_switches_topology(td: TimeseriesData, net) -> bool:
+    """True if a branch ``on_off`` series opens a branch at some step (or
+    closes one that the base network has open). Pruning reads ``on_off`` once
+    when a build-once reuse driver is built, so such a series needs the
+    per-step rebuild loop to drop and re-add the isolated part."""
+    for branch in net.branches:
+        series = td._branch_id_to_series.get(branch.id, {}).get("on_off")
+        name = getattr(branch, "name", None)
+        if name is not None and name in td._branch_name_to_series:
+            series = td._branch_name_to_series[name].get("on_off", series)
+        if series is None:
+            continue
+        base = branch.model.on_off
+        if any(float(v) == 0 for v in series) or (
+            isinstance(base, int | float) and base == 0
+        ):
+            return True
+    return False
 
 
 def _only_reuse_kwargs(solver_kwargs) -> bool:
@@ -606,11 +880,12 @@ def _casadi_reuse_eligible(
     """Whether the build-once / re-solve CasADi graph-reuse path can replace the
     per-step rebuild loop and produce identical results.
 
-    The parametric reuse driver only handles memory-less, id-addressed series on
-    a plain power flow, so it is gated to exactly those cases; anything else
-    (optimisation problem, step hooks observing temporal state, temporal coupling
-    in the network, name-addressed or compound series, or solver kwargs it cannot
-    honour) falls back to the standard loop.
+    The parametric reuse driver only handles memory-less series on a plain
+    power flow (id- and name-addressed, compound series included:
+    ``CasADiTimeseries._declare_params`` declares them all), so it is gated to
+    exactly those cases; anything else (optimisation problem, step hooks
+    observing temporal state, temporal coupling in the network, or solver
+    kwargs it cannot honour) falls back to the standard loop.
     """
     if not _is_casadi_solver(solver):
         return False
@@ -620,7 +895,7 @@ def _casadi_reuse_eligible(
     # (storage/linepack/LTC) must go through the per-step loop instead.
     if _network_has_temporal_coupling(net):
         return False
-    if _td_has_name_or_compound_series(timeseries_data):
+    if _td_switches_topology(timeseries_data, net):
         return False
     return _only_reuse_kwargs(solver_kwargs)
 
@@ -654,6 +929,7 @@ def _run_casadi_reuse(
         datetime_index=datetime_index,
         backend_used="casadi",
         solver_used="ipopt",
+        reuse_path="casadi",
     )
 
 
@@ -715,6 +991,8 @@ def _gurobipy_reuse_eligible(
         return False
     if _td_has_name_or_compound_series(timeseries_data):
         return False
+    if _td_switches_topology(timeseries_data, net):
+        return False
     return _only_reuse_kwargs(solver_kwargs)
 
 
@@ -761,6 +1039,7 @@ def _run_gurobipy_reuse(
         datetime_index=datetime_index,
         backend_used="gurobipy",
         solver_used="gurobi",
+        reuse_path="gurobipy",
     )
 
 
@@ -780,7 +1059,112 @@ def _resolve_steps(steps: int | None, timeseries_data: TimeseriesData | None) ->
             f"'steps' ({steps}) exceeds the length of the registered series "
             f"({length}).  Either register longer series or reduce 'steps'."
         )
+    if length is not None and length > steps:
+        # An explicit steps= (the only way to reach this branch) is a
+        # deliberate truncation, so this is a log note, not a warning; a
+        # length mismatch created by merging unequal series still warns at
+        # merge time (see TimeseriesData.extend).
+        labels = timeseries_data.series_labels()
+        shown = ", ".join(labels[:5]) + (", ..." if len(labels) > 5 else "")
+        _log.info(
+            "Registered series have length %d but the run covers %d step(s); "
+            "the values past step %d of %s are ignored. Truncate explicitly "
+            "with timeseries_data.head(%d) or .slice(start, stop). See the "
+            "how-to/timeseries docs page.",
+            length,
+            steps,
+            steps - 1,
+            shown,
+            steps,
+        )
     return steps
+
+
+def _settable_inputs(model) -> list[str]:
+    return sorted(
+        key
+        for key, val in vars(model).items()
+        if not key.startswith("_")
+        and (isinstance(val, Const) or isinstance(val, (int, float)))
+    )
+
+
+_VAR_SERIES_CONTEXTS = {
+    "simulation": (
+        "a simulation run",
+        "the model stays non-square and every step reports a dof finding",
+    ),
+    "multi_period": (
+        "a multi-period run",
+        "every period is pinned at once, which commonly makes the "
+        "single-shot solve infeasible",
+    ),
+}
+
+
+def _warn_on_report_series_targets(timeseries_data: TimeseriesData, net) -> None:
+    """Warn once at run start when a registered series targets a reported
+    value (``PostProcess`` / ``Intermediate``, e.g. ``Junction.t_k``): it is
+    recomputed from the solution, so the series has no effect at all."""
+    hits = timeseries_data.var_targets(net, kinds=(PostProcess, Intermediate))
+    if not hits:
+        return
+    details = [
+        f"{kind} {key!r} attribute {attr!r} on {type(model).__name__} "
+        f"(settable inputs: {', '.join(_settable_inputs(model)[:8]) or 'none'})"
+        for kind, key, attr, model in hits
+    ]
+    warnings.warn(
+        "Timeseries series target reported values that are recomputed from "
+        "the solution, so they have no effect: "
+        + "; ".join(details)
+        + ". A node quantity is usually driven via the input of an attached "
+        "boundary child (for example an ExtHydrGrid's 't_k'). See the "
+        "how-to/timeseries docs page.",
+        stacklevel=4,
+    )
+
+
+def _warn_on_var_series_targets(
+    timeseries_data: TimeseriesData, net: Network, context: str = "simulation"
+) -> None:
+    """Warn once at run start when a registered series targets a solver Var:
+    the series then only pins the Var through its bounds instead of driving it
+    as a plain parameter. Fires whenever a series binds to a component whose
+    model declares that attribute as a ``Var``, on both the sequential
+    (``run_timeseries``) and the single-shot (``run_multi_period``) path;
+    *context* selects the consequence clause and does not change when it
+    fires."""
+    _warn_on_report_series_targets(timeseries_data, net)
+    hits = timeseries_data.var_targets(net)
+    if not hits:
+        return
+    run_kind, consequence = _VAR_SERIES_CONTEXTS[context]
+    details = []
+    for kind, key, attr, model in hits:
+        inputs = _settable_inputs(model)
+        shown = ", ".join(inputs[:8]) + (", ..." if len(inputs) > 8 else "")
+        details.append(
+            f"{kind} {key!r} attribute {attr!r} is a solved variable (Var) on "
+            f"{type(model).__name__} (settable inputs: {shown or 'none'})"
+        )
+    node_hint = (
+        " A node quantity is usually driven via the input of an attached "
+        "boundary child (for example an ExtHydrGrid's 't_k')."
+        if any(kind == "node id" for kind, _, _, _ in hits)
+        else ""
+    )
+    warnings.warn(
+        f"Timeseries series target solved variables in {run_kind}: "
+        + "; ".join(details)
+        + ". Such a series only pins the Var through its bounds; "
+        + consequence
+        + ". Declare the "
+        "attribute as a plain float to make it a settable input, or pass an "
+        "optimization problem that controls the Var." + node_hint + " See the "
+        "how-to/timeseries docs page.",
+        stacklevel=3,
+    )
 
 
 def run(  # NOSONAR
@@ -796,27 +1180,61 @@ def run(  # NOSONAR
     progress_callback: Callable[[int, int], None] | None = None,
     datetime_index: pandas.DatetimeIndex | None = None,
     dt_h: float | None = None,
+    reuse: bool | str | None = None,
     **solver_kwargs,
 ) -> TimeseriesResult:
     """Run a timeseries simulation: copy net, apply timeseries, solve, collect.
 
-    ``steps`` defaults to ``timeseries_data.length``. ``on_step_error='skip'``
+    ``steps`` defaults to ``timeseries_data.length``. Registered series that
+    bind to no component of *net* are reported once, before the first step, as
+    a warning (:meth:`TimeseriesData.validate_bound` raises on them instead).
+    A series that targets a solver ``Var`` attribute warns up front in a
+    simulation run: such a series only pins the Var through its bounds and
+    leaves the model non-square (a dof finding per step); a series meant as an
+    input should target a settable input, i.e. a plain float or ``Const``
+    attribute.
+    An ``inter_temporal_equations`` entry whose terms are all prescribed or
+    replayed values cannot be enforced by the solve; it is reported as a
+    ``temporal`` entry in the step's ``SolverResult.warnings`` (and raised as a
+    ``ValidationError`` under ``strict=True``) instead of being dropped
+    silently. See the how-to/timeseries docs page.
+    ``on_step_error='skip'``
     records a failed StepResult and continues; a step whose solver reports an
     unsuccessful solve (``result.success == False``) counts as failed exactly
     like a raising solver. ``solver_kwargs`` are forwarded to
     ``solver.solve(...)``.
 
+    A plain flow run (``optimization_problem=None``) defaults to
+    ``simulation=True``, so a single step matches :func:`monee.run_energy_flow`
+    on the same network; pass ``simulation=False`` for the
+    optimize-the-feasibility-problem path.
+
     ``dt_h`` sets the constant inter-step interval in hours seen by
     ``inter_step_equations`` (default ``None`` keeps the StepState default of
     1.0). ``datetime_index`` overrides ``dt_h`` with per-step intervals.
+
+    ``reuse`` selects the solve path: ``None`` (default) takes a build-once
+    reuse driver (CasADi graph reuse, gurobipy model reuse) whenever the run is
+    eligible and the per-step rebuild loop otherwise, ``False`` always rebuilds
+    every step, and ``"require"`` raises ``ValueError`` when no reuse driver
+    can take the run. ``TimeseriesResult.reuse_path`` records the path taken.
 
     ``step_hooks`` entries may be :class:`StepHook` instances (receiving both
     ``pre_run`` and ``post_run``) or plain callables, which only receive the
     post-run call ``hook(net_copy, step, step_state, step_result, base_net)``.
     """
+    if reuse not in (None, False, "require"):
+        raise ValueError(f"reuse must be None, False or 'require'; got {reuse!r}.")
     steps = _resolve_steps(steps, timeseries_data)
     if timeseries_data is None:
         timeseries_data = TimeseriesData()
+    timeseries_data.validate_bound(net, strict=False)
+    if optimization_problem is None:
+        solver_kwargs.setdefault("simulation", True)
+    if solve_flag and solver_kwargs.get("simulation"):
+        _warn_on_var_series_targets(timeseries_data, net)
+    elif solve_flag:
+        _warn_on_report_series_targets(timeseries_data, net)
     if step_hooks is None:
         step_hooks = []
     if on_step_error not in ("raise", "skip"):
@@ -844,7 +1262,8 @@ def run(  # NOSONAR
     # re-solve each step with a warm start instead of rebuilding/recompiling the
     # whole model every step. Gated to the cases that produce identical results
     # (plain power flow, id-addressed memory-less series, no hooks/optimisation).
-    if solve_flag and _casadi_reuse_eligible(
+    try_reuse = solve_flag and reuse is not False
+    if try_reuse and _casadi_reuse_eligible(
         net,
         resolved_solver,
         optimization_problem,
@@ -868,7 +1287,7 @@ def run(  # NOSONAR
     # the time-varying inputs (and carried inter-step state) per step instead of
     # reconstructing the whole model every step. Gated to the cases that produce
     # identical results (see :func:`_gurobipy_reuse_eligible`).
-    if solve_flag and _gurobipy_reuse_eligible(
+    if try_reuse and _gurobipy_reuse_eligible(
         net,
         resolved_solver,
         optimization_problem,
@@ -891,6 +1310,13 @@ def run(  # NOSONAR
         )
         if reuse_result is not None:
             return reuse_result
+    if reuse == "require":
+        raise ValueError(
+            "run_timeseries(reuse='require'): no build-once reuse driver can take "
+            "this run (it needs a CasADi or gurobipy solver, no optimisation "
+            "problem or step hooks, and series/extensions the driver supports; "
+            "see the how-to/timeseries docs page)."
+        )
 
     step_results: list[StepResult] = []
     step_state = StepState()
@@ -912,6 +1338,11 @@ def run(  # NOSONAR
 
         if solve_flag:
             try:
+                # Evaluated before the solve: the backend sees exactly these
+                # prescribed values, and solving may rebind the attributes.
+                temporal_entries = _temporal_replay_violations(
+                    net_copy, step_state, step
+                )
                 result = solve(
                     net_copy,
                     optimization_problem=optimization_problem,
@@ -924,6 +1355,9 @@ def run(  # NOSONAR
                 # backends: no push, on_step_error honoured.
                 if getattr(result, "success", True) is False:
                     raise _unsuccessful_solve_error(step, result)
+                _report_temporal_replay_violations(
+                    temporal_entries, result, bool(solver_kwargs.get("strict"))
+                )
                 step_state.push(result.network, step=step)
                 sr = StepResult(step=step, result=result)
             except Exception as exc:

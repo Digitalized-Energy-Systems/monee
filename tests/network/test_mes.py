@@ -1,4 +1,5 @@
 import types
+import warnings
 
 import networkx as nx
 import pytest
@@ -18,7 +19,7 @@ from monee.model.formulation import (
 from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
 from monee.network import generate_supply_return_mes_based_on_power_net
 from monee.network.mes import GAS_HHV_MJ_PER_KG as mes_gas_hhv
-from monee.network.mes import get_length
+from monee.network.mes import create_heat_supply_return_net_for_power, get_length
 from monee.problem.min_load_shedding import create_min_load_shedding_problem
 from monee.simulation.timeseries import TimeseriesData
 from monee.solver import GEKKOSolver
@@ -1040,3 +1041,179 @@ def test_get_length_fallbacks():
     assert get_length(net, no_len, b0, b1) > 0  # geodesic between positions
     assert get_length(net, with_len, b0, b1) == 300.0  # explicit length wins
     assert get_length(net, no_len, b2, b3, default_length=123) == 123.0  # no pos
+
+
+def _power_net_with_uniform_loads(p_mw, n=5):
+    net = mm.Network(mm.create_power_grid("power"))
+    buses = [mx.create_bus(net) for _ in range(n)]
+    for a, b in zip(buses, buses[1:]):
+        mx.create_line(net, a, b, length_m=300, r_ohm_per_m=1e-4, x_ohm_per_m=1e-5)
+    for bus in buses[1:]:
+        mx.create_power_load(net, node_id=bus, p_mw=p_mw, q_mvar=0.0)
+    mx.create_ext_power_grid(net, node_id=buses[0])
+    return net
+
+
+def _sizing_warnings(power_net, **heat_kwargs):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        create_heat_supply_return_net_for_power(power_net, mm.Network(), **heat_kwargs)
+    return [str(w.message) for w in caught if "heat overlay carries" in str(w.message)]
+
+
+def test_heat_overlay_warns_when_flat_diameter_cannot_carry_the_design_flow():
+    # GIVEN MV-magnitude loads against the flat default_diameter_m
+    mv_net = _power_net_with_uniform_loads(2.0)
+
+    # WHEN / THEN the warning fires only where the flat diameter is actually used
+    messages = _sizing_warnings(mv_net, auto_diameter=False)
+    assert len(messages) == 1
+    assert "auto_diameter=True" in messages[0]
+
+    # AND not under the demand-based sizing that is now the default
+    assert _sizing_warnings(mv_net) == []
+    assert _sizing_warnings(mv_net, auto_diameter=True) == []
+
+    # AND none at the LV magnitude the flat default is meant for
+    assert (
+        _sizing_warnings(_power_net_with_uniform_loads(0.02), auto_diameter=False) == []
+    )
+
+
+def _cigre_mv_power_net():
+    pytest.importorskip("pandapower.networks")
+    import pandapower.networks as ppn
+
+    from monee.io.from_pandapower import from_pandapower_net
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return from_pandapower_net(ppn.create_cigre_network_mv(with_der="pv_wind"))
+
+
+@pytest.mark.pptest
+def test_cigre_mv_heat_overlay_solves_with_default_sizing():
+    # GIVEN the heat overlay of the docs' CIGRE MV example, in isolation
+    power_net = _cigre_mv_power_net()
+    heat_net = mm.Network()
+    create_heat_supply_return_net_for_power(power_net, heat_net)
+
+    # THEN the trunk pipes are widened past the flat default and the grid cap
+    # admits the trunk design flow
+    pipes = [b for b in heat_net.branches if isinstance(b.model, mm.WaterPipe)]
+    assert max(float(p.model.diameter_m) for p in pipes) > 0.12
+    assert pipes[0].grid.max_mass_flow_kgs > 200
+
+    # AND the overlay solves - it was Infeasible_Problem_Detected before sizing
+    # took the Darcy pressure budget and the HX-Gen injections into account
+    result = run_energy_flow(heat_net)
+    assert result.success
+    pressures = [
+        mvalue(n.model.pressure_pu)
+        for n in result.network.nodes
+        if isinstance(n.model, mm.Junction)
+    ]
+    assert min(pressures) >= 0.5
+
+
+@pytest.mark.pptest
+def test_cigre_mv_generated_mes_solves():
+    # GIVEN the F-006 reproduction: the one-call wrapper on CIGRE MV
+    mes = generate_supply_return_mes_based_on_power_net(
+        _cigre_mv_power_net(), coupling_density=0.2
+    )
+
+    # WHEN / THEN both the default and the smooth NLP bundle converge
+    assert run_energy_flow(mes.copy()).success
+    assert run_energy_flow(mes.copy(), formulation="smooth_nlp").success
+
+
+def test_heat_overlay_pipe_sizing_respects_the_pressure_budget():
+    # GIVEN a long radial feeder whose flow fits the velocity cap easily
+    power_net = _power_net_with_uniform_loads(2.0, n=4)
+    for branch in power_net.branches:
+        branch.model.length_m = 20000
+
+    sized = mm.Network()
+    create_heat_supply_return_net_for_power(power_net, sized)
+    velocity_only = mm.Network()
+    create_heat_supply_return_net_for_power(
+        power_net, velocity_only, auto_diameter_pressure_budget_pu=None
+    )
+
+    # THEN the pressure criterion, not the velocity one, sets the trunk diameter
+    def trunk_d(net):
+        return max(
+            float(b.model.diameter_m)
+            for b in net.branches
+            if isinstance(b.model, mm.WaterPipe)
+        )
+
+    assert trunk_d(sized) > trunk_d(velocity_only)
+
+    # AND the sized overlay solves where the velocity-only one does not
+    assert run_energy_flow(sized).success
+
+
+def _mes_fingerprint(mes):
+    childs = sorted(
+        (type(c.model).__name__, str(getattr(c, "node_id", None))) for c in mes.childs
+    )
+    compounds = sorted(
+        (type(c.model).__name__, str(sorted(map(str, c.connected_to.values()))))
+        for c in mes.compounds
+    )
+    return childs, compounds
+
+
+def _coupling_warnings(power_net, **kwargs):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        mes = generate_supply_return_mes_based_on_power_net(power_net, **kwargs)
+    return mes, [str(w.message) for w in caught if "coupling_density" in str(w.message)]
+
+
+def test_generate_mes_warns_when_density_yields_no_coupling_points():
+    pn = _power_net_with_uniform_loads(0.5)
+
+    mes, messages = _coupling_warnings(pn, coupling_density=0.01)
+    assert len(mes.compounds) == 0
+    assert len(messages) == 1
+    assert "coupling_density=0.01" in messages[0]
+    assert "generate_mes" in messages[0]
+
+    # an explicit zero density is a deliberate coupling-free build, not a surprise
+    _, messages = _coupling_warnings(pn, coupling_density=0)
+    assert messages == []
+
+    mes, messages = _coupling_warnings(pn, coupling_density=1.0)
+    assert len(mes.compounds) > 0
+    assert messages == []
+
+
+def test_generate_mes_seeded_deterministic_by_default():
+    import inspect
+    import random
+
+    sig = inspect.signature(generate_supply_return_mes_based_on_power_net)
+    assert "seed" in sig.parameters
+    assert sig.parameters["seed"].default == 0
+
+    pn = _power_net_with_uniform_loads(0.5)
+    for bus in (2, 3, 4):
+        mx.create_power_generator(pn, bus, p_mw=0.3, q_mvar=0.0)
+
+    random.seed(4321)
+    expected_stream = random.random()
+
+    random.seed(4321)
+    m1 = generate_supply_return_mes_based_on_power_net(pn, coupling_density=0.8)
+    m2 = generate_supply_return_mes_based_on_power_net(pn, coupling_density=0.8)
+    assert _mes_fingerprint(m1) == _mes_fingerprint(m2)
+    assert random.random() == expected_stream
+
+    m3 = generate_supply_return_mes_based_on_power_net(
+        pn, coupling_density=0.8, coupling_kwargs={"seed": 7}
+    )
+    m4 = generate_supply_return_mes_based_on_power_net(pn, coupling_density=0.8, seed=7)
+    assert _mes_fingerprint(m3) == _mes_fingerprint(m4)

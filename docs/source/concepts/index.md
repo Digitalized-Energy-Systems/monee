@@ -17,6 +17,15 @@ How monee represents networks as directed graphs: nodes, branches, children,
 grids, variables, and parameters, and how to build custom components.
 :::
 
+:::{grid-item-card} Conventions
+:link: conventions
+:link-type: doc
+:shadow: sm
+
+The cheat sheet: load convention per child class, branch signs, per-unit
+bases, default grid values, setpoint versus served, and `dt_h`.
+:::
+
 :::{grid-item-card} Physical models
 :link: domains
 :link-type: doc
@@ -105,6 +114,7 @@ with physics background and visualisation code.
 :hidden:
 
 data_model
+conventions
 domains
 multi_energy
 formulations

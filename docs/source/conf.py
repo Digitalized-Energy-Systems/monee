@@ -27,6 +27,7 @@ extensions = [
     "sphinx.ext.mathjax",
     "sphinxcontrib.mermaid",
     "interactive_plots",
+    "feature_map",
 ]
 
 templates_path = ["_templates"]
@@ -34,6 +35,18 @@ exclude_patterns = []
 
 autoclass_content = "both"
 suppress_warnings = ["autodoc"]
+
+# ``make doctest`` runs in environments without the optional pandapower
+# dependency (the CI build jobs install ``.[test]`` only). Examples that need
+# it carry ``:skipif: not HAS_PANDAPOWER`` and are skipped there instead of
+# failing on the import.
+doctest_global_setup = """
+try:
+    import pandapower  # noqa: F401
+    HAS_PANDAPOWER = True
+except ImportError:
+    HAS_PANDAPOWER = False
+"""
 autosectionlabel_prefix_document = True
 napoleon_google_docstring = True
 napoleon_numpy_docstring = True
@@ -75,6 +88,8 @@ html_theme = "furo"
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
+# Opens the sphinx-design tab that holds a linked #anchor.
+html_js_files = [("tab_anchor.js", {"defer": "defer"})]
 
 html_theme_options = {
     "light_logo": "monee-logo.drawio.svg",

@@ -92,3 +92,24 @@ def test_res_with_load_shedding():
     TOL = 1e-6
     assert (load_df["regulation"] >= -TOL).all(), "regulation must be non-negative"
     assert (load_df["regulation"] <= 1 + TOL).all(), "regulation must be at most 1"
+
+
+def test_auto_priority_floor_is_idempotent_across_applies():
+    # GIVEN a problem whose per-load weights sit below the auto priority floor
+    net = create_urban_district_net()
+    net.child_by_id(3).model._priority_weight = 1e5
+    net.branch_by_id((12, 13, 0)).model._priority_weight = 50
+    problem = mp.create_min_load_shedding_problem(
+        weight_for_load=lambda m: getattr(m, "_priority_weight", None)
+    )
+    attacher = problem.objectives._objectives[0]._data_attacher
+    loads = [m for m in net.all_models() if isinstance(m, mm.PowerLoad)]
+
+    # WHEN the same problem is applied repeatedly
+    problem._apply(net)
+    first = [attacher(model)[0] for model in loads]
+    for _ in range(3):
+        problem._apply(net)
+
+    # THEN the effective objective weights are unchanged
+    assert [attacher(model)[0] for model in loads] == first

@@ -67,6 +67,7 @@ from .core import (
     lex_cap_slack,
     mark_slacks_and_prescriptions,
     prepare_solve_network,
+    validate_result,
     withdraw_vars,
 )
 
@@ -101,21 +102,55 @@ _GRB_STATUS_TO_STRINGS: dict[str, tuple[str, str]] = {
 
 
 @functools.cache
-def _grb_status_map(GRB) -> dict[int, tuple[str, str]]:
+def _grb_status_map(grb) -> dict[int, tuple[str, str]]:
     """``{GRB status code: (solver_status, termination_condition)}`` for the
     bound GRB namespace (cached; codes are stable per gurobipy install)."""
     out: dict[int, tuple[str, str]] = {}
     for name, strings in _GRB_STATUS_TO_STRINGS.items():
-        code = getattr(GRB, name, None)
+        code = getattr(grb, name, None)
         if code is not None:
             out[code] = strings
     return out
 
 
+# gurobipy refuses any relational with a nonlinear expression on its left side
+# (``NLExpr.__le__`` & co. raise) before _add_temp_constr can rewrite it.
+_NL_FORM_ERROR = "Nonlinear constraints must take the form y=f(x)"
+_NL_FORM_HINT = (
+    "The gurobipy backend could not build a constraint with a nonlinear "
+    "expression on its left side (gurobipy only accepts 'y = f(x)'); typical "
+    "sources are the polar AC NLP electricity formulation (the default) and "
+    "problem limits on its nonlinear reports such as loading_from_pu. Pass a "
+    "formulation the backend handles, e.g. formulation='el_misocp' or "
+    "'nonconvex_miqcqp', or use solver='scip' / solver='ipopt'. See the "
+    "concepts/solvers docs page."
+)
+
 DEFAULT_GUROBI_PARAMS: dict = {
     "MIPGap": 1e-3,
     "TimeLimit": 300,
 }
+
+_SOLVER_STATS = (
+    ("obj", "ObjVal"),
+    ("bound", "ObjBound"),
+    ("gap", "MIPGap"),
+    ("runtime_s", "Runtime"),
+    ("status", "Status"),
+    ("nodes", "NodeCount"),
+)
+
+
+def _solver_stats(gm) -> dict:
+    """Final objective, dual bound, gap, runtime, status and node count of the
+    solved Gurobi model; NaN where Gurobi has none (no incumbent, an LP)."""
+    stats = {}
+    for key, attr in _SOLVER_STATS:
+        try:
+            stats[key] = float(getattr(gm, attr))
+        except Exception:  # noqa: BLE001 - attribute unavailable for this model
+            stats[key] = float("nan")
+    return stats
 
 
 def _require_gurobipy():
@@ -143,14 +178,21 @@ class GurobiIISReport:
         self.constraints = constraints
         self.bounds = bounds
 
-    def summary(self, max_items: int = 50) -> str:
+    @staticmethod
+    def _section(title: str, items: list[str], max_items: int) -> list[str]:
+        lines = [f"  {title} in IIS ({len(items)}):"]
+        lines += [f"    {i}" for i in items[:max_items]]
+        hidden = len(items) - max_items
+        if hidden > 0:
+            lines.append(f"    ... {hidden} more (truncated at max_items={max_items})")
+        return lines
+
+    def summary(self, max_items: int = 200) -> str:
         lines = ["Irreducible Inconsistent Subsystem (Gurobi IIS):"]
         if self.bounds:
-            lines.append(f"  Variable bounds in IIS ({len(self.bounds)}):")
-            lines += [f"    {b}" for b in self.bounds[:max_items]]
+            lines += self._section("Variable bounds", self.bounds, max_items)
         if self.constraints:
-            lines.append(f"  Constraints in IIS ({len(self.constraints)}):")
-            lines += [f"    {c}" for c in self.constraints[:max_items]]
+            lines += self._section("Constraints", self.constraints, max_items)
         if not self.bounds and not self.constraints:
             lines.append("  (empty IIS - model may be unbounded, not infeasible)")
         return "\n".join(lines)
@@ -186,7 +228,9 @@ class GurobipySolver(SolverInterface):
 
     Args:
         params: extra Gurobi parameters merged over :data:`DEFAULT_GUROBI_PARAMS`
-            (e.g. ``{"TimeLimit": 60, "MIPGap": 1e-4}``).
+            (e.g. ``{"TimeLimit": 60, "MIPGap": 1e-4}``). :meth:`solve` also
+            takes a per-call ``solver_options`` dict merged over these, as the
+            Pyomo backend does; a ``None`` value drops the key (Gurobi default).
     """
 
     _BOUND_SNAP_TOL = 1e-9
@@ -520,7 +564,7 @@ class GurobipySolver(SolverInterface):
                 "%s infeasible (status=%s).  Diagnostic report:\n%s",
                 phase_label,
                 status,
-                report.summary(max_items=50),
+                report.summary(),
             )
             return False, report, solver_status, tc
         if gm.SolCount > 0:
@@ -540,21 +584,35 @@ class GurobipySolver(SolverInterface):
         bounds: list[str] = []
         try:
             gm.computeIIS()
-            for c in gm.getConstrs():
-                if c.IISConstr:
-                    constraints.append(c.ConstrName or f"c{c.index}")
-            for gc in gm.getGenConstrs():
-                if getattr(gc, "IISGenConstr", 0):
-                    constraints.append(gc.GenConstrName or f"genc{gc.index}")
-            for v in gm.getVars():
-                if v.IISLB or v.IISUB:
-                    side = "/".join(
-                        s for s, f in (("LB", v.IISLB), ("UB", v.IISUB)) if f
-                    )
-                    bounds.append(f"{v.VarName} [{side}]")
+            self._collect_iis_constraints(gm, constraints)
+            self._collect_iis_bounds(gm, bounds)
         except Exception as exc:  # pragma: no cover - IIS can itself fail
             _log.warning("Gurobi computeIIS failed: %s", exc)
         return GurobiIISReport(constraints, bounds)
+
+    @staticmethod
+    def _collect_iis_constraints(gm, constraints: list[str]) -> None:
+        for c in gm.getConstrs():
+            if c.IISConstr:
+                constraints.append(c.ConstrName or f"c{c.index}")
+        # Unlike Constr, GenConstr and QConstr have no ``index``; number the
+        # unnamed ones by their position in the pool instead.
+        for i, gc in enumerate(gm.getGenConstrs()):
+            if getattr(gc, "IISGenConstr", 0):
+                constraints.append(gc.GenConstrName or f"genc{i}")
+        # Quadratic rows live in their own pool; without them an IIS whose
+        # blocking constraint is e.g. a Weymouth or a bilinear heat balance
+        # reports as bounds-only and reads like a mystery.
+        for i, qc in enumerate(gm.getQConstrs()):
+            if getattr(qc, "IISQConstr", 0):
+                constraints.append(qc.QCName or f"qc{i}")
+
+    @staticmethod
+    def _collect_iis_bounds(gm, bounds: list[str]) -> None:
+        for v in gm.getVars():
+            if v.IISLB or v.IISUB:
+                side = "/".join(s for s, f in (("LB", v.IISLB), ("UB", v.IISUB)) if f)
+                bounds.append(f"{v.VarName} [{side}]")
 
     # --------- main solve ---------
 
@@ -567,6 +625,8 @@ class GurobipySolver(SolverInterface):
         step_state: StepState = None,
         simulation: bool = False,
         formulation=None,
+        strict: bool = False,
+        solver_options: dict | None = None,
         **kwargs,
     ):
         gp, GRB, nlfunc = _require_gurobipy()
@@ -585,7 +645,17 @@ class GurobipySolver(SolverInterface):
                 step_state=step_state,
                 simulation=simulation,
                 formulation=formulation,
+                strict=strict,
+                params={
+                    key: val
+                    for key, val in {**self._params, **(solver_options or {})}.items()
+                    if val is not None
+                },
             )
+        except gp.GurobiError as exc:
+            if _NL_FORM_ERROR not in str(exc):
+                raise
+            raise NotImplementedError(_NL_FORM_HINT) from exc
         finally:
             gm.dispose()
 
@@ -600,9 +670,11 @@ class GurobipySolver(SolverInterface):
         step_state,
         simulation,
         formulation,
+        strict=False,
+        params=None,
     ):
         gm.setParam("OutputFlag", 1 if debug else 0)
-        for key, val in self._params.items():
+        for key, val in (self._params if params is None else params).items():
             gm.setParam(key, val)
 
         # Two objective buckets for lexicographic mode (single sum otherwise).
@@ -718,8 +790,11 @@ class GurobipySolver(SolverInterface):
             )
 
         obj_val = self._obj_value(gm, all_obj_exprs) if success else float("nan")
+        user_objective = (
+            self._obj_value(gm, user_obj_exprs) if success and user_obj_exprs else None
+        )
 
-        return SolverResult(
+        result = SolverResult(
             network,
             network.as_result_dataframe_dict(),
             obj_val,
@@ -730,6 +805,18 @@ class GurobipySolver(SolverInterface):
             infeasibility_report=report if not success else None,
             backend_used=self.backend_name,
             solver_used=self.solver_name,
+            user_objective=user_objective,
+            aux_objective=(
+                None if user_objective is None else obj_val - user_objective
+            ),
+            solver_stats=_solver_stats(gm),
+        )
+        return validate_result(
+            network,
+            result,
+            ignored_nodes=ignored_nodes,
+            simulation=simulation,
+            strict=strict,
         )
 
     def _solve_lexicographic(self, gm, user_obj_exprs, aux_obj_exprs):
@@ -784,6 +871,7 @@ class GurobipySolver(SolverInterface):
         quadratic/nonlinear objectives ``setObjectiveN`` cannot, and is the
         correct path for MISOCP/MIQCP models (see :meth:`_solve_lexicographic`)."""
         # Phase 1: user objective only - solved to the model's (tight) MIPGap.
+        mip_gap = gm.Params.MIPGap
         self._set_objective(gm, user_obj_exprs)
         gm.optimize()
         success, report, status_str, tc_str = self._classify(
@@ -793,7 +881,7 @@ class GurobipySolver(SolverInterface):
             return success, report, status_str, tc_str
 
         s_star = gm.ObjVal
-        slack = self._lex_cap_slack(s_star, self._params.get("MIPGap", 0.0))
+        slack = self._lex_cap_slack(s_star, mip_gap)
         self._add_temp_constr(gm, sum(user_obj_exprs) <= s_star + slack, name="lex_cap")
 
         self._set_objective(gm, aux_obj_exprs)
@@ -802,10 +890,7 @@ class GurobipySolver(SolverInterface):
             try:
                 gm.optimize()
             finally:
-                gm.setParam(
-                    "MIPGap",
-                    self._params.get("MIPGap", DEFAULT_GUROBI_PARAMS["MIPGap"]),
-                )
+                gm.setParam("MIPGap", mip_gap)
         else:
             gm.optimize()
         return self._classify(gm, phase_label="Lexicographic phase 2")
@@ -905,7 +990,12 @@ class GurobipySolver(SolverInterface):
 
             equations = as_iter(
                 node.equations(
-                    grid, from_branches, to_branches, connected_childs, **impls
+                    grid,
+                    from_branches,
+                    to_branches,
+                    connected_childs,
+                    simulation=self._simulation,
+                    **impls,
                 )
             )
 
@@ -926,7 +1016,9 @@ class GurobipySolver(SolverInterface):
                 for expr in child.minimize(grid, node.model, sqrt_impl=nf.sqrt):
                     aux_obj_exprs.append(expr)
                 child_eqs = filter_bool_eqs(
-                    as_iter(child.equations(grid, node.model)),
+                    as_iter(
+                        child.equations(grid, node.model, simulation=self._simulation)
+                    ),
                     context=f"child_{child.id}",
                 )
                 self._process_intermediate_eqs(child.model, child_eqs)
@@ -1026,7 +1118,7 @@ class _ParamStepState(InterStepState):
         self.dt_h = dt_h
         self.params: dict = {}  # {(component_id, attr): gurobi Var}
 
-    def get(self, component_id, attr: str, step: int = -1):
+    def get(self, component_id, attr: str, step: int = -1, model_type=None):
         if step != -1:
             raise NotImplementedError(
                 "The gurobipy build-once timeseries driver carries only the "
@@ -1092,6 +1184,7 @@ class GurobipyTimeseries:
         carry_mip_start=True,
         params: dict | None = None,
     ):
+        timeseries_data.validate_bound(input_network, strict=False)
         self._td = timeseries_data
         self.carry_mip_start = carry_mip_start
         gp, GRB, nlfunc = _require_gurobipy()
@@ -1317,6 +1410,13 @@ class GurobipyTimeseries:
 
     # ------------------------------------------------------------------ #
     def _declare_param_targets(self, network, td):
+        self._check_param_series_supported(td)
+        self._declare_series_targets(td._child_id_to_series, network.child_by_id)
+        self._declare_series_targets(td._node_id_to_series, network.node_by_id)
+        self._declare_series_targets(td._branch_id_to_series, network.branch_by_id)
+
+    @staticmethod
+    def _check_param_series_supported(td):
         # Only id-addressed child/node/branch series are wired as re-boundable
         # parameters; silently ignoring the rest would freeze those inputs at
         # their static values across all steps.
@@ -1338,27 +1438,17 @@ class GurobipyTimeseries:
                 "monee.run_timeseries per-step loop for these."
             )
 
-        def add(model, attr):
-            cur = getattr(model, attr)
-            cur = (
-                cur.value if isinstance(cur, (Var, Const, Intermediate)) else float(cur)
-            )
-            setattr(model, attr, Var(value=float(cur), min=float(cur), max=float(cur)))
+    @staticmethod
+    def _pin_as_param(model, attr):
+        cur = getattr(model, attr)
+        cur = cur.value if isinstance(cur, (Var, Const, Intermediate)) else float(cur)
+        setattr(model, attr, Var(value=float(cur), min=float(cur), max=float(cur)))
 
-        for cid, attrs in td._child_id_to_series.items():
-            model = network.child_by_id(cid).model
+    def _declare_series_targets(self, id_to_series, lookup):
+        for cid, attrs in id_to_series.items():
+            model = lookup(cid).model
             for attr, series in attrs.items():
-                add(model, attr)
-                self._param_targets.append((model, attr, series))
-        for nid, attrs in td._node_id_to_series.items():
-            model = network.node_by_id(nid).model
-            for attr, series in attrs.items():
-                add(model, attr)
-                self._param_targets.append((model, attr, series))
-        for bid, attrs in td._branch_id_to_series.items():
-            model = network.branch_by_id(bid).model
-            for attr, series in attrs.items():
-                add(model, attr)
+                self._pin_as_param(model, attr)
                 self._param_targets.append((model, attr, series))
 
     def _active_models(self):
@@ -1444,9 +1534,12 @@ class GurobipyTimeseries:
         violations = compute_bound_violations(
             self._nodes, self._branches, self._compounds, self._network
         )
+        # The persistent model re-solves the same network object every step;
+        # hand out a snapshot so each step's result.network keeps its values.
+        network = self._network.copy()
         return SolverResult(
-            self._network,
-            self._network.as_result_dataframe_dict(),
+            network,
+            network.as_result_dataframe_dict(),
             self._last_objective,
             ok,
             violations,

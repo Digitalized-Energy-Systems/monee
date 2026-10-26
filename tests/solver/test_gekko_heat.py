@@ -396,9 +396,12 @@ def test_heat_exchanger():
     assert math.isclose(
         result.dataframes["Junction"]["t_k"][0], 383.17457358, abs_tol=0.01
     )
-    assert math.isclose(
-        result.dataframes["Junction"]["pressure_pa"][0], 999997.65278, abs_tol=0.01
-    )
+    # The heat exchanger carries no pressure equation, so the absolute level on
+    # the junction-0/1 side is a free degree of freedom; only the Darcy drop
+    # along the pipe is determined.
+    pressures = result.dataframes["Junction"]["pressure_pa"]
+    assert math.isclose(pressures[0] - pressures[1], -1.4801, abs_tol=0.01)
+    assert math.isclose(pressures[2] - pressures[3], -2.8896, abs_tol=0.01)
     assert len(result.dataframes) == 6
 
 
@@ -419,6 +422,35 @@ def test_dead_end():
         result.dataframes["Junction"]["t_k"][0], 343.40404, abs_tol=0.01
     )
     assert len(result.dataframes) == 4
+
+
+def test_apopt_objective_tolerance_below_epigraph_tightening_eps():
+    # APOPT's objective_convergence_tolerance is an absolute tolerance. On a
+    # plain flow solve the MIQCQP branch formulations carry no objective except
+    # their epigraph tightening term (EPIGRAPH_TIGHTENING_EPS times the squared
+    # flows, O(1e-7 .. 1e-5) at district heating flows). A tolerance at or above
+    # that scale lets APOPT stop a branch-and-bound node NLP before it is
+    # feasible again and the tree runs empty; test_dead_end is the regression.
+    from monee.model.formulation.miqcqp.convex.gas import (
+        RelaxedWeymouthBranchFormulation,
+    )
+    from monee.model.formulation.miqcqp.nonconvex.heat import (
+        BilinearDarcyWeisbachBranchFormulation,
+    )
+    from monee.solver.gekko import DEFAULT_SOLVER_OPTIONS
+
+    tolerance = next(
+        float(option.split()[1])
+        for option in DEFAULT_SOLVER_OPTIONS
+        if option.startswith("objective_convergence_tolerance ")
+    )
+    eps = min(
+        BilinearDarcyWeisbachBranchFormulation.EPIGRAPH_TIGHTENING_EPS,
+        RelaxedWeymouthBranchFormulation.EPIGRAPH_TIGHTENING_EPS,
+    )
+    # APOPT's default (1e-6) is the loosest value that solves test_dead_end.
+    assert tolerance <= 1e-6
+    assert tolerance < eps
 
 
 def create_supply_return_parallel_he():

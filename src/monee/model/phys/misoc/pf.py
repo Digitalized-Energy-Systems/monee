@@ -2,6 +2,11 @@
 #   W_j = W_i / a^2 - 2(r \cdot P + x \cdot Q) + |Z|^2 \cdot ell
 #   P^2 + Q^2 \le (W_i / a^2) \cdot ell
 # Losses are tap-free (ideal transformer is lossless). tap=1 reduces to BFM.
+#
+# P/Q here are the SERIES flows of the pi-model, i.e. the terminal flows minus
+# the shunt injection of the branch's own charging admittance. The caller does
+# that split (formulation/miqcqp/convex/el.py); feeding terminal flows in
+# instead silently models a network with zero line charging.
 
 
 def active_power_loss(

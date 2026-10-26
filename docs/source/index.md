@@ -5,9 +5,12 @@
 
 install
 quickstart
+features
 concepts/index
 tutorials/index
 how-to/index
+problems/index
+components/index
 benchmarks/index
 api/index
 ```
@@ -96,7 +99,7 @@ Results come back as typed dataframes, one row per component.
 :::
 
 :::{grid-item-card}
-:link: tutorials/01_optimization_basics
+:link: problems/index
 :link-type: doc
 :shadow: sm
 
@@ -104,7 +107,7 @@ Results come back as typed dataframes, one row per component.
 ^^^
 Swap {func}`~monee.run_energy_flow` for
 {func}`~monee.run_energy_flow_optimization` and pass a problem.
-Load shedding ships built in; add your own objectives and constraints.
+Economic dispatch and load shedding ship built in; add your own objectives and constraints.
 :::
 
 :::{grid-item-card}
@@ -114,9 +117,9 @@ Load shedding ships built in; add your own objectives and constraints.
 
 **Flexible solver back-ends**
 ^^^
-Solves with IPOPT by default, and routes any other solver name to Pyomo
-(SCIP, Gurobi, GLPK, CBC). Switch back-ends without changing model
-code. A MISOCP relaxation is available for convex OPF.
+Hands the model to the open-source solver IPOPT by default, and routes any
+other solver name through Pyomo to third-party solvers such as SCIP, Gurobi,
+GLPK and CBC. Switch back-ends without changing model code. A MISOCP relaxation is available for convex OPF.
 :::
 
 :::{grid-item-card}
@@ -144,6 +147,16 @@ match the reference to at ~1e-9%-1%.
 :::
 
 ::::
+
+:::{div} sd-text-center sd-pt-4
+
+```{button-ref} features
+:color: primary
+:outline:
+Explore all features
+```
+
+:::
 
 ---
 
@@ -181,11 +194,19 @@ result = run_energy_flow(net)
 print(result.dataframes["Bus"][["id", "vm_pu", "va_degree"]])
 ```
 
+`mx.create_multi_energy_network()` is an alias for `mm.Network()`, so the two
+entry points you will see across these pages are the same object.
+Every component, with both its model class and its `create_*` function,
+parameters, defaults and result columns, is listed on the
+{doc}`component reference <components/index>`. The docs
+use the express form in examples that stay inside `monee.express`, and
+`mm.Network()` where `monee.model` is imported anyway.
+
 ---
 
 ## Where to go next
 
-::::{grid} 1 2 2 4
+::::{grid} 1 2 3 3
 :gutter: 3
 
 :::{grid-item-card} Quickstart
@@ -195,6 +216,15 @@ print(result.dataframes["Bus"][["id", "vm_pu", "va_degree"]])
 :shadow: sm
 
 A five-minute guided tour of the core workflow.
+:::
+
+:::{grid-item-card} Feature overview
+:link: features
+:link-type: doc
+:text-align: center
+:shadow: sm
+
+Every capability on one map, and a table of common goals.
 :::
 
 :::{grid-item-card} Concepts

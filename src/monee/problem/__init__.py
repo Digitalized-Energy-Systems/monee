@@ -18,4 +18,11 @@ from monee.problem.core import (
 
 
 def calc_general_resilience_performance(network: md.Network, **kwargs):
+    """Curtailed demand of a solved *network* as ``(power, heat, gas)`` in MW.
+
+    Thin wrapper around :meth:`GeneralResiliencePerformanceMetric.calc`; see
+    there for ``inv``, ``include_ext_grid`` (off by default: it accounts
+    external import as unserved demand, which is the islanding view) and
+    ``include_coupling_points``.
+    """
     return GeneralResiliencePerformanceMetric().calc(network, **kwargs)

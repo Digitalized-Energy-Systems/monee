@@ -1,0 +1,4550 @@
+# Feature catalog for the "Feature overview" page (features.md).
+#
+# This file is the single source of truth for the interactive feature map and
+# the "What do you want to do?" task table. The local Sphinx extension
+# _ext/feature_map.py reads it once per build, validates it and reports every
+# problem as a normal Sphinx warning that points at the offending line here.
+#
+# groups    One line on the map each, drawn in "order". "style: open" draws a
+#           hollow line (where user code plugs in). Colors are assigned by order.
+#           The id "other" is reserved for features with an unknown group.
+# features  One station each. Required: id, group, title, tagline, level
+#           (core or advanced), carriers (electricity, gas, heat or all), docs.
+#           Optional: short, details, highlights, snippet, api, keywords and
+#           related (ids of other features, drawn as arcs on hover).
+# tasks     One row of the task table each, grouped by "category" (a group
+#           title, or a free category such as "Get started"). Ids start with
+#           "task-". "features" are feature ids shown as chips.
+# docs      Links into these docs: "doc" is a document name, "section" the
+#           exact title of a heading or rubric on that page ("" links the page
+#           itself), "kind" one of quickstart, install, concept, how-to,
+#           tutorial, problem, component, benchmark or api. The extension
+#           resolves them to URLs at build time, so they never go stale silently.
+#
+# Text fields may use `backticks` for inline code.
+
+groups:
+  - id: model
+    title: Model the network
+    order: 1
+    tagline: One graph holds the components and physics of electricity, gas and heat.
+
+  - id: couple
+    title: Couple the carriers
+    order: 2
+    tagline: Conversion units link the grids so every carrier solves in one system.
+
+  - id: build
+    title: Build and import
+    order: 3
+    tagline: >-
+      Create networks in code, import standard formats or start from ready-made systems.
+
+  - id: simulate
+    title: Simulate
+    order: 4
+    tagline: >-
+      Steady-state energy flow, profile replay, co-simulation and islanded operation.
+
+  - id: optimize
+    title: Optimize
+    order: 5
+    tagline: Ready-made and custom problems, from one period to a coupled horizon.
+
+  - id: horizon
+    title: Plan a horizon
+    order: 6
+    tagline: >-
+      What couples periods in time, and the joint and rolling solves that exploit it.
+
+  - id: solve
+    title: Formulate and solve
+    order: 7
+    tagline: Choose the equations and the solver that fit your study.
+
+  - id: analyze
+    title: Analyze and validate
+    order: 8
+    tagline: Read, plot, check and trust every result.
+
+  - id: extend
+    title: Extend
+    order: 9
+    style: open
+    tagline: Add your own components, equations and network-wide plug-ins.
+
+features:
+  - id: network-model
+    group: model
+    title: Network data model
+    short: Data model
+    level: core
+    carriers: [all]
+    tagline: Nodes, branches, children and compounds form one graph across all carriers.
+    details: >-
+      monee stores a network as one graph of nodes (buses, junctions), oriented branches (lines,
+      pipes), children (loads, sources, external grids) and compounds (multi-part units such as
+      a CHP). The physics lives in a model object attached to each component, so models can be
+      swapped without touching the topology. Use the express API for everyday building, `Network.node`,
+      `branch`, `child` and `compound` for full control, and `statistics` or `as_dataframe_dict`
+      to inspect what you built.
+    highlights:
+      - >-
+        Every carrier lives in the same graph, with one grid object per carrier for shared constants
+      - >-
+        Compounds such as a CHP build their own internal nodes and branches and report on a control
+        node
+      - >-
+        `statistics()` counts components per model class, `as_dataframe_dict()` lists every input
+        as one `DataFrame` per class
+      - >-
+        `net.graph` is the underlying networkx `MultiGraph`; branch direction lives in the from
+        and to ids
+    snippet: |-
+      import monee.model as mm
+
+      net = mm.Network(el_model=mm.PowerGrid(name="power", sn_mva=1))
+      load = net.child(mm.PowerLoad(p_mw=0.1, q_mvar=0.0))
+      bus0 = net.node(mm.Bus(base_kv=1), child_ids=[load], grid=mm.EL)
+      bus1 = net.node(mm.Bus(base_kv=1), grid=mm.EL)
+      net.branch(mm.PowerLine(length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4, parallel=1), bus0, bus1, grid=mm.EL)
+    api:
+      - monee.model.Network
+      - monee.model.Network.node
+      - monee.model.Network.branch
+      - monee.model.Network.child
+      - monee.model.Network.compound
+      - monee.model.Network.statistics
+      - monee.model.Network.as_dataframe_dict
+      - monee.model.Network.graph
+      - monee.model.to_spanning_tree
+      - monee.model.Node
+      - monee.model.Branch
+      - monee.model.Child
+      - monee.model.Compound
+    keywords: [network, graph, node, branch, child, compound, bus, junction, topology, statistics,
+      inventory, networkx, spanning tree]
+    related: [express-builder, carrier-grids, edit-and-switch, custom-models, result-tables]
+    docs:
+      - doc: concepts/data_model
+        section: ''
+        label: Data model
+        kind: concept
+      - doc: concepts/data_model
+        section: Assembling a network
+        label: Assembling a network
+        kind: concept
+      - doc: concepts/data_model
+        section: Network conveniences
+        label: Inspect and transform a network
+        kind: concept
+      - doc: components/index
+        section: ''
+        label: Component reference
+        kind: component
+      - doc: api/monee.model
+        section: Network container
+        label: Network API
+        kind: api
+
+  - id: carrier-grids
+    group: model
+    title: Carrier grids
+    short: Grids
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Set the per-unit bases, gas type, reference pressure and limits of each energy carrier.
+    details: >-
+      Each carrier has a grid object: `PowerGrid` holds the apparent-power base and voltage band,
+      `GasGrid` the fluid preset (`lgas` or `methane`), reference pressure and squared-pressure
+      band, and `WaterGrid` the reference temperature, velocity cap and fluid properties. Pass
+      grids to `Network` by keyword as `el_model`, `gas_model` and `water_model`. Voltage levels come
+      from each bus's `base_kv`, so one power grid covers a multi-level network; a second grid instance
+      is only needed for a different per-unit base, and the branch that joins the two then needs
+      the same explicit `grid=`. Build a new grid rather than
+      editing one, because derived constants such as compressibility are computed at construction.
+    highlights:
+      - >-
+        Gas presets `lgas` and `methane`, with absolute or gauge pressure via `pressure_ambient_pa`
+      - >-
+        Voltage levels come from `base_kv` on each bus, so one `PowerGrid` covers HV and MV
+      - >-
+        Gas pressure bands apply in optimization runs only, so a plain simulation stays square
+      - >-
+        `WaterGrid` sets `t_ref_k`, `pressure_ref_pa` and the velocity cap `v_max_mps`
+    snippet: |-
+      import monee.model as mm
+
+      net = mm.Network(el_model=mm.create_power_grid("el", sn_mva=100),
+                       gas_model=mm.create_gas_grid("gas", type="methane"))
+      hv = net.node(mm.Bus(base_kv=110), grid=mm.EL)
+      mv = net.node(mm.Bus(base_kv=20), grid=mm.EL)
+    api:
+      - monee.model.PowerGrid
+      - monee.model.GasGrid
+      - monee.model.WaterGrid
+      - monee.model.create_power_grid
+      - monee.model.create_gas_grid
+      - monee.model.create_water_grid
+      - monee.model.STANDARD_ATMOSPHERE_PA
+    keywords: [grid, sn_mva, per unit, base, voltage level, pressure stage, lgas, methane, gauge
+        pressure, reference temperature]
+    related: [network-model, electricity-grid, gas-network, district-heating, conventions]
+    docs:
+      - doc: components/grids
+        section: ''
+        label: Grids reference
+        kind: component
+      - doc: concepts/data_model
+        section: Grids
+        label: Grids in the data model
+        kind: concept
+      - doc: concepts/conventions
+        section: Gas
+        label: Gas pressure convention
+        kind: concept
+      - doc: how-to/express_structures
+        section: Builders and their defaults
+        label: Build a medium-pressure gas grid
+        kind: how-to
+      - doc: api/monee.model
+        section: Grids
+        label: Grids API
+        kind: api
+
+  - id: electricity-grid
+    group: model
+    title: Electricity grid
+    short: Power grid
+    level: core
+    carriers: [electricity]
+    tagline: >-
+      Buses, lines, transformers, loads, generators and shunts solved with full AC power flow.
+    details: >-
+      Buses hold voltage magnitude and angle; `PowerLine`, `Trafo` and the MATPOWER-style `GenericPowerBranch`
+      connect them, and `ExtPowerGrid` is the slack. Loads, PQ generators, voltage-controlled
+      generators (PV buses) and constant-admittance shunts attach as children. The default formulation
+      is the nonlinear polar AC power flow, which handles any topology and is validated against
+      pandapower.
+    highlights:
+      - >-
+        Polar AC power flow in voltage magnitude and angle, for radial and meshed grids
+      - >-
+        Branch results report flows at both ends and loading against `max_i_ka`; losses are `p_from_mw
+        + p_to_mw`
+      - >-
+        `VoltageControlledGenerator` models PV buses, `PowerShunt` capacitor banks and reactors
+      - >-
+        Lines flagged `backup=True` become switchable through `controllable_backup_lines`
+    snippet: ''
+    api:
+      - monee.model.Bus
+      - monee.model.PowerLine
+      - monee.model.Trafo
+      - monee.model.GenericPowerBranch
+      - monee.model.ExtPowerGrid
+      - monee.model.PowerLoad
+      - monee.model.PowerGenerator
+      - monee.model.VoltageControlledGenerator
+      - monee.model.PowerShunt
+      - monee.express.create_line
+      - monee.express.create_trafo
+      - monee.express.create_power_generator
+      - monee.EL_NLP_FORMULATION
+    keywords: [bus, line, cable, transformer, load, generator, PV bus, shunt, AC power flow, slack,
+      loading, losses]
+    related: [energy-flow, ac-opf, misocp-relaxation, operating-limits, matpower-import, backup-lines]
+    docs:
+      - doc: components/electricity
+        section: ''
+        label: Electricity components
+        kind: component
+      - doc: concepts/domains
+        section: AC power flow
+        label: AC power-flow equations
+        kind: concept
+      - doc: components/electricity
+        section: Trafo
+        label: Transformer reference
+        kind: component
+      - doc: components/electricity
+        section: VoltageControlledGenerator
+        label: PV bus reference
+        kind: component
+      - doc: api/monee.model.phys
+        section: AC power flow
+        label: AC physics API
+        kind: api
+
+  - id: gas-network
+    group: model
+    title: Gas network
+    short: Gas
+    level: core
+    carriers: [gas]
+    tagline: >-
+      Junctions, Weymouth pipes, compressors, sources and sinks with pressure in per unit.
+    details: >-
+      Gas junctions solve squared pressure in per unit of the grid reference, and `GasPipe` applies
+      the Weymouth equation with a friction factor from diameter and roughness and a flow cap
+      from the erosional velocity. `GasCompressor` enforces a fixed pressure ratio with one-way
+      flow, and `ExtHydrGrid`, `Source` and `Sink` feed and draw gas. Selectable friction models
+      capture laminar flow in lightly loaded pipes.
+    highlights:
+      - >-
+        Weymouth flow in squared per-unit pressure, reporting mass flow, velocity and density
+      - Compressors with a fixed pressure ratio and a flow cap
+      - >-
+        Friction models: `constant`, `hybrid`, `pwl` or `nonlinear` for laminar and turbulent
+        flow
+      - Pressures agree with pandapipes within 1.2 percent of the pipe drop
+    snippet: ''
+    api:
+      - monee.model.Junction
+      - monee.model.GasPipe
+      - monee.model.GasCompressor
+      - monee.model.ExtHydrGrid
+      - monee.model.Source
+      - monee.model.Sink
+      - monee.express.create_gas_junction
+      - monee.express.create_gas_pipe
+      - monee.express.create_compressor
+      - monee.express.create_gas_ext_grid
+      - monee.express.create_gas_source
+      - monee.express.create_gas_sink
+      - monee.model.formulation.make_gas_nlp_formulation
+    keywords: [gas, pipeline, Weymouth, pressure, compressor, friction, roughness, mass flow,
+      laminar, velocity]
+    related: [carrier-grids, gas-linepack, power-gas-links, chp, formulations]
+    docs:
+      - doc: components/gas
+        section: ''
+        label: Gas components
+        kind: component
+      - doc: concepts/domains
+        section: Weymouth pipe flow
+        label: Weymouth pipe flow
+        kind: concept
+      - doc: concepts/domains
+        section: Friction models
+        label: Friction models
+        kind: concept
+      - doc: components/gas
+        section: GasCompressor
+        label: Compressor reference
+        kind: component
+      - doc: api/monee.model.phys
+        section: Gas flow (Weymouth)
+        label: Weymouth physics API
+        kind: api
+
+  - id: district-heating
+    group: model
+    title: District heating
+    short: Heat
+    level: core
+    carriers: [heat]
+    tagline: >-
+      Insulated water pipes with temperature propagation, heat exchangers and nodal heat units.
+    details: >-
+      `WaterPipe` solves the Darcy-Weisbach pressure drop and carries temperature from inlet to
+      outlet, losing heat through its insulation to the ambient. Fixed-flow heat exchangers drive
+      their own design flow (a 30 K spread by default), passive exchangers follow the surrounding
+      hydraulics, and `HeatGenerator` and `HeatLoad` add heat straight to a junction balance.
+      Heat-exchanger consumers follow part-load profiles through regulation (variable flow) or
+      `q_mw_set` (constant flow).
+    highlights:
+      - Darcy-Weisbach hydraulics with temperature upwinding and insulation losses
+      - >-
+        Fixed-flow exchangers for plants, passive exchangers for consumers on coupler loops
+      - Nodal `HeatGenerator` and `HeatLoad` without a mass flow of their own
+      - >-
+        Agrees with pandapipes to about 0.1 percent on pressure and 0.01 K on temperature
+    snippet: ''
+    api:
+      - monee.model.WaterPipe
+      - monee.model.HeatExchanger
+      - monee.model.PassiveHeatExchanger
+      - monee.model.HeatGenerator
+      - monee.model.HeatLoad
+      - monee.model.ConsumeHydrGrid
+      - monee.express.create_water_junction
+      - monee.express.create_water_pipe
+      - monee.express.create_heat_exchanger
+      - monee.express.create_passive_heat_exchanger
+      - monee.express.create_heat_generator
+      - monee.express.create_heat_load
+    keywords: [district heating, water pipe, Darcy-Weisbach, temperature, heat loss, heat exchanger,
+      substation, heat demand, part load]
+    related: [heat-loops, power-to-heat, thermal-inertia, mccormick-heat, topology-structures]
+    docs:
+      - doc: components/water
+        section: ''
+        label: Water and heat components
+        kind: component
+      - doc: concepts/domains
+        section: Temperature propagation
+        label: Temperature propagation
+        kind: concept
+      - doc: concepts/multi_energy
+        section: Fixed-flow and passive exchangers
+        label: Fixed-flow and passive exchangers
+        kind: concept
+      - doc: how-to/district_heating
+        section: Part-load control
+        label: Part-load control
+        kind: how-to
+      - doc: api/monee.model.phys
+        section: Heat flow
+        label: Heat physics API
+        kind: api
+
+  - id: edit-and-switch
+    group: model
+    title: Edit and switch components
+    short: Edit
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Change parameters, take components out of service, remove or replace them, and copy networks.
+    details: >-
+      Declared attributes such as setpoints, cost, `diameter_m` or `on_off` are settable between
+      solves, and `Network.deactivate` and `activate` exclude components without deleting them,
+      propagating through compound parts. Every add has a removal counterpart, so replacing a
+      pipe is a removal plus a new create call, and `Network.copy` gives a fast deep copy for
+      scenario loops. Writing an unknown attribute warns, and `set_attribute_guard("error")` or
+      `MONEE_ATTRIBUTE_GUARD=error` turns typos into errors for CI.
+    highlights:
+      - Look up components with `node_by_id`, `branch_by_id` and `child_by_id`
+      - >-
+        `deactivate` switches a CHP off cleanly and restores its setpoints on `activate`
+      - >-
+        `remove_child`, `remove_node`, `remove_branch` and `remove_compound` undo any add
+      - >-
+        Sizing arguments live in `Var` bounds, so a bigger battery is `storage.e_mwh.max = 4.0`
+    snippet: |-
+      from monee.model.core import set_attribute_guard
+
+      set_attribute_guard("error")
+      net.child_by_id(load_id).model.p_mw = 1.2
+      net.deactivate(net.child_by_id(gen_id))
+      result = monee.run_energy_flow(net.copy())
+    api:
+      - monee.model.Network.deactivate
+      - monee.model.Network.activate
+      - monee.model.Network.deactivate_by_id
+      - monee.model.Network.remove_child
+      - monee.model.Network.remove_node
+      - monee.model.Network.remove_branch
+      - monee.model.Network.remove_compound
+      - monee.model.Network.copy
+      - monee.model.Network.node_by_id
+      - monee.model.Network.branch_by_id
+      - monee.model.Network.child_by_id
+      - monee.model.core.set_attribute_guard
+    keywords: [parameter study, sweep, what-if, deactivate, out of service, contingency, remove,
+      copy, attribute guard, typo]
+    related: [network-model, stepper, islanding, load-shedding, resilience-metrics]
+    docs:
+      - doc: concepts/data_model
+        section: Which attributes are settable after construction
+        label: Settable attributes
+        kind: concept
+      - doc: concepts/conventions
+        section: Removing components
+        label: Removing components
+        kind: concept
+      - doc: how-to/express_structures
+        section: 'Parameter studies: editing what a structure built'
+        label: Parameter studies
+        kind: how-to
+      - doc: concepts/conventions
+        section: Writing attributes after construction
+        label: Writing attributes
+        kind: concept
+      - doc: concepts/data_model
+        section: Component ids
+        label: Component ids
+        kind: concept
+
+  - id: power-to-heat
+    group: couple
+    title: Power-to-heat
+    short: P2H
+    level: core
+    carriers: [electricity, heat]
+    tagline: >-
+      Heat pumps and electric boilers that draw power from a bus and heat a water loop.
+    details: >-
+      `create_p2h` adds a `PowerToHeat` compound whose internal heat exchanger heats water from
+      the cold inlet to the hot outlet; the electrical draw follows as heat output divided by
+      efficiency, and an efficiency above 1 models a heat pump with a fixed COP. Name the sides
+      with `cold_node_id` and `hot_node_id` to make the wiring explicit. Results appear on the
+      `PowerToHeatControlNode` as `el_mw` (consumption, positive) and `heat_mw` (injection, negative).
+    highlights:
+      - Efficiency above 1 models a heat pump COP
+      - Electric boilers and heat pumps share one component
+      - Acts as a feed-in station from return to supply header
+      - '`PowerToHeatHG` injects heat at one junction instead'
+    snippet: |-
+      mx.create_p2h(net, power_node_id=bus, cold_node_id=j_return,
+                    hot_node_id=j_supply, heat_energy_mw=0.5, diameter_m=0.1,
+                    efficiency=3.0)
+    api:
+      - monee.express.create_p2h
+      - monee.model.PowerToHeat
+      - monee.model.PowerToHeatControlNode
+    keywords: [P2H, power-to-heat, heat pump, heatpump, electric boiler, COP, electrification, sector coupling]
+    related: [chp, gas-to-heat, heat-loops, energy-flow, node-based-couplers]
+    docs:
+      - doc: quickstart
+        section: Multi-energy networks
+        label: 'Quickstart: couple power and heat'
+        kind: quickstart
+      - doc: concepts/multi_energy
+        section: Power-to-Heat (P2H)
+        label: Power-to-heat
+        kind: concept
+      - doc: components/coupling
+        section: PowerToHeat
+        label: PowerToHeat reference
+        kind: component
+      - doc: how-to/district_heating
+        section: ''
+        label: District heating with couplers
+        kind: how-to
+
+  - id: chp
+    group: couple
+    title: CHP
+    short: CHP
+    level: core
+    carriers: [electricity, gas, heat]
+    tagline: >-
+      Combined heat and power units that burn gas and feed electricity and district heat.
+    details: >-
+      `create_chp` adds a compound with separate power and heat efficiencies and a gas consumption
+      setpoint, connected to a bus, a gas junction and a cold and a hot water junction. Its internal
+      exchanger heats water by the 30 K design spread, so wired from the return to the supply
+      header it acts as a feed-in station that holds the supply temperature. Give its gas side
+      a gas external grid as pressure reference, and deactivate the compound to switch the unit
+      off cleanly.
+    highlights:
+      - Keep `efficiency_power` plus `efficiency_heat` at or below 1
+      - >-
+        `CHPControlNode` reports `el_mw`, `heat_mw` and the gas setpoint `gas_mass_flow_kgs`
+      - >-
+        Regulation becomes a decision in economic dispatch once gas and heat are priced
+    snippet: |-
+      mx.create_chp(net, power_node_id=bus, gas_node_id=j_gas,
+                    cold_node_id=j_return, hot_node_id=j_supply, diameter_m=0.15,
+                    efficiency_power=0.35, efficiency_heat=0.45,
+                    mass_flow_setpoint_kgs=0.05)
+    api:
+      - monee.express.create_chp
+      - monee.model.CHP
+      - monee.model.CHPControlNode
+    keywords: [CHP, cogeneration, combined heat and power, gas engine, feed-in station, sector
+        coupling]
+    related: [power-to-heat, heat-loops, coupler-regulation, economic-dispatch, node-based-couplers]
+    docs:
+      - doc: concepts/multi_energy
+        section: Combined Heat and Power (CHP)
+        label: Combined heat and power
+        kind: concept
+      - doc: components/coupling
+        section: CHP
+        label: CHP reference
+        kind: component
+      - doc: tutorials/03_coupled_network
+        section: ''
+        label: 'Tutorial: coupled network'
+        kind: tutorial
+      - doc: problems/economic_dispatch
+        section: Gas and heat
+        label: CHP in economic dispatch
+        kind: problem
+      - doc: api/monee.model
+        section: Multi-energy couplers
+        label: Couplers API
+        kind: api
+
+  - id: gas-to-heat
+    group: couple
+    title: Gas boilers
+    short: G2H
+    level: advanced
+    carriers: [gas, heat]
+    tagline: Gas boilers that feed district heat without producing electricity.
+    details: >-
+      `create_g2h` adds a `GasToHeat` compound with a heat setpoint and an efficiency, wired into
+      the loop like CHP and P2H with a cold inlet and a hot outlet. It draws `heat_energy_mw /
+      (efficiency * 3.6 * hhv)` kg/s of gas, using the gas grid's higher heating value. The `GasToHeatControlNode`
+      reports `heat_mw` (heat injected) and `gas_mass_flow_kgs` (the fuel setpoint; the served
+      draw is regulation times it).
+    highlights:
+      - Heat only, no electricity output
+      - Same cold-to-hot wiring as CHP and P2H
+      - Needs a gas external grid as pressure reference
+      - '`GasToHeatHG` is a node-based variant'
+    snippet: |-
+      mx.create_g2h(net, gas_node_id=j_gas, cold_node_id=j_return,
+                    hot_node_id=j_supply, heat_energy_mw=0.5, diameter_m=0.1,
+                    efficiency=0.9)
+    api:
+      - monee.express.create_g2h
+      - monee.model.GasToHeat
+      - monee.model.GasToHeatControlNode
+    keywords: [G2H, gas-to-heat, gas boiler, peak boiler, district heating, sector coupling]
+    related: [chp, power-to-heat, heat-loops, gas-network]
+    docs:
+      - doc: concepts/multi_energy
+        section: Gas-to-Heat (G2H)
+        label: Gas-to-heat
+        kind: concept
+      - doc: components/coupling
+        section: GasToHeat
+        label: GasToHeat reference
+        kind: component
+      - doc: how-to/district_heating
+        section: ''
+        label: District heating with couplers
+        kind: how-to
+
+  - id: power-gas-links
+    group: couple
+    title: Electrolysers and turbines
+    short: P2G / G2P
+    level: advanced
+    carriers: [electricity, gas]
+    tagline: >-
+      Power-to-gas electrolysers and gas-to-power turbines as single branches between bus and
+      junction.
+    details: >-
+      `create_p2g` adds a `PowerToGas` branch from a bus to a gas junction that injects a gas
+      mass flow setpoint and draws the matching electric power at its efficiency. `create_g2p`
+      adds a `GasToPower` branch from a gas junction to a bus that injects active and reactive
+      power setpoints and draws the matching gas flow through the gas grid's higher heating value.
+      Both are plain branches that report their results on the branch itself and dispatch through
+      regulation.
+    highlights:
+      - P2G reports `p_from_mw` (power drawn) and `to_mass_flow_kgs` (gas injected)
+      - G2P takes `p_mw_setpoint` and `q_mvar_setpoint`
+      - '`loss_percent()` returns 1 minus the efficiency'
+      - A rated cable can curtail an electrolyser in economic dispatch
+    snippet: |-
+      mx.create_p2g(net, from_node_id=bus, to_node_id=j_gas, efficiency=0.7,
+                    mass_flow_setpoint_kgs=0.01)
+      mx.create_g2p(net, from_node_id=j_gas, to_node_id=bus, efficiency=0.4,
+                    p_mw_setpoint=0.5)
+    api:
+      - monee.express.create_p2g
+      - monee.express.create_g2p
+      - monee.model.PowerToGas
+      - monee.model.GasToPower
+    keywords: [P2G, power-to-gas, electrolyser, hydrogen, G2P, gas-to-power, gas turbine, gas
+        engine, sector coupling]
+    related: [gas-network, electricity-grid, coupler-regulation, operating-limits]
+    docs:
+      - doc: concepts/multi_energy
+        section: Power-to-Gas (P2G)
+        label: Power-to-gas
+        kind: concept
+      - doc: concepts/multi_energy
+        section: Gas-to-Power (G2P)
+        label: Gas-to-power
+        kind: concept
+      - doc: components/coupling
+        section: PowerToGas
+        label: PowerToGas reference
+        kind: component
+      - doc: components/coupling
+        section: GasToPower
+        label: GasToPower reference
+        kind: component
+      - doc: tutorials/mes_network_limits
+        section: Why the cable cuts the electrolyser
+        label: Electrolyser under a cable limit
+        kind: tutorial
+
+  - id: heat-loops
+    group: couple
+    title: Heating loops
+    short: Loops
+    level: advanced
+    carriers: [heat]
+    tagline: >-
+      Supply and return loops fed by couplers, wired so they solve, with a capped backup heat source.
+    details: >-
+      A coupler with an internal exchanger needs a closed loop: plant reference on the cold side,
+      coupler from cold to hot, consumers back to the reference. A water external grid pins pressure
+      and temperature, which makes it an unlimited backup heat plant unless you cap it with `max_import_kgs`
+      or bound it in the problem. When a fixed-flow consumer shares the loop with a coupler, add
+      a bypass pipe or use a passive exchanger so the hydraulics are not over-determined.
+    highlights:
+      - With a coupler as the heat source, put the reference on the return side
+      - >-
+        Beside a plant that pins the supply temperature, couplers act as feed-in stations
+      - A bypass pipe absorbs the flow mismatch on every backend
+      - Cap the heat slack, or a resilience study reports zero heat curtailment
+    snippet: |-
+      mx.create_water_ext_grid(net, j_return, t_k=330, max_import_kgs=10.0)
+      mx.create_heat_exchanger(net, j_supply, j_return, q_mw=0.5)
+      mx.create_water_pipe(net, j_supply, j_return, diameter_m=0.15, length_m=50)
+    api:
+      - monee.express.create_water_ext_grid
+      - monee.express.create_consume_hydr_grid
+    keywords: [district heating, supply, return, loop, bypass, plant reference, heat slack, backup
+        plant, supply temperature, feed-in station]
+    related: [district-heating, chp, power-to-heat, topology-structures, load-shedding]
+    docs:
+      - doc: concepts/multi_energy
+        section: District heating loops
+        label: District heating loops
+        kind: concept
+      - doc: how-to/district_heating
+        section: The bypass pattern
+        label: The bypass pattern
+        kind: how-to
+      - doc: concepts/multi_energy
+        section: The heat slack is a backup plant
+        label: The heat slack is a backup plant
+        kind: concept
+      - doc: tutorials/04_mes_economic_dispatch
+        section: Temperature control
+        label: Temperature control with feed-in stations
+        kind: tutorial
+      - doc: how-to/district_heating
+        section: The over-determined loop
+        label: The over-determined loop
+        kind: how-to
+
+  - id: coupler-regulation
+    group: couple
+    title: Coupler dispatch
+    short: Regulation
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Run any coupler, load or generator between off and its full setpoint, as a fixed share or as
+      an optimization decision.
+    details: >-
+      Every child, coupler and heat exchanger carries a regulation factor between 0 and 1 that
+      scales its setpoint; a plain energy flow keeps it at its set value (1 by default), and a
+      timeseries can drive it for part load. An optimization problem promotes it to a decision
+      variable: `controllable_cps` does this for every coupler, and load shedding and economic
+      dispatch do it for you. Result frames keep the setpoint column and report regulation next
+      to it, so the served quantity is their product.
+    highlights:
+      - A plain energy flow delivers regulation times the setpoint exactly
+      - '`controllable_cps` turns every coupler''s regulation into a decision'
+      - Drive part load from a profile with a regulation series
+      - Setpoint and served value stay apart in the results
+    snippet: |-
+      problem = mp.OptimizationProblem()
+      problem.controllable_cps([("regulation", mp.AttributeParameter(
+          min=lambda a, v: 0, max=lambda a, v: 1, val=lambda a, v: 1))])
+    api:
+      - monee.problem.OptimizationProblem.controllable_cps
+      - monee.problem.AttributeParameter
+      - monee.simulation.TimeseriesData.add_compound_series_by_name
+    keywords: [regulation, dispatch, part load, controllable, decision variable, setpoint, served,
+      coupling point]
+    related: [economic-dispatch, optimization-problems, chp, load-shedding, ramp-limits]
+    docs:
+      - doc: concepts/multi_energy
+        section: Regulation and dispatch
+        label: Regulation and dispatch
+        kind: concept
+      - doc: concepts/conventions
+        section: Setpoint versus served
+        label: Setpoint versus served
+        kind: concept
+      - doc: tutorials/03_coupled_network
+        section: Dispatching the couplers
+        label: 'Tutorial: dispatching the couplers'
+        kind: tutorial
+      - doc: tutorials/03_coupled_network
+        section: Setpoints and served values
+        label: 'Tutorial: setpoints and served values'
+        kind: tutorial
+      - doc: how-to/district_heating
+        section: Part-load control
+        label: Part load from a profile
+        kind: how-to
+
+  - id: node-based-couplers
+    group: couple
+    title: Node-based couplers
+    short: HG couplers
+    level: advanced
+    carriers: [electricity, gas, heat]
+    tagline: Lightweight CHP, P2H and G2H variants that inject heat at one junction.
+    details: >-
+      `create_chp_hg`, `create_p2h_hg` and `create_g2h_hg` inject heat directly at a single water
+      junction instead of through an internal exchanger across a supply and return pair, so they
+      need neither a return junction nor an exchanger diameter. `CHPHG` stays a compound with
+      a control node, while `PowerToHeatHG` and `GasToHeatHG` are plain branches. The McCormick
+      heating formulation and networks generated with node-based heat loads require them.
+    highlights:
+      - No return junction and no exchanger diameter
+      - Required with `HEAT_CONVEX_MILP_FORMULATION`
+      - '`use_hg_variants` selects them in `create_coupling_points_for_mes`'
+      - Downstream of a heat plant they push the supply above its setpoint
+    snippet: |-
+      mx.create_chp_hg(net, power_node_id=bus, heat_node_id=j_heat, gas_node_id=j_gas,
+                       efficiency_power=0.35, efficiency_heat=0.45,
+                       mass_flow_setpoint_kgs=0.01)
+      mx.create_p2h_hg(net, power_node_id=bus, heat_node_id=j_heat,
+                       heat_energy_mw=0.2, efficiency=0.95)
+    api:
+      - monee.express.create_chp_hg
+      - monee.express.create_p2h_hg
+      - monee.express.create_g2h_hg
+      - monee.model.CHPHG
+      - monee.model.PowerToHeatHG
+      - monee.model.GasToHeatHG
+    keywords: [HG variant, node-based coupler, heat injection, CHPHG, PowerToHeatHG, GasToHeatHG,
+      McCormick]
+    related: [mccormick-heat, chp, power-to-heat, mes-generator]
+    docs:
+      - doc: concepts/multi_energy
+        section: Node-based heat couplers (HG variants)
+        label: HG couplers
+        kind: concept
+      - doc: components/coupling
+        section: Node-based couplers (HG variants)
+        label: HG coupler reference
+        kind: component
+      - doc: how-to/generate_mes
+        section: Coupling points
+        label: use_hg_variants in the coupling point builder
+        kind: how-to
+      - doc: how-to/generate_mes
+        section: Node-based heat loads (McCormick-DHS)
+        label: Node-based heat loads
+        kind: how-to
+      - doc: tutorials/04_mes_economic_dispatch
+        section: Temperature control
+        label: Why HG units are not temperature controlled
+        kind: tutorial
+
+  - id: express-builder
+    group: build
+    title: Express builder
+    short: Express
+    level: core
+    carriers: [all]
+    tagline: Add any component with one `create_*` call that returns its id.
+    details: >-
+      `monee.express` (imported as `mx`) has dedicated `create_*` functions for buses, lines,
+      transformers, loads, generators, external grids, gas and water junctions and pipes, compressors,
+      sources, sinks, heat exchangers and coupling units, plus generic `create_el_child`, `create_gas_child`
+      and `create_water_child` for any other child model such as a storage. Branch and child functions
+      on a single carrier auto-create a missing endpoint, an optional `name` makes a component
+      addressable in results and time series, and `position` places nodes in plots. `mx.create_multi_energy_network()`
+      is an alias for `mm.Network()`, so express calls and the model API mix freely.
+    highlights:
+      - One call per component for electricity, gas, heat and coupling units
+      - Every `create_*` call returns the component id
+      - '`name=` makes a component addressable in time series and results'
+      - '`constraints=` on every call, explicit node and child ids via `overwrite_id`'
+    snippet: |-
+      import monee.express as mx
+      net = mx.create_multi_energy_network()
+      b0, b1 = mx.create_bus(net), mx.create_bus(net)
+      mx.create_line(net, b0, b1, length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+      mx.create_ext_power_grid(net, b0)
+      mx.create_power_load(net, b1, p_mw=0.1, q_mvar=0.0)
+    api:
+      - monee.express.create_multi_energy_network
+      - monee.express.create_bus
+      - monee.express.create_line
+      - monee.express.create_trafo
+      - monee.express.create_ext_power_grid
+      - monee.express.create_power_load
+      - monee.express.create_gas_junction
+      - monee.express.create_gas_pipe
+      - monee.express.create_water_junction
+      - monee.express.create_water_pipe
+      - monee.express.create_sink
+      - monee.express.create_el_child
+    keywords: [express, mx, create_bus, create_line, create_gas_pipe, create_water_pipe, create_el_child,
+      builder, component]
+    related: [network-model, topology-structures, energy-flow, chp]
+    docs:
+      - doc: quickstart
+        section: Solving an electricity network
+        label: 'Quickstart: first network'
+        kind: quickstart
+      - doc: index
+        section: Quick look
+        label: Quick look
+        kind: quickstart
+      - doc: components/index
+        section: ''
+        label: Component reference
+        kind: component
+      - doc: api/monee.express
+        section: Create functions
+        label: Express create functions
+        kind: api
+
+  - id: reference-networks
+    group: build
+    title: Reference networks
+    short: Ref. nets
+    level: core
+    carriers: [all]
+    tagline: >-
+      Deterministic multi-energy test systems, from a small urban district to a restoration benchmark.
+    details: >-
+      `monee.network` ships ready-made coupled systems: a 20 kV urban district around a CHP, a
+      scalable multi-district version, a seeded 7-bus benchmark with two normally open backup
+      lines and a CIGRE MV based system (needs pandapower). `create_restoration_benchmark` builds
+      a large grid with compressors, a long district heating chain and CHP, P2G and G2P coupling,
+      and can attach linepack and thermal inertia. Every factory returns the same network on each
+      call.
+    highlights:
+      - '`create_large_urban_mes_net` scales with `n_districts` under a shared slack'
+      - Seeded benchmark nets ship with normally open backup lines
+      - >-
+        The restoration benchmark defaults to the MISOCP electricity formulation for SCIP or Gurobi
+    snippet: |-
+      from monee import run_energy_flow
+      from monee.network import create_urban_district_net
+
+      net = create_urban_district_net()
+      result = run_energy_flow(net)
+    api:
+      - monee.network.create_urban_district_net
+      - monee.network.create_large_urban_mes_net
+      - monee.network.create_monee_benchmark_net
+      - monee.network.create_mv_multi_cigre
+      - monee.network.create_restoration_benchmark
+    keywords: [reference network, test case, benchmark, urban district, CIGRE MV, restoration,
+      example network, scale up]
+    related: [mes-generator, load-shedding, backup-lines, islanding, energy-flow, misocp-relaxation]
+    docs:
+      - doc: how-to/reference_networks
+        section: Available networks
+        label: Available reference networks
+        kind: how-to
+      - doc: how-to/reference_networks
+        section: Quick start
+        label: Solve a reference network
+        kind: how-to
+      - doc: how-to/reference_networks
+        section: 'Scaling up: replicated districts'
+        label: Replicated districts
+        kind: how-to
+      - doc: how-to/reference_networks
+        section: The restoration benchmark
+        label: The restoration benchmark
+        kind: how-to
+      - doc: how-to/reference_networks
+        section: Seeded benchmark nets with backup lines
+        label: Benchmark nets with backup lines
+        kind: how-to
+      - doc: api/monee.network
+        section: Reference energy systems
+        label: Reference networks API
+        kind: api
+
+  - id: topology-structures
+    group: build
+    title: Topology structures
+    short: Structures
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Build lines, rings, stars and paired district heating loops with one call per shape.
+    details: >-
+      `el_structure`, `gas_structure` and `water_structure` return builders that remember carrier
+      defaults such as impedance or diameter, so each line, ring or star is one call that can
+      attach a load to every new node. `dhs_structure` mirrors each shape on a supply and a return
+      network, bridges the node pairs with heat exchangers and closes the loop with `attach_heat_plant`.
+      Shapes return `Segment` handles that list the created ids and compose through `start_from`.
+    highlights:
+      - '`line`, `ring` and `star` shapes for electricity, gas and water'
+      - Load keywords attach a load, sink, source or generator to every new node
+      - '`heat_exchanger_q_mw` puts one consumer on each supply and return pair'
+      - >-
+        `attach_heat_plant` closes the loop with a supply slack at the feed temperature
+    snippet: |-
+      import monee.express as mx
+
+      net = mx.create_multi_energy_network()
+      s = mx.el_structure(net, length_m=100, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5)
+      seg = s.line(5, load_p_mw=0.1)
+      s.attach_ext_grid(seg.first)
+    api:
+      - monee.express.el_structure
+      - monee.express.gas_structure
+      - monee.express.water_structure
+      - monee.express.dhs_structure
+      - monee.express.DhsStructure.attach_heat_plant
+      - monee.express.Segment
+    keywords: [structure, feeder, radial, ring, star, bulk build, supply and return, heat plant,
+      segment]
+    related: [express-builder, heat-loops, district-heating, mes-generator]
+    docs:
+      - doc: how-to/express_structures
+        section: ''
+        label: Bulk topology builders
+        kind: how-to
+      - doc: how-to/express_structures
+        section: 'Shapes: line, ring, star'
+        label: Line, ring and star shapes
+        kind: how-to
+      - doc: how-to/express_structures
+        section: District heating structures
+        label: District heating structures
+        kind: how-to
+      - doc: api/monee.express
+        section: Topology structures
+        label: Topology structures API
+        kind: api
+
+  - id: matpower-import
+    group: build
+    title: MATPOWER import
+    short: MATPOWER
+    level: advanced
+    carriers: [electricity]
+    tagline: >-
+      Load IEEE test cases and any MATPOWER .m or .mat file as a ready-to-solve network.
+    details: >-
+      `read_matpower_case` parses MATPOWER text and binary cases and maps buses, demand, shunts,
+      generators and pi-model branches onto monee components, with the slack at the reference
+      bus and voltage-controlled generators at PV buses. It needs no extra install. `read_matpower_opf_case`
+      additionally reads `gencost` and returns the network together with an AC OPF problem; MATPOWER
+      support is import only.
+    highlights:
+      - Reads .m text and .mat binary cases
+      - Isolated buses are dropped, out-of-service branches kept de-energized
+      - >-
+        Branch current limits are derived from `RATE_A`; unrated branches stay effectively unbounded
+      - '`read_matpower_opf_case` also reads `gencost` for an AC OPF'
+    snippet: |-
+      from monee import run_energy_flow
+      from monee.io.matpower import read_matpower_case
+
+      net = read_matpower_case("case9.m")
+      result = run_energy_flow(net)
+    api:
+      - monee.io.matpower.read_matpower_case
+      - monee.io.matpower.read_matpower_opf_case
+      - monee.io.matpower.read_mpc
+      - monee.run_energy_flow
+    keywords: [MATPOWER, IEEE test case, case9, case118, .m file, .mat file, mpc, gencost, import,
+      transmission]
+    related: [ac-opf, pandapower-simbench, electricity-grid, native-files]
+    docs:
+      - doc: how-to/matpower_io
+        section: Reading a MATPOWER file
+        label: Read a MATPOWER file
+        kind: how-to
+      - doc: how-to/matpower_io
+        section: How MATPOWER data is mapped
+        label: How MATPOWER data is mapped
+        kind: how-to
+      - doc: how-to/matpower_io
+        section: Reading a case as an optimal power flow
+        label: Read a case as an OPF
+        kind: how-to
+      - doc: api/monee.io
+        section: matpower
+        label: MATPOWER API
+        kind: api
+
+  - id: pandapower-simbench
+    group: build
+    title: pandapower and SimBench
+    short: pandapower
+    level: advanced
+    carriers: [electricity]
+    tagline: >-
+      Convert a pandapower net, or fetch a SimBench grid with a year of profiles, in one call.
+    details: >-
+      `from_pandapower_net` maps buses, lines, transformers, external grids, generators, static
+      generators, loads and switches, recovers line current limits and transformer ratings, and
+      keeps bus names, coordinates and lookups from pandapower indices to monee ids. `obtain_simbench_net_with_td`
+      returns a converted SimBench grid together with a `TimeseriesData` of its 15-minute profiles,
+      ready for `run_timeseries`. Both are experimental: the converter needs pandapower, and SimBench
+      needs the `simbench` extra (`pip install monee[simbench]`), which installs both.
+    highlights:
+      - '`pp_bus_to_node` and `pp_line_to_branch` join results back to pandapower'
+      - >-
+        Branch results carry a `kind` column (`line`, `trafo`, `trafo3w`, `impedance`, `switch-stub`)
+      - SimBench generation profiles follow the load convention (negative `p_mw`)
+      - >-
+        `from_pandapower_net(net, opf=True)` returns the network plus an AC OPF problem
+    snippet: |-
+      from monee import run_timeseries
+      from monee.io.from_simbench import obtain_simbench_net_with_td
+
+      net, td = obtain_simbench_net_with_td("1-LV-rural1--0-no_sw")
+      ts_result = run_timeseries(net, td, steps=96)
+    api:
+      - monee.io.from_pandapower.from_pandapower_net
+      - monee.io.from_simbench.obtain_simbench_net_with_td
+      - monee.io.from_simbench.obtain_simbench_net
+      - monee.io.from_simbench.obtain_simbench_profile
+      - monee.io.from_simbench.obtain_simbench_profile_by_pp_net
+    keywords: [pandapower, SimBench, convert, import, CIGRE, load profile, 15-minute, distribution
+        grid, experimental]
+    related: [matpower-import, timeseries, profiles-and-prices, ac-opf, interactive-plots, validated-accuracy]
+    docs:
+      - doc: how-to/convert_from_pandapower
+        section: Converting a network
+        label: Convert a pandapower net
+        kind: how-to
+      - doc: how-to/convert_from_pandapower
+        section: SimBench
+        label: SimBench grids and profiles
+        kind: how-to
+      - doc: how-to/convert_from_pandapower
+        section: Which branch is which
+        label: Branch kinds and lookups
+        kind: how-to
+      - doc: install
+        section: Optional extras
+        label: Install the simbench extra
+        kind: install
+      - doc: api/monee.io
+        section: pandapower (experimental)
+        label: pandapower import API
+        kind: api
+      - doc: api/monee.io
+        section: simbench (experimental)
+        label: SimBench import API
+        kind: api
+
+  - id: cim-esdl-import
+    group: build
+    title: CIM and ESDL import
+    short: CIM / ESDL
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Experimental import of CGMES grid models and ESDL energy systems, with a report of what was
+      skipped.
+    details: >-
+      `import_cim_files` reads the EQ, TP and SSH (optionally SV) profiles of a CGMES 2.4.15 or
+      3.0.0 model through cimpy into buses, pi-model branches, loads, generators and external
+      grids. `import_esdl_file` maps an ESDL energy system through pyESDL onto electricity cables,
+      gas and heat pipes, and electricity and heat demands and producers, rebuilding nodes from
+      connected ports. Both are experimental and return a report that counts mapped objects and
+      lists what was skipped.
+    highlights:
+      - '`CimImportReport` and `EsdlImportReport` list skip reasons'
+      - ESDL import rebuilds electricity, gas and heat topology
+      - Gas demands and conversion assets in ESDL are skipped and reported
+      - Needs the optional cimpy or pyESDL package
+    snippet: |-
+      from monee.io.from_esdl import import_esdl_file
+
+      net, report = import_esdl_file("my_system.esdl")
+      report.log()
+    api:
+      - monee.io.from_cim.import_cim_files
+      - monee.io.from_cim.CimImportReport
+      - monee.io.from_esdl.import_esdl_file
+      - monee.io.from_esdl.EsdlImportReport
+    keywords: [CIM, CGMES, IEC 61970, ESDL, cimpy, pyESDL, interoperability, import, experimental]
+    related: [pandapower-simbench, matpower-import, native-files, network-checks]
+    docs:
+      - doc: how-to/import_cim_esdl
+        section: ''
+        label: Import CIM and ESDL
+        kind: how-to
+      - doc: how-to/import_cim_esdl
+        section: Import a CGMES model (CIM)
+        label: Import a CGMES model
+        kind: how-to
+      - doc: how-to/import_cim_esdl
+        section: Import an ESDL energy system
+        label: Import an ESDL system
+        kind: how-to
+      - doc: how-to/import_cim_esdl
+        section: The import report
+        label: The import report
+        kind: how-to
+      - doc: api/monee.io
+        section: CIM / CGMES (experimental)
+        label: CIM import API
+        kind: api
+      - doc: api/monee.io
+        section: ESDL (experimental)
+        label: ESDL import API
+        kind: api
+
+  - id: mes-generator
+    group: build
+    title: Synthetic multi-energy networks
+    short: Generator
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Overlay gas, district heating and coupling points on any power grid, reproducibly.
+    details: >-
+      `generate_supply_return_mes_based_on_power_net` copies a power grid, builds a gas tree and
+      a supply and return district heating network on its spanning tree, sizes them from local
+      demand and places CHP, P2G and P2H units. `coupling_density` and `centralized` control the
+      coupling layout, `seed` (default 0) makes each realization reproducible, and the wrapper
+      works on imported grids such as a converted CIGRE MV net. The layer builders can also be
+      called one by one.
+    highlights:
+      - Decentralized or hub coupling at a chosen density
+      - Heat pipes are sized for velocity and pressure drop by default
+      - 'Heat-plant modes: `closing_pipe`, `two_port` or `screening`'
+      - Node-based heat loads for the McCormick heating formulation
+    snippet: |-
+      from monee import run_energy_flow
+      from monee.network import generate_supply_return_mes_based_on_power_net
+
+      mes = generate_supply_return_mes_based_on_power_net(power_net, coupling_density=0.2, seed=42)
+      result = run_energy_flow(mes)
+    api:
+      - monee.network.generate_supply_return_mes_based_on_power_net
+      - monee.network.create_gas_tree_net_for_power
+      - monee.network.create_heat_supply_return_net_for_power
+      - monee.network.create_coupling_points_for_mes
+    keywords: [synthetic network, generator, overlay, multi-energy system, coupling density, seed,
+      test system, scenario]
+    related: [reference-networks, pandapower-simbench, node-based-couplers, chp, mccormick-heat]
+    docs:
+      - doc: how-to/generate_mes
+        section: One-call wrapper (recommended)
+        label: One-call MES generator
+        kind: how-to
+      - doc: how-to/generate_mes
+        section: Coupling points
+        label: Place coupling points
+        kind: how-to
+      - doc: how-to/generate_mes
+        section: Heat overlay
+        label: Heat overlay
+        kind: how-to
+      - doc: how-to/generate_mes
+        section: Complete example
+        label: Complete example
+        kind: how-to
+      - doc: api/monee.network
+        section: ''
+        label: monee.network API
+        kind: api
+
+  - id: native-files
+    group: build
+    title: Save and load
+    short: Save / load
+    level: advanced
+    carriers: [all]
+    tagline: Persist a network as OMEF JSON and reload it to solve to the same result.
+    details: >-
+      `save_network` and `load_network` (aliases of `write_omef_network` and `load_to_network`)
+      store every node, branch, child, compound and grid, keeping variable bounds, constants and
+      component ordering exactly. `include_solve_state=True` checkpoints the solved operating
+      point, and `network_to_native_dict` and `native_dict_to_network` keep the format in memory.
+      Custom models round-trip once registered with `@mm.model`; extensions, custom constraints
+      and objectives and non-default formulations are not stored, so re-apply them after loading.
+    highlights:
+      - Round-trips `Var` bounds, integer flags and constants
+      - Custom model classes load by name once registered
+      - '`include_solve_state=True` checkpoints a solved operating point'
+      - >-
+        Extensions (linepack, LTC, islanding), constraints and objectives are not stored
+    snippet: |-
+      from monee.io import save_network, load_network
+
+      save_network("grid.json", net)
+      net2 = load_network("grid.json")
+    api:
+      - monee.io.save_network
+      - monee.io.load_network
+      - monee.io.write_omef_network
+      - monee.io.load_to_network
+      - monee.io.native.network_to_native_dict
+      - monee.io.native.native_dict_to_network
+    keywords: [save, load, JSON, OMEF, persistence, serialize, checkpoint, export]
+    related: [custom-models, matpower-import, reference-networks, network-aspects]
+    docs:
+      - doc: how-to/matpower_io
+        section: Saving and loading the native format
+        label: Save and load the native format
+        kind: how-to
+      - doc: how-to/matpower_io
+        section: Format details
+        label: What is serialized
+        kind: how-to
+      - doc: how-to/matpower_io
+        section: Custom models
+        label: Round-trip custom models
+        kind: how-to
+      - doc: api/monee.io
+        section: native (OMEF JSON)
+        label: Native format API
+        kind: api
+
+  - id: energy-flow
+    group: simulate
+    title: Energy flow
+    short: Energy flow
+    level: core
+    carriers: [all]
+    tagline: >-
+      Solve power, gas and heat flows of one network as one simultaneous steady-state system.
+    details: >-
+      `run_energy_flow` writes the equations of every carrier into one model and solves them together,
+      so a coupled network needs no iteration between sectors. It runs as a square steady-state
+      simulation: phantom degrees of freedom are pinned and operational flow limits dropped, while
+      `run_energy_flow_optimization` solves the same model under an optimization problem's limits
+      and objective. monee uses IPOPT by default (via CasADi), and the solved values are written
+      back into the network as a warm start unless you pass `copy=True`.
+    highlights:
+      - >-
+        AC power flow, Weymouth gas flow and Darcy-Weisbach water and heat flow in one solve
+      - One formulation serves both simulation and optimization
+      - '`formulation="smooth_nlp"` gives a binary-free model for IPOPT'
+      - >-
+        `result.success`, `termination_condition` and `residuals` report how the solve ended
+    snippet: |-
+      import monee
+
+      result = monee.run_energy_flow(net)
+      result = monee.run_energy_flow(net, formulation="smooth_nlp")
+    api:
+      - monee.run_energy_flow
+      - monee.solve
+      - monee.run_energy_flow_optimization
+    keywords: [power flow, load flow, energy flow, gas flow, heat flow, steady state, simulation,
+      run_energy_flow]
+    related: [result-tables, formulations, solver-backends, timeseries, network-checks]
+    docs:
+      - doc: quickstart
+        section: Solving an electricity network
+        label: 'Quickstart: first energy flow'
+        kind: quickstart
+      - doc: concepts/formulations
+        section: Simulation vs optimisation
+        label: Simulation vs optimisation
+        kind: concept
+      - doc: concepts/domains
+        section: ''
+        label: Physical models
+        kind: concept
+      - doc: concepts/solvers
+        section: Simulation vs. optimisation mode
+        label: Solver modes
+        kind: concept
+      - doc: api/index
+        section: ''
+        label: Top-level API
+        kind: api
+      - doc: api/monee.simulation
+        section: Single solve
+        label: solve API
+        kind: api
+
+  - id: timeseries
+    group: simulate
+    title: Timeseries
+    short: Timeseries
+    level: core
+    carriers: [all]
+    tagline: >-
+      Replay profiles step by step as independent solves, each a power flow or an optimization.
+    details: >-
+      `run_timeseries` copies the network for each step, applies the registered profiles and solves
+      the steps one after another, so run time grows linearly with their number. Pass `optimization_problem`
+      to optimize each step on its own; ramp and storage limits then act against the step just
+      solved, with no foresight. `StepHook` subclasses run code before and after every step, `on_step_error="skip"`
+      records failed steps and keeps going. A plain CasADi power flow driven by id-addressed series,
+      without step hooks, extra solver options or temporal coupling, builds the model once and
+      re-solves it per step.
+    highlights:
+      - '`get_result_for` returns one row per step and one column per component'
+      - >-
+        `dt_h` sets a constant step length, a `datetime_index` derives it from timestamps
+      - Step hooks raise alerts, log, or read and write inter-step state
+      - >-
+        Switch to `run_multi_period` only when storage, ramps, linepack, inertia or a terminal
+        state must be planned jointly
+    snippet: |-
+      from monee.simulation import TimeseriesData, run_timeseries
+
+      td = TimeseriesData()
+      td.add_child_series(load_id, "p_mw", [0.4, 0.6, 1.0, 1.2, 0.9, 0.5])
+      result = run_timeseries(net, td)
+    api:
+      - monee.run_timeseries
+      - monee.TimeseriesResult
+      - monee.simulation.TimeseriesResult.get_result_for
+      - monee.StepHook
+      - monee.simulation.StepResult
+    keywords: [timeseries, time series, profiles, quasi-static, sequential, '8760', step hook,
+      hour by hour, dt_h, datetime_index, on_step_error]
+    related: [profiles-and-prices, multi-period, stepper, pandapower-simbench, energy-flow, temporal-coupling]
+    docs:
+      - doc: how-to/timeseries
+        section: ''
+        label: Timeseries how-to
+        kind: how-to
+      - doc: concepts/timeseries
+        section: Sequential pipeline
+        label: Sequential pipeline
+        kind: concept
+      - doc: tutorials/02_timeseries_simulation
+        section: ''
+        label: 'Tutorial: solar feeder day-ahead'
+        kind: tutorial
+      - doc: how-to/timeseries
+        section: 'Step timing: dt_h and datetime_index'
+        label: Step length and timestamps
+        kind: how-to
+      - doc: how-to/timeseries
+        section: Step hooks
+        label: Step hooks
+        kind: how-to
+      - doc: api/monee.simulation
+        section: Timeseries
+        label: Timeseries API
+        kind: api
+
+  - id: profiles-and-prices
+    group: simulate
+    title: Profiles and prices
+    short: Profiles
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Attach per-step values and prices to any attribute by id, name or `DataFrame`.
+    details: >-
+      `TimeseriesData` maps (component, attribute) pairs to per-step values for nodes, children,
+      branches and compounds, registered by id or name or built from a pandas `DataFrame`. Objects
+      merge with `+` or `extend`, `head` and `slice` cut a year-long profile to a study window,
+      and `validate_bound` turns series that bind to nothing into an error. `add_objective_data`
+      sets prices or costs per period for your own objectives and for economic dispatch.
+    highlights:
+      - >-
+        Series should target settable inputs such as `p_mw` or `regulation`, not solved outputs
+      - >-
+        The same object feeds `run_timeseries`, `run_multi_period`, `run_mpc` and the `Stepper`
+      - >-
+        Economic dispatch costs are per MW and period, so scale an hourly price by `dt_h`
+    snippet: ''
+    api:
+      - monee.TimeseriesData
+      - monee.simulation.TimeseriesData.add_child_series
+      - monee.simulation.TimeseriesData.add_child_series_by_name
+      - monee.simulation.TimeseriesData.add_branch_series_by_name
+      - monee.simulation.TimeseriesData.add_compound_series_by_name
+      - monee.simulation.TimeseriesData.from_dataframe
+      - monee.simulation.TimeseriesData.slice
+      - monee.simulation.TimeseriesData.add_objective_data
+      - monee.simulation.TimeseriesData.add_objective_data_by_name
+      - monee.simulation.TimeseriesData.validate_bound
+    keywords: [load profile, generation profile, TimeseriesData, DataFrame, CSV, price, tariff,
+      time-of-use, windowing]
+    related: [timeseries, multi-period, economic-dispatch, stepper]
+    docs:
+      - doc: how-to/timeseries
+        section: Registering time series
+        label: Registering time series
+        kind: how-to
+      - doc: how-to/timeseries
+        section: Windowing
+        label: Window a long profile
+        kind: how-to
+      - doc: how-to/multi_period
+        section: Time-varying pricing
+        label: Time-varying pricing
+        kind: how-to
+      - doc: how-to/timeseries
+        section: Series must target settable inputs
+        label: Which attributes a series can drive
+        kind: how-to
+      - doc: concepts/timeseries
+        section: TimeseriesData
+        label: TimeseriesData concept
+        kind: concept
+      - doc: problems/economic_dispatch
+        section: How costs enter
+        label: How dispatch costs enter
+        kind: problem
+
+  - id: stepper
+    group: simulate
+    title: Co-simulation Stepper
+    short: Stepper
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Advance a network step by step from an external clock, with persistent state and outages.
+    details: >-
+      `Stepper` lets an external framework such as mosaik own the clock: each `step(dt_h)` solves
+      one snapshot at the caller's step length, applies a profile row (`ts_index`) and then `data_overrides`,
+      and carries storage, linepack and thermal state between calls. Components can be failed,
+      restored, deactivated, activated or removed between steps, and every topology change is
+      logged as a `NetworkChange`. By default successful steps warm-start the next solve, and
+      `to_timeseries_result` converts the history to the usual result API.
+    highlights:
+      - '`dt_h` may change on every call'
+      - >-
+        `changes_df` lists every topology change, including islanding decided in the solve
+      - >-
+        `on_step_error="skip"` keeps the clock in sync and carries a failed step's interval forward
+      - '`max_history` bounds memory in open-ended runs'
+    snippet: |-
+      from monee import Stepper
+
+      c = Stepper(net, timeseries_data=td)
+      r = c.step(1.0, ts_index=0)
+      r2 = c.step(0.25, ts_index=1, data_overrides={(load_id, "p_mw"): 0.3})
+    api:
+      - monee.Stepper
+      - monee.simulation.Stepper.step
+      - monee.simulation.Stepper.get
+      - monee.simulation.Stepper.fail
+      - monee.simulation.Stepper.restore
+      - monee.simulation.Stepper.changes_df
+      - monee.simulation.Stepper.to_timeseries_result
+      - monee.NetworkChange
+    keywords: [co-simulation, cosimulation, mosaik, Stepper, external clock, variable step, data_overrides,
+      outage, real-time loop]
+    related: [timeseries, gas-linepack, thermal-inertia, edit-and-switch, auto-fallback]
+    docs:
+      - doc: how-to/stepper
+        section: ''
+        label: Externally paced co-simulation
+        kind: how-to
+      - doc: how-to/stepper
+        section: When to use which driver
+        label: Stepper, timeseries or multi-period
+        kind: how-to
+      - doc: concepts/timeseries
+        section: Externally paced steps
+        label: Externally paced steps
+        kind: concept
+      - doc: how-to/stepper
+        section: Constructing a Stepper
+        label: Constructing a Stepper
+        kind: how-to
+      - doc: api/monee.simulation
+        section: Stepper (co-simulation)
+        label: Stepper API
+        kind: api
+
+  - id: islanding
+    group: simulate
+    title: Islanding
+    short: Islands
+    level: advanced
+    carriers: [electricity, gas, heat]
+    tagline: Solve networks split into islands, each led by its own grid-forming unit.
+    details: >-
+      `enable_islanding` registers per-carrier modes for electricity, gas and water that add a
+      connectivity-flow formulation with binary energization variables, so every island holding
+      a grid-forming unit is solved instead of pruned. A grid-forming generator or source leads
+      an island only once that island has lost its external grid; elsewhere a generator holds its
+      nominal setpoint (idle by default) and a source's flow stays free unless a nominal is set.
+      An island short of capacity de-energizes buses instead of failing, and the binaries
+      need a mixed-integer solver such as SCIP or Gurobi.
+    highlights:
+      - >-
+        Grid-forming generators for electricity, grid-forming sources for gas and water
+      - >-
+        `branch_gating` takes the branches of a de-energized bus out of service, so a unit serves
+        as many buses as its capacity covers
+      - Call `enable_islanding` again after loading a saved network
+    snippet: |-
+      import monee as mn
+      import monee.express as mx
+
+      mx.create_grid_forming_generator(net, bus_2, p_mw_max=1.0, q_mvar_max=0.5)
+      mn.enable_islanding(net, electricity=True)
+      result = mn.run_energy_flow(net, solver="scip")
+    api:
+      - monee.enable_islanding
+      - monee.NetworkIslandingConfig
+      - monee.ElectricityIslandingMode
+      - monee.GasIslandingMode
+      - monee.WaterIslandingMode
+      - monee.GridFormingGenerator
+      - monee.GridFormingSource
+      - monee.express.create_grid_forming_generator
+      - monee.express.create_gas_grid_forming_source
+      - monee.express.create_water_grid_forming_source
+    keywords: [islanding, island, microgrid, grid-forming, black start, energisation, outage,
+      restoration]
+    related: [global-solvers, load-shedding, backup-lines, resilience-metrics, network-aspects,
+      stepper]
+    docs:
+      - doc: how-to/islanding
+        section: 'Quick start: electricity'
+        label: Islanding quick start
+        kind: how-to
+      - doc: concepts/islanding
+        section: ''
+        label: Islanding concept
+        kind: concept
+      - doc: how-to/islanding
+        section: Multi-carrier islanding
+        label: Multi-carrier islanding
+        kind: how-to
+      - doc: concepts/islanding
+        section: Branch energisation gating (electricity)
+        label: Branch energisation gating
+        kind: concept
+      - doc: components/extensions
+        section: GridFormingGenerator
+        label: GridFormingGenerator reference
+        kind: component
+      - doc: api/monee.model.extension
+        section: Islanding
+        label: Islanding API
+        kind: api
+
+  - id: economic-dispatch
+    group: optimize
+    title: Economic dispatch
+    short: Dispatch
+    level: core
+    carriers: [all]
+    tagline: >-
+      Minimize the cost of supplying power, gas and heat under full network limits.
+    details: >-
+      `create_economic_dispatch_problem` chooses generator output at minimum cost while voltage
+      and line loading limits hold, and prices the external grid exchange when `ext_grid_cost_default`
+      is set. `gas_cost_default` and `heat_cost_default` add gas sources and heat units, and once
+      every carrier of a coupling unit is dispatched its regulation becomes a decision, so the
+      merit order across carriers follows from the optimum. `ramp_limit` couples consecutive periods,
+      and `include_storages` dispatches storages over a `run_multi_period` or `run_mpc` horizon.
+    highlights:
+      - >-
+        `cost=` on generators, external grids, gas sources and heat units sets each price
+      - Runs on the default AC formulation with IPOPT, no setup
+      - Heat from a district heating plant is priced from its island heat balance
+      - 'Prices are per MW and period: multiply an hourly price by `dt_h`'
+    snippet: |-
+      import monee
+      from monee.problem import create_economic_dispatch_problem
+
+      problem = create_economic_dispatch_problem(ext_grid_cost_default=25, gas_cost_default=30)
+      result = monee.run_energy_flow_optimization(net, problem)
+    api:
+      - monee.problem.create_economic_dispatch_problem
+      - monee.problem.create_multi_period_economic_dispatch_problem
+      - monee.run_energy_flow_optimization
+    keywords: [economic dispatch, OPF, merit order, generation cost, gas price, heat price, CHP
+        dispatch, cost minimisation]
+    related: [ac-opf, multi-period, coupler-regulation, operating-limits, profiles-and-prices]
+    docs:
+      - doc: problems/economic_dispatch
+        section: ''
+        label: Economic dispatch
+        kind: problem
+      - doc: problems/economic_dispatch
+        section: Gas and heat
+        label: Gas and heat dispatch
+        kind: problem
+      - doc: tutorials/04_mes_economic_dispatch
+        section: ''
+        label: 'Tutorial: multi-energy economic dispatch'
+        kind: tutorial
+      - doc: problems/economic_dispatch
+        section: How costs enter
+        label: How costs enter
+        kind: problem
+      - doc: problems/economic_dispatch
+        section: Running it over a horizon
+        label: Dispatch over a horizon
+        kind: problem
+
+  - id: load-shedding
+    group: optimize
+    title: Load shedding
+    short: Shedding
+    level: core
+    carriers: [all]
+    tagline: >-
+      Find the least harmful curtailment across electricity, gas and heat after a contingency.
+    details: >-
+      `create_min_load_shedding_problem` gives every demand, generator and coupling unit a service
+      level between 0 and 1 and minimizes weighted unserved power under the full physics and bounds
+      on voltage, pressure, temperature, loading and external exchange. `solve_load_shedding_problem`
+      builds and solves it in one call, `weight_for_load` ranks critical loads so they are shed
+      last, and reserve lines built with `backup=True` become switch decisions. Those switches
+      are binary only on a mixed-integer solver such as SCIP or Gurobi; IPOPT relaxes them.
+    highlights:
+      - Per-load priorities through `weight_for_load`
+      - Exchange bounds per carrier at external grids, the heat slack included
+      - A shed-headroom check warns when a slack could still import more
+      - Lexicographic variant on the Pyomo and native Gurobi backends
+    snippet: |-
+      from monee import solve_load_shedding_problem
+
+      result = solve_load_shedding_problem(
+          network, bounds_vm=(0.9, 1.1), bounds_ext_el=(-0.5, 0.5))
+    api:
+      - monee.solve_load_shedding_problem
+      - monee.problem.create_min_load_shedding_problem
+    keywords: [load shedding, curtailment, unserved energy, resilience, contingency, priority,
+      critical load, lexicographic]
+    related: [resilience-metrics, backup-lines, islanding, optimization-problems, reference-networks,
+      coupler-regulation]
+    docs:
+      - doc: problems/load_shedding
+        section: ''
+        label: Load shedding
+        kind: problem
+      - doc: problems/load_shedding
+        section: One-call interface
+        label: One-call interface
+        kind: problem
+      - doc: problems/load_shedding
+        section: Prioritising individual loads
+        label: Prioritising individual loads
+        kind: problem
+      - doc: problems/load_shedding
+        section: Lexicographic variant
+        label: Lexicographic variant
+        kind: problem
+      - doc: tutorials/01_optimization_basics
+        section: ''
+        label: 'Tutorial: minimum-cost load curtailment'
+        kind: tutorial
+      - doc: api/index
+        section: ''
+        label: Top-level API
+        kind: api
+
+  - id: optimization-problems
+    group: optimize
+    title: Custom problems
+    short: Problems
+    level: core
+    carriers: [all]
+    tagline: >-
+      Declare decisions, objectives and constraints, then solve them with the network physics.
+    details: >-
+      An `OptimizationProblem` collects what the solver may change (`controllable_generators`,
+      `controllable_demands`, `controllable_cps`, `controllable_storages`, or any attribute through
+      `controllable`), plus `Objectives` and `Constraints` built over selected components; `Network.constraint`
+      and `Network.objective` add rows over the whole network. The same problem object runs in
+      `run_energy_flow_optimization`, `run_timeseries`, `run_multi_period`, `run_mpc` and the
+      `Stepper`. With `lex_objectives=True`, a single-period solve on Pyomo or gurobipy minimizes
+      your objective first and the formulation's tightening terms second, with no weights to tune.
+    highlights:
+      - '`bounds` overrides the limits of selected variables after promotion'
+      - The built-in problems are assembled from the same public pieces
+      - Lexicographic objectives remove weight tuning against relaxation terms
+      - '`result.user_objective` reports your objective without the auxiliary terms'
+    snippet: |-
+      import monee, monee.model as mm, monee.problem as mp
+      problem = mp.OptimizationProblem()
+      problem.controllable_generators(["p_mw"])
+      problem.objectives = mp.Objectives()
+      problem.objectives.select(lambda m, _c: isinstance(m, mm.PowerGenerator)).calculate(lambda ms: sum(m.cost * -m.p_mw for m in ms))
+      result = monee.run_energy_flow_optimization(net, problem)
+    api:
+      - monee.problem.OptimizationProblem
+      - monee.problem.Objectives
+      - monee.problem.Constraints
+      - monee.problem.AttributeParameter
+      - monee.problem.OptimizationProblem.controllable
+      - monee.problem.OptimizationProblem.bounds
+      - monee.model.Network.constraint
+      - monee.model.Network.objective
+      - monee.run_energy_flow_optimization
+    keywords: [optimization, OptimizationProblem, controllable, decision variable, objective,
+      constraint, lexicographic, multi-objective, custom]
+    related: [economic-dispatch, load-shedding, coupler-regulation, ramp-limits, custom-models,
+      misocp-relaxation]
+    docs:
+      - doc: problems/index
+        section: Building your own problem
+        label: Building your own problem
+        kind: problem
+      - doc: tutorials/01_optimization_basics
+        section: Defining the optimisation problem
+        label: 'Tutorial: defining the problem'
+        kind: tutorial
+      - doc: quickstart
+        section: Optimisation
+        label: 'Quickstart: optimisation'
+        kind: quickstart
+      - doc: concepts/solvers
+        section: Lexicographic objectives
+        label: Lexicographic objectives
+        kind: concept
+      - doc: how-to/use_pyomo_solver
+        section: Lexicographic objectives (Pyomo only)
+        label: Two-phase solve on Pyomo
+        kind: how-to
+      - doc: api/monee.problem
+        section: Problem definitions
+        label: Problem API
+        kind: api
+
+  - id: operating-limits
+    group: optimize
+    title: Operating limits
+    short: Limits
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Enforce voltage, loading, pressure, temperature and import limits, and price the congestion.
+    details: >-
+      Both built-in problems bound bus voltages and line loading (apparent power against `max_s_mva`,
+      otherwise current against `max_i_ka`), keep gas pressures and water temperatures in their
+      bands, and honour external grid caps such as `max_import_mw` or `max_import_kgs` unless
+      a problem-level exchange bound replaces them. `OptimizationProblem.bounds` overrides the
+      band of selected variables, for example the squared pressure of chosen gas junctions. Comparing
+      solves with and without a limit gives its congestion cost, and relaxing it slightly gives
+      the value of one more MW.
+    highlights:
+      - Import and export caps on power, gas and water external grids
+      - >-
+        Gas pressure bands bind only in optimization; a plain simulation keeps a wide range
+      - 'Write slack bounds in the load convention: an import cap is `p_mw >= -cap`'
+    snippet: ''
+    api:
+      - monee.express.create_ext_power_grid
+      - monee.express.create_gas_ext_grid
+      - monee.express.create_water_ext_grid
+      - monee.problem.OptimizationProblem.bounds
+      - monee.problem.utils.line_loading_limit
+    keywords: [line loading, thermal rating, voltage band, pressure band, temperature band, import
+        cap, congestion, shadow price]
+    related: [economic-dispatch, conventions, electricity-grid, gas-network, load-shedding]
+    docs:
+      - doc: tutorials/mes_network_limits
+        section: ''
+        label: 'Tutorial: network limits and congestion'
+        kind: tutorial
+      - doc: tutorials/mes_network_limits
+        section: What one more MW is worth
+        label: What one more MW is worth
+        kind: tutorial
+      - doc: how-to/reference_networks
+        section: Import / export capacity limits
+        label: Import and export limits
+        kind: how-to
+      - doc: problems/economic_dispatch
+        section: Recipes
+        label: 'Recipes: pressure band and more'
+        kind: problem
+      - doc: how-to/troubleshooting
+        section: My import cap does nothing
+        label: My import cap does nothing
+        kind: how-to
+      - doc: api/monee.problem
+        section: Utilities
+        label: Limit utilities API
+        kind: api
+
+  - id: ac-opf
+    group: optimize
+    title: AC optimal power flow
+    short: AC OPF
+    level: advanced
+    carriers: [electricity]
+    tagline: >-
+      Turn MATPOWER or pandapower cases with generator costs into a cost-minimizing AC OPF.
+    details: >-
+      `read_matpower_opf_case` returns a network and an `OptimizationProblem`: every in-service
+      generator is dispatchable within its active and reactive limits with its polynomial cost,
+      bus voltages stay in their band and `max_loading` caps branch loading. `from_pandapower_net(net,
+      opf=True)` takes the same route with `poly_cost` and the pandapower limits. The slack voltage
+      is free within its band, the OPF convention of MATPOWER and pandapower, and the pandapower
+      `case9` matches `runopp` to about 1e-5 MW.
+    highlights:
+      - '`limit_basis` selects apparent-power (default) or current loading limits'
+      - Piecewise-linear `gencost` only with two breakpoints, that is a linear cost
+      - pandapower static generators stay fixed injections under `opf=True`
+      - >-
+        Switch to the MISOCP relaxation and solve with SCIP or Gurobi for a convex variant
+    snippet: |-
+      import monee
+      from monee.io.matpower import read_matpower_opf_case
+
+      net, problem = read_matpower_opf_case("case9.m", max_loading=1.0)
+      result = monee.run_energy_flow_optimization(net, problem)
+    api:
+      - monee.io.matpower.read_matpower_opf_case
+      - monee.io.matpower.build_matpower_opf
+      - monee.io.from_pandapower.from_pandapower_net
+      - monee.problem.OptimizationProblem.optimize_bus_voltages
+    keywords: [OPF, optimal power flow, AC OPF, gencost, poly_cost, runopp, generator cost, line
+        limits]
+    related: [matpower-import, pandapower-simbench, economic-dispatch, misocp-relaxation, electricity-grid,
+      validated-accuracy]
+    docs:
+      - doc: how-to/matpower_io
+        section: Reading a case as an optimal power flow
+        label: Read a case as an OPF
+        kind: how-to
+      - doc: how-to/convert_from_pandapower
+        section: Making a converted case dispatchable
+        label: Dispatchable pandapower import
+        kind: how-to
+      - doc: benchmarks/validation
+        section: Electricity, against pandapower (identical model)
+        label: OPF agreement with pandapower
+        kind: benchmark
+      - doc: concepts/domains
+        section: AC power flow
+        label: AC power-flow equations
+        kind: concept
+
+  - id: backup-lines
+    group: optimize
+    title: Backup line switching
+    short: Backup lines
+    level: advanced
+    carriers: [electricity]
+    tagline: >-
+      Let the optimizer close normally open reserve lines to restore supply after a fault.
+    details: >-
+      Flag an electricity line with `backup=True`, usually together with `on_off=0` so it is built
+      open. `controllable_backup_lines` turns the `on_off` of every flagged line into a binary
+      decision, and the minimum load shedding problem does this on its own, closing a reserve
+      line whenever that reduces curtailment. The binaries need a mixed-integer solver such as
+      SCIP or Gurobi, since IPOPT relaxes them to fractions.
+    highlights:
+      - >-
+        `backup=True` on `PowerLine` or `GenericPowerBranch` marks a reserve; the flag alone changes
+        nothing
+      - >-
+        `OptimizationProblem.controllable_backup_lines` makes `on_off` a binary decision
+      - >-
+        The islanding branch gate only bounds a backup line from above, so closing it stays a
+        decision
+      - >-
+        `create_monee_benchmark_net` ships two open backup lines, `create_mv_multi_cigre` one
+    snippet: |-
+      import monee
+      import monee.model as mm
+
+      net.branch(mm.PowerLine(500, 1e-4, 1e-4, 1, backup=True, on_off=0),
+                 from_node_id=bus_a, to_node_id=bus_b)
+      result = monee.solve_load_shedding_problem(net, solver="scip")
+    api:
+      - monee.model.PowerLine
+      - monee.model.GenericPowerBranch
+      - monee.problem.OptimizationProblem.controllable_backup_lines
+      - monee.problem.create_min_load_shedding_problem
+      - monee.network.create_monee_benchmark_net
+    keywords: [backup line, reserve line, switching, reconfiguration, restoration, normally open,
+      tie line, on_off, binary, contingency]
+    related: [load-shedding, islanding, reference-networks, global-solvers, resilience-metrics]
+    docs:
+      - doc: problems/load_shedding
+        section: Decision variables
+        label: Reserve switches in load shedding
+        kind: problem
+      - doc: components/electricity
+        section: PowerLine
+        label: PowerLine backup flag
+        kind: component
+      - doc: how-to/reference_networks
+        section: Seeded benchmark nets with backup lines
+        label: Nets with backup lines
+        kind: how-to
+      - doc: concepts/islanding
+        section: Branch energisation gating (electricity)
+        label: Backup lines and islanding
+        kind: concept
+      - doc: how-to/islanding
+        section: Common pitfalls
+        label: Islanding pitfalls
+        kind: how-to
+
+  - id: multi-period
+    group: horizon
+    title: Multi-period
+    short: Horizon
+    level: core
+    carriers: [all]
+    tagline: >-
+      Optimize a whole horizon jointly when storage, ramps, linepack or inertia couple the periods.
+    details: >-
+      `run_multi_period` builds one problem over all periods, so decisions anticipate the horizon:
+      a battery charges cheaply now to cover a later peak. It is only needed when something couples
+      periods; independent periods are cheaper with `run_timeseries`. `initial_state` and `terminal_state`
+      pin the start and end, periods may differ in length through a `dt_h` list or a `DatetimeIndex`,
+      and CasADi with IPOPT is the default while Pyomo with SCIP or Gurobi handles integer problems.
+    highlights:
+      - '`terminal_state` fixes the final value, for example for cyclic storage'
+      - Built-in and custom problems run unchanged over the horizon
+      - '`MultiPeriodResult` offers per-period frames and `get_period_result`'
+      - 'Periods carry no time weight: scale prices by `dt_h` for energy cost'
+    snippet: |-
+      from monee.simulation import run_multi_period
+
+      result = run_multi_period(net, td, optimization_problem=prob, dt_h=1.0,
+                                terminal_state={(bat, "e_mwh"): 2.0})
+      soc = result.get_result_for_id(bat, "e_mwh")
+    api:
+      - monee.run_multi_period
+      - monee.MultiPeriodResult
+      - monee.simulation.MultiPeriodResult.get_period_result
+      - monee.PyomoMultiPeriodSolver
+      - monee.solver.CasADiMultiPeriodSolver
+      - monee.GekkoMultiPeriodSolver
+    keywords: [multi-period, horizon, foresight, intertemporal, terminal state, cyclic, variable
+        step size, day-ahead]
+    related: [timeseries, storage, rolling-mpc, ramp-limits, gas-linepack, thermal-inertia]
+    docs:
+      - doc: concepts/multi_period
+        section: Timeseries vs. multi-period
+        label: Timeseries vs. multi-period
+        kind: concept
+      - doc: how-to/multi_period
+        section: 'Battery dispatch: 6-hour horizon'
+        label: Battery dispatch over 6 hours
+        kind: how-to
+      - doc: concepts/multi_period
+        section: Initial and terminal state
+        label: Initial and terminal state
+        kind: concept
+      - doc: how-to/multi_period
+        section: Variable step sizes
+        label: Variable step sizes
+        kind: how-to
+      - doc: tutorials/mes_storage_and_ramps
+        section: ''
+        label: 'Tutorial: storage and ramp limits'
+        kind: tutorial
+      - doc: api/monee.simulation
+        section: Multi-period
+        label: Multi-period API
+        kind: api
+
+  - id: storage
+    group: horizon
+    title: Storage
+    short: Storage
+    level: core
+    carriers: [electricity, gas, heat]
+    tagline: >-
+      Batteries, gas stores and hot-water tanks that track their state of charge over time.
+    details: >-
+      `ElectricStorage` tracks energy in MWh, while `GasStorage` and `ThermalStorage` track stored
+      mass in kg, with a standing loss on the thermal tank. All three attach as children and follow
+      the load convention, so positive dispatch charges. `run_timeseries` replays a prescribed
+      schedule and carries the state from step to step; optimized dispatch couples periods, so
+      it runs through `OptimizationProblem.controllable_storages` and `run_multi_period`.
+    highlights:
+      - >-
+        Charge and discharge efficiencies on batteries and gas stores model round-trip losses
+      - '`loss_factor_per_h` models the standing loss of a thermal tank'
+      - >-
+        A `terminal_state` entry on `e_mwh` stops the optimizer from selling the starting charge
+      - >-
+        Economic dispatch with `include_storages=True` dispatches batteries, and gas stores when
+        gas is dispatched
+    snippet: |-
+      import monee.model as mm
+      import monee.express as mx
+
+      net = mx.create_multi_energy_network()
+      bus = mx.create_bus(net)
+      bat_id = mx.create_el_child(net, mm.ElectricStorage(e_mwh_initial=2.0, e_mwh_max=4.0, p_max_mw=1.0), node_id=bus, name="battery")
+    api:
+      - monee.model.ElectricStorage
+      - monee.model.GasStorage
+      - monee.model.ThermalStorage
+      - monee.express.create_el_child
+      - monee.express.create_gas_child
+      - monee.express.create_water_child
+      - monee.problem.OptimizationProblem.controllable_storages
+    keywords: [battery, BESS, state of charge, SoC, gas storage, thermal storage, hot-water tank,
+      round-trip efficiency, arbitrage]
+    related: [multi-period, economic-dispatch, timeseries, profiles-and-prices, temporal-coupling]
+    docs:
+      - doc: how-to/storage
+        section: ''
+        label: Storage guide
+        kind: how-to
+      - doc: how-to/storage
+        section: Optimised dispatch
+        label: Optimized battery dispatch
+        kind: how-to
+      - doc: how-to/storage
+        section: Gas storage
+        label: Gas storage
+        kind: how-to
+      - doc: how-to/storage
+        section: Thermal storage
+        label: Thermal storage
+        kind: how-to
+      - doc: components/electricity
+        section: ElectricStorage
+        label: ElectricStorage reference
+        kind: component
+      - doc: tutorials/mes_storage_and_ramps
+        section: Adding the battery
+        label: Battery in a coupled day
+        kind: tutorial
+      - doc: api/monee.model
+        section: Storage models
+        label: Storage models API
+        kind: api
+
+  - id: ramp-limits
+    group: horizon
+    title: Ramp limits and period rules
+    short: Ramps
+    level: advanced
+    carriers: [all]
+    tagline: Bound changes between periods and apply constraints only in chosen periods.
+    details: >-
+      `ramp_limit` on the economic dispatch bounds the MW change of generators, gas sources and
+      heat units, and `Constraints.regulation_ramp` limits every regulation decision, which covers
+      coupling units. `temporal_equation` adds any cross-period rule to selected components without
+      writing a model class, and `when_period` restricts a constraint to chosen periods of a `run_multi_period`
+      horizon, for example a maintenance outage. Under `run_multi_period` these rows bind with
+      foresight; under `run_timeseries` only against the step just solved.
+    highlights:
+      - Per-carrier ramp limits for power, gas and heat
+      - '`regulation_ramp_limit` does the same in load shedding'
+      - The first period is free unless `initial_state` gives the previous value
+    snippet: |-
+      from monee.problem import create_economic_dispatch_problem
+      from monee.simulation import run_multi_period
+
+      problem = create_economic_dispatch_problem(ext_grid_cost_default=30, ramp_limit=1.0)
+      problem.constraints.regulation_ramp(0.5)
+      result = run_multi_period(net, td, optimization_problem=problem)
+    api:
+      - monee.problem.Constraints.regulation_ramp
+      - monee.problem.core.Constraint.temporal_equation
+      - monee.problem.core.Constraint.when_period
+      - monee.problem.create_economic_dispatch_problem
+    keywords: [ramp, ramp rate, regulation_ramp, ramp_limit, temporal_equation, when_period, maintenance
+        window, flexibility]
+    related: [multi-period, temporal-coupling, economic-dispatch, coupler-regulation]
+    docs:
+      - doc: tutorials/mes_storage_and_ramps
+        section: Ramp limits and the joint solve
+        label: Ramp limits and the joint solve
+        kind: tutorial
+      - doc: how-to/multi_period
+        section: Cross-period constraints (temporal_equation)
+        label: Cross-period constraints
+        kind: how-to
+      - doc: how-to/multi_period
+        section: Per-period constraints
+        label: Constraints in selected periods
+        kind: how-to
+      - doc: problems/economic_dispatch
+        section: Multi-period dispatch
+        label: Ramp rows in the dispatch
+        kind: problem
+
+  - id: gas-linepack
+    group: horizon
+    title: Gas linepack
+    short: Linepack
+    level: advanced
+    carriers: [gas]
+    tagline: Let gas pipelines store and release mass to buffer demand over time.
+    details: >-
+      `GasLinepack` gives every gas pipe a stored mass tied to its average pressure and a net
+      pack rate split equally between its end junctions. A single solve pins the pack rate to
+      zero; in timeseries, `Stepper` and multi-period runs the stored mass couples consecutive
+      steps, and a multi-period optimization can pack the line at low demand and drain it in the
+      peak. Capacities are computed from pipe geometry and the gas grid and can be overridden
+      per pipe.
+    highlights:
+      - In a joint solve, lowers the feed-in capacity a demand peak needs
+      - '`linepack_kg_initial` and `linepack_kg_max` override per pipe'
+      - Combines with `LumpedThermalCapacitance`
+    snippet: |-
+      from monee import GasLinepack
+
+      net.add_extension(GasLinepack())
+    api:
+      - monee.GasLinepack
+      - monee.model.Network.add_extension
+    keywords: [linepack, pipeline storage, gas buffer, line pack, temporal coupling, transient
+        gas]
+    related: [multi-period, thermal-inertia, gas-network, network-aspects]
+    docs:
+      - doc: concepts/temporal_extensions
+        section: GasLinepack
+        label: GasLinepack
+        kind: concept
+      - doc: how-to/multi_period
+        section: Gas linepack with multi-period
+        label: Linepack over a horizon
+        kind: how-to
+      - doc: concepts/temporal_extensions
+        section: Linepack walkthrough
+        label: Linepack walkthrough
+        kind: concept
+      - doc: api/monee.model.extension
+        section: Gas linepack
+        label: GasLinepack API
+        kind: api
+
+  - id: thermal-inertia
+    group: horizon
+    title: Thermal inertia
+    short: Inertia
+    level: advanced
+    carriers: [heat]
+    tagline: >-
+      Give heating junctions thermal mass so temperature changes travel with delay.
+    details: >-
+      `LumpedThermalCapacitance` gives each water junction the thermal mass of its adjacent half-pipes,
+      so a supply temperature step reaches downstream junctions with a delay and a rounded front.
+      It adds no equations in a single solve and acts in timeseries, `Stepper` and multi-period
+      runs. `default_t_init` and `t_init_overrides` anchor the first step, and the horizon should
+      span a few time constants, which for realistic pipes are hours.
+    highlights:
+      - No per-junction parameters needed
+      - Junctions with an external grid or grid-forming source are skipped
+      - The time constant is roughly the stored water mass over the through-flow
+    snippet: |-
+      from monee import LumpedThermalCapacitance
+
+      net.add_extension(LumpedThermalCapacitance())
+    api:
+      - monee.LumpedThermalCapacitance
+      - monee.model.Network.add_extension
+    keywords: [thermal inertia, thermal mass, LTC, temperature delay, district heating dynamics,
+      time constant]
+    related: [gas-linepack, district-heating, multi-period, timeseries]
+    docs:
+      - doc: concepts/temporal_extensions
+        section: LumpedThermalCapacitance
+        label: LumpedThermalCapacitance
+        kind: concept
+      - doc: concepts/temporal_extensions
+        section: First-step anchoring
+        label: First-step anchoring
+        kind: concept
+      - doc: concepts/temporal_extensions
+        section: Choosing the horizon
+        label: Choosing the horizon
+        kind: concept
+      - doc: how-to/timeseries
+        section: Thermal and gas storage extensions
+        label: Thermal inertia in a timeseries
+        kind: how-to
+      - doc: api/monee.model.extension
+        section: Lumped thermal capacitance
+        label: LumpedThermalCapacitance API
+        kind: api
+
+  - id: rolling-mpc
+    group: horizon
+    title: Rolling-horizon MPC
+    short: MPC
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Re-optimize a short look-ahead window, execute its first steps and roll forward.
+    details: >-
+      `run_mpc` solves a multi-period problem over `horizon` periods, keeps the first `execution_steps`,
+      reseeds the initial state from the executed periods and advances until `total_steps` are
+      covered. Storage state stays continuous across window boundaries. The returned objective
+      sums the windows and overcounts when `execution_steps` is below `horizon`, and a `terminal_state`
+      anchors only the final window.
+    highlights:
+      - '`execution_steps=1` is closest to online MPC'
+      - A larger `execution_steps` re-solves less often and costs less
+      - Returns a `MultiPeriodResult` over the executed steps
+    snippet: |-
+      from monee import run_mpc
+
+      result = run_mpc(net, td_24h, total_steps=24, horizon=6, execution_steps=1,
+                       optimization_problem=prob, dt_h=1.0)
+    api:
+      - monee.run_mpc
+      - monee.MultiPeriodResult
+    keywords: [MPC, model predictive control, rolling horizon, receding horizon, look-ahead, real-time
+        dispatch]
+    related: [multi-period, storage, stepper, profiles-and-prices]
+    docs:
+      - doc: concepts/multi_period
+        section: Rolling-horizon MPC
+        label: Rolling-horizon MPC
+        kind: concept
+      - doc: how-to/multi_period
+        section: Rolling-horizon MPC
+        label: Rolling-horizon MPC how-to
+        kind: how-to
+      - doc: api/monee.simulation
+        section: Multi-period
+        label: run_mpc API
+        kind: api
+
+  - id: solver-backends
+    group: solve
+    title: Solver backends
+    short: Backends
+    level: core
+    carriers: [all]
+    tagline: >-
+      Name a solver and monee routes the model to CasADi, GEKKO, Pyomo or gurobipy.
+    details: >-
+      monee uses IPOPT by default (via CasADi) and falls back to the IPOPT bundled with GEKKO
+      when CasADi cannot be imported. The `solver=` name picks the backend: `apopt` and `bpopt`
+      go to GEKKO, `gurobi` uses the native in-memory gurobipy backend when gurobipy is installed
+      (Pyomo otherwise, and always for multi-period solves), other names such as `scip` go through
+      Pyomo, and `backend=` forces a specific backend. Benchmarks show CasADi solving the smooth NLPs 3.5
+      to 18 times faster than GEKKO and gurobipy solving conic and quadratic models 2 to 7 times
+      faster than Gurobi through Pyomo.
+    highlights:
+      - Switching backends needs no change to the model code
+      - >-
+        A misspelt or missing Pyomo solver name raises a `ValueError` listing the installed ones
+      - Solver objects can be built once and reused
+      - On non-convex problems backends may stop at different local optima
+    snippet: |-
+      import monee
+
+      result = monee.run_energy_flow(net, solver="scip")
+    api:
+      - monee.solve
+      - monee.solver.resolve_solver
+      - monee.solver.CasADiSolver
+      - monee.GEKKOSolver
+      - monee.PyomoSolver
+      - monee.solver.gurobipy.GurobipySolver
+    keywords: [solver, backend, IPOPT, CasADi, GEKKO, Pyomo, gurobipy, benchmark, speed]
+    related: [global-solvers, solver-tuning, auto-fallback, formulations, validated-accuracy]
+    docs:
+      - doc: concepts/solvers
+        section: Selecting a solver by name
+        label: Selecting a solver by name
+        kind: concept
+      - doc: benchmarks/backend_selection
+        section: ''
+        label: Choosing a solver backend
+        kind: benchmark
+      - doc: install
+        section: Solver back-ends
+        label: Installing solver back-ends
+        kind: install
+      - doc: benchmarks/backend_selection
+        section: Formulation class to recommended backend
+        label: Formulation to backend table
+        kind: benchmark
+      - doc: api/monee.solver
+        section: Dispatch
+        label: Solver dispatch API
+        kind: api
+
+  - id: formulations
+    group: solve
+    title: Formulation choice
+    short: Formulations
+    level: core
+    carriers: [all]
+    tagline: >-
+      Pick the equations per solve, from smooth NLP to exact quadratic, per carrier or network-wide.
+    details: >-
+      The formulation is a solve parameter: pass `formulation="smooth_nlp"`, `"convex_miqcqp"`,
+      `"nonconvex_miqcqp"`, a sector key such as `"el_misocp"`, or a tuple merged left to right.
+      Resolution runs from a per-component pin, to the solve argument, to `Network.apply_formulation`,
+      to `DEFAULT_SIMULATION_FORMULATION`. The smooth gas and heat formulations take `friction_model`
+      (`constant`, `hybrid`, `pwl` or `nonlinear`), and every option except `constant` resolves
+      laminar flow in lightly loaded pipes.
+    highlights:
+      - >-
+        Bundles: `SMOOTH_NLP_FORMULATION`, `CONVEX_MIQCQP_FORMULATION`, `NONCONVEX_MIQCQP_FORMULATION`
+      - >-
+        Mix carriers, for example `("el_misocp", "gas_convex_miqcqp", "heat_nonconvex_miqcqp")`
+      - '`friction_model="hybrid"` matches the pandapipes default friction law'
+      - The formulation decides which solvers fit
+    snippet: |-
+      import monee
+
+      monee.run_energy_flow(net, formulation="smooth_nlp")
+      form = monee.make_smooth_nlp_formulation(friction_model="hybrid")
+      monee.run_energy_flow(net, formulation=form)
+    api:
+      - monee.FORMULATIONS
+      - monee.resolve_formulation
+      - monee.SMOOTH_NLP_FORMULATION
+      - monee.CONVEX_MIQCQP_FORMULATION
+      - monee.NONCONVEX_MIQCQP_FORMULATION
+      - monee.DEFAULT_SIMULATION_FORMULATION
+      - monee.make_smooth_nlp_formulation
+      - monee.make_gas_nlp_formulation
+      - monee.make_heat_nlp_formulation
+      - monee.make_gas_milp_pwl_formulation
+      - monee.Network.apply_formulation
+    keywords: [formulation, smooth_nlp, convex_miqcqp, nonconvex_miqcqp, NLP, MIQCQP, relaxation,
+      friction model, laminar, Reynolds]
+    related: [misocp-relaxation, mccormick-heat, solver-backends, custom-formulations, global-solvers,
+      gas-network]
+    docs:
+      - doc: concepts/formulations
+        section: Choosing formulations at solve time
+        label: Choosing formulations at solve time
+        kind: concept
+      - doc: concepts/formulations
+        section: Choosing a formulation
+        label: Which formulation for which study
+        kind: concept
+      - doc: concepts/formulations
+        section: Built-in formulations
+        label: Built-in formulations
+        kind: concept
+      - doc: tutorials/03_coupled_network
+        section: Choosing the formulation
+        label: 'Tutorial: choosing the formulation'
+        kind: tutorial
+      - doc: concepts/domains
+        section: Friction models
+        label: Friction models
+        kind: concept
+      - doc: api/monee.model.formulation
+        section: Registry & solve-time attachment
+        label: Formulation registry API
+        kind: api
+
+  - id: global-solvers
+    group: solve
+    title: SCIP and Gurobi
+    short: SCIP / Gurobi
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Solve mixed-integer and non-convex models to a proven optimality gap with SCIP or Gurobi.
+    details: >-
+      Models with binaries or conic and quadratic structure, such as islanding, reserve line switching,
+      MISOCP and the MIQCQP formulations, need a solver that branches on integers; the recommended
+      ones are SCIP (open source) and Gurobi (commercial). Local solvers such as IPOPT can stop
+      at a feasible point that is not optimal while reporting success. SCIP on `formulation="nonconvex_miqcqp"`
+      runs spatial branch and bound and proves optimality up to its gap, and `solver_options`
+      such as `numerics/feastol` and `limits/time` tune it.
+    highlights:
+      - >-
+        `solver="scip"` routes through Pyomo; `solver="gurobi"` uses gurobipy when it is installed
+      - >-
+        IPOPT treats integer decisions as continuous and warns only for flow direction binaries
+      - A relaxation bound grades a local solution
+    snippet: |-
+      result = monee.run_energy_flow_optimization(
+          net, problem, solver="scip", formulation="nonconvex_miqcqp")
+    api:
+      - monee.NONCONVEX_MIQCQP_FORMULATION
+      - monee.run_energy_flow_optimization
+      - monee.PyomoMultiPeriodSolver
+    keywords: [SCIP, Gurobi, MILP, MIQCQP, MISOCP, global optimum, branch and bound, local optimum,
+      certificate]
+    related: [misocp-relaxation, solver-backends, islanding, backup-lines, mccormick-heat, formulations]
+    docs:
+      - doc: how-to/use_pyomo_solver
+        section: ''
+        label: Use SCIP or Gurobi
+        kind: how-to
+      - doc: tutorials/mes_local_optima
+        section: ''
+        label: 'Tutorial: local optima and global solvers'
+        kind: tutorial
+      - doc: tutorials/mes_local_optima
+        section: The global optimum
+        label: The global optimum
+        kind: tutorial
+      - doc: problems/index
+        section: Solving a problem
+        label: Integer decisions need a MIP solver
+        kind: problem
+      - doc: concepts/solvers
+        section: Choosing a solver
+        label: Choosing a solver
+        kind: concept
+
+  - id: misocp-relaxation
+    group: solve
+    title: MISOCP relaxation
+    short: MISOCP
+    level: advanced
+    carriers: [electricity]
+    tagline: >-
+      Second-order cone relaxation of AC power flow for convex, global and mixed-integer studies.
+    details: >-
+      `EL_MISOCP_FORMULATION` lifts voltages and currents into squared variables and relaxes the
+      branch-flow coupling into a second-order cone, a convex model that SCIP or Gurobi solve
+      to global optimality. The branch frame reports the series flows so you can check the cone
+      gap, and `result.warnings` carries a relaxation finding when a cone stays slack. Because
+      a relaxation keeps every feasible point, its optimum is a lower bound that grades any dispatch
+      found by a local solver.
+    highlights:
+      - >-
+        Branch currents, loading limits and pi-model charging included; transformer phase shift
+        is ignored
+      - '`EL_NONCONVEX_MIQCQP_FORMULATION` pins the cone to equality for exact AC'
+      - >-
+        On radial networks a tight cone certifies an exact AC power flow; on meshed ones cross-check
+        with an NLP solve
+    snippet: |-
+      import monee
+
+      net.apply_formulation(monee.EL_MISOCP_FORMULATION)
+      result = monee.solve(net, solver="scip")
+    api:
+      - monee.EL_MISOCP_FORMULATION
+      - monee.EL_NONCONVEX_MIQCQP_FORMULATION
+      - monee.ResultWarning
+    keywords: [MISOCP, SOCP, second-order cone, convex relaxation, branch flow, global optimum,
+      lower bound, cone gap]
+    related: [formulations, global-solvers, ac-opf, reference-networks, optimization-problems]
+    docs:
+      - doc: concepts/domains
+        section: MISOCP Branch-Flow relaxation
+        label: Branch-flow cone relaxation
+        kind: concept
+      - doc: concepts/formulations
+        section: Checking the cone gap
+        label: Checking the cone gap
+        kind: concept
+      - doc: how-to/use_pyomo_solver
+        section: Minimal example
+        label: MISOCP OPF with SCIP
+        kind: how-to
+      - doc: tutorials/mes_local_optima
+        section: A lower bound from a relaxation
+        label: A lower bound from a relaxation
+        kind: tutorial
+      - doc: concepts/formulations
+        section: Which attribute is the decision variable
+        label: Decision variables under branch flow
+        kind: concept
+      - doc: api/monee.model.formulation
+        section: Branch-flow MISOCP electricity
+        label: MISOCP API
+        kind: api
+
+  - id: mccormick-heat
+    group: solve
+    title: Linear district heating (McCormick)
+    short: McCormick
+    level: advanced
+    carriers: [heat]
+    tagline: >-
+      Convex LP or MILP district heating with McCormick envelopes and computable worst-case gap
+      bounds.
+    details: >-
+      `HEAT_CONVEX_MILP_FORMULATION` replaces the bilinear enthalpy with McCormick envelopes,
+      linearizes the heat loss and omits hydraulics, so pipes are unidirectional. `num_partitions`
+      above 1 tightens it into a piecewise MILP, and `mccormick_dhs_gap_bound_mw` and `mccormick_dhs_gap_bound_k`
+      report the worst-case gap before you refine. Node-based heat loads and the HG couplers inject
+      heat straight into its nodal heat balance, while heat exchangers map to fixed-flow convex
+      variants.
+    highlights:
+      - An LP at `num_partitions=1`, a piecewise MILP above, for SCIP or Gurobi
+      - Worst-case gap bounds in MW and K
+      - >-
+        `orient_unidirectional_water_pipes` re-orients pipes so every junction stays supplied
+        after an outage
+      - The economic dispatch cannot price heat under it
+    snippet: |-
+      import monee
+
+      net.apply_formulation(monee.make_heat_convex_milp_formulation(num_partitions=4))
+      result = monee.solve(net, solver="scip")
+    api:
+      - monee.HEAT_CONVEX_MILP_FORMULATION
+      - monee.make_heat_convex_milp_formulation
+      - monee.model.formulation.milp.heat.mccormick_dhs_gap_bound_mw
+      - monee.model.formulation.milp.heat.mccormick_dhs_gap_bound_k
+      - monee.orient_unidirectional_water_pipes
+    keywords: [McCormick, LP, MILP, convex relaxation, district heating, heat dispatch, gap bound,
+      envelope]
+    related: [node-based-couplers, formulations, district-heating, global-solvers]
+    docs:
+      - doc: concepts/formulations
+        section: McCormick district heating
+        label: McCormick district heating
+        kind: concept
+      - doc: how-to/generate_mes
+        section: Node-based heat loads (McCormick-DHS)
+        label: Node-based heat loads
+        kind: how-to
+      - doc: concepts/multi_energy
+        section: Node-based heat couplers (HG variants)
+        label: Couplers for McCormick heating
+        kind: concept
+      - doc: api/monee.model.formulation
+        section: McCormick district heating & fixed-flow heat exchanger
+        label: McCormick API
+        kind: api
+
+  - id: solver-tuning
+    group: solve
+    title: Solver options and warm starts
+    short: Tuning
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Override gaps, time limits and IPOPT settings, and start each solve from the last solution.
+    details: >-
+      `run_energy_flow`, `run_energy_flow_optimization`, `run_timeseries` and the `Stepper` forward
+      `solver_options` to the backend, the multi-period drivers do not; on Pyomo they merge over instance
+      options and tuned presets, and a `None` value removes a preset key. The CasADi backend retries
+      a failed IPOPT solve once with an adaptive barrier strategy. Each solve writes its solution
+      back into the network so loops start warm, `run_timeseries` on CasADi builds the model once
+      and re-solves it per step for a plain power flow driven by id-addressed series without hooks
+      or extra solver options, and the `Stepper` switches IPOPT to warm-start options that roughly
+      halve the time per step on the bundled multi-energy benchmark.
+    highlights:
+      - Presets such as a 300 second time limit and a 1e-4 gap for SCIP
+      - '`copy=True` keeps the input network untouched'
+      - >-
+        On CIGRE MV, 12 timeseries steps on that build-once path ran 4.4 times faster than 12 separate
+        calls
+    snippet: |-
+      result = monee.run_energy_flow_optimization(
+          net, problem, solver="scip", solver_options={"limits/gap": 1e-3})
+    api:
+      - monee.run_energy_flow
+      - monee.run_timeseries
+      - monee.persist_solution
+      - monee.solver.casadi.CasADiSolver.set_warm_start_hint
+    keywords: [solver_options, MIP gap, time limit, IPOPT options, warm start, repeated solves,
+      performance]
+    related: [solver-backends, auto-fallback, timeseries, stepper]
+    docs:
+      - doc: concepts/solvers
+        section: Tuning solver options
+        label: Tuning solver options
+        kind: concept
+      - doc: concepts/solvers
+        section: Warm starting
+        label: Warm starting
+        kind: concept
+      - doc: how-to/use_pyomo_solver
+        section: Warm starts, options, and robustness
+        label: Warm starts and options on Pyomo
+        kind: how-to
+      - doc: benchmarks/backend_selection
+        section: How this compares to a dedicated power-flow tool
+        label: Where a power flow spends its time
+        kind: benchmark
+
+  - id: auto-fallback
+    group: solve
+    title: Automatic solver fallback
+    short: Auto
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      With `solver="auto"`, a numerics failure is retried once on SCIP so sweeps keep running.
+    details: >-
+      A failed solve on CasADi, Pyomo or gurobipy returns `success=False` instead of raising,
+      so sweep loops can branch on `result.success`. `solver="auto"` runs the default IPOPT backend
+      and retries on SCIP only after a numerics failure such as `Restoration_Failed`; a proven
+      infeasibility or a badly posed model returns at once. The result records `backend_used`
+      and `fallback_from` and gains a `backend_fallback` warning; it works with `run_energy_flow`,
+      `run_timeseries` and the `Stepper`.
+    highlights:
+      - Suits contingency screening, Monte Carlo and parameter sweeps
+      - '`is_numerics_failure` separates a solver breakdown from an infeasible model'
+      - Single-period only, rejected by `run_multi_period`
+      - '`solver_options` are not forwarded to the SCIP retry'
+    snippet: |-
+      result = monee.run_energy_flow(net, solver="auto")
+      print(result.success, result.backend_used, result.fallback_from)
+    api:
+      - monee.solver.AutoSolver
+      - monee.solver.casadi.is_numerics_failure
+      - monee.run_energy_flow
+    keywords: [auto, fallback, retry, robustness, sweep, contingency, Monte Carlo, Restoration_Failed]
+    related: [solver-backends, infeasibility-diagnosis, timeseries, stepper, edit-and-switch]
+    docs:
+      - doc: concepts/solvers
+        section: Automatic back-end fallback
+        label: Automatic back-end fallback
+        kind: concept
+      - doc: how-to/troubleshooting
+        section: My contingency loop needs a try/except around every solve
+        label: Robust contingency loops
+        kind: how-to
+      - doc: how-to/troubleshooting
+        section: A failed solve is not always an infeasible model
+        label: Numerics failure or infeasible model
+        kind: how-to
+      - doc: how-to/timeseries
+        section: Error handling
+        label: Skip failed timeseries steps
+        kind: how-to
+
+  - id: result-tables
+    group: analyze
+    title: Result tables
+    short: Results
+    level: core
+    carriers: [all]
+    tagline: Read every solved value from one pandas `DataFrame` per component type.
+    details: >-
+      Every solve returns a `SolverResult` whose dataframes hold one frame per component type
+      and one row per component, mixing solved values, echoed inputs, derived values and post-processed
+      report columns such as `va_degree` or pipe velocity. `result.get(ModelType, index="id")`
+      indexes rows by component id (a `from_node_id`, `to_node_id`, `key` `MultiIndex` for branches), `result[id,
+      ModelType]` returns one row, and Jupyter renders a result as collapsible tables. Timeseries
+      and multi-period results add `get_result_for`, with steps or periods as rows and component
+      ids as columns, and `get_result_for_id`, a series for one component.
+    highlights:
+      - >-
+        Every frame carries `id`, `active` and `ignored` columns; `name` appears once a row is
+        named
+      - Pass the model class when a node and a child share an id
+      - >-
+        `user_objective` separates your objective from the formulation's `aux_objective` on CasADi,
+        Pyomo and gurobipy
+      - Signs follow the load convention throughout
+    snippet: |-
+      import monee.model as mm
+
+      buses = result.get(mm.Bus)
+      print(buses[["id", "vm_pu", "va_degree"]])
+      lines = result.get(mm.PowerLine, index="id")
+    api:
+      - monee.solver.SolverResult
+      - monee.solver.core.SolverResult.get
+      - monee.model.value
+      - monee.TimeseriesResult.get_result_for
+      - monee.TimeseriesResult.get_result_for_id
+      - monee.MultiPeriodResult.get_period_result
+    keywords: [results, DataFrame, pandas, SolverResult, result.get, index, id, name, objective,
+      user_objective]
+    related: [conventions, interactive-plots, network-checks, resilience-metrics, timeseries,
+      network-model]
+    docs:
+      - doc: quickstart
+        section: Inspecting the result
+        label: 'Quickstart: inspecting the result'
+        kind: quickstart
+      - doc: components/index
+        section: Reading the tables
+        label: Reading the result tables
+        kind: component
+      - doc: concepts/solvers
+        section: Working with results
+        label: Working with results
+        kind: concept
+      - doc: concepts/data_model
+        section: Where the id lives in a result frame
+        label: Where the id lives in a result frame
+        kind: concept
+      - doc: how-to/timeseries
+        section: Querying results
+        label: Query timeseries results
+        kind: how-to
+
+  - id: conventions
+    group: analyze
+    title: Sign conventions
+    short: Signs
+    level: core
+    carriers: [all]
+    tagline: >-
+      One load convention, unit-suffixed names and documented per-unit bases for every carrier.
+    details: >-
+      Positive means consumption and negative means generation for every child, slack and storage;
+      generator constructors take positive magnitudes and store them negative. Attribute suffixes
+      carry units (`_mw`, `_mvar`, `_kgs`, `_pu`, `_k`, `_mwh`), and the conventions page collects
+      the bases and the sign rules of power and hydraulic branches. Getting the slack sign right
+      is what makes import caps and import prices behave.
+    highlights:
+      - An external grid reports an import as negative `p_mw`
+      - An import cap reads `p_mw >= -cap`, an import price `-price * p_mw`
+      - The served value is the setpoint times regulation
+      - '`dt_h` is always in hours, and a timestamp closes the interval it labels'
+    snippet: ''
+    api: []
+    keywords: [load convention, sign, units, per unit, base, slack sign, mass flow sign, import,
+      export, time step]
+    related: [result-tables, operating-limits, coupler-regulation, carrier-grids]
+    docs:
+      - doc: concepts/conventions
+        section: ''
+        label: Conventions cheat sheet
+        kind: concept
+      - doc: concepts/conventions
+        section: The load convention
+        label: The load convention
+        kind: concept
+      - doc: concepts/conventions
+        section: Branch signs
+        label: Branch signs
+        kind: concept
+      - doc: concepts/data_model
+        section: Sign of the slack
+        label: Sign of the slack
+        kind: concept
+      - doc: concepts/multi_energy
+        section: Result columns and their signs
+        label: Coupler result signs
+        kind: concept
+      - doc: concepts/conventions
+        section: Time
+        label: Time convention
+        kind: concept
+
+  - id: interactive-plots
+    group: analyze
+    title: Interactive plots
+    short: Plots
+    level: core
+    carriers: [all]
+    tagline: Draw any network or solved result as an interactive Plotly graph.
+    details: >-
+      `plot_network` draws a network before any solve, with nodes colored by carrier and every
+      scalar model parameter in the hover text. `result.plot()` colors buses by voltage band and
+      lines by loading on a traffic-light scale, labels junctions with pressure and shows each
+      component's full result row on hover. `use_monee_positions=True` reuses stored node positions
+      such as imported pandapower geodata, and `write_to` exports a self-contained HTML page,
+      or PDF, PNG and SVG with the optional kaleido package.
+    highlights:
+      - Plotly is a core dependency, no extra install
+      - Graphviz layout when pygraphviz is installed, networkx layout otherwise
+      - Stored positions are used only when every node has one
+      - Returns a plotly `Figure` for further styling
+    snippet: |-
+      import monee
+
+      monee.plot_network(net)
+      fig = result.plot(use_monee_positions=True, write_to="network.html")
+      fig.show()
+    api:
+      - monee.plot_network
+      - monee.plot_result
+      - monee.solver.core.SolverResult.plot
+    keywords: [plot, plotly, visualization, visualize, network graph, voltage map, loading map, HTML export,
+      geodata, kaleido]
+    related: [result-tables, pandapower-simbench, network-model]
+    docs:
+      - doc: how-to/convert_from_pandapower
+        section: Plotting the converted network
+        label: Plot a solved network
+        kind: how-to
+      - doc: api/monee.visualization
+        section: Result plots
+        label: Result plots API
+        kind: api
+      - doc: api/monee.visualization
+        section: Network plots
+        label: Network plots API
+        kind: api
+      - doc: install
+        section: Optional dependencies
+        label: Optional plotting dependencies
+        kind: install
+
+  - id: network-checks
+    group: analyze
+    title: Checks and strict mode
+    short: Checks
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Lint a network before solving, flag suspicious results after, or raise in strict mode.
+    details: >-
+      `net.check()` runs cheap structural checks before any solve: a missing slack per carrier,
+      heat-only dead-end junctions, non-transformer branches between buses of different `base_kv`
+      and simulation variables that no equation pins; `mode="optimization"` skips that last check
+      for a network headed into an optimization. After every successful solve monee attaches typed
+      `ResultWarning` entries (`energy_balance`, `served_delta`, `relaxation`, `integrality`,
+      `pruned`, `bound_active`, `dof`) to `result.warnings`. `strict=True` on any solve entry
+      point raises `ValidationError` instead, which suits CI runs and published results.
+    highlights:
+      - >-
+        Catches a carrier with no slack before the solve; islands cut off from their slack are reported
+        afterwards as `pruned`
+      - >-
+        `result.violations` lists bound violations, `result.residuals` the largest equation residual
+      - Noise floors keep solver tolerance out of the findings
+      - >-
+        Repeated finding profiles, such as every timeseries step, are counted instead of re-reported
+    snippet: |-
+      findings = net.check()
+      try:
+          result = monee.run_energy_flow(net, strict=True)
+      except monee.ValidationError as e:
+          print([w.category for w in e.warnings])
+    api:
+      - monee.model.Network.check
+      - monee.model.network.CheckFinding
+      - monee.ResultWarning
+      - monee.ValidationError
+    keywords: [lint, check, validation, strict, warnings, ValidationError, energy balance, CI,
+      sanity check, residuals]
+    related: [infeasibility-diagnosis, result-tables, energy-flow, auto-fallback]
+    docs:
+      - doc: how-to/diagnose_infeasibility
+        section: Pre-flight lint
+        label: Pre-flight lint
+        kind: how-to
+      - doc: how-to/diagnose_infeasibility
+        section: Result validation and strict mode
+        label: Result validation
+        kind: how-to
+      - doc: how-to/diagnose_infeasibility
+        section: Strict mode
+        label: Strict mode
+        kind: how-to
+      - doc: concepts/solvers
+        section: Working with results
+        label: Violations and residuals
+        kind: concept
+
+  - id: infeasibility-diagnosis
+    group: analyze
+    title: Infeasibility diagnosis
+    short: Diagnosis
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Turn a failed solve into a structured report that names the components behind it.
+    details: >-
+      A failed Pyomo solve attaches an `InfeasibilityReport` with constraint residuals, bound
+      violations, active bounds, a minimal infeasible subsystem when one can be isolated and violation
+      hotspots ranked per component. A failed CasADi solve returns `success=False` with a `CasADiFailureReport`
+      whose `numerics_failure` flag separates a solver breakdown from a verdict about the model,
+      gurobipy attaches Gurobi's IIS as a `GurobiIISReport`, and GEKKO raises `GekkoSolveError`
+      with a parsed APMonitor report. Every report sits on `result.infeasibility_report` or on
+      the raised error and prints with `summary()`.
+    highlights:
+      - Solver variable names are translated back to component names
+      - Pyomo residuals are grouped by carrier and collapsed into hotspots
+      - On CasADi the input network stays untouched by a failed solve
+      - '`diagnose_infeasibility` and `compute_mis` work on a Pyomo model directly'
+    snippet: |-
+      result = monee.run_energy_flow_optimization(net, problem, solver="scip")
+      if not result.success:
+          report = result.infeasibility_report
+          print(report.summary(max_items=10))
+          for spot in report.violation_hotspots(limit=5):
+              print(spot["component"], spot["count"], spot["max_residual"])
+    api:
+      - monee.solver.InfeasibilityReport
+      - monee.solver.diagnose_infeasibility
+      - monee.solver.compute_mis
+      - monee.solver.collect_constraint_residuals
+      - monee.solver.CasADiFailureReport
+      - monee.solver.casadi.is_numerics_failure
+      - monee.solver.gurobipy.GurobiIISReport
+      - monee.solver.GekkoSolveError
+    keywords: [infeasible, infeasibility report, IIS, MIS, minimal infeasible subsystem, hotspots,
+      debugging, failed solve, numerics failure]
+    related: [network-checks, auto-fallback, solver-backends, global-solvers]
+    docs:
+      - doc: how-to/troubleshooting
+        section: The solver says infeasible
+        label: First checks when a solve is infeasible
+        kind: how-to
+      - doc: how-to/diagnose_infeasibility
+        section: ''
+        label: Diagnose infeasible and failed solves
+        kind: how-to
+      - doc: how-to/diagnose_infeasibility
+        section: Pyomo back-end
+        label: Pyomo infeasibility report
+        kind: how-to
+      - doc: concepts/solvers
+        section: What a failed solve returns
+        label: What a failed solve returns
+        kind: concept
+      - doc: how-to/troubleshooting
+        section: A failed solve is not always an infeasible model
+        label: Numerics failure or infeasible model
+        kind: how-to
+      - doc: api/monee.solver
+        section: Infeasibility diagnostics
+        label: Infeasibility API
+        kind: api
+
+  - id: resilience-metrics
+    group: analyze
+    title: Resilience metrics
+    short: Metrics
+    level: advanced
+    carriers: [all]
+    tagline: Measure unserved power, heat and gas per carrier on any solved network.
+    details: >-
+      `calc_general_resilience_performance` walks a solved network and returns curtailed demand
+      as a (power, heat, gas) tuple in MW, with gas converted through its higher heating value.
+      Unlike `result.objective` it counts deactivated and excluded loads at their full rating
+      and leaves out the formulation's auxiliary terms, so it is the number to rank contingencies
+      by. `include_ext_grid=True` also counts external import as unserved, the view used for islanding
+      studies, and `include_coupling_points=True` adds coupler curtailment on the input carrier.
+    highlights:
+      - Comparable across scenarios and contingencies
+      - Deactivated and islanded loads count at full rating
+      - Regulated loads count at their unserved share
+      - Per-carrier curtailment in MW
+    snippet: |-
+      from monee.problem import calc_general_resilience_performance
+
+      shed_power, shed_heat, shed_gas = calc_general_resilience_performance(result.network)
+    api:
+      - monee.problem.calc_general_resilience_performance
+      - monee.problem.GeneralResiliencePerformanceMetric
+    keywords: [resilience, metric, KPI, unserved demand, curtailment, contingency ranking, shed
+        power, islanding]
+    related: [load-shedding, islanding, backup-lines, result-tables]
+    docs:
+      - doc: problems/load_shedding
+        section: Measuring curtailment
+        label: Measuring curtailment
+        kind: problem
+      - doc: problems/load_shedding
+        section: Worked example
+        label: Load shedding worked example
+        kind: problem
+      - doc: api/monee.problem
+        section: Metrics
+        label: Metrics API
+        kind: api
+
+  - id: validated-accuracy
+    group: analyze
+    title: Validation and benchmarks
+    short: Benchmarks
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Results agree with pandapower and pandapipes, and backend benchmarks show where each solver
+      is fastest.
+    details: >-
+      AC power flow agrees with pandapower `runpp` within 5e-3 pu on voltage, and AC OPF reaches
+      the `runopp` optimum with a relative cost error of 4e-7 or better, often faster than `runopp`.
+      Gas agrees with pandapipes within 1.2 percent of the pipe pressure drop, heat to about 0.1
+      percent on pressure and below 1e-2 K on temperature, and coupled P2G, G2P and CHP cases
+      match pandapipes multinet while solving 1.4 to 5 times faster. The backend benchmarks map
+      each formulation class to its fastest backend, and scripts and saved results live in the
+      repository's benchmarks folder.
+    highlights:
+      - Electricity compared on the identical MATPOWER model
+      - Coupled MES solved in one NLP instead of an iterative multinet loop
+      - Dedicated single-sector solvers stay faster on plain power flow
+      - Scope covers fixed-PQ generators; PV-bus transmission cases are excluded
+    snippet: ''
+    api: []
+    keywords: [validation, pandapower, pandapipes, accuracy, verification, trust, benchmark, runpp,
+      runopp, multinet, speed]
+    related: [electricity-grid, gas-network, district-heating, ac-opf, solver-backends, pandapower-simbench,
+      power-gas-links, chp]
+    docs:
+      - doc: benchmarks/index
+        section: ''
+        label: Benchmarks and validation
+        kind: benchmark
+      - doc: benchmarks/validation
+        section: ''
+        label: Validation against pandapower and pandapipes
+        kind: benchmark
+      - doc: benchmarks/validation
+        section: Electricity, against pandapower (identical model)
+        label: Electricity against pandapower
+        kind: benchmark
+      - doc: benchmarks/validation
+        section: Gas, heat, and coupled MES, against pandapipes
+        label: Gas, heat and MES against pandapipes
+        kind: benchmark
+      - doc: benchmarks/backend_selection
+        section: ''
+        label: Choosing a solver backend
+        kind: benchmark
+      - doc: benchmarks/index
+        section: Results at a glance
+        label: Results at a glance
+        kind: benchmark
+
+  - id: custom-models
+    group: extend
+    title: Custom components
+    short: Custom models
+    level: advanced
+    carriers: [all]
+    tagline: Subclass a model, write its equations and register it with `@mm.model`.
+    details: >-
+      Subclass `NodeModel`, `BranchModel`, `ChildModel` or `CompoundModel` (or the `MultiGrid`
+      node, branch and compound variants that span carriers) and return constraint expressions
+      from `equations()`. `Var` marks a decision variable, `Const` a pinned setpoint, `Intermediate`
+      a solver-computed value and `PostProcess` a report-only value, and the branch author contract
+      lists the attributes the nodal balances read. The `@mm.model` decorator registers the class
+      so it round-trips through the native OMEF format.
+    highlights:
+      - >-
+        Keep `Var` for quantities an equation pins or a problem drives; use `Const` or a float
+        for setpoints
+      - >-
+        An unpinned `Var` is a free degree of freedom in simulation, and the result warns about
+        it
+      - >-
+        Per-component `constraints=` callables add extra constraints without subclassing
+    snippet: |-
+      @mm.model
+      class FlexibleLoad(mm.PowerLoad):
+          def __init__(self, c, **kwargs):
+              super().__init__(mm.Var(c, min=0, max=c), mm.Var(0), **kwargs)
+          def equations(self, grid, node_model, **kwargs):
+              return [self.q_mvar == 0]
+    api:
+      - monee.model.model
+      - monee.model.Var
+      - monee.model.Const
+      - monee.model.Intermediate
+      - monee.model.PostProcess
+      - monee.model.NodeModel
+      - monee.model.BranchModel
+      - monee.model.ChildModel
+      - monee.model.CompoundModel
+      - monee.model.MultiGridNodeModel
+      - monee.model.MultiGridBranchModel
+      - monee.model.MultiGridCompoundModel
+    keywords: [custom model, subclass, equations, Var, Const, Intermediate, PostProcess, plugin,
+      registration, extend, constraints]
+    related: [custom-formulations, network-aspects, native-files, optimization-problems, temporal-coupling]
+    docs:
+      - doc: quickstart
+        section: Extending with custom models
+        label: 'Quickstart: custom models'
+        kind: quickstart
+      - doc: concepts/data_model
+        section: The attribute protocol
+        label: The attribute protocol
+        kind: concept
+      - doc: concepts/data_model
+        section: Branch author contract
+        label: Branch author contract
+        kind: concept
+      - doc: concepts/data_model
+        section: Model registration
+        label: Model registration
+        kind: concept
+      - doc: concepts/data_model
+        section: Network conveniences
+        label: Per-component constraints
+        kind: concept
+      - doc: api/monee.model
+        section: Core protocol
+        label: Core protocol API
+        kind: api
+
+  - id: custom-formulations
+    group: extend
+    title: Custom formulations
+    short: Own equations
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Write your own equation sets for any model type and run them on every backend.
+    details: >-
+      Subclass `NodeFormulation`, `BranchFormulation`, `ChildFormulation` or `CompoundFormulation`,
+      declare variables in `ensure_var` and return constraints from `equations` (optionally objective
+      terms from `minimize`), then map the classes to model types in a `NetworkFormulation`. The
+      backend injects math implementations and a piecewise builder, so the same formulation runs
+      on every backend. Activate it with `Network.apply_formulation`, the `formulation=` keyword
+      of a builder or solve call, or by name after `register_formulation`.
+    highlights:
+      - Map per model type or per (model, grid) pair
+      - >-
+        Mix with built-ins by key, for example `formulation=("smooth_nlp", "my_key")`
+      - >-
+        A per-component pin overrides the solve argument and the network-level choice
+    snippet: |-
+      from monee.model.formulation import NetworkFormulation
+
+      form = NetworkFormulation(branch_type_to_formulations={LinearValve: LinearValveFormulation()})
+      monee.register_formulation("linear_valve", form)
+      result = monee.run_energy_flow(net, formulation=("smooth_nlp", "linear_valve"))
+    api:
+      - monee.register_formulation
+      - monee.model.formulation.NetworkFormulation
+      - monee.model.formulation.core.BranchFormulation
+      - monee.model.formulation.core.NodeFormulation
+      - monee.model.formulation.core.ChildFormulation
+      - monee.model.formulation.core.CompoundFormulation
+      - monee.model.Network.apply_formulation
+    keywords: [custom formulation, equations, ensure_var, minimize, NetworkFormulation, register_formulation,
+      apply_formulation, registry, piecewise]
+    related: [formulations, custom-models, network-aspects, solver-backends]
+    docs:
+      - doc: concepts/formulations
+        section: Writing a custom formulation
+        label: Writing a custom formulation
+        kind: concept
+      - doc: concepts/formulations
+        section: Lifecycle
+        label: Formulation lifecycle
+        kind: concept
+      - doc: concepts/formulations
+        section: Choosing formulations at solve time
+        label: Activation and precedence
+        kind: concept
+      - doc: concepts/formulations
+        section: Architecture
+        label: Formulation architecture
+        kind: concept
+      - doc: api/monee.model.formulation
+        section: Core
+        label: Formulation core API
+        kind: api
+
+  - id: network-aspects
+    group: extend
+    title: Network aspects
+    short: Aspects
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      Plug network-wide variables and equations into every solver without touching model classes.
+    details: >-
+      A `NetworkAspect` adds variables and equations across the whole network; it is the mechanism
+      behind islanding, gas linepack and lumped thermal capacitance. Subclasses override only
+      the phases they need: `prepare` (add `Var`s before injection), `equations`, `activate_timeseries`
+      and the temporal hooks. Register one with `network.add_extension`; aspects compose and stay
+      active in single-step, timeseries and multi-period solves, but the native format does not
+      save them.
+    highlights:
+      - Four phases, each a no-op by default
+      - Several aspects compose, each on its own variables
+      - Works in single-step, timeseries and multi-period solves
+      - Not stored by the native format, so register again after loading
+    snippet: |-
+      import monee.model as mm
+      from monee import NetworkAspect
+
+      class PressureFloor(NetworkAspect):
+          def equations(self, network, ignored_nodes):
+              return [n.model.pressure_squared_pu >= 0.81 for n in network.nodes
+                      if isinstance(n.grid, mm.GasGrid) and n.id not in ignored_nodes
+                      and not isinstance(n.model.pressure_squared_pu, float)]
+
+      net.add_extension(PressureFloor())
+    api:
+      - monee.NetworkAspect
+      - monee.model.Network.add_extension
+      - monee.model.extension.core.NetworkAspect.prepare
+      - monee.model.extension.core.NetworkAspect.equations
+      - monee.model.extension.core.NetworkAspect.activate_timeseries
+    keywords: [NetworkAspect, plug-in, extension, add_extension, network-wide, custom variables,
+      custom constraints, prepare, activate_timeseries]
+    related: [temporal-coupling, gas-linepack, thermal-inertia, islanding, custom-models]
+    docs:
+      - doc: concepts/network_aspects
+        section: ''
+        label: Network aspects
+        kind: concept
+      - doc: concepts/network_aspects
+        section: Minimal example
+        label: Write your own aspect
+        kind: concept
+      - doc: concepts/network_aspects
+        section: Temporal phases in detail
+        label: Temporal phases
+        kind: concept
+      - doc: concepts/network_aspects
+        section: Registering an aspect
+        label: Registering an aspect
+        kind: concept
+      - doc: components/extensions
+        section: Network aspects
+        label: Built-in aspects reference
+        kind: component
+      - doc: api/monee.model.extension
+        section: Base
+        label: NetworkAspect API
+        kind: api
+
+  - id: temporal-coupling
+    group: extend
+    title: Temporal coupling
+    short: Inter-temporal
+    level: advanced
+    carriers: [all]
+    tagline: >-
+      One `inter_temporal_equations` method couples timeseries steps and multi-period horizons
+      alike.
+    details: >-
+      Any model or aspect can implement `inter_temporal_equations` to tie a step to earlier ones,
+      for storage state, ramp limits or thermal mass. `temporal_state.get` returns the previous
+      solved float in `run_timeseries` (`StepState`) and a live solver variable in `run_multi_period`
+      (`PeriodState`), so the same code works for sequential steps and for a joint horizon. `inter_step_equations`
+      runs in timeseries only and `inter_period_equations` in multi-period only.
+    highlights:
+      - Look back further with `get(..., step=-2)` or an absolute step index
+      - >-
+        In a timeseries, a constraint over prescribed values only is dropped and reported as a
+        temporal warning
+      - >-
+        `strict=True` on `run_timeseries` turns that warning into a `ValidationError`
+    snippet: |-
+      def inter_temporal_equations(self, temporal_state, component_id, **kwargs):
+          prev_p = temporal_state.get(component_id, "p_mw")
+          if prev_p is None:
+              return []
+          return [self.p_mw - prev_p <= self.ramp_up, prev_p - self.p_mw <= self.ramp_down]
+    api:
+      - monee.simulation.StepState
+      - monee.simulation.PeriodState
+      - monee.simulation.step_state.InterStepState
+      - monee.model.extension.core.NetworkAspect.inter_temporal_equations
+    keywords: [inter_temporal_equations, inter_step_equations, inter_period_equations, StepState,
+      PeriodState, ramp rate, state of charge, look-back, custom dynamics]
+    related: [ramp-limits, custom-models, network-aspects, multi-period, timeseries, storage]
+    docs:
+      - doc: concepts/timeseries
+        section: Three temporal hooks
+        label: Three temporal hooks
+        kind: concept
+      - doc: concepts/timeseries
+        section: Implementing dynamics
+        label: Implementing dynamics
+        kind: concept
+      - doc: how-to/timeseries
+        section: 'Inter-step coupling: ramp constraints'
+        label: Ramp-limited generator model
+        kind: how-to
+      - doc: how-to/timeseries
+        section: Prescribed replay semantics
+        label: Prescribed replay semantics
+        kind: how-to
+      - doc: concepts/multi_period
+        section: PeriodState
+        label: PeriodState
+        kind: concept
+      - doc: api/monee.simulation
+        section: Step state
+        label: Step state API
+        kind: api
+
+tasks:
+  - id: task-install
+    category: Get started
+    want: Install monee and only the extras I need
+    how: >-
+      `pip install monee` (pyscipopt, the SCIP interface, comes with it), plus the `simbench`
+      extra, cimpy, pyESDL or gurobipy for the features that need them
+    features: [solver-backends, pandapower-simbench, cim-esdl-import]
+    docs:
+      - doc: install
+        section: Install monee
+        label: Install monee
+        kind: install
+      - doc: install
+        section: Optional extras
+        label: Optional extras
+        kind: install
+      - doc: install
+        section: Solver back-ends
+        label: Installing solver backends
+        kind: install
+
+  - id: task-first-power-flow
+    category: Get started
+    want: Run my first power flow in a few lines
+    how: Build the grid with `monee.express` and call `run_energy_flow`
+    features: [express-builder, network-model, energy-flow, result-tables]
+    docs:
+      - doc: quickstart
+        section: Solving an electricity network
+        label: 'Quickstart: first energy flow'
+        kind: quickstart
+      - doc: quickstart
+        section: Inspecting the result
+        label: Inspecting the result
+        kind: quickstart
+
+  - id: task-reference-net
+    category: Get started
+    want: Load a ready-made multi-energy network and solve it
+    how: '`monee.network.create_urban_district_net`, then `run_energy_flow`'
+    features: [reference-networks, energy-flow]
+    docs:
+      - doc: how-to/reference_networks
+        section: Quick start
+        label: Solve a reference network
+        kind: how-to
+      - doc: how-to/reference_networks
+        section: Available networks
+        label: Available reference networks
+        kind: how-to
+
+  - id: task-read-signs
+    category: Get started
+    want: Read results and understand the signs of slacks, loads and couplers
+    how: '`result.get(ModelType)` frames, read in the load convention'
+    features: [result-tables, conventions]
+    docs:
+      - doc: components/index
+        section: Reading the tables
+        label: Reading the tables
+        kind: component
+      - doc: concepts/conventions
+        section: The load convention
+        label: The load convention
+        kind: concept
+      - doc: concepts/multi_energy
+        section: Result columns and their signs
+        label: Coupler result signs
+        kind: concept
+
+  - id: task-two-voltage-levels
+    category: Model the network
+    want: Connect two voltage levels through a transformer
+    how: >-
+      Buses with their own `base_kv` joined by `mx.create_trafo` (low-voltage bus first); a separate
+      `create_power_grid` is only needed for a different `sn_mva` base, and then pass `grid=` to
+      `create_trafo` too
+    features: [carrier-grids, electricity-grid]
+    docs:
+      - doc: components/grids
+        section: ''
+        label: Grids
+        kind: component
+      - doc: components/electricity
+        section: Trafo
+        label: Trafo
+        kind: component
+      - doc: concepts/data_model
+        section: Grids
+        label: Grids in the data model
+        kind: concept
+
+  - id: task-pv-bus-shunt
+    category: Model the network
+    want: Hold a bus voltage with a generator, or add a capacitor bank
+    how: >-
+      `mm.VoltageControlledGenerator` or `mm.PowerShunt` attached with `mx.create_el_child`
+    features: [electricity-grid, express-builder]
+    docs:
+      - doc: components/electricity
+        section: VoltageControlledGenerator
+        label: VoltageControlledGenerator
+        kind: component
+      - doc: components/electricity
+        section: PowerShunt
+        label: PowerShunt
+        kind: component
+
+  - id: task-gas-type
+    category: Model the network
+    want: Run a gas grid on methane or at another pressure level
+    how: >-
+      `mm.create_gas_grid("gas", type="methane", pressure_ref_pa=...)` passed to `Network` as
+      `gas_model`
+    features: [carrier-grids, gas-network]
+    docs:
+      - doc: components/grids
+        section: ''
+        label: Grids
+        kind: component
+      - doc: concepts/conventions
+        section: Gas
+        label: Gas conventions
+        kind: concept
+
+  - id: task-add-storage
+    category: Model the network
+    want: Add a battery, a gas store or a hot-water tank
+    how: >-
+      `mm.ElectricStorage`, `mm.GasStorage` or `mm.ThermalStorage` attached with `mx.create_el_child`,
+      `create_gas_child` or `create_water_child`
+    features: [storage]
+    docs:
+      - doc: how-to/storage
+        section: ''
+        label: Storage dispatch
+        kind: how-to
+      - doc: how-to/storage
+        section: Gas storage
+        label: Gas storage
+        kind: how-to
+      - doc: how-to/storage
+        section: Thermal storage
+        label: Thermal storage
+        kind: how-to
+
+  - id: task-inspect-inputs
+    category: Model the network
+    want: List every component and its input parameters as tables
+    how: >-
+      `net.statistics()` for counts per model class, `net.as_dataframe_dict()` for one input `DataFrame`
+      per class
+    features: [network-model, result-tables]
+    docs:
+      - doc: concepts/data_model
+        section: Network conveniences
+        label: Network conveniences
+        kind: concept
+      - doc: api/monee.model
+        section: Network container
+        label: Network API
+        kind: api
+
+  - id: task-typo-safe-edits
+    category: Model the network
+    want: Change parameters between solves and make attribute typos fail loudly
+    how: >-
+      Write declared attributes on the model; `set_attribute_guard("error")` raises on an unknown
+      name
+    features: [edit-and-switch]
+    docs:
+      - doc: concepts/data_model
+        section: Which attributes are settable after construction
+        label: Settable attributes
+        kind: concept
+      - doc: concepts/conventions
+        section: Writing attributes after construction
+        label: Writing attributes
+        kind: concept
+
+  - id: task-heat-pump
+    category: Couple the carriers
+    want: Couple a power grid to district heating with a heat pump
+    how: >-
+      `mx.create_p2h` between a bus and a cold and a hot water junction, then `run_energy_flow`
+    features: [power-to-heat, energy-flow, district-heating]
+    docs:
+      - doc: quickstart
+        section: Multi-energy networks
+        label: 'Quickstart: multi-energy networks'
+        kind: quickstart
+      - doc: concepts/multi_energy
+        section: Power-to-Heat (P2H)
+        label: Power-to-heat
+        kind: concept
+      - doc: components/coupling
+        section: PowerToHeat
+        label: PowerToHeat reference
+        kind: component
+
+  - id: task-chp-site
+    category: Couple the carriers
+    want: Model a site with a CHP and an electric boiler on power, gas and heat
+    how: >-
+      `mx.create_chp` and `mx.create_p2h` wired from the return to the supply side of one loop
+    features: [chp, power-to-heat, heat-loops]
+    docs:
+      - doc: tutorials/03_coupled_network
+        section: Building the network
+        label: Building a three-carrier site
+        kind: tutorial
+      - doc: components/coupling
+        section: CHP
+        label: CHP reference
+        kind: component
+      - doc: concepts/multi_energy
+        section: Available coupling components
+        label: Available coupling components
+        kind: concept
+
+  - id: task-gas-boiler
+    category: Couple the carriers
+    want: Add a gas boiler that feeds a district heating loop
+    how: '`mx.create_g2h` from a gas junction to a cold and a hot water junction'
+    features: [gas-to-heat, heat-loops]
+    docs:
+      - doc: concepts/multi_energy
+        section: Gas-to-Heat (G2H)
+        label: Gas-to-heat
+        kind: concept
+      - doc: components/coupling
+        section: GasToHeat
+        label: GasToHeat reference
+        kind: component
+
+  - id: task-p2g-g2p
+    category: Couple the carriers
+    want: Connect power and gas with an electrolyser or a gas turbine
+    how: '`mx.create_p2g` (bus to junction) or `mx.create_g2p` (junction to bus)'
+    features: [power-gas-links, gas-network]
+    docs:
+      - doc: concepts/multi_energy
+        section: Power-to-Gas (P2G)
+        label: Power-to-gas
+        kind: concept
+      - doc: concepts/multi_energy
+        section: Gas-to-Power (G2P)
+        label: Gas-to-power
+        kind: concept
+      - doc: components/coupling
+        section: PowerToGas
+        label: PowerToGas reference
+        kind: component
+
+  - id: task-loop-converge
+    category: Couple the carriers
+    want: Get a district heating loop fed by a coupler to solve
+    how: >-
+      Plant reference on the cold side, coupler from cold to hot, and a bypass pipe or passive
+      exchanger for consumers
+    features: [heat-loops, district-heating]
+    docs:
+      - doc: how-to/district_heating
+        section: The bypass pattern
+        label: The bypass pattern
+        kind: how-to
+      - doc: concepts/multi_energy
+        section: District heating loops
+        label: District heating loops
+        kind: concept
+      - doc: how-to/district_heating
+        section: Alternatives to the bypass
+        label: Alternatives to the bypass
+        kind: how-to
+
+  - id: task-supply-temperature
+    category: Couple the carriers
+    want: Hold a district heating supply temperature while units change output
+    how: >-
+      Feed-in stations (CHP and P2H wired cold to hot) beside a heat plant from `DhsStructure.attach_heat_plant`
+      that pins the supply temperature
+    features: [heat-loops, chp, topology-structures]
+    docs:
+      - doc: tutorials/04_mes_economic_dispatch
+        section: Temperature control
+        label: Temperature control
+        kind: tutorial
+      - doc: how-to/express_structures
+        section: District heating structures
+        label: District heating structures
+        kind: how-to
+
+  - id: task-heat-slack
+    category: Couple the carriers
+    want: Cap the backup heat supply so a resilience study counts lost heat
+    how: >-
+      `max_import_kgs` on `create_water_ext_grid`, or `bounds_ext_heat` in the load-shedding problem
+    features: [heat-loops, load-shedding, operating-limits]
+    docs:
+      - doc: concepts/multi_energy
+        section: The heat slack is a backup plant
+        label: The heat slack is a backup plant
+        kind: concept
+      - doc: problems/load_shedding
+        section: Keyword reference
+        label: Load shedding keywords
+        kind: problem
+      - doc: problems/economic_dispatch
+        section: How heat is priced
+        label: How heat is priced
+        kind: problem
+
+  - id: task-structures
+    category: Build and import
+    want: Build a feeder, ring or star without one call per node
+    how: >-
+      `el_structure`, `gas_structure` or `water_structure` with `line`, `ring` and `star`
+    features: [topology-structures, express-builder]
+    docs:
+      - doc: how-to/express_structures
+        section: Quick start
+        label: Build a feeder in two calls
+        kind: how-to
+      - doc: how-to/express_structures
+        section: 'Shapes: line, ring, star'
+        label: Line, ring and star shapes
+        kind: how-to
+
+  - id: task-save-load
+    category: Build and import
+    want: Save a network to disk and reload it later
+    how: '`monee.io.save_network` and `monee.io.load_network` (OMEF JSON)'
+    features: [native-files]
+    docs:
+      - doc: how-to/matpower_io
+        section: Saving and loading the native format
+        label: Save and load the native format
+        kind: how-to
+      - doc: how-to/matpower_io
+        section: Format details
+        label: What is serialized
+        kind: how-to
+
+  - id: task-matpower
+    category: Build and import
+    want: Import a MATPOWER case and run AC power flow
+    how: '`monee.io.matpower.read_matpower_case`, then `run_energy_flow`'
+    features: [matpower-import, energy-flow]
+    docs:
+      - doc: how-to/matpower_io
+        section: Reading a MATPOWER file
+        label: Read a MATPOWER file
+        kind: how-to
+      - doc: how-to/matpower_io
+        section: How MATPOWER data is mapped
+        label: How MATPOWER data is mapped
+        kind: how-to
+
+  - id: task-pandapower
+    category: Build and import
+    want: Bring my pandapower net into monee and compare results bus by bus
+    how: >-
+      `from_pandapower_net`, then join `net.pp_bus_to_node` against `result.get(mm.Bus, index="id")`
+    features: [pandapower-simbench, result-tables, validated-accuracy]
+    docs:
+      - doc: how-to/convert_from_pandapower
+        section: Converting a network
+        label: Convert a pandapower net
+        kind: how-to
+      - doc: how-to/convert_from_pandapower
+        section: Node ids, names and positions
+        label: Join results by node id
+        kind: how-to
+      - doc: benchmarks/validation
+        section: Electricity, against pandapower (identical model)
+        label: Expected agreement with pandapower
+        kind: benchmark
+
+  - id: task-simbench-year
+    category: Build and import
+    want: Run a SimBench grid through a year of real profiles
+    how: '`monee.io.from_simbench.obtain_simbench_net_with_td`, then `run_timeseries`'
+    features: [pandapower-simbench, timeseries, profiles-and-prices]
+    docs:
+      - doc: how-to/convert_from_pandapower
+        section: SimBench
+        label: SimBench grids and profiles
+        kind: how-to
+      - doc: how-to/timeseries
+        section: ''
+        label: Timeseries how-to
+        kind: how-to
+
+  - id: task-cim-esdl
+    category: Build and import
+    want: Import a CGMES grid model or an ESDL energy system
+    how: '`import_cim_files` or `import_esdl_file`, then read the import report'
+    features: [cim-esdl-import]
+    docs:
+      - doc: how-to/import_cim_esdl
+        section: Import a CGMES model (CIM)
+        label: Import a CGMES model
+        kind: how-to
+      - doc: how-to/import_cim_esdl
+        section: Import an ESDL energy system
+        label: Import an ESDL system
+        kind: how-to
+      - doc: how-to/import_cim_esdl
+        section: The import report
+        label: The import report
+        kind: how-to
+
+  - id: task-scale-up
+    category: Build and import
+    want: Scale a multi-energy test system up to hundreds of nodes
+    how: >-
+      `monee.network.create_large_urban_mes_net(n_districts=20)` replicates the urban district
+      under a shared slack
+    features: [reference-networks]
+    docs:
+      - doc: how-to/reference_networks
+        section: 'Scaling up: replicated districts'
+        label: Replicated districts
+        kind: how-to
+
+  - id: task-generate-mes
+    category: Build and import
+    want: Turn my power grid into a multi-energy test system
+    how: >-
+      `generate_supply_return_mes_based_on_power_net` with a coupling density and a seed
+    features: [mes-generator, reference-networks]
+    docs:
+      - doc: how-to/generate_mes
+        section: One-call wrapper (recommended)
+        label: One-call MES generator
+        kind: how-to
+      - doc: how-to/generate_mes
+        section: Complete example
+        label: Complete example
+        kind: how-to
+      - doc: how-to/generate_mes
+        section: Coupling points
+        label: Place coupling points
+        kind: how-to
+
+  - id: task-replay-day
+    category: Simulate
+    want: Replay a day of load and PV profiles and track voltages
+    how: >-
+      `TimeseriesData` with `run_timeseries`, then `get_result_for`; a `StepHook` can raise alerts
+    features: [timeseries, profiles-and-prices]
+    docs:
+      - doc: tutorials/02_timeseries_simulation
+        section: ''
+        label: 'Tutorial: solar feeder day-ahead'
+        kind: tutorial
+      - doc: how-to/timeseries
+        section: Registering time series
+        label: Registering time series
+        kind: how-to
+      - doc: tutorials/02_timeseries_simulation
+        section: Monitoring with a step hook
+        label: Monitoring with a step hook
+        kind: tutorial
+
+  - id: task-heat-demand-profile
+    category: Simulate
+    want: Drive a heat consumer through a daily demand profile
+    how: >-
+      `add_branch_series_by_name` on the exchanger's regulation (variable flow) or `q_mw_set`
+      (constant flow), then `run_timeseries`
+    features: [district-heating, profiles-and-prices, timeseries]
+    docs:
+      - doc: how-to/district_heating
+        section: Part-load control
+        label: Part-load control
+        kind: how-to
+      - doc: how-to/timeseries
+        section: Series must target settable inputs
+        label: Series must target settable inputs
+        kind: how-to
+
+  - id: task-profiles-bind
+    category: Simulate
+    want: Check that every profile reaches its component before a long run
+    how: >-
+      `td.validate_bound(net)` raises on unmatched keys; `run_timeseries(net, td, solve_flag=False)`
+      applies the data without solving
+    features: [profiles-and-prices, timeseries]
+    docs:
+      - doc: how-to/timeseries
+        section: Series that bind to nothing
+        label: Series that bind to nothing
+        kind: how-to
+      - doc: how-to/timeseries
+        section: Applying data without solving
+        label: Applying data without solving
+        kind: how-to
+      - doc: how-to/timeseries
+        section: Length checks against the run horizon
+        label: Length checks
+        kind: how-to
+
+  - id: task-variable-steps
+    category: Simulate
+    want: Mix quarter-hour and hourly steps, or use real timestamps
+    how: >-
+      `datetime_index` on `run_timeseries`; a `dt_h` list or a `DatetimeIndex` on `run_multi_period`
+      and `run_mpc`; any `dt_h` per `Stepper.step`
+    features: [timeseries, multi-period, stepper, conventions]
+    docs:
+      - doc: how-to/timeseries
+        section: 'Step timing: dt_h and datetime_index'
+        label: Step timing
+        kind: how-to
+      - doc: how-to/multi_period
+        section: Variable step sizes
+        label: Variable step sizes
+        kind: how-to
+      - doc: concepts/conventions
+        section: Time
+        label: Time convention
+        kind: concept
+
+  - id: task-replay-schedule
+    category: Simulate
+    want: Replay a fixed storage schedule and track the state of charge
+    how: >-
+      Register the charge series in `TimeseriesData` and call `run_timeseries`; a prescribed schedule
+      needs no joint solve
+    features: [storage, timeseries, profiles-and-prices]
+    docs:
+      - doc: how-to/storage
+        section: Prescribed dispatch in timeseries
+        label: Prescribed dispatch
+        kind: how-to
+      - doc: how-to/timeseries
+        section: Prescribed replay semantics
+        label: Prescribed replay semantics
+        kind: how-to
+
+  - id: task-thermal-inertia
+    category: Simulate
+    want: Model the thermal inertia of a heating network over time
+    how: >-
+      `net.add_extension(LumpedThermalCapacitance())` before a timeseries, `Stepper` or multi-period
+      run
+    features: [thermal-inertia, timeseries]
+    docs:
+      - doc: concepts/temporal_extensions
+        section: LumpedThermalCapacitance
+        label: LumpedThermalCapacitance
+        kind: concept
+      - doc: how-to/timeseries
+        section: Thermal and gas storage extensions
+        label: Thermal and gas storage extensions
+        kind: how-to
+
+  - id: task-cosim
+    category: Simulate
+    want: Drive monee from mosaik or another co-simulation clock
+    how: '`monee.Stepper` with `step(dt_h, data_overrides=...)` and `get`'
+    features: [stepper]
+    docs:
+      - doc: how-to/stepper
+        section: Quick start
+        label: Stepper quick start
+        kind: how-to
+      - doc: how-to/stepper
+        section: Stepping
+        label: Stepping with overrides
+        kind: how-to
+      - doc: concepts/timeseries
+        section: Externally paced steps
+        label: Externally paced steps
+        kind: concept
+
+  - id: task-islands
+    category: Simulate
+    want: Island part of a network and keep supplying it after a fault
+    how: >-
+      Grid-forming units plus `enable_islanding`, best solved with a mixed-integer solver such
+      as SCIP or Gurobi
+    features: [islanding, global-solvers, backup-lines]
+    docs:
+      - doc: how-to/islanding
+        section: 'Quick start: electricity'
+        label: Islanding quick start
+        kind: how-to
+      - doc: how-to/islanding
+        section: Multi-carrier islanding
+        label: Multi-carrier islanding
+        kind: how-to
+      - doc: concepts/islanding
+        section: Grid-forming nodes
+        label: Grid-forming nodes
+        kind: concept
+
+  - id: task-cheapest-dispatch
+    category: Optimize
+    want: Find the cheapest generator dispatch within voltage and line limits
+    how: >-
+      `create_economic_dispatch_problem` solved with `run_energy_flow_optimization`
+    features: [economic-dispatch, operating-limits]
+    docs:
+      - doc: problems/economic_dispatch
+        section: Worked example
+        label: Worked example
+        kind: problem
+      - doc: problems/economic_dispatch
+        section: Keyword reference
+        label: Keyword reference
+        kind: problem
+
+  - id: task-own-objective
+    category: Optimize
+    want: Write my own objective and constraints
+    how: >-
+      `OptimizationProblem` with `controllable_*` helpers, `Objectives` and `Constraints`
+    features: [optimization-problems, coupler-regulation]
+    docs:
+      - doc: problems/index
+        section: Building your own problem
+        label: Building your own problem
+        kind: problem
+      - doc: tutorials/01_optimization_basics
+        section: Defining the optimisation problem
+        label: Defining the optimisation problem
+        kind: tutorial
+      - doc: api/monee.problem
+        section: Problem definitions
+        label: Problem API
+        kind: api
+
+  - id: task-ac-opf
+    category: Optimize
+    want: Solve an AC optimal power flow on a standard case with its generator costs
+    how: >-
+      `read_matpower_opf_case`, or `from_pandapower_net(net, opf=True)`, then `run_energy_flow_optimization`
+    features: [ac-opf, matpower-import, pandapower-simbench]
+    docs:
+      - doc: how-to/matpower_io
+        section: Reading a case as an optimal power flow
+        label: Read a case as an OPF
+        kind: how-to
+      - doc: how-to/convert_from_pandapower
+        section: Making a converted case dispatchable
+        label: Dispatchable pandapower import
+        kind: how-to
+
+  - id: task-mes-dispatch
+    category: Optimize
+    want: >-
+      Dispatch CHPs, heat pumps and electrolysers against power, gas and heat prices
+    how: >-
+      `create_economic_dispatch_problem` with `gas_cost_default` and `heat_cost_default`, so coupler
+      regulation becomes a decision
+    features: [economic-dispatch, coupler-regulation, chp, power-to-heat, power-gas-links]
+    docs:
+      - doc: problems/economic_dispatch
+        section: Gas and heat
+        label: Gas and heat dispatch
+        kind: problem
+      - doc: tutorials/04_mes_economic_dispatch
+        section: ''
+        label: 'Tutorial: multi-energy economic dispatch'
+        kind: tutorial
+      - doc: tutorials/04_mes_economic_dispatch
+        section: Dispatching the day
+        label: Hour by hour dispatch
+        kind: tutorial
+
+  - id: task-import-cap
+    category: Optimize
+    want: Cap how much power, gas or heat the network can import
+    how: >-
+      `max_import_mw` on `create_ext_power_grid`, `max_import_kgs` on `create_gas_ext_grid` and
+      `create_water_ext_grid`, read in the load convention
+    features: [operating-limits, conventions]
+    docs:
+      - doc: how-to/reference_networks
+        section: Import / export capacity limits
+        label: Import and export limits
+        kind: how-to
+      - doc: how-to/troubleshooting
+        section: My import cap does nothing
+        label: My import cap does nothing
+        kind: how-to
+      - doc: concepts/conventions
+        section: The load convention
+        label: The load convention
+        kind: concept
+
+  - id: task-congestion
+    category: Optimize
+    want: >-
+      Find which cable or pipe limit binds, what it costs and what more capacity is worth
+    how: >-
+      Compare economic dispatch solves with each limit in place, lifted and slightly relaxed
+    features: [operating-limits, economic-dispatch]
+    docs:
+      - doc: tutorials/mes_network_limits
+        section: Where the network can bind
+        label: Where the network can bind
+        kind: tutorial
+      - doc: tutorials/mes_network_limits
+        section: What the limits cost
+        label: What the limits cost
+        kind: tutorial
+      - doc: tutorials/mes_network_limits
+        section: What one more MW is worth
+        label: What one more MW is worth
+        kind: tutorial
+
+  - id: task-shed-least
+    category: Optimize
+    want: >-
+      Curtail as little demand as possible after a contingency, protecting critical loads
+    how: '`solve_load_shedding_problem` with `weight_for_load` priorities'
+    features: [load-shedding]
+    docs:
+      - doc: problems/load_shedding
+        section: One-call interface
+        label: One-call interface
+        kind: problem
+      - doc: problems/load_shedding
+        section: Prioritising individual loads
+        label: Prioritising individual loads
+        kind: problem
+      - doc: tutorials/01_optimization_basics
+        section: ''
+        label: 'Tutorial: minimum-cost load curtailment'
+        kind: tutorial
+
+  - id: task-close-backup-lines
+    category: Optimize
+    want: Close reserve lines to restore supply after a fault
+    how: >-
+      Flag candidate lines `backup=True` with `on_off=0`, then `solve_load_shedding_problem` with
+      SCIP or Gurobi
+    features: [backup-lines, load-shedding, global-solvers]
+    docs:
+      - doc: problems/load_shedding
+        section: Decision variables
+        label: Reserve switches
+        kind: problem
+      - doc: how-to/reference_networks
+        section: Seeded benchmark nets with backup lines
+        label: Nets with backup lines
+        kind: how-to
+      - doc: how-to/islanding
+        section: Common pitfalls
+        label: Backup lines and islanding
+        kind: how-to
+
+  - id: task-rank-contingencies
+    category: Optimize
+    want: Rank contingencies by how much demand they cut
+    how: >-
+      Deactivate each element on a copy, solve load shedding, compare `calc_general_resilience_performance`
+    features: [resilience-metrics, load-shedding, edit-and-switch, backup-lines, auto-fallback]
+    docs:
+      - doc: problems/load_shedding
+        section: Measuring curtailment
+        label: Measuring curtailment
+        kind: problem
+      - doc: how-to/troubleshooting
+        section: My contingency loop needs a try/except around every solve
+        label: Robust contingency loops
+        kind: how-to
+
+  - id: task-lex-objectives
+    category: Optimize
+    want: >-
+      Optimize my objective first and the relaxation's loss term second (lexicographic objectives)
+    how: >-
+      `OptimizationProblem(lex_objectives=True)`, or `lex_objectives=True` on load shedding, solved
+      through Pyomo or gurobipy
+    features: [optimization-problems, misocp-relaxation, load-shedding]
+    docs:
+      - doc: concepts/solvers
+        section: Lexicographic objectives
+        label: Lexicographic objectives
+        kind: concept
+      - doc: how-to/use_pyomo_solver
+        section: Lexicographic objectives (Pyomo only)
+        label: Two-phase solve on Pyomo
+        kind: how-to
+      - doc: problems/load_shedding
+        section: Lexicographic variant
+        label: Lexicographic load shedding
+        kind: problem
+
+  - id: task-ts-or-mp
+    category: Plan a horizon
+    want: Decide whether to solve periods one by one or jointly (timeseries or multi-period)
+    how: >-
+      `run_timeseries` for independent periods; `run_multi_period` only when storage, ramps, linepack,
+      inertia or a terminal state couple them
+    features: [timeseries, multi-period, stepper]
+    docs:
+      - doc: concepts/multi_period
+        section: Timeseries vs. multi-period
+        label: Timeseries vs. multi-period
+        kind: concept
+      - doc: how-to/stepper
+        section: When to use which driver
+        label: When to use which driver
+        kind: how-to
+      - doc: tutorials/mes_storage_and_ramps
+        section: What couples the hours
+        label: What couples the hours
+        kind: tutorial
+
+  - id: task-hourly-dispatch
+    category: Plan a horizon
+    want: Dispatch every hour of a year when the hours do not interact
+    how: >-
+      `run_timeseries` with `optimization_problem=create_economic_dispatch_problem(...)`, one
+      independent optimization per step
+    features: [timeseries, economic-dispatch, profiles-and-prices]
+    docs:
+      - doc: concepts/multi_period
+        section: Timeseries vs. multi-period
+        label: Timeseries vs. multi-period
+        kind: concept
+      - doc: concepts/timeseries
+        section: Sequential pipeline
+        label: Sequential pipeline
+        kind: concept
+      - doc: tutorials/04_mes_economic_dispatch
+        section: Dispatching the day
+        label: Dispatching the day
+        kind: tutorial
+
+  - id: task-battery-prices
+    category: Plan a horizon
+    want: >-
+      Optimize a battery against time-of-use prices and end with the starting charge
+    how: >-
+      `controllable_storages`, prices via `add_objective_data`, `run_multi_period` with `terminal_state`
+    features: [storage, multi-period, profiles-and-prices]
+    docs:
+      - doc: how-to/multi_period
+        section: Time-varying pricing
+        label: Time-varying pricing
+        kind: how-to
+      - doc: how-to/storage
+        section: Optimised dispatch
+        label: Optimized storage dispatch
+        kind: how-to
+      - doc: concepts/multi_period
+        section: Initial and terminal state
+        label: Initial and terminal state
+        kind: concept
+
+  - id: task-ramps
+    category: Plan a horizon
+    want: Limit how fast CHPs, boilers and generators change output between hours
+    how: >-
+      `ramp_limit` in the economic dispatch or `constraints.regulation_ramp`, solved with `run_multi_period`
+    features: [ramp-limits, multi-period, coupler-regulation]
+    docs:
+      - doc: tutorials/mes_storage_and_ramps
+        section: Ramp limits and the joint solve
+        label: Ramp limits and the joint solve
+        kind: tutorial
+      - doc: how-to/multi_period
+        section: Cross-period constraints (temporal_equation)
+        label: Cross-period constraints
+        kind: how-to
+      - doc: problems/economic_dispatch
+        section: Multi-period dispatch
+        label: Ramp rows in the dispatch
+        kind: problem
+
+  - id: task-linepack
+    category: Plan a horizon
+    want: Use gas pipelines as a buffer for a demand peak
+    how: '`net.add_extension(GasLinepack())` and a joint solve with `run_multi_period`'
+    features: [gas-linepack, multi-period]
+    docs:
+      - doc: how-to/multi_period
+        section: Gas linepack with multi-period
+        label: Linepack with multi-period
+        kind: how-to
+      - doc: concepts/temporal_extensions
+        section: GasLinepack
+        label: GasLinepack
+        kind: concept
+
+  - id: task-mpc
+    category: Plan a horizon
+    want: Run a rolling-horizon model predictive controller
+    how: '`run_mpc` with `horizon` and `execution_steps`'
+    features: [rolling-mpc, multi-period]
+    docs:
+      - doc: how-to/multi_period
+        section: Rolling-horizon MPC
+        label: Rolling-horizon MPC
+        kind: how-to
+      - doc: concepts/multi_period
+        section: Rolling-horizon MPC
+        label: MPC concept
+        kind: concept
+
+  - id: task-smooth-nlp
+    category: Formulate and solve
+    want: Solve a coupled power, gas and heat flow as one smooth NLP with IPOPT
+    how: >-
+      `formulation="smooth_nlp"` on `run_energy_flow` or `run_energy_flow_optimization`
+    features: [formulations, energy-flow]
+    docs:
+      - doc: tutorials/03_coupled_network
+        section: Choosing the formulation
+        label: Choosing the formulation
+        kind: tutorial
+      - doc: concepts/formulations
+        section: Choosing formulations at solve time
+        label: Choosing formulations at solve time
+        kind: concept
+
+  - id: task-laminar
+    category: Formulate and solve
+    want: Model laminar flow in lightly loaded gas or water pipes
+    how: >-
+      `make_smooth_nlp_formulation`, `make_gas_nlp_formulation` or `make_heat_nlp_formulation`
+      with `friction_model="hybrid"`, `"pwl"` or `"nonlinear"`, passed as `formulation=`
+    features: [formulations, gas-network, district-heating]
+    docs:
+      - doc: concepts/domains
+        section: Friction models
+        label: Friction models
+        kind: concept
+      - doc: concepts/formulations
+        section: Choosing a formulation
+        label: Choosing a formulation
+        kind: concept
+      - doc: concepts/formulations
+        section: Smooth gas NLP
+        label: Smooth gas NLP formulation
+        kind: concept
+
+  - id: task-scip-gurobi
+    category: Formulate and solve
+    want: Solve a mixed-integer or relaxed model with SCIP or Gurobi
+    how: >-
+      `solver="scip"` through Pyomo, or `solver="gurobi"`, which uses the native gurobipy backend
+      when gurobipy is installed (Pyomo otherwise, and always for multi-period)
+    features: [global-solvers, solver-backends]
+    docs:
+      - doc: how-to/use_pyomo_solver
+        section: Pick a solver by name
+        label: Pick a solver by name
+        kind: how-to
+      - doc: how-to/use_pyomo_solver
+        section: Formulation compatibility
+        label: Formulation compatibility
+        kind: how-to
+      - doc: benchmarks/backend_selection
+        section: Formulation class to recommended backend
+        label: Formulation to backend table
+        kind: benchmark
+
+  - id: task-fastest-backend
+    category: Formulate and solve
+    want: Pick the fastest backend for my formulation
+    how: >-
+      Keep the default CasADi with IPOPT for smooth NLPs; use `solver="gurobi"` (native gurobipy
+      when installed), or SCIP through Pyomo, for conic and mixed-integer models
+    features: [solver-backends, global-solvers, validated-accuracy]
+    docs:
+      - doc: benchmarks/backend_selection
+        section: Formulation class to recommended backend
+        label: Recommended backend
+        kind: benchmark
+      - doc: benchmarks/backend_selection
+        section: Selecting a backend
+        label: Selecting a backend
+        kind: benchmark
+      - doc: concepts/solvers
+        section: Choosing a solver
+        label: Choosing a solver
+        kind: concept
+
+  - id: task-misocp-opf
+    category: Formulate and solve
+    want: Get a convex optimal power flow with the MISOCP relaxation
+    how: '`EL_MISOCP_FORMULATION` solved with SCIP or Gurobi, then check the cone gap'
+    features: [misocp-relaxation, ac-opf]
+    docs:
+      - doc: concepts/domains
+        section: MISOCP Branch-Flow relaxation
+        label: Branch-flow cone relaxation
+        kind: concept
+      - doc: how-to/use_pyomo_solver
+        section: Minimal example
+        label: MISOCP OPF with SCIP
+        kind: how-to
+      - doc: concepts/formulations
+        section: Checking the cone gap
+        label: Checking the cone gap
+        kind: concept
+
+  - id: task-prove-optimum
+    category: Formulate and solve
+    want: Prove a dispatch is the global optimum, or bound it from below
+    how: >-
+      SCIP on `formulation="nonconvex_miqcqp"`, or a relaxation tuple for a lower bound
+    features: [global-solvers, misocp-relaxation]
+    docs:
+      - doc: tutorials/mes_local_optima
+        section: The global optimum
+        label: The global optimum
+        kind: tutorial
+      - doc: tutorials/mes_local_optima
+        section: A lower bound from a relaxation
+        label: A lower bound from a relaxation
+        kind: tutorial
+      - doc: tutorials/mes_local_optima
+        section: Local and global solvers
+        label: Local and global solvers
+        kind: tutorial
+
+  - id: task-mccormick
+    category: Formulate and solve
+    want: Run a fast LP or MILP district heating model with worst-case gap bounds
+    how: >-
+      `HEAT_CONVEX_MILP_FORMULATION` with node-based heat loads or HG couplers, checked with `mccormick_dhs_gap_bound_k`
+    features: [mccormick-heat, node-based-couplers]
+    docs:
+      - doc: concepts/formulations
+        section: McCormick district heating
+        label: McCormick district heating
+        kind: concept
+      - doc: how-to/generate_mes
+        section: Node-based heat loads (McCormick-DHS)
+        label: Node-based heat loads
+        kind: how-to
+
+  - id: task-speed-up-solves
+    category: Formulate and solve
+    want: Speed up thousands of similar solves on one network
+    how: >-
+      `run_timeseries` or the `Stepper` instead of a loop of `run_energy_flow`, with warm starts
+      and tuned solver options
+    features: [solver-tuning, timeseries, stepper]
+    docs:
+      - doc: concepts/solvers
+        section: Warm starting
+        label: Warm starting
+        kind: concept
+      - doc: concepts/solvers
+        section: Tuning solver options
+        label: Tuning solver options
+        kind: concept
+      - doc: benchmarks/backend_selection
+        section: How this compares to a dedicated power-flow tool
+        label: Repeated solves benchmark
+        kind: benchmark
+
+  - id: task-robust-sweep
+    category: Formulate and solve
+    want: Keep a contingency or Monte Carlo sweep running when single cases fail
+    how: >-
+      `solver="auto"` with a branch on `result.success`, or `on_step_error="skip"` in `run_timeseries`
+    features: [auto-fallback, timeseries]
+    docs:
+      - doc: concepts/solvers
+        section: Automatic back-end fallback
+        label: Automatic back-end fallback
+        kind: concept
+      - doc: how-to/troubleshooting
+        section: My contingency loop needs a try/except around every solve
+        label: Robust contingency loops
+        kind: how-to
+      - doc: how-to/timeseries
+        section: Error handling
+        label: Timeseries error handling
+        kind: how-to
+
+  - id: task-plot-network
+    category: Analyze and validate
+    want: Plot my network and its solved state interactively
+    how: >-
+      `monee.plot_network(net)` before the solve, `result.plot(write_to="net.html")` after it
+    features: [interactive-plots]
+    docs:
+      - doc: how-to/convert_from_pandapower
+        section: Plotting the converted network
+        label: Plotting a network
+        kind: how-to
+      - doc: api/monee.visualization
+        section: Result plots
+        label: Result plots API
+        kind: api
+      - doc: api/monee.visualization
+        section: Network plots
+        label: Network plots API
+        kind: api
+
+  - id: task-find-overloads
+    category: Analyze and validate
+    want: Find overloaded lines and transformers in a distribution grid
+    how: >-
+      Filter the branch result frame on `loading_from_pu` or `loading_to_pu` above 1; on a converted
+      pandapower grid the `kind` column tells lines from transformers
+    features: [result-tables, electricity-grid, pandapower-simbench]
+    docs:
+      - doc: how-to/convert_from_pandapower
+        section: Transformer ratings and loading
+        label: Transformer ratings and loading
+        kind: how-to
+      - doc: how-to/convert_from_pandapower
+        section: Which branch is which
+        label: Which branch is which
+        kind: how-to
+      - doc: components/electricity
+        section: PowerLine
+        label: PowerLine result columns
+        kind: component
+
+  - id: task-why-failed
+    category: Analyze and validate
+    want: Find out why my optimization is infeasible, failed or returned suspicious numbers
+    how: >-
+      `net.check()` before, `result.warnings` and `strict=True` after, `result.infeasibility_report`
+      on failure
+    features: [network-checks, infeasibility-diagnosis]
+    docs:
+      - doc: how-to/troubleshooting
+        section: The solver says infeasible
+        label: First checks when a solve is infeasible
+        kind: how-to
+      - doc: how-to/diagnose_infeasibility
+        section: ''
+        label: Diagnose infeasible and failed solves
+        kind: how-to
+      - doc: how-to/diagnose_infeasibility
+        section: Result validation and strict mode
+        label: Result validation and strict mode
+        kind: how-to
+      - doc: how-to/troubleshooting
+        section: A failed solve is not always an infeasible model
+        label: Numerics failure or infeasible model
+        kind: how-to
+
+  - id: task-check-agreement
+    category: Analyze and validate
+    want: Check how closely monee agrees with pandapower and pandapipes
+    how: >-
+      The validation benchmarks compare power flow, OPF, gas, heat and coupled MES on like-for-like
+      networks
+    features: [validated-accuracy]
+    docs:
+      - doc: benchmarks/validation
+        section: ''
+        label: Validation
+        kind: benchmark
+      - doc: benchmarks/index
+        section: Results at a glance
+        label: Results at a glance
+        kind: benchmark
+
+  - id: task-custom-component
+    category: Extend
+    want: Write a component with my own physics
+    how: >-
+      Subclass a model class, implement `equations()` and register it with `@mm.model`
+    features: [custom-models]
+    docs:
+      - doc: quickstart
+        section: Extending with custom models
+        label: 'Quickstart: custom models'
+        kind: quickstart
+      - doc: concepts/data_model
+        section: Branch author contract
+        label: Branch author contract
+        kind: concept
+      - doc: concepts/data_model
+        section: Model registration
+        label: Model registration
+        kind: concept
+
+  - id: task-custom-formulation
+    category: Extend
+    want: Implement a new equation set for an existing component type
+    how: >-
+      Subclass a formulation class, map it in a `NetworkFormulation` and register it with `register_formulation`
+    features: [custom-formulations, formulations]
+    docs:
+      - doc: concepts/formulations
+        section: Writing a custom formulation
+        label: Writing a custom formulation
+        kind: concept
+      - doc: concepts/formulations
+        section: Choosing formulations at solve time
+        label: Activation and precedence
+        kind: concept
+      - doc: concepts/formulations
+        section: Lifecycle
+        label: Formulation lifecycle
+        kind: concept
+
+  - id: task-network-wide
+    category: Extend
+    want: Add network-wide variables, constraints or dynamics between time steps
+    how: >-
+      Subclass `NetworkAspect` and register it with `add_extension`, or implement `inter_temporal_equations`
+    features: [network-aspects, temporal-coupling]
+    docs:
+      - doc: concepts/network_aspects
+        section: Minimal example
+        label: Write your own aspect
+        kind: concept
+      - doc: concepts/timeseries
+        section: Three temporal hooks
+        label: Three temporal hooks
+        kind: concept
+      - doc: how-to/timeseries
+        section: 'Inter-step coupling: ramp constraints'
+        label: Ramp-limited generator model
+        kind: how-to

@@ -25,8 +25,9 @@ zero without the extension (steady-state constraint) and non-zero with it
 without LTC but rolls off smoothly with it.
 
 Unlike the MES example this runs a plain energy-flow timeseries (no
-optimisation problem, no commercial solver): the bundled CasADi/IPOPT backend
-handles the combined nonlinear gas + heat flow.
+optimisation problem, no commercial solver): monee's default CasADi backend,
+which calls the third-party IPOPT solver through CasADi, handles the combined
+nonlinear gas + heat flow.
 
 Requires: plotly. kaleido is optional (static PNG export); the interactive
 HTML is always written.

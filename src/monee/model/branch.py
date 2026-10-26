@@ -259,6 +259,12 @@ class HeatExchanger(BranchModel):
     positive one a generator. Prefer the sign-normalizing
     :class:`HeatExchangerLoad` / :class:`HeatExchangerGenerator` aliases or
     ``monee.express.create_heat_exchanger`` (which takes positive = consumption).
+
+    ``regulation`` scales the duty and the through-flow together, so the design
+    temperature spread is kept at part load and ``regulation = 0`` is
+    hydraulically equivalent to an absent branch. The exception is a
+    ``regulation`` Var under the McCormick MILP formulation, which keeps the
+    design flow so that the H-space balance stays linear.
     """
 
     def __init__(
@@ -298,7 +304,14 @@ class HeatExchanger(BranchModel):
             if isinstance(q_mw, (int, float)):
                 mass_flow_design_kgs = self._mass_flow_seed_kgs
             else:
-                mass_flow_design_kgs = Var(0, name="mass_flow_design_kgs")
+                # Seed the sized flow at the design value too: it multiplies
+                # both temperatures in the energy balance, so a zero start
+                # wipes those columns out of the Jacobian and, once the
+                # delivered duty is pinned, leaves IPOPT no consistent first
+                # step (Restoration_Failed after one iteration).
+                mass_flow_design_kgs = Var(
+                    self._mass_flow_seed_kgs, name="mass_flow_design_kgs"
+                )
                 self._calc_mass_flow = True
 
         self.mass_flow_design_kgs = mass_flow_design_kgs
@@ -313,6 +326,16 @@ class HeatExchanger(BranchModel):
         self.t_from_pu = Var(1, min=0, max=2, name="t_from_pu")
         self.t_to_pu = Var(1, min=0, max=2, name="t_to_pu")
 
+    def scale_duty(self, factor):
+        """Scale the duty by *factor*: the setpoint, the design flow and the
+        warm-start seeds derived from them, so a part-load duty solves like a
+        heat exchanger built for it (``regulation`` scales the duty within one
+        solve instead)."""
+        self.q_mw_set = self.q_mw_set * factor
+        self.mass_flow_design_kgs = self.mass_flow_design_kgs * factor
+        self._q_design_mw = self._q_design_mw * factor
+        self._mass_flow_seed_kgs = self._mass_flow_seed_kgs * factor
+
     def equations(self, grid: WaterGrid, from_node_model, to_node_model, **kwargs):
         eqs = [
             IntermediateEq(
@@ -326,6 +349,10 @@ class HeatExchanger(BranchModel):
                 * 1e6
                 / (ohfmodel.SPECIFIC_HEAT_CAP_WATER * self._T_delta_design_K)
             )
+            # q_mw_set is the negated duty Var here (Var.__neg__ in __init__);
+            # keep it a Var - the formulations classify a Var q_mw_set as a
+            # sized generator - but tie it to the duty so it is no phantom.
+            eqs.append(self.q_mw_set == -self.q_mw)
         else:
             eqs.append(self.q_mw == self.q_mw_set * self.regulation)
         return eqs
@@ -347,14 +374,19 @@ class HeatExchangerLoad(HeatExchanger):
 @model
 class HeatExchangerGenerator(HeatExchanger):
     """Heat exchanger that injects heat (``q_mw_set < 0``); the magnitude of
-    ``q_mw`` is used, its sign is ignored."""
+    ``q_mw`` is used, its sign is ignored. ``cost`` (currency per MW heat) is
+    read by the economic dispatch objective."""
 
-    def __init__(self, q_mw, mass_flow_design_kgs=None, regulation=1) -> None:
+    def __init__(
+        self, q_mw, mass_flow_design_kgs=None, regulation=1, cost=None
+    ) -> None:
         super().__init__(
             _normalize_he_q_mw(q_mw, load=False),
             mass_flow_design_kgs=mass_flow_design_kgs,
             regulation=regulation,
         )
+        if cost is not None:
+            self.cost = cost
 
 
 @model
@@ -445,10 +477,16 @@ class PassiveHeatExchangerLoad(PassiveHeatExchanger):
 @model
 class PassiveHeatExchangerGenerator(PassiveHeatExchanger):
     """Passive heat exchanger that injects heat (``q_mw_set < 0``); the
-    magnitude of ``q_mw`` is used, its sign is ignored."""
+    magnitude of ``q_mw`` is used, its sign is ignored. ``cost`` (currency per
+    MW heat) is read by the economic dispatch objective."""
 
     def __init__(
-        self, q_mw, diameter_m, temperature_ext_k=293, loss_coefficient=None
+        self,
+        q_mw,
+        diameter_m,
+        temperature_ext_k=293,
+        loss_coefficient=None,
+        cost=None,
     ) -> None:
         super().__init__(
             _normalize_he_q_mw(q_mw, load=False),
@@ -456,6 +494,8 @@ class PassiveHeatExchangerGenerator(PassiveHeatExchanger):
             temperature_ext_k=temperature_ext_k,
             loss_coefficient=loss_coefficient,
         )
+        if cost is not None:
+            self.cost = cost
 
 
 @model
@@ -503,7 +543,7 @@ class GasPipe(BranchModel):
 @model
 class GasCompressor(BranchModel):
     """
-    Ideal compressor - fixed pressure ratio, unidirectional (suction → discharge).
+    Ideal compressor - fixed pressure ratio, unidirectional (suction -> discharge).
     Forward flow lives in ``mass_flow_neg_kgs`` to match GasPipe's Weymouth convention.
     """
 

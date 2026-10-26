@@ -2,8 +2,12 @@
 
 import math
 
+import pytest
+
+import monee.express as mx
 import monee.model as mm
 import monee.solver as ms
+from monee import run_energy_flow
 from monee.model.formulation import EL_MISOCP_FORMULATION
 
 
@@ -11,6 +15,7 @@ def _build_p2h_network(
     heat_mw=0.020,
     efficiency=1.0,
     diameter_m=0.15,
+    regulation=1,
 ):
     """Two-grid (power + heat/water) network with one P2H unit."""
     pn = mm.Network(mm.create_water_grid("heat"))
@@ -50,7 +55,7 @@ def _build_p2h_network(
     )
 
     pn.compound(
-        mm.PowerToHeat(heat_mw, diameter_m, 300, efficiency),
+        mm.PowerToHeat(heat_mw, diameter_m, 300, efficiency, regulation=regulation),
         power_node_id=p2,
         heat_node_id=w2,
         heat_return_node_id=w1,
@@ -196,6 +201,101 @@ def test_p2h_absolute_values():
     assert math.isclose(cn["heat_mw"].iloc[0], -heat_mw, rel_tol=1e-4)
 
 
+def test_p2h_partial_regulation_result_columns():
+    """el_mw reports the realized draw at partial regulation, load_p_mw the
+    setpoint, and heat_mw the generator-signed realized output."""
+    heat_mw, eff, reg = 0.020, 0.8, 0.5
+    net = _build_p2h_network(heat_mw=heat_mw, efficiency=eff, regulation=reg)
+
+    result = ms.GEKKOSolver().solve(net)
+
+    assert result.success
+    cn = result.dataframes["PowerToHeatControlNode"]
+    setpoint_el = heat_mw / eff
+    assert math.isclose(cn["load_p_mw"].iloc[0], setpoint_el, rel_tol=1e-9)
+    assert math.isclose(cn["el_mw"].iloc[0], reg * setpoint_el, rel_tol=1e-4)
+    assert math.isclose(cn["heat_mw"].iloc[0], -reg * heat_mw, rel_tol=1e-4)
+
+
+def test_p2h_regulation_set_after_create_reaches_a_single_solve():
+    """Regression: the compound's ``regulation`` is a build-time seed that only
+    ``sync()`` pushes onto the control node, and only the timeseries driver
+    called it, so a value set before ``run_energy_flow`` was silently ignored."""
+    # GIVEN a unit built at full regulation, then set to half
+    heat_mw, eff, reg = 0.020, 0.8, 0.5
+    net = _build_p2h_network(heat_mw=heat_mw, efficiency=eff)
+    net.compounds[0].model.regulation = reg
+
+    # WHEN
+    result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
+    cn = result.dataframes["PowerToHeatControlNode"]
+    assert cn["regulation"].iloc[0] == pytest.approx(reg)
+    assert math.isclose(cn["heat_mw"].iloc[0], -reg * heat_mw, rel_tol=1e-4)
+
+
+def _p2h_control_node_id(net):
+    return next(
+        node.id
+        for node in net.nodes
+        if isinstance(node.model, mm.PowerToHeatControlNode)
+    )
+
+
+def test_p2h_regulation_set_on_the_control_node_survives_the_solve():
+    """Regression: the solve-time compound sync reset a regulation written onto
+    the control node itself to the compound's unchanged build-time seed."""
+    # GIVEN
+    heat_mw, eff, reg = 0.020, 0.8, 0.5
+    net = _build_p2h_network(heat_mw=heat_mw, efficiency=eff)
+    net.node_by_id(_p2h_control_node_id(net)).model.regulation = reg
+
+    # WHEN
+    result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
+    cn = result.dataframes["PowerToHeatControlNode"]
+    assert cn["regulation"].iloc[0] == pytest.approx(reg)
+    assert math.isclose(cn["heat_mw"].iloc[0], -reg * heat_mw, rel_tol=1e-4)
+
+
+def test_p2h_control_node_series_survives_the_per_step_rebuild():
+    """The same reset hit a node series on the control node in the per-step
+    rebuild loop, while the CasADi build-once path kept it."""
+    from monee.simulation.timeseries import TimeseriesData, run
+
+    # GIVEN a node series on the control node; the step hook forces the
+    # per-step rebuild loop
+    net = _build_p2h_network(heat_mw=0.020, efficiency=0.8)
+    control_id = _p2h_control_node_id(net)
+    td = TimeseriesData()
+    td.add_node_series(control_id, "regulation", [0.5, 0.25])
+
+    # WHEN
+    res = run(net, td, steps=2, step_hooks=[lambda *a: None])
+
+    # THEN
+    assert res.failed_steps == []
+    regulation = res.get_result_for(mm.PowerToHeatControlNode, "regulation")
+    assert regulation[control_id].tolist() == pytest.approx([0.5, 0.25])
+
+
+def test_p2h_heat_mw_sign_convention():
+    """Positive heat_energy_mw input reports as negative heat_mw (injection)."""
+    heat_mw = 0.020
+    net = _build_p2h_network(heat_mw=heat_mw, efficiency=1.0)
+
+    result = ms.GEKKOSolver().solve(net)
+
+    assert result.success
+    cn = result.dataframes["PowerToHeatControlNode"]
+    assert heat_mw > 0
+    assert math.isclose(cn["heat_mw"].iloc[0], -heat_mw, rel_tol=1e-4)
+
+
 def test_p2h_misocp_formulation():
     # GIVEN
     net = _build_p2h_network()
@@ -244,6 +344,43 @@ def test_p2h_cop_analogy():
     el_ref = r_ref.dataframes["PowerToHeatControlNode"]["el_mw"].iloc[0]
     el_low = r_low.dataframes["PowerToHeatControlNode"]["el_mw"].iloc[0]
     assert math.isclose(el_low / el_ref, 1.0 / 0.6, rel_tol=1e-4)
+
+
+@pytest.mark.parametrize("pressure_pu", [0.6, 1.5])
+def test_p2h_loop_follows_off_nominal_reference_pressure(pressure_pu):
+    """The control node sits at the loop's reference pressure; its report-only
+    ``pressure_squared_pu`` must not clamp it (a bounded Var tied to
+    ``pressure_pu`` did, limiting the loop to about [0.71, 1.73] pu)."""
+    # GIVEN the docs loop with a 6 bar / 15 bar return reference on a 10 bar base
+    net = mx.create_multi_energy_network()
+    bus = mx.create_bus(net)
+    mx.create_ext_power_grid(net, bus)
+    junc_return = mx.create_water_junction(net)
+    junc_supply = mx.create_water_junction(net)
+    mx.create_water_ext_grid(net, junc_return, t_k=330, pressure_pu=pressure_pu)
+    mx.create_passive_heat_exchanger(
+        net, junc_supply, junc_return, q_mw=0.5, diameter_m=0.1
+    )
+    mx.create_p2h(
+        net,
+        power_node_id=bus,
+        cold_node_id=junc_return,
+        hot_node_id=junc_supply,
+        heat_energy_mw=0.5,
+        diameter_m=0.1,
+        efficiency=0.95,
+    )
+
+    # WHEN
+    result = run_energy_flow(net)
+
+    # THEN
+    assert result.success
+    junctions = result.get(mm.Junction).set_index("id")
+    assert junctions.loc[junc_supply, "t_k"] == pytest.approx(360, abs=0.5)
+    control = result.get(mm.PowerToHeatControlNode).iloc[0]
+    assert control["pressure_pu"] == pytest.approx(pressure_pu, abs=1e-3)
+    assert control["pressure_squared_pu"] == pytest.approx(pressure_pu**2, rel=1e-3)
 
 
 def test_p2h_no_gas_interaction():

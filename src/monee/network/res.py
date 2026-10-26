@@ -38,13 +38,13 @@ def create_urban_district_net() -> mm.Network:
     """
     Urban residential district: 20 kV power + medium-pressure gas + district heat.
 
-    5 buses · 5 gas junctions · 4 heat junctions (3 supply + 1 return) · 3 CPs.
+    5 buses, 5 gas junctions, 4 heat junctions (3 supply + 1 return), 3 CPs.
     Highest CP-to-node ratio of the three grids.
     Suitable for: testing CHP-centred resilience.
 
     The heat grid uses a supply-return two-pipe structure: the CHP injects
-    heat on the return→supply side (r1→s1, ~102 kW) and a single
-    ``HeatExchangerLoad`` consumer extracts on the supply→return side (s3→r1).
+    heat on the return->supply side (r1->s1, ~102 kW) and a single
+    ``HeatExchangerLoad`` consumer extracts on the supply->return side (s3->r1).
     """
     net = mx.create_multi_energy_network()
 
@@ -81,7 +81,7 @@ def create_urban_district_net() -> mm.Network:
     mx.create_gas_pipe(net, g1, g4, diameter_m=0.10, length_m=200)
 
     # Supply side (hot, ~356 K): CP hot outlets + distribution + HE consumers.
-    # CHP and P2H bridge return→supply, just as HEs bridge supply→return.
+    # CHP and P2H bridge return->supply, just as HEs bridge supply->return.
     s1 = mx.create_water_junction(net, name="s1")
     s2 = mx.create_water_junction(net, name="s2")
     s3 = mx.create_water_junction(net, name="s3")
@@ -94,8 +94,8 @@ def create_urban_district_net() -> mm.Network:
 
     mx.create_heat_exchanger(net, s3, r1, 0.2)
 
-    # CHP: gas at G2 → power at B3, heat from r1→s1.
-    # heat_w = 0.40 × 0.006 kg/s × 3.6 × 11.79011 kWh/kg × 1e6 ≈ 101 866 W
+    # CHP: gas at G2 -> power at B3, heat from r1->s1.
+    # heat_w = 0.40 x 0.006 kg/s x 3.6 x 11.79011 kWh/kg x 1e6 ~= 101 866 W
     # (default gas is lgas, HHV 11.79011 kWh/kg)
     mx.create_chp(
         net,
@@ -109,7 +109,7 @@ def create_urban_district_net() -> mm.Network:
         mass_flow_setpoint_kgs=0.006,
         regulation=1,
     )
-    # P2G: surplus power at B0 → hydrogen injection at G4
+    # P2G: surplus power at B0 -> hydrogen injection at G4
     mx.create_p2g(
         net,
         from_node_id=b0,
@@ -118,7 +118,7 @@ def create_urban_district_net() -> mm.Network:
         mass_flow_setpoint_kgs=0.010,
         regulation=1,
     )
-    # G2P: gas peaker at G3 → power backup at B2
+    # G2P: gas peaker at G3 -> power backup at B2
     mx.create_g2p(
         net,
         from_node_id=g3,
@@ -255,7 +255,7 @@ def create_large_urban_mes_net(n_districts: int = 6) -> mm.Network:
     in the heat sector (one group per district).
 
     Args:
-        n_districts: Number of urban districts to replicate.  Must be ≥1.
+        n_districts: Number of urban districts to replicate.  Must be >=1.
     """
     if n_districts < 1:
         raise ValueError("n_districts must be >= 1")

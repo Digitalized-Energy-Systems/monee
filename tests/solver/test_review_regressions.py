@@ -132,13 +132,15 @@ def test_casadi_timeseries_name_series_wins_over_id():
 
 
 # --------------------------------------------------------------------------- #
-# Issue 2: a non-converged CasADi solve must RAISE (uniform with GEKKO), not
-# silently return success=False.
+# Issue 2: a non-converged CasADi solve must not be mistaken for a solution.
+# Superseded by batch solver-ergonomics item S1: the default now REPORTS the
+# failure on the result (success=False plus the diagnostics) and strict=True
+# raises, instead of always raising.
 # --------------------------------------------------------------------------- #
 @pytest.mark.skipif(
     __import__("importlib").util.find_spec("casadi") is None, reason="casadi missing"
 )
-def test_casadi_raises_on_nonconvergence(monkeypatch):
+def test_casadi_reports_nonconvergence(monkeypatch):
     from monee.solver import casadi as cmod
     from monee.solver.casadi import CasADiSolveError, CasADiSolver
 
@@ -164,8 +166,13 @@ def test_casadi_raises_on_nonconvergence(monkeypatch):
 
     monkeypatch.setattr(cmod.ca, "nlpsol", fake_nlpsol)
 
+    result = run_energy_flow(net, solver=CasADiSolver())
+    assert result.success is False
+    assert result.solver_status == "error"
+    assert result.infeasibility_report is not None
+
     with pytest.raises(CasADiSolveError):
-        run_energy_flow(net, solver=CasADiSolver())
+        run_energy_flow(net, solver=CasADiSolver(), strict=True)
 
 
 @pytest.mark.skipif(

@@ -2,19 +2,11 @@
 # How-to guides
 
 Short, task-focused guides for common operations. Each guide assumes you are
-already familiar with the {doc}`../quickstart`.
+already familiar with the {doc}`../quickstart`. Load shedding and economic
+dispatch have moved to {doc}`../problems/index`.
 
 ::::{grid} 1 2 2 2
 :gutter: 4
-
-:::{grid-item-card} Load shedding
-:link: load_shedding
-:link-type: doc
-:shadow: sm
-
-Find the minimum demand curtailment needed to keep a network feasible under
-voltage, pressure, and temperature bounds, in one call or fully customised.
-:::
 
 :::{grid-item-card} Import MATPOWER files
 :link: matpower_io
@@ -25,13 +17,14 @@ Read standard IEEE test cases or any `.mat` MATPOWER file, and persist
 networks to/from the native OMEF JSON format.
 :::
 
-:::{grid-item-card} Convert from pandapower
+:::{grid-item-card} Convert from pandapower and SimBench
 :link: convert_from_pandapower
 :link-type: doc
 :shadow: sm
 
 Import an existing pandapower network into monee with a single function
-call. *(Experimental: complex elements may not convert correctly.)*
+call, or fetch a SimBench benchmark grid together with its full-year
+profiles. *(Experimental: complex elements may not convert correctly.)*
 :::
 
 :::{grid-item-card} Use the Pyomo solver
@@ -50,6 +43,15 @@ MILP / MIQCP problems such as the MISOCP optimal power flow.
 
 Enable multi-island solves with `enable_islanding()`, add grid-forming
 generators or sources, and retrieve per-island results.
+:::
+
+:::{grid-item-card} District heating with couplers
+:link: district_heating
+:link-type: doc
+:shadow: sm
+
+Run a mass-flow-prescribed consumer next to a CHP or P2H with the bypass
+pattern, and drive the loop to part load from a demand profile.
 :::
 
 :::{grid-item-card} Timeseries simulation
@@ -86,6 +88,15 @@ schedule via `TimeseriesData` or let the optimizer choose the dispatch.
 
 Drive a network step by step from an external co-simulation framework with
 `Stepper`, using variable step sizes, data overrides, and persistent state.
+:::
+
+:::{grid-item-card} Troubleshooting
+:link: troubleshooting
+:link-type: doc
+:shadow: sm
+
+The recurring traps: sign slips, unbound profiles, relaxed formulations,
+ignored components, and the objective that is not yours.
 :::
 
 :::{grid-item-card} Diagnose infeasibility
@@ -139,13 +150,14 @@ regional MES) for benchmarking, tutorials, and quick experiments.
 :maxdepth: 1
 :hidden:
 
-load_shedding
 matpower_io
 convert_from_pandapower
 import_cim_esdl
 use_pyomo_solver
+troubleshooting
 diagnose_infeasibility
 islanding
+district_heating
 timeseries
 stepper
 multi_period

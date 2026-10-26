@@ -23,10 +23,21 @@ from .core import NetworkAspect
 class GasLinepack(NetworkAspect):
     """Linepack extension. Injects ``linepack_kg`` and ``net_pack_kgs`` on every
     GasPipe; auto-sizes initial/max from grid params. Per-pipe overrides via the
-    ``overrides`` ``{branch_id: {"linepack_kg_initial": ..., "linepack_kg_max": ...}}``."""
+    ``overrides`` ``{branch_id: {"linepack_kg_initial": ..., "linepack_kg_max": ...}}``.
 
-    def __init__(self, overrides: dict[int, dict] | None = None) -> None:
+    ``first_step_steady_state=True`` pins ``net_pack_kgs = 0`` in the first
+    step instead of charging from ``linepack_kg_initial``, so step 0 is the
+    steady state of its inputs and the following steps start from that step's
+    solved linepack (the same anchor a separate steady solve would give), like
+    :class:`LumpedThermalCapacitance` does for heat."""
+
+    def __init__(
+        self,
+        overrides: dict[int, dict] | None = None,
+        first_step_steady_state: bool = False,
+    ) -> None:
         self._overrides: dict[int, dict] = overrides or {}
+        self._first_step_steady_state: bool = bool(first_step_steady_state)
         self._pipe_volume: dict[int, float] = {}
         self._initial_lp: dict[int, float] = {}
         self._active_branches: set[int] = set()
@@ -146,6 +157,9 @@ class GasLinepack(NetworkAspect):
                 continue
             bm = branch.model
             prev_lp = temporal_state.get(branch.id, "linepack_kg")
+            if prev_lp is None and self._first_step_steady_state:
+                eqs.append(bm.net_pack_kgs == 0)
+                continue
             if prev_lp is None:
                 prev_lp = self._initial_lp[branch.id]
             eqs.append(bm.net_pack_kgs * dt_s == bm.linepack_kg - prev_lp)

@@ -1,5 +1,7 @@
 """Tests for the bulk-construction structure builders in monee.express."""
 
+import warnings
+
 import pytest
 
 import monee.express as mx
@@ -192,6 +194,22 @@ def test_dhs_attach_heat_plant():
     assert len(net.childs_by_type(mm.ConsumeHydrGrid)) == 1
 
 
+def test_dhs_attach_heat_plant_forwards_pin_temperature():
+    # GIVEN
+    net = mm.Network()
+    dhs = mx.dhs_structure(net, diameter_m=0.15, length_m=100)
+    seg = dhs.line(3, heat_exchanger_q_mw=0.02)
+
+    # WHEN
+    dhs.attach_heat_plant(
+        seg.supply.first, seg.return_.first, pin_temperature=False, name="Plant1"
+    )
+
+    # THEN
+    ext_grid = net.childs_by_type(mm.ExtHydrGrid)[0]
+    assert ext_grid.model.pin_temperature is False
+
+
 def test_dhs_ring_counts():
     # GIVEN
     net = mm.Network()
@@ -248,3 +266,173 @@ def test_star_rejects_zero_arm():
     # WHEN / THEN
     with pytest.raises(ValueError):
         g.star([2, 0, 3])
+
+
+def test_water_ring_pipes_stay_bidirectional():
+    # GIVEN
+    net = mm.Network()
+    w = mx.water_structure(net, diameter_m=0.15, length_m=100, unidirectional=True)
+
+    # WHEN
+    w.ring(4)
+
+    # THEN
+    pipes = [b.model for b in net.branches_by_type(mm.WaterPipe)]
+    assert len(pipes) == 4
+    assert not any(p.unidirectional for p in pipes)
+
+
+def test_water_line_keeps_unidirectional():
+    # GIVEN
+    net = mm.Network()
+    w = mx.water_structure(net, diameter_m=0.15, length_m=100, unidirectional=True)
+
+    # WHEN
+    w.line(4)
+
+    # THEN
+    pipes = [b.model for b in net.branches_by_type(mm.WaterPipe)]
+    assert all(p.unidirectional for p in pipes)
+
+
+def test_dhs_ring_pipes_stay_bidirectional():
+    # GIVEN
+    net = mm.Network()
+    dhs = mx.dhs_structure(net, diameter_m=0.15, length_m=100)
+
+    # WHEN
+    dhs.ring(4, heat_exchanger_q_mw=0.02)
+
+    # THEN
+    pipes = [b.model for b in net.branches_by_type(mm.WaterPipe)]
+    assert len(pipes) == 8
+    assert not any(p.unidirectional for p in pipes)
+
+
+@pytest.mark.parametrize("shape", ["line", "ring", "star"])
+def test_unknown_load_kwarg_raises(shape):
+    # GIVEN
+    net = mm.Network()
+    g = mx.gas_structure(net, diameter_m=0.3, length_m=100)
+
+    # WHEN / THEN
+    with pytest.raises(TypeError, match="sink_mass_flow_kgs"):
+        if shape == "star":
+            g.star([3], sink_mass_flow_kgs=0.02)
+        else:
+            getattr(g, shape)(3, sink_mass_flow_kgs=0.02)
+
+
+def test_carrier_specific_load_kwargs_are_rejected_across_carriers():
+    # GIVEN
+    net = mm.Network()
+    g = mx.gas_structure(net, diameter_m=0.3, length_m=100)
+    e = mx.el_structure(net, length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
+
+    # WHEN / THEN
+    with pytest.raises(TypeError):
+        g.line(2, load_p_mw=1.0)
+    with pytest.raises(TypeError):
+        e.line(2, sink_mass_flow=0.02)
+
+
+def test_el_start_from_mismatched_base_kv_warns():
+    # GIVEN
+    net = mm.Network()
+    manual_bus = mx.create_bus(net, base_kv=1)
+    e = mx.el_structure(
+        net, length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, base_kv=20
+    )
+
+    # WHEN / THEN
+    with pytest.warns(UserWarning, match="base_kv=1.*base_kv=20") as record:
+        e.line(3, start_from=manual_bus)
+    assert "express_structures" in str(record[0].message)
+
+
+def test_el_start_from_matching_base_kv_stays_silent():
+    # GIVEN
+    net = mm.Network()
+    e = mx.el_structure(
+        net, length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, base_kv=20
+    )
+    seg = e.line(3)
+
+    # WHEN / THEN
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        e.line(2, start_from=seg.last)
+
+
+def test_el_start_from_base_kv_warns_once_per_bus():
+    # GIVEN
+    net = mm.Network()
+    manual_bus = mx.create_bus(net, base_kv=10)
+    e = mx.el_structure(
+        net, length_m=500, r_ohm_per_m=7e-5, x_ohm_per_m=7e-5, base_kv=20
+    )
+
+    # WHEN
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        e.star([2, 2, 2], start_from=manual_bus)
+
+    # THEN
+    assert len(caught) == 1
+
+
+def test_gas_star_attaches_no_hub_sink_by_default():
+    # GIVEN
+    net = mm.Network()
+    g = mx.gas_structure(net, diameter_m=0.15, length_m=400)
+
+    # WHEN
+    star = g.star([2, 2], sink_mass_flow=0.02)
+
+    # THEN
+    sinks = net.childs_by_type(mm.Sink)
+    assert len(sinks) == 4
+    assert star.hub_children == []
+    assert all(c.node_id != star.hub for c in sinks)
+
+
+def test_gas_star_hub_loads_opt_in():
+    # GIVEN
+    net = mm.Network()
+    g = mx.gas_structure(net, diameter_m=0.15, length_m=400)
+
+    # WHEN
+    star = g.star([2, 2], sink_mass_flow=0.02, hub_loads=True)
+
+    # THEN
+    sinks = net.childs_by_type(mm.Sink)
+    assert len(sinks) == 5
+    assert len(star.hub_children) == 1
+
+
+def test_dhs_star_forwards_hub_loads():
+    # GIVEN
+    net = mm.Network()
+    dhs = mx.dhs_structure(net, diameter_m=0.15, length_m=100)
+
+    # WHEN
+    dhs.star([2, 2], heat_load_q_mw=0.01)
+
+    # THEN
+    # 4 arm nodes per side, hubs excluded by default.
+    assert len(net.childs_by_type(mm.HeatLoad)) == 8
+
+
+def test_shape_and_ext_grid_methods_are_documented():
+    # GIVEN / WHEN
+    documented = [
+        mx.structures._Structure.line,
+        mx.structures._Structure.ring,
+        mx.structures._Structure.star,
+        mx.structures.GasStructure.attach_ext_grid,
+        mx.structures.WaterStructure.attach_ext_grid,
+        mx.structures.ElStructure.attach_ext_grid,
+    ]
+
+    # THEN
+    assert all(m.__doc__ for m in documented)

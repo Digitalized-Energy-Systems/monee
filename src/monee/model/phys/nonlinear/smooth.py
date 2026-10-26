@@ -17,12 +17,31 @@ import math
 import monee.model.phys.core.hydraulics as hyd
 
 from .gf import R_specific as _R_SPECIFIC_DEFAULT
-from .gf import abs_psq_diff_pu, calc_C_squared
+from .gf import abs_psq_diff_pu, calc_c_squared
 
 
 def smooth_abs(signed, eps, sqrt_impl=math.sqrt):
     r"""Smooth absolute value :math:`\sqrt{m^2 + \varepsilon^2}`. :math:`\varepsilon` is a small mass-flow scale [kg/s]."""
     return sqrt_impl(signed * signed + eps * eps)
+
+
+SMOOTHING_EPS_FLOW_FRACTION = 1e-4
+
+
+def scaled_smoothing_eps(eps, flow_scale, fraction=SMOOTHING_EPS_FLOW_FRACTION):
+    r"""Cap the smoothing width at *fraction* of a branch's flow capacity [kg/s].
+
+    :func:`smooth_abs` puts a floor of :math:`\varepsilon` under :math:`|m|`, which leaves the
+    drop term a spurious :math:`friction \cdot \varepsilon \cdot m` slope around zero flow. As soon
+    as :math:`\varepsilon` reaches a percent or so of what a branch actually carries that floor
+    is physics rather than smoothing, and IPOPT stalls on the resulting nearly
+    rank-deficient pressure rows (``Error_In_Step_Computation``). Tying the width
+    to each branch's own capacity keeps it negligible on narrow low-flow pipes,
+    where a fixed kg/s value is not.
+    """
+    if not flow_scale or flow_scale <= 0:
+        return eps
+    return min(eps, fraction * flow_scale)
 
 
 def weymouth_pressure(
@@ -58,7 +77,7 @@ def weymouth_pressure(
     of 0 reproduces the historical absolute form).
     """
     coeff = (
-        calc_C_squared(diameter_m, length_m, t_k, compressibility, r_specific)
+        calc_c_squared(diameter_m, length_m, t_k, compressibility, r_specific)
         * pressure_ref_pa**2
     )
     abs_diff = abs_psq_diff_pu(

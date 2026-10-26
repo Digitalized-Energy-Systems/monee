@@ -32,7 +32,11 @@ step *k* never bleed into step *k+1*.
 
 **Inject:** ``TimeseriesData`` writes per-step scalar values onto model
 attributes before the solver runs. This is the same as setting the attribute by
-hand.
+hand. The target should be a settable input (a plain float or ``Const``
+attribute): a series on a solver ``Var`` only pins its bounds and leaves the
+simulation non-square, so :func:`~monee.run_timeseries` warns about such
+series at run start, naming the attribute and the component's settable
+inputs.
 
 **Solve:** the copied and patched network goes to the solver exactly like a
 single-step call. Any solver or optimization problem works here.
@@ -157,7 +161,9 @@ opposite ends:
 * ``td1 + td2`` returns a new object: for duplicate pairs the
   left operand (``td1``) wins.
 
-Merging objects of different lengths raises ``ValueError``.
+Merging objects of unequal lengths truncates every series (on both sides)
+to the shorter length and warns once; use ``head(n)`` or
+``slice(start, stop)`` beforehand to choose the window explicitly.
 
 .. testcode::
 
@@ -199,7 +205,12 @@ Querying results
       .. code-block:: python
 
          # Series: one value per successful step
-         p_load = result.get_result_for_id(load, "p_mw")
+         p_load = result.get_result_for_id(load, "p_mw", mm.PowerLoad)
+
+      Component ids are handed out per category, so the same number addresses
+      one node, one child and one branch.  Naming the model class selects the
+      one meant; a lookup that matches several result tables raises a
+      ``ValueError`` naming them.
 
    .. tab-item:: Datetime index
 

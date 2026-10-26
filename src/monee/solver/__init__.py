@@ -1,5 +1,9 @@
+from .core import SolverResult
 from .dispatch import (
+    AUTO_FALLBACK_SOLVER,
+    AUTO_SOLVER,
     GEKKO_SOLVERS,
+    AutoSolver,
     resolve_multi_period_solver,
     resolve_solver,
 )
@@ -19,7 +23,14 @@ from .pyo import PyomoSolver
 
 # The CasADi backend is optional (casadi may not be installed); expose its
 # classes lazily so importing monee.solver never hard-requires casadi.
-__all_lazy__ = ("CasADiSolver", "CasADiTimeseries", "CasADiMultiPeriodSolver")
+__all_lazy__ = (
+    "CasADiSolver",
+    "CasADiTimeseries",
+    "CasADiMultiPeriodSolver",
+    "CasADiSolveError",
+    "CasADiFailureReport",
+    "is_numerics_failure",
+)
 
 
 def __getattr__(name):

@@ -21,12 +21,12 @@ class ExactBranchFlowBranchFormulation(MISOCPElectricityBranchFormulation):
         # The equality pins ell; no loss-based tightening incentive needed.
         return []
 
-    def _soc_constraints(self, branch, grid, from_node_model, tap):
+    def _soc_constraints(self, branch, from_node_model, p_series_pu, q_series_pu, tap):
         return [
             soc_eq(
                 from_node_model.vars["vm_pu_squared"],
-                branch.vars["p_from_mw"] / grid.sn_mva,
-                branch.vars["q_from_mvar"] / grid.sn_mva,
+                p_series_pu,
+                q_series_pu,
                 branch.current_pu_squared,
                 tap=tap,
             ),

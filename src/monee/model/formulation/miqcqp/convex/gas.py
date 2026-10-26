@@ -7,14 +7,34 @@ term, plus the ``direction``/``on_off`` binaries.
 
 import monee.model.phys.core.hydraulics as hydraulicsmodel
 import monee.model.phys.nonlinear.gf as ogfmodel
-from monee.model.core import Const
+from monee.model.core import Const, value
 
 from ...common import ensure_velocity_report
 from ...core import BranchFormulation
 
 
 class RelaxedWeymouthBranchFormulation(BranchFormulation):
+    # The epigraph rows bind only through this objective term and through the
+    # binaries, so this formulation needs a solver that enforces integrality. On
+    # a continuous solver the term sits under the convergence tolerance (IPOPT
+    # defaults to 1e-6), the relaxation stays slack and the pressure drop comes
+    # out several times too large - see :meth:`relaxation_gap`.
     EPIGRAPH_TIGHTENING_EPS = 1e-5
+    RELAXATION_GAP_TOL = 0.1
+
+    def relaxation_gap(self, model):
+        r"""Relative error of the signed squared flow the Weymouth row consumes:
+        :math:`(m_{sq,pos} - m_{sq,neg})` against the exact :math:`m |m|` of the
+        solved net flow. 0 when the epigraph relaxation came out tight; large
+        when the solver kept slack (and the pressure drop is wrong by that much).
+        """
+        pos = value(model.mass_flow_pos_kgs)
+        neg = value(model.mass_flow_neg_kgs)
+        signed_sq = value(model.mass_flow_pos_kgs_squared) - value(
+            model.mass_flow_neg_kgs_squared
+        )
+        net = pos - neg
+        return abs(signed_sq - net * abs(net)) / max(abs(signed_sq), 1e-6)
 
     def ensure_var(self, model, simulation=False, grid=None):
         f_const = hydraulicsmodel.friction_at_high_re(

@@ -1,3 +1,5 @@
+import pytest
+
 import monee.model as mm
 from monee.model.core import GenericModel, Node, component_list, model
 
@@ -59,3 +61,70 @@ def test_node_base():
 
     assert node.from_branch_ids == ["from_branch"]
     assert node.to_branch_ids == ["to_branch"]
+
+
+def test_unknown_kwargs_warn_and_are_kept_in_ext_data():
+    with pytest.warns(UserWarning, match=r"PowerLoad ignored unknown keyword"):
+        load = mm.PowerLoad(p_mw=1.0, q_mvar=0.0, cost=10.0, typo_kwarg=1)
+    assert load._ext_data == {"cost": 10.0, "typo_kwarg": 1}
+    assert "cost" not in load.vars
+
+
+def test_known_kwargs_do_not_warn():
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        mm.PowerLoad(p_mw=1.0, q_mvar=0.0)
+        mm.Junction()
+
+
+def test_consume_hydr_grid_documents_its_input_only_columns():
+    child = mm.ConsumeHydrGrid()
+
+    assert isinstance(child.mass_flow_kgs, mm.Var)
+    # pressure_pu / t_k are plain inputs echoed back into the result tables,
+    # never solved values.
+    assert child.pressure_pu == 1
+    assert child.t_k == 293
+
+    doc = mm.ConsumeHydrGrid.__doc__
+    assert "inputs echoed back" in doc
+    assert "junction table" in doc
+    assert "express_structures" in doc
+
+
+def test_scale_duty_matches_a_heat_exchanger_built_for_the_part_load():
+    hx = mm.HeatExchanger(q_mw=-0.4)
+    part = mm.HeatExchanger(q_mw=-0.1)
+
+    hx.scale_duty(0.25)
+
+    assert hx.q_mw_set == pytest.approx(part.q_mw_set)
+    assert hx.mass_flow_design_kgs == pytest.approx(part.mass_flow_design_kgs)
+    assert hx._q_design_mw == pytest.approx(part._q_design_mw)
+    assert hx._mass_flow_seed_kgs == pytest.approx(part._mass_flow_seed_kgs)
+
+
+def test_set_pushes_a_compound_attribute_onto_its_control_node():
+    import monee.express as mx
+
+    net = mx.create_multi_energy_network()
+    bus = mx.create_bus(net)
+    cold, hot = mx.create_water_junction(net), mx.create_water_junction(net)
+    compound = net.compound_by_id(
+        mx.create_p2h(
+            net,
+            bus,
+            cold_node_id=cold,
+            hot_node_id=hot,
+            heat_energy_mw=1.0,
+            diameter_m=0.2,
+            efficiency=3.0,
+        )
+    )
+    node = next(c for c in compound.subcomponents if isinstance(c, Node))
+
+    assert compound.set(regulation=0.3) is compound
+    assert compound.model.regulation == 0.3
+    assert node.model.regulation == 0.3

@@ -1,5 +1,7 @@
 """Tests for multi-period optimization (run_multi_period / run_mpc)."""
 
+import warnings
+
 import pandas
 import pytest
 
@@ -55,6 +57,114 @@ def _storage_net():
 def _max_abs_period_delta(series):
     """Maximum absolute period-to-period change of a per-period series."""
     return max(abs(series.iloc[t + 1] - series.iloc[t]) for t in range(len(series) - 1))
+
+
+class _StubMultiPeriodSolver:
+    """Accepted by resolve_multi_period_solver; records the call, never solves."""
+
+    _backend_name = "stub"
+    _solver_name = "stub"
+
+    def __init__(self):
+        self.calls = []
+
+    def solve_multi_period(self, network, **kwargs):
+        self.calls.append(kwargs)
+        return "stub-result"
+
+
+def test_run_multi_period_reports_unbound_series_up_front():
+    # GIVEN
+    net, _b0, _b1, _load_id = _simple_power_net()
+    td = TimeseriesData()
+    td.add_child_series_by_name("typo_load", "p_mw", [1.0, 0.5])
+
+    # WHEN / THEN
+    with pytest.warns(UserWarning, match="typo_load"):
+        run_multi_period(net, td, steps=2, solver=_StubMultiPeriodSolver())
+
+
+def test_run_mpc_reports_unbound_series_up_front():
+    # GIVEN
+    net, _b0, _b1, _load_id = _simple_power_net()
+    td = TimeseriesData()
+    td.add_child_series_by_name("typo_load", "p_mw", [1.0, 0.5])
+
+    # WHEN / THEN
+    with pytest.warns(UserWarning, match="typo_load"):
+        with pytest.raises(AttributeError):
+            # The stub result has no .success; the warning fires before that.
+            run_mpc(
+                net,
+                td,
+                total_steps=2,
+                horizon=2,
+                solver=_StubMultiPeriodSolver(),
+            )
+
+
+@mm.model
+class _FreeVarLoad(mm.ChildModel):
+    def __init__(self, p_mw=1.0, **kwargs):
+        super().__init__(**kwargs)
+        self.p_mw = mm.Var(p_mw, min=0.5, max=3.0, name="p_mw")
+        self.q_mvar = 0.0
+
+    def equations(self, grid, node_model, **kwargs):
+        return []
+
+
+def _free_var_net():
+    net, _b0, b1, _load_id = _simple_power_net()
+    net.child_to(_FreeVarLoad(), node_id=b1, name="process")
+    return net
+
+
+def test_run_multi_period_warns_on_series_targeting_a_var():
+    # GIVEN
+    net = _free_var_net()
+    td = TimeseriesData()
+    td.add_child_series_by_name("process", "p_mw", [0.75, 0.8])
+
+    # WHEN / THEN
+    with pytest.warns(
+        UserWarning,
+        match=r"multi-period run.*'p_mw' is a solved variable.*q_mvar",
+    ):
+        run_multi_period(net, td, steps=2, solver=_StubMultiPeriodSolver())
+
+
+def test_run_mpc_warns_on_series_targeting_a_var():
+    # GIVEN
+    net = _free_var_net()
+    td = TimeseriesData()
+    td.add_child_series_by_name("process", "p_mw", [0.75, 0.8])
+
+    # WHEN / THEN
+    with pytest.warns(UserWarning, match=r"'p_mw' is a solved variable"):
+        with pytest.raises(AttributeError):
+            run_mpc(
+                net,
+                td,
+                total_steps=2,
+                horizon=2,
+                solver=_StubMultiPeriodSolver(),
+            )
+
+
+def test_run_multi_period_silent_without_var_series():
+    # GIVEN
+    net = _free_var_net()
+    td = TimeseriesData()
+    td.add_child_series_by_name("process", "q_mvar", [0.0, 0.0])
+
+    # WHEN
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        run_multi_period(net, td, steps=2, solver=_StubMultiPeriodSolver())
+
+    # THEN
+    assert not [w for w in caught if "solved variable" in str(w.message)]
 
 
 def test_single_period_matches_single_step():
@@ -1157,3 +1267,46 @@ def test_linepack_multi_period_couples_periods():
     # change across periods, so net_pack_kgs is non-zero for at least one period.
     npk = result.get_result_for(mm.GasPipe, "net_pack_kgs")[pipe_id]
     assert (npk.abs() > 1e-6).any(), "expected inter-period linepack coupling"
+
+
+def _linepack_net():
+    import monee.express as mx
+    from monee.model.extension.linepack import GasLinepack
+
+    net = mm.Network(gas_model=mm.create_gas_grid("g"))
+    g0, g1, g2 = (mx.create_gas_junction(net) for _ in range(3))
+    mx.create_gas_ext_grid(net, g0, free_pressure_bounds=(0.9, 1.1))
+    p01 = mx.create_gas_pipe(net, g0, g1, 0.3, 5000)
+    mx.create_gas_pipe(net, g1, g2, 0.3, 5000)
+    mx.create_gas_sink(net, g2, mass_flow_kgs=0.5)
+    net.add_extension(GasLinepack())
+    return net, p01
+
+
+def test_initial_state_can_address_the_linepack_an_extension_declares():
+    """Regression: the state keys were validated on the base network, before
+    GasLinepack.prepare() declares linepack_kg, so the documented key raised."""
+    from monee.simulation import run_multi_period
+
+    net, p01 = _linepack_net()
+    init = 2500.0
+
+    res = run_multi_period(
+        net, steps=2, dt_h=1.0, initial_state={(p01, "linepack_kg"): init}
+    )
+
+    assert res.success
+    linepack = res.get_result_for(mm.GasPipe, "linepack_kg")[p01].tolist()
+    net_pack = res.get_result_for(mm.GasPipe, "net_pack_kgs")[p01].tolist()
+    assert net_pack[0] * 3600 == pytest.approx(linepack[0] - init, rel=1e-3)
+
+
+def test_a_misspelled_state_key_still_raises():
+    from monee.simulation import run_multi_period
+
+    net, p01 = _linepack_net()
+
+    with pytest.raises(ValueError, match="linepak_kg"):
+        run_multi_period(
+            net, steps=2, dt_h=1.0, initial_state={(p01, "linepak_kg"): 1.0}
+        )

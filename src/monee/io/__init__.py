@@ -17,12 +17,13 @@ from .native import (
     write_omef_network,
 )
 
+_SIMBENCH_MODULE = "monee.io.from_simbench"
 _LAZY_EXPORTS = {
     "from_pandapower_net": "monee.io.from_pandapower",
-    "obtain_simbench_net": "monee.io.from_simbench",
-    "obtain_simbench_net_with_td": "monee.io.from_simbench",
-    "obtain_simbench_profile": "monee.io.from_simbench",
-    "obtain_simbench_profile_by_pp_net": "monee.io.from_simbench",
+    "obtain_simbench_net": _SIMBENCH_MODULE,
+    "obtain_simbench_net_with_td": _SIMBENCH_MODULE,
+    "obtain_simbench_profile": _SIMBENCH_MODULE,
+    "obtain_simbench_profile_by_pp_net": _SIMBENCH_MODULE,
 }
 
 __all__ = [

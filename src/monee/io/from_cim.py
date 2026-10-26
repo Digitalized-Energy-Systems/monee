@@ -175,7 +175,7 @@ def _add_transformer(obj, ends, net, tn_to_node, base_kv_of, report):
         report.skip("PowerTransformer with unresolved endpoint")
         return
 
-    # Lump both winding impedances onto the FROM side: Z = Σ z_e·(U_from/U_e)².
+    # Lump both winding impedances onto the FROM side: Z = sum z_e*(U_from/U_e)^2.
     u_from = _num(_get(ends[0], "ratedU"), base_kv_of(from_node)) or 1.0
     r_ohm = x_ohm = 0.0
     for end in ends:

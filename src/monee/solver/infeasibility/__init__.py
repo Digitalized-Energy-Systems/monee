@@ -17,6 +17,7 @@ from .apm import (
 )
 from .pyo import (
     BoundViolation,
+    ComponentIndex,
     ConstraintResidual,
     InfeasibilityReport,
     collect_constraint_residuals,
@@ -28,6 +29,7 @@ from .pyo import (
 
 __all__ = [
     "BoundViolation",
+    "ComponentIndex",
     "ConstraintResidual",
     "GekkoInfeasibilityReport",
     "GekkoSolveError",

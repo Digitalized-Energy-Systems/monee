@@ -1,6 +1,22 @@
-from monee.model.branch import GasPipe, GenericPowerBranch
+from monee.model.branch import GenericPowerBranch
 from monee.model.child import PowerLoad
+from monee.model.core import BranchModel
 from monee.model.node import Bus, Junction
+
+
+class _CouplerBranchStub(BranchModel):
+    """Stand-in for a multi-grid coupler branch, which is the only kind that
+    declares the directional mass flows the junction balance reads."""
+
+    def __init__(self, from_mass_flow_kgs=None, to_mass_flow_kgs=None) -> None:
+        super().__init__()
+        if from_mass_flow_kgs is not None:
+            self.from_mass_flow_kgs = from_mass_flow_kgs
+        if to_mass_flow_kgs is not None:
+            self.to_mass_flow_kgs = to_mass_flow_kgs
+
+    def equations(self, grid, from_node_model, to_node_model, **kwargs):
+        return []
 
 
 def test_bus_eq():
@@ -73,12 +89,8 @@ def test_control_node_construction_keeps_generic_model_state():
 def test_junction_mass_flow():
     # GIVEN
     junction = Junction()
-    to_model = GasPipe(diameter_m=10, length_m=10, temperature_ext_k=234, roughness_m=1)
-    to_model.to_mass_flow_kgs = 10
-    from_model = GasPipe(
-        diameter_m=10, length_m=10, temperature_ext_k=234, roughness_m=1
-    )
-    from_model.from_mass_flow_kgs = 3
+    to_model = _CouplerBranchStub(to_mass_flow_kgs=10)
+    from_model = _CouplerBranchStub(from_mass_flow_kgs=3)
 
     # WHEN
     mass_flow_kgs = junction.calc_signed_mass_flow(

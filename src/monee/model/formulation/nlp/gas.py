@@ -82,7 +82,7 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         self.smoothing_eps = smoothing_eps
 
     def ensure_var(self, model, simulation=False, grid=None):
-        # mass_flow_kgs is already the signed flow (model defines it as pos − neg);
+        # mass_flow_kgs is already the signed flow (model defines it as pos - neg);
         # promote it to the decision var instead of adding a redundant one.
         model.mass_flow_kgs = Var(0.0, name="mass_flow_kgs")
         # Seed |m| only for the square simulation solve (see nlp.heat).
@@ -127,7 +127,12 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         )
 
         eqs = [
-            mag == smoothmodel.smooth_abs(signed, self.smoothing_eps, sqrt_impl),
+            mag
+            == smoothmodel.smooth_abs(
+                signed,
+                smoothmodel.scaled_smoothing_eps(self.smoothing_eps, f_max_local),
+                sqrt_impl,
+            ),
             branch.mass_flow_pos_kgs == 0.5 * (mag + signed),  # NOSONAR
             branch.mass_flow_neg_kgs == 0.5 * (mag - signed),  # NOSONAR
         ]

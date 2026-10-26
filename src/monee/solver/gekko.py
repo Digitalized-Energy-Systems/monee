@@ -1,5 +1,6 @@
 import contextlib
 import logging
+import math
 
 import networkx as nx
 from gekko import GEKKO
@@ -17,6 +18,7 @@ from monee.problem.core import OptimizationProblem
 
 from .core import (
     OperatorEquationAssembly,
+    ResultWarning,
     SolverInterface,
     SolverResult,
     StepState,
@@ -28,6 +30,8 @@ from .core import (
     persist_solution,
     prepare_solve_network,
     remove_cps,
+    validate_result,
+    warn_on_residuals,
     withdraw_vars,
 )
 from .infeasibility.apm import (
@@ -40,6 +44,134 @@ from .infeasibility.apm import (
 # can report which solver it runs on SolverResult.solver_used.
 _GEKKO_CODE_TO_NAME: dict[int, str] = {1: "apopt", 2: "bpopt", 3: "ipopt"}
 
+_EVAL_NS = {
+    name: getattr(math, name)
+    for name in (
+        "sin",
+        "cos",
+        "tan",
+        "asin",
+        "acos",
+        "atan",
+        "sinh",
+        "cosh",
+        "tanh",
+        "exp",
+        "log",
+        "log10",
+        "sqrt",
+        "erf",
+    )
+}
+_EVAL_NS["abs"] = abs
+
+
+def _gekko_status(m) -> tuple[str, str]:
+    """``(solver_status, termination_condition)`` from GEKKO's application and
+    solver status flags."""
+    app = int(m.options.APPSTATUS)
+    solve = int(m.options.SOLVESTATUS)
+    if app == 1 and solve == 1:
+        return "ok", "optimal"
+    logging.warning(
+        "GEKKO reported APPSTATUS=%d, SOLVESTATUS=%d: the returned point is not "
+        "a clean successful solution.",
+        app,
+        solve,
+    )
+    return "warning", f"other (APPSTATUS={app}, SOLVESTATUS={solve})"
+
+
+def _gekko_max_residual(m) -> float | None:
+    """Largest equation violation at GEKKO's returned point, or ``None`` when it
+    cannot be evaluated.
+
+    APOPT can report a successful solution for a point that misses an equality
+    by a physically relevant amount, and GEKKO only writes its own residual
+    report (``infeasibilities.txt``) on failure, so re-evaluate the equations it
+    was given against the values it returned.
+    """
+    ns = _gekko_eval_namespace(m)
+    worst = 0.0
+    for eq in m._equations:
+        violation = _gekko_equation_violation(eq, ns)
+        if violation is None:
+            return None
+        worst = max(worst, violation)
+    return worst
+
+
+def _gekko_scalar(obj):
+    # GEKKO wraps values in GK_Value, whose payload is either a scalar or a
+    # one-entry trajectory; unwrap until a number comes out.
+    v = obj.value
+    for _ in range(4):
+        if isinstance(v, (int, float)):
+            return float(v)
+        nxt = getattr(v, "value", None)
+        if nxt is None:
+            with contextlib.suppress(TypeError, IndexError, KeyError):
+                nxt = v[0]
+        if nxt is None or nxt is v:
+            break
+        v = nxt
+    return None
+
+
+def _gekko_eval_namespace(m):
+    ns = dict(_EVAL_NS)
+    for group in (m._variables, m._parameters, m._intermediates, m._constants):
+        for obj in group:
+            val = _gekko_scalar(obj)
+            if val is not None:
+                ns[obj.name] = val
+    return ns
+
+
+def _gekko_equation_violation(eq, ns):
+    # GEKKO's own rendering of the equations monee handed it: names, numbers
+    # and math calls only, evaluated without builtins.
+    expr = str(eq.value).replace("^", "**")
+    op = next((o for o in (">=", "<=", "=") if o in expr), None)
+    if op is None:
+        return None
+    lhs, _, rhs = expr.partition(op)
+    try:
+        diff = eval(lhs, {"__builtins__": {}}, ns) - eval(  # noqa: S307
+            rhs, {"__builtins__": {}}, ns
+        )
+    except Exception:
+        return None
+    if op == "=":
+        return abs(diff)
+    return diff if op == "<=" else -diff
+
+
+def _withdrawn_var(value, var_meta):
+    orig = var_meta.get(id_(value)) if var_meta is not None else None
+    val = value.VALUE.value[0]
+    if orig is None:
+        # No registry (legacy callers): GEKKO's stored NAME is a
+        # mangled artefact, best-effort only.
+        return Var(
+            value=val,
+            min=value.LOWER,
+            max=value.UPPER,
+            integer=value.NAME.startswith("int_"),
+            name=value.NAME.split("_")[-1],
+        )
+    if orig.integer:
+        val = int(round(val))
+    return Var(
+        value=val,
+        min=value.LOWER,
+        max=value.UPPER,
+        integer=orig.integer,
+        name=orig.name,
+        scale=orig.scale,
+    )
+
+
 # The builtin, aliased because inject_gekko_vars_attr's legacy signature shadows
 # ``id``. GKVariable overrides ``__eq__`` (builds equations) so identity keys are
 # the only safe dict keys for the var-metadata registry.
@@ -47,6 +179,17 @@ id_ = id
 
 # APOPT (SOLVER=1) MINLP options. IPOPT rejects the minlp_* keys, so they are
 # applied only for the APOPT path (see _solver_options).
+#
+# objective_convergence_tolerance is an absolute tolerance and must stay below
+# the objective the MIQCQP formulations carry on a plain flow solve: their only
+# objective is the epigraph tightening term, EPIGRAPH_TIGHTENING_EPS (1e-5)
+# times the squared branch flows, i.e. O(1e-7 .. 1e-5) for district heating
+# flows. With a looser value (1e-4 up to 2.1.0) APOPT declares a branch-and-
+# bound node NLP converged before the flows are feasible again after the
+# branching bound change, discards the node as failed and runs the tree empty
+# ("no more possible trial points and no integer solution"), see
+# tests/solver/test_gekko_heat.py::test_dead_end. APOPT's own default is 1e-6;
+# it is pinned explicitly because of that coupling.
 DEFAULT_SOLVER_OPTIONS = [
     "minlp_maximum_iterations 1000",
     "minlp_max_iter_with_int_sol 500",
@@ -58,7 +201,7 @@ DEFAULT_SOLVER_OPTIONS = [
     "minlp_integer_max 2.0e5",
     "minlp_integer_leaves 150",
     "minlp_print_level 1",
-    "objective_convergence_tolerance 1.0e-4",
+    "objective_convergence_tolerance 1.0e-6",
     "constraint_convergence_tolerance 1.0e-4",
 ]
 
@@ -90,6 +233,17 @@ class GekkoCubicSplineImpl:
 
 
 class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
+    """GEKKO/APMonitor back-end.
+
+    Failure contract: unlike the CasADi, Pyomo and gurobipy back-ends, which
+    return a ``success=False`` :class:`~monee.solver.core.SolverResult`, a failed
+    GEKKO solve raises :class:`~monee.solver.GekkoSolveError` carrying the parsed
+    APMonitor report. The failure arrives as an exception out of the APMonitor
+    subprocess with no iterate to report on a result, so there is nothing to hand
+    back. ``solver='auto'`` treats that exception as a numerics failure and
+    retries on SCIP like any other. See the concepts/solvers docs page.
+    """
+
     def __init__(self, solver=1):
         self.solver: int = solver
         self._backend_name = "gekko"
@@ -129,30 +283,7 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
     def withdraw_gekko_vars_attr(target: GenericModel, var_meta=None):
         for key, value in target.__dict__.items():
             if type(value) is GKVariable:
-                orig = var_meta.get(id_(value)) if var_meta is not None else None
-                val = value.VALUE.value[0]
-                if orig is not None:
-                    if orig.integer:
-                        val = int(round(val))
-                    new_var = Var(
-                        value=val,
-                        min=value.LOWER,
-                        max=value.UPPER,
-                        integer=orig.integer,
-                        name=orig.name,
-                        scale=orig.scale,
-                    )
-                else:
-                    # No registry (legacy callers): GEKKO's stored NAME is a
-                    # mangled artefact, best-effort only.
-                    new_var = Var(
-                        value=val,
-                        min=value.LOWER,
-                        max=value.UPPER,
-                        integer=value.NAME.startswith("int_"),
-                        name=value.NAME.split("_")[-1],
-                    )
-                setattr(target, key, new_var)
+                setattr(target, key, _withdrawn_var(value, var_meta))
             if type(value) is GK_Operators:
                 setattr(target, key, Const(value.VALUE.value))
             if type(value) is GK_Intermediate:
@@ -188,6 +319,7 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
         step_state: StepState = None,
         simulation=False,
         formulation=None,
+        strict: bool = False,
     ):
         self._simulation = simulation
         m = GEKKO(remote=False)
@@ -201,6 +333,7 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
                 step_state=step_state,
                 simulation=simulation,
                 formulation=formulation,
+                strict=strict,
             )
         finally:
             # APMonitor leaves its run directory behind on every solve; the
@@ -220,6 +353,7 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
         step_state,
         simulation,
         formulation,
+        strict=False,
     ):
         m.options.SOLVER = self.solver
         m.options.WEB = 0
@@ -369,17 +503,40 @@ class GEKKOSolver(OperatorEquationAssembly, SolverInterface):
         violations = finalize_solution(
             nodes, branches, compounds, network, input_network
         )
+        solver_status, termination_condition = _gekko_status(m)
         solver_result = SolverResult(
             network,
             network.as_result_dataframe_dict(),
             m.options.OBJFCNVAL,
             m.options.APPSTATUS == 1,
             violations,
+            solver_status=solver_status,
+            termination_condition=termination_condition,
+            residuals=warn_on_residuals(_gekko_max_residual(m)),
             mode_used="simulation" if imode_used == 1 else "optimization",
             backend_used=self.backend_name,
             solver_used=self.solver_name,
         )
-        return solver_result
+        extra = None
+        if use_sim and imode_used != 1:
+            extra = [
+                ResultWarning(
+                    "dof",
+                    "simulation requested but the square IMODE=1 solve failed "
+                    "and fell back to IMODE=3; the model is likely not square "
+                    "(phantom degrees of freedom or non-simulation "
+                    "formulations), so the solved values are one feasible "
+                    "point, not a unique setpoint",
+                )
+            ]
+        return validate_result(
+            network,
+            solver_result,
+            ignored_nodes=ignored_nodes,
+            simulation=simulation,
+            strict=strict,
+            extra_warnings=extra,
+        )
 
     def _pwl_impl(self, m):
         # spline outperforms GEKKO's native pwl

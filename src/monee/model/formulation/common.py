@@ -7,9 +7,11 @@ PWL) lives entirely on the branch side, so the node formulations are defined
 once here and reused by ``nlp``, ``milp`` and ``miqcqp``.
 """
 
+from monee.model.branch import WaterPipe
 from monee.model.core import Const, Intermediate, IntermediateEq, PostProcess, Var
 from monee.model.phys.core.hydraulics import calc_pipe_area
 from monee.model.phys.nonlinear.gf import reference_gas_density
+from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
 
 from .core import NodeFormulation
 
@@ -35,6 +37,46 @@ def ensure_velocity_report(model, grid):
         model.velocity_mps = velocity_post_process(model, reference_gas_density(grid))
     elif hasattr(grid, "fluid_density_kg_per_m3"):
         model.velocity_mps = velocity_post_process(model, grid.fluid_density_kg_per_m3)
+        ensure_heat_loss_report(model, grid)
+
+
+def ensure_heat_loss_report(model, grid):
+    r"""Attach the ``heat_loss_mw`` report of a water pipe: the heat its water
+    loses to the ground, :math:`|\dot m| c_p (T_{in} - T_{out})` in MW. NaN
+    under formulations without inlet/outlet temperatures (McCormick MILP)."""
+    if isinstance(model, WaterPipe):
+        model.heat_loss_mw = PostProcess(
+            lambda v, k=SPECIFIC_HEAT_CAP_WATER * grid.t_ref_k / 1e6: (
+                v.mass_flow_mag_kgs * (v.t_in_pu - v.t_out_pu) * k
+            )
+        )
+
+
+_PSQ_SIMULATION_BOUNDS = (0, 3)
+# Bounds the junction models declare themselves (node.Junction, multi.py control
+# nodes) plus the ones a previous attach left behind: anything else on the
+# incoming Var is a user-set limit and wins over the grid's.
+_PSQ_DEFAULT_MIN = (0, 0.5, None)
+_PSQ_DEFAULT_MAX = (2, 3, None)
+
+
+def _psq_bounds(model, simulation, grid):
+    """Pressure-squared Var bounds: the grid's operational limits in
+    optimization mode, the wide simulation range otherwise (a square solve must
+    never be cut off by an operational limit)."""
+    lo, hi = _PSQ_SIMULATION_BOUNDS
+    if simulation or grid is None:
+        return lo, hi
+    existing = getattr(model, "pressure_squared_pu", None)
+    if isinstance(existing, Var) and existing.min not in _PSQ_DEFAULT_MIN:
+        lo = existing.min
+    else:
+        lo = getattr(grid, "pressure_squared_pu_min", lo)
+    if isinstance(existing, Var) and existing.max not in _PSQ_DEFAULT_MAX:
+        hi = existing.max
+    else:
+        hi = getattr(grid, "pressure_squared_pu_max", hi)
+    return lo, hi
 
 
 class GasNodeFormulation(NodeFormulation):
@@ -53,7 +95,8 @@ class GasNodeFormulation(NodeFormulation):
     def ensure_var(self, model, simulation=False, grid=None):
         model.pressure_pa = PostProcess(lambda v: float("nan"))
         model.pressure_pu = Intermediate(1)
-        model.pressure_squared_pu = Var(1, min=0, max=3, name="pressure_sq_pu")
+        lo, hi = _psq_bounds(model, simulation, grid)
+        model.pressure_squared_pu = Var(1, min=lo, max=hi, name="pressure_sq_pu")
 
         if simulation:
             t = getattr(model, "t_pu", None)

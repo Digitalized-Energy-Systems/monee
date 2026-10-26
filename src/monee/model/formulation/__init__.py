@@ -16,7 +16,7 @@ Sector constants and the sector-complete bundles
 :data:`NONCONVEX_MIQCQP_FORMULATION`) live in :mod:`.bundles`.
 
 The pre-restructure names (``AC_NETWORK_FORMULATION``,
-``NL_WEYMOUTH_NETWORK_FORMULATION``, ``make_mccormick_dhs_formulation``, …)
+``NL_WEYMOUTH_NETWORK_FORMULATION``, ``make_mccormick_dhs_formulation``, ...)
 remain importable from here but emit a :class:`DeprecationWarning`.
 """
 
@@ -49,7 +49,11 @@ from .bundles import (
     make_smooth_nlp_formulation,
 )
 from .core import Formulation, NetworkFormulation
-from .milp.heat import mccormick_dhs_gap_bound_k, mccormick_dhs_gap_bound_mw
+from .milp.heat import (
+    mccormick_dhs_gap_bound_k,
+    mccormick_dhs_gap_bound_mw,
+    orient_unidirectional_water_pipes,
+)
 from .registry import (
     FORMULATIONS,
     attach_formulations,
@@ -85,6 +89,7 @@ __all__ = [
     "make_heat_nlp_formulation",
     "make_heat_convex_milp_formulation",
     "make_heat_nonconvex_pwl_formulation",
+    "orient_unidirectional_water_pipes",
     # bundles
     "SMOOTH_NLP_FORMULATION",
     "CONVEX_MIQCQP_FORMULATION",

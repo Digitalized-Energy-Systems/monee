@@ -89,6 +89,7 @@ from .multi import (
     SubHG,
 )
 from .grid import (
+    STANDARD_ATMOSPHERE_PA,
     create_gas_grid,
     create_water_grid,
     create_power_grid,
@@ -113,4 +114,5 @@ from .extension import (
 from .formulation import (
     HEAT_CONVEX_MILP_FORMULATION,
     make_heat_convex_milp_formulation,
+    orient_unidirectional_water_pipes,
 )

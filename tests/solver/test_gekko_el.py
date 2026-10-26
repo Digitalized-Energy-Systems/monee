@@ -1,5 +1,7 @@
 import math
 
+import pytest
+
 import monee.model as mm
 from monee.model import Network, Var
 from monee.model.branch import PowerLine, Trafo
@@ -349,3 +351,53 @@ def test_not_connected_due_to_deactivation():
 
     # the isolated bus has no solved voltage
     assert math.isnan(result.dataframes["Bus"]["vm_pu"][3])
+
+
+def test_result_reports_termination_metadata_and_residuals():
+    # GIVEN
+    pn = create_two_line_example_with_vm(1)
+
+    # WHEN
+    result = GEKKOSolver().solve(pn)
+
+    # THEN
+    assert result.solver_status == "ok"
+    assert result.termination_condition == "optimal"
+    assert result.residuals is not None
+    assert result.residuals < 1e-6
+
+
+class _StubValue:
+    def __init__(self, name, value):
+        self.name = name
+        self.value = value
+
+
+class _StubEquation:
+    def __init__(self, value):
+        self.value = value
+
+
+class _StubGekkoModel:
+    def __init__(self, equations, values):
+        self._variables = [_StubValue(n, [v]) for n, v in values.items()]
+        self._parameters = []
+        self._intermediates = []
+        self._constants = []
+        self._equations = [_StubEquation(e) for e in equations]
+
+
+def test_max_residual_sees_a_violated_equality_a_bound_check_would_miss():
+    # GIVEN a point that satisfies every bound but misses an equality by 0.05
+    # (the APOPT failure mode: success reported, violations empty).
+    model = _StubGekkoModel(
+        ["v1=((v2)*(1.0))", "((v1)**(2))<=4", "v2>=0"], {"v1": 0.0, "v2": 0.05}
+    )
+
+    # WHEN
+    from monee.solver.gekko import _gekko_max_residual
+
+    residual = _gekko_max_residual(model)
+
+    # THEN
+    assert residual == pytest.approx(0.05)

@@ -120,6 +120,12 @@ To solve with the optimizer choosing when to charge/discharge:
    )
    print(result)
 
+To price the exchange with the external grid, register per-period prices via
+``TimeseriesData.add_objective_data`` and minimize ``sum(-price * p_mw)`` over
+the ``ExtPowerGrid`` models. Import into the network is negative ``p_mw``
+under the load convention, so pricing ``+p_mw`` rewards import instead of
+charging for it. The worked pricing example is in :doc:`../how-to/multi_period`.
+
 Battery optimal dispatch: the solver charges during off-peak hours and discharges during the midday peak.
 
 .. only:: html
@@ -157,14 +163,19 @@ containing one solved network copy per period.
 
          # Series: one float per period
          soc  = result.get_result_for_id(bat, "e_mwh")
-         disp = result.get_result_for_id(bat, "p_mw")
+         disp = result.get_result_for_id(bat, "p_mw", mm.ElectricStorage)
+
+      Component ids are handed out per category, so the same number can
+      address a node and a child.  Naming the model class selects the one
+      meant; a lookup that matches several result tables raises a
+      ``ValueError`` naming them.
 
    .. tab-item:: All attributes
 
       .. code-block:: python
 
          # DataFrame: rows = periods, columns = all attributes
-         df = result[bat]
+         df = result[bat, mm.ElectricStorage]
          print(df["e_mwh"])   # SoC trajectory
          print(df["p_mw"])    # dispatch trajectory
 
@@ -324,8 +335,9 @@ choice (for example to force Pyomo for an integer problem).
 
          result = run_multi_period(net, td, solver=GekkoMultiPeriodSolver())
 
-      Smooth NLP problems without integer variables. Ships with its own IPOPT
-      binaries and is the automatic fallback when casadi is not installed.
+      Smooth NLP problems without integer variables. Runs IPOPT from the
+      binaries that the GEKKO package bundles, and is the automatic fallback
+      when casadi cannot be imported.
 
    .. tab-item:: Pyomo
 
@@ -344,7 +356,7 @@ choice (for example to force Pyomo for an integer problem).
 Two-pass assembly
 =================
 
-All three multi-period solvers (CasADi, GEKKO, and Pyomo) use a two-pass
+All three of monee's multi-period back-ends (for CasADi, GEKKO, and Pyomo) use a two-pass
 approach to build the joint problem efficiently:
 
 .. code-block:: text

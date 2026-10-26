@@ -11,6 +11,7 @@ the suite does. The status-mapping and selection tests need no SCIP at all.
 """
 
 import math
+import types
 
 import pytest
 from pyomo.opt import SolverStatus, TerminationCondition
@@ -72,7 +73,7 @@ def test_build_result_unbounded():
 
 
 def test_build_result_limit_with_incumbent_is_usable():
-    """A limit (time/node/gap) that still produced a feasible incumbent maps to
+    """A limit (time/node/...) that still produced a feasible incumbent maps to
     aborted+maxTimeLimit, which ``_classify_solve_result`` treats as success."""
     # GIVEN / WHEN
     result = PyscipoptSolver._build_result("timelimit", has_solution=True)
@@ -82,15 +83,65 @@ def test_build_result_limit_with_incumbent_is_usable():
     assert result.solver.termination_condition == TerminationCondition.maxTimeLimit
 
 
-def test_build_result_limit_without_incumbent_is_infeasible():
-    """A limit hit with no incumbent must not be read back as a solution, so it
-    is reported as infeasible to surface a diagnostic instead."""
+def test_build_result_gaplimit_is_optimal_within_tolerance():
+    """A gap-limit stop means the incumbent meets the configured relative gap:
+    reported ok/optimal (converged within tolerance), distinguishable from a
+    real timeout's aborted/maxTimeLimit."""
     # GIVEN / WHEN
-    result = PyscipoptSolver._build_result("timelimit", has_solution=False)
+    result = PyscipoptSolver._build_result("gaplimit", has_solution=True)
 
     # THEN
-    assert result.solver.status == SolverStatus.warning
-    assert result.solver.termination_condition == TerminationCondition.infeasible
+    assert result.solver.status == SolverStatus.ok
+    assert result.solver.termination_condition == TerminationCondition.optimal
+
+
+def test_build_result_gaplimit_without_incumbent_is_a_failure():
+    # GIVEN / WHEN
+    result = PyscipoptSolver._build_result("gaplimit", has_solution=False)
+
+    # THEN no solution to read back, but no infeasibility verdict either
+    assert result.solver.status == SolverStatus.aborted
+    assert result.solver.termination_condition == TerminationCondition.other
+    assert result.solver.has_solution is False
+
+
+def _scip_executable_result(message):
+    """What Pyomo's interface to the scip executable returns for a stop at a
+    limit: ok/other, with SCIP's own message."""
+    return types.SimpleNamespace(
+        solver=types.SimpleNamespace(
+            status=SolverStatus.ok,
+            termination_condition=TerminationCondition.other,
+            message=message,
+        )
+    )
+
+
+def test_scip_executable_gap_limit_reads_optimal_like_the_bridge():
+    # GIVEN
+    result = _scip_executable_result("gap limit reached")
+
+    # WHEN
+    success, _, _, tc_str = pyo_mod._classify_solve_result(
+        result, None, "scip", phase_label="test"
+    )
+
+    # THEN
+    assert success
+    assert tc_str == str(TerminationCondition.optimal)
+
+
+def test_scip_executable_other_limits_stay_other():
+    # GIVEN
+    result = _scip_executable_result("memory limit reached")
+
+    # WHEN
+    _, _, _, tc_str = pyo_mod._classify_solve_result(
+        result, None, "scip", phase_label="test"
+    )
+
+    # THEN
+    assert tc_str == str(TerminationCondition.other)
 
 
 # --------------------------------------------------------------------------- #
@@ -173,6 +224,55 @@ def test_bridge_solves_misocp_load_shedding(monkeypatch):
     assert (vm > 0).all()
 
 
+def test_scip_preset_ships_a_default_relative_gap():
+    """The SCIP preset carries limits/gap so exploratory MILPs stop at the
+    incumbent instead of grinding on the optimality proof."""
+    assert pyo_mod.PER_SOLVER_OPTIONS["scip"]["limits/gap"] == 1e-4
+
+
+def test_solver_result_importable_from_monee_solver():
+    from monee.solver import SolverResult
+    from monee.solver.core import SolverResult as core_solver_result
+
+    assert SolverResult is core_solver_result
+
+
+@requires_pyscipopt
+def test_solver_options_reach_scip_through_public_chain(monkeypatch):
+    """Per-call solver_options passed to run_energy_flow_optimization reach the
+    SCIP bridge, merged over instance options and the module preset; a None
+    value removes a preset key."""
+    # GIVEN
+    monkeypatch.setattr(pyo_mod, "_classic_scip_available", lambda: False)
+    seen: dict = {}
+    orig_solve = PyscipoptSolver.solve
+
+    def spy(self, model, **kwargs):
+        seen.update(self.options)
+        return orig_solve(self, model, **kwargs)
+
+    monkeypatch.setattr(PyscipoptSolver, "solve", spy)
+    net = create_urban_district_net()
+    net.apply_formulation(EL_MISOCP_FORMULATION)
+    solver = PyomoSolver("scip", solver_options={"limits/gap": 0.02})
+
+    # WHEN
+    import monee
+
+    result = monee.run_energy_flow_optimization(
+        net,
+        _shedding_problem(),
+        solver=solver,
+        solver_options={"limits/gap": 0.01, "limits/time": None},
+    )
+
+    # THEN: per-call wins over instance, instance over preset; None removes.
+    assert result.success
+    assert seen["limits/gap"] == 0.01
+    assert "limits/time" not in seen
+    assert seen["misc/allowstrongdualreds"] is False
+
+
 @requires_pyscipopt
 def test_bridge_writeback_matches_a_second_identical_solve(monkeypatch):
     """The .nl-name-matching write-back is deterministic: two identical solves
@@ -199,3 +299,68 @@ def test_bridge_writeback_matches_a_second_identical_solve(monkeypatch):
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
+
+
+@requires_pyscipopt
+def test_multi_period_scip_routes_to_the_bridge_without_classic_exe(monkeypatch):
+    """Regression: the Pyomo multi-period solver called ``pyo.SolverFactory``
+    directly, so ``run_multi_period(..., solver="scip")`` failed with "No
+    executable found for solver 'scip'" where the single-period path falls back
+    to the pyscipopt bridge."""
+    import monee.express as mx
+    from monee.simulation import TimeseriesData, run_multi_period
+
+    # GIVEN no standalone scip executable
+    monkeypatch.setattr(pyo_mod, "_classic_scip_available", lambda: False)
+    net = mx.create_multi_energy_network()
+    b0 = mx.create_bus(net)
+    b1 = mx.create_bus(net)
+    mx.create_line(net, b0, b1, length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
+    mx.create_ext_power_grid(net, b0)
+    mx.create_power_load(net, b1, p_mw=0.1, q_mvar=0.0, name="load")
+    td = TimeseriesData()
+    td.add_child_series_by_name("load", "p_mw", [0.1, 0.5])
+
+    # WHEN
+    result = run_multi_period(net, td, steps=2, dt_h=1.0, solver="scip")
+
+    # THEN
+    assert result.success
+    assert result.backend_used == "pyomo"
+
+
+def test_build_result_limit_without_incumbent_is_a_failure_not_a_verdict():
+    """Regression: a SCIP time limit without an incumbent was reported as
+    'infeasible' (and a MIS computed), a false verdict about the model.
+    gurobipy reports the same stop as aborted/maxTimeLimit without success."""
+    # GIVEN
+    result = PyscipoptSolver._build_result("timelimit", has_solution=False)
+
+    # WHEN
+    success, report, status, tc = pyo_mod._classify_solve_result(
+        result, None, "scip", phase_label="test"
+    )
+
+    # THEN
+    assert result.solver.termination_condition == TerminationCondition.maxTimeLimit
+    assert result.solver.status == SolverStatus.aborted
+    assert success is False
+    assert report is None
+
+
+def test_build_result_infeasible_or_unbounded_keeps_the_infeasibility_verdict():
+    """Regression: SCIP's 'inforunbd' is a proof about the model, not a limit
+    stop; it fell into the no-incumbent limit branch and lost the diagnosis."""
+    result = PyscipoptSolver._build_result("inforunbd", has_solution=False)
+
+    assert result.solver.termination_condition == TerminationCondition.infeasible
+
+
+def test_build_result_limit_with_incumbent_is_still_a_witness():
+    result = PyscipoptSolver._build_result("timelimit", has_solution=True)
+
+    success, _report, _status, _tc = pyo_mod._classify_solve_result(
+        result, None, "scip", phase_label="test"
+    )
+
+    assert success is True

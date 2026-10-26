@@ -10,8 +10,8 @@ On a failed local solve APMonitor leaves two artifacts in the run directory
 This module parses both into a structured :class:`GekkoInfeasibilityReport`
 analogous to the Pyomo :class:`~monee.solver.infeasibility.pyo.InfeasibilityReport`.
 APMonitor sanitises variable names with ``re.sub(r"\\W+", "_", name).lower()``
-(``powergenerator-5.p_mw`` → ``powergenerator_5_p_mw``), which is not
-reversible; callers therefore pass a *name_map* of sanitised → original monee
+(``powergenerator-5.p_mw`` -> ``powergenerator_5_p_mw``), which is not
+reversible; callers therefore pass a *name_map* of sanitised -> original monee
 names, built while injecting the GEKKO variables.
 """
 
@@ -240,7 +240,8 @@ class GekkoInfeasibilityReport:
         if self.infeasible_equations:
             lines.append(
                 f"=== Possibly infeasible equations "
-                f"({len(self.infeasible_equations)} total) ==="
+                f"({len(self.infeasible_equations)} total), values at the "
+                f"failed iterate (not a solution) ==="
             )
             for eq in self.infeasible_equations[:max_items]:
                 lines.append(
