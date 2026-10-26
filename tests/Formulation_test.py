@@ -617,7 +617,7 @@ def result_plots(
         "theta_u", "theta_M",
         "parallel", "b_to_pu", "g_to_pu",
         "b_fr_pu", "g_fr_pu",
-        "br_x_pu", "br_r_pu",
+        "br_x_pu", "br_r_pu", "va_diff",
     }
 
     cols = [
@@ -661,7 +661,7 @@ def result_plots(
 
     if "vm_pu" not in ac.columns or "vm_pu" not in qc.columns:
         return
-
+        # vm_pu for QC only a boundm, not specific value, specific value is v_welle (squared voltage)
     ac_v = ac["vm_pu"]
     qc_v = qc["vm_pu"]
 
@@ -763,7 +763,7 @@ def result_plots(
     plt.xticks(x, ac.index, rotation=45)
     plt.xlabel(component_name)
     plt.ylabel("Squared voltage [p.u.²]")
-    plt.title(f"{component_name} — QC v² vs ṽ")
+    plt.title(f"{component_name} — QC v² vs ṽ") #vm_pu² alsways needs to be smaller than v_welle, otherwise contraint ciolation
     plt.legend()
     plt.grid()
     plt.tight_layout()
@@ -875,7 +875,7 @@ def va_diff_and_analysis(ac_result, qc_result, line_buses, tol=1e-6, tol_degree=
     va_diff_lifted_rad = np.arctan2(qc_line["ws"], qc_line["wc"])
 
     va_diff_ac = np.rad2deg(va_diff_ac_rad)
-    va_diff_qc = np.rad2deg(va_diff_qc_rad)
+    va_diff_qc = np.rad2deg(va_diff_qc_rad) # only the relaxation band, not the explicit variable (loosely bound  by bounds, but not specifically pinned down by network physics -> better use arctan2(ws,wc) , ws and wc are tied to model by equalities of power flow balance
     va_diff_lifted = np.rad2deg(va_diff_lifted_rad)
 
     sin_gap = qc_line["s"] - np.sin(va_diff_qc_rad)

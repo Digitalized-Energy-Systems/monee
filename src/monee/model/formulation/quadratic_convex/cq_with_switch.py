@@ -5,6 +5,7 @@ from ..core import BranchFormulation, NodeFormulation
 from monee.model.core import Intermediate, IntermediateEq, Var
 from monee.model.child import PowerGenerator
 from monee.problem.core import Objectives, OptimizationProblem
+from ... import ExtPowerGrid
 
 # Paper equations use _pu power, while Monee gives branch flow variables in
 # _mw / _mvar. The cq_with_switch helper therefore divides P/Q by grid.sn_mva.
@@ -58,7 +59,7 @@ def _angle_bound(branch):
             "No explicit value for theta_u (angmax/delta_max) given; defaulting to pi/36, tighter than paper (theha_u <=pi/2).",
             stacklevel=2,
         ) #default value based on paper expectation
-        theta_u = math.pi / 2 #todo try to set to pi/36 -> accord to p.5 of paper  ?
+        theta_u = math.pi / 2 #very large gap, could maybe be tightened up to pi/36
     theta_u = float(theta_u)
 
     if not (0 < theta_u <= math.pi / 2): #according to paper relaxation only valid for agles smaller that pi/2
@@ -72,7 +73,7 @@ def _angle_bound(branch):
 
 def _big_m_angle_bound(branch, theta_u):
     """
-    Paper: switched off branch voltage-angle difference bound. (theta_u is from active line, in switched off case upper bound is theta_u+theta_M and lower bound is -theta_u-theta_M)
+    switched off branch voltage-angle difference bound. (theta_u is from active line, in switched off case upper bound is theta_u+theta_M and lower bound is -theta_u-theta_M)
     value needs to be provided
     theta^M = sum(theta_ij_u)
     """
@@ -96,9 +97,11 @@ def _big_m_angle_bound(branch, theta_u):
 
 def _switch_copy_relax(copy_var, original_var, on_off, lb, ub):
     """
-    Exact convex hull of copy_var = z * original_var for binary z.
-    preparation for Eq. (35) (requires participating on/off variables to be zero in the off state). The physical bounds lb/ub
-    are the paper voltage bounds.
+    Switched copy of bus variable: Exact convex hull of copy_var = z * original_var for binary z.
+    preparation step (later steps require participating on/off variables to be zero in the off state).
+    The physical bounds lb/ub are the paper voltage bounds.
+    The copy equals original when the line is on (z = 1) and is 0 when it is off.
+    Needed because the on/off McCormick envelope requires its arguments to be zero for an open line, which a bus voltage never is.
     """
     z = on_off
     return [
@@ -128,7 +131,7 @@ class QCElectricityNodeFormulation(NodeFormulation):
         v_min = node._qc_v_min
         v_max = node._qc_v_max
 
-        return opfmodel.square_relax( v_sq_var=_get_v_sq_var(node),v_var=_get_vm_var(node), v_min=v_min, v_max=v_max ) #constraints vm_pu and v_welle_pu, does not calcualte them
+        return opfmodel.square_relax( v_sq_var=_get_v_sq_var(node),v_var=_get_vm_var(node), v_min=v_min, v_max=v_max ) #constraints vm_pu and v_tilde_pu, does not calcualte them
 
 
 class QCElectricityBranchFormulation(BranchFormulation):
@@ -153,20 +156,17 @@ class QCElectricityBranchFormulation(BranchFormulation):
         branch.wc = Var(1, min=0) #v_i*v_j*cos(delta) ~vv*cs
         branch.ws = Var(0) #~vv*s -> can be pos or neg, no min value
 
-        branch.v_sq_p_from = Var(1, min=0) #branch local, similar to lifted squared-voltage variables ~z*v_welle_i, used for swithced formulation
+        branch.v_sq_p_from = Var(1, min=0) #branch local, similar to lifted squared-voltage variables ~z*v_tilde_i, used for swithced formulation
         branch.v_sq_p_to = Var(1, min=0)
 
-        branch.i_qc = Var(0, min=0) # QC auxiliary l_ij from paper; NOT physical current in kA, optimization value
-        #no optimization variables, just stored for later to branch
+        branch.i_qc = Var(0, min=0) # QC auxiliary l_ij from paper; not physical current in kA, optimization value
+        # no optimization variables, just stored for later to branch
         branch.theta_u = theta_u
         branch.theta_M = theta_M
     def minimize(self, branch, grid, from_node_model, to_node_model, **kwargs):
         """Ohmic loss ``r * l``, the term that drives the relaxation tight.
-
-        Same device the branch-flow MISOCP formulation uses. It is what makes
-        the ``wc``/``ws`` envelopes and the current SOC bind at the AC-feasible
-        point; drop it and the solver is free to return any point of the relaxed
-        set - on a 0.5 MW radial feeder that means a ~56 MW slack injection.
+        Same device the branch-flow MISOCP formulation uses. This makes the wc/ws envelopes and the current SOC bind at
+        the AC-feasible point
         """
         return [branch.i_qc * branch.br_r_pu]
     def equations( self,branch, grid, from_node_model, to_node_model, **kwargs):
@@ -177,8 +177,8 @@ class QCElectricityBranchFormulation(BranchFormulation):
         z = branch.on_off
         vm_from = _get_vm_var(from_node_model)
         vm_to = _get_vm_var(to_node_model)
-        v_sq_from = _get_v_sq_var(from_node_model) #lifted variables v_welle as approx of v^2
-        v_sq_to = _get_v_sq_var(to_node_model) #lifted variable v_welle as approx of v^2
+        v_sq_from = _get_v_sq_var(from_node_model) #lifted variables v_tilde as approx of v^2
+        v_sq_to = _get_v_sq_var(to_node_model) #lifted variable v_tilde as approx of v^2
         v_from_min, v_from_max = _voltage_bounds(from_node_model)
         v_to_min, v_to_max = _voltage_bounds(to_node_model)
         theta_u = branch.theta_u
@@ -191,9 +191,9 @@ class QCElectricityBranchFormulation(BranchFormulation):
         cs_max = 1.0
         s_min = -math.sin(theta_u)
         s_max = math.sin(theta_u)
-        wc_min = vv_min * cs_min #needed for McCormick envelope equ.35
-        wc_max = vv_max #needed for McCormick envelope equ.35
-        ws_abs_max = vv_max * s_max #needed for McCormick envelope equ.35
+        wc_min = vv_min * cs_min #needed for McCormick envelope
+        wc_max = vv_max #needed for McCormick envelope
+        ws_abs_max = vv_max * s_max #needed for McCormick envelope
 
         # Series admittance in p.u.
         impedance = branch.br_r_pu + 1j * branch.br_x_pu
@@ -207,11 +207,11 @@ class QCElectricityBranchFormulation(BranchFormulation):
         # Voltage-angle difference. already linear
         eqs = [ branch.va_diff == from_node_model.vars["va_radians"]  - to_node_model.vars["va_radians"], ]
 
-        # Paper Eqs. (27)-(28): switched sine and cosine relaxations.
+        # switched sine and cosine relaxations.
         eqs += opfmodel.cosine_relax( cs_var=branch.cs, delta_var=branch.va_diff, delta_max=theta_u, on_off=z, delta_big_m=theta_M)
         eqs += opfmodel.sine_relax( s_var=branch.s, delta_var=branch.va_diff,delta_max=theta_u, on_off=z, delta_big_m=theta_M )
 
-        # On/off voltage-magnitude. on/off McCormick products are zero when branch is switched off. (equ.35)
+        # On/off voltage-magnitude. on/off McCormick products are zero when branch is switched off.
         eqs += _switch_copy_relax( copy_var=branch.v_on_from, original_var=vm_from, on_off=z, lb=v_from_min, ub=v_from_max)
         eqs += _switch_copy_relax( copy_var=branch.v_on_to, original_var=vm_to, on_off=z,lb=v_to_min, ub=v_to_max )
 
@@ -220,15 +220,9 @@ class QCElectricityBranchFormulation(BranchFormulation):
         # wc ~ vv * cos(theta_i - theta_j)
         # ws ~ vv * sin(theta_i - theta_j)
         #
-        # NOTE on vv's inputs: paper Eq. (16) defines the continuous vv_ij as
-        # the McCormick product of the actual voltage MAGNITUDES v_i, v_j
-        # (not the squared/lifted v-hat used for v_sq_p). Appendix A.2.1's
-        # on/off vv_ij is the on/off extension of that same quantity, so its
-        # two McCormick inputs must also be magnitude-perspective copies
-        # (v_on_from / v_on_to, zeroed off-state via _switch_copy_relax) with
-        # bounds [v_min, v_max] -- not the squared perspective copies used
-        # for v_sq_p_from/to below, whose bounds are [v_min^2, v_max^2] and
-        # which enter the power-flow equations directly, not through vv.
+        # continuous vv_ij:  McCormick product of the actual voltage magnitudes v_i, v_j (not the squared/lifted v-hat used for v_sq_p).
+        # on/off vv_ij is the on/off extension of that same quantity, so its two McCormick inputs must also be magnitude-perspective copies
+        # (v_on_from / v_on_to, zero at off-state via _switch_copy_relax) with bounds [v_min, v_max]
         eqs += opfmodel.mccormick_on_off_relax( product_var=branch.vv,
             x_var=branch.v_on_from,
             y_var=branch.v_on_to,
@@ -267,7 +261,7 @@ class QCElectricityBranchFormulation(BranchFormulation):
             product_ub=ws_abs_max,
         )
 
-        # Perspective squared voltage, paper Equ.(34).
+        # Perspective squared voltage
         eqs += opfmodel.perspective_voltage_relax(
             v_sq_p_var=branch.v_sq_p_from,
             v_sq_var=v_sq_from,
@@ -284,7 +278,7 @@ class QCElectricityBranchFormulation(BranchFormulation):
             on_off=z,
         )
 
-        # Explicit zero-off bounds for perspective copies. (physical bus voltage doesn't become 0 for switched of line)
+        # Explicit zero-off bounds for perspective copies. (physical bus voltage doesn't become 0 for switched-off-line)
         eqs += [
             branch.v_sq_p_from >= z * v_from_min ** 2,
             branch.v_sq_p_from <= z * v_from_max ** 2,
@@ -356,8 +350,6 @@ class QCElectricityBranchFormulation(BranchFormulation):
             ),
         ]
 
-        #  current, same as AC
-
         i_from_ka = (
                 (branch.p_from_mw ** 2+ branch.q_from_mvar ** 2+ CURRENT_SMOOTHING_EPS_MW ** 2 ) ** 0.5
                 / (vm_from* from_node_model.vars["base_kv"] )
@@ -394,22 +386,15 @@ class QCElectricityBranchFormulation(BranchFormulation):
             ),
         ]
 
-        # Current-magnitude strengthening. no thermal-limit-dependent constraints
-        #   Equ. (21): v_i^2 * l_ij >= p_ij^2 + q_ij^2
-        #   Equ. (23): relationship between l_ij and lifted voltages
-        # Equs. (30)-(31) are deliberately NOT included here: they are an
-        # optional extra tightening the paper presents as "another valid
-        # constraint" (Sect. 5.2.4), not part of its actual QC-OTS
-        # constraint set (Appendix A.2.1 lists only (3)-(7), (16), (21),
-        # (23), (32)-(34)). They remain available as
-        # opfmodel.current_switch_relax for callers who want them.
+        #No thermal-limit-dependent constraints as optional extra tightening (another valid constraint) but not part of
+        # here implemented actual QC-OTS constraint set. available as opfmodel.current_switch_relax if wanted
         g_fr = float(getattr(branch, "g_fr_pu", 0.0))
         g_to = float(getattr(branch, "g_to_pu", 0.0))
         b_fr = float(getattr(branch, "b_fr_pu", 0.0))
         b_to = float(getattr(branch, "b_to_pu", 0.0))
 
-        # tolerance; not a paper bound but set
-        tol = 1e-12
+        # tolerance; not a paper bound but set due to unit conversions with rounding noise
+        tol = 1e-12 #far below physically meaningful parameter and below typical solver tolerance
         plain_branch = (
                 abs(float(branch.tap) - 1.0) <= tol
                 and abs(float(branch.shift)) <= tol
@@ -420,7 +405,6 @@ class QCElectricityBranchFormulation(BranchFormulation):
         )
 
         if plain_branch:
-            # Paper Eq. (23).
             # Perspective squared-voltage copies used -> inactive branch remains consistent with l = wc = 0
             eqs.append(
                 opfmodel.current_flow_equation(
@@ -432,8 +416,6 @@ class QCElectricityBranchFormulation(BranchFormulation):
                     b_branch=b,
                 )
             )
-
-            # Paper Eq. (21).
             eqs.append(
                 opfmodel.current_soc_relax(
                     p_var=branch.p_from_mw,
@@ -446,8 +428,7 @@ class QCElectricityBranchFormulation(BranchFormulation):
             )
 
         elif _is_fixed_one(z):
-
-            # Active transformer / line-charging branch: Appendix-C Eqs. (48)-(49)
+            # Active transformer / line-charging branch
             if abs(g_fr) > tol or abs(g_to) > tol:
                 raise ValueError(
                     "Paper Eq. (49) does not cover nonzero end conductance "
@@ -462,7 +443,6 @@ class QCElectricityBranchFormulation(BranchFormulation):
 
             b_charge = b_fr + b_to
 
-            # Paper Eq. (49).
             eqs.append(
                 opfmodel.current_flow_equation_extended(
                     i_var=branch.i_qc,
@@ -480,7 +460,6 @@ class QCElectricityBranchFormulation(BranchFormulation):
                 )
             )
 
-            # Paper Eq. (48).
             eqs.append(
                 opfmodel.current_soc_relax(
                     p_var=branch.p_from_mw,
@@ -493,73 +472,31 @@ class QCElectricityBranchFormulation(BranchFormulation):
             )
 
         else:
-            # Switchable branch (on_off not fixed to 1) with a non-unity
-            # tap, non-zero phase shift, or nonzero end shunts. The paper
-            # gives no on/off extension of the transformer/line-charging
-            # current relation (48)-(49) -- those are derived only for the
-            # permanently-active case (Appendix C). Previously this branch
-            # silently added no current-magnitude constraint at all, which
-            # quietly weakened the relaxation with no warning. Fail loudly
-            # instead: either fix on_off=1 for this branch, or give it
-            # zero tap/shift/shunts so it falls into the plain (21)/(23)
-            # case above, to use this QC formulation on it.
             raise NotImplementedError(
-                "Switchable QC branches with a non-unity tap, nonzero "
-                "phase shift, or nonzero end shunts (g_fr/g_to/b_fr/b_to) "
-                "are outside the scope of the paper's current-magnitude "
-                "relaxation: Eqs. (48)-(49) (Appendix C) are derived only "
-                "for permanently-active branches (on_off fixed to 1), and "
-                "the paper provides no on/off extension of them. Fix this "
-                "branch's on_off to 1, or zero out its tap/shift/shunts, "
-                "to use the QC relaxation on it."
+                "Switchable QC branches with a non-unity tap, nonzero phase shift, or nonzero end shunts (g_fr/g_to/b_fr/b_to) "
+                "are outside the scope of current-magnitude relaxation: Equations for QC formulation are derived only "
+                "for permanently-active branches (on_off fixed to 1), and no on/off extension of them is yet provided. Fix this "
+                "branch's on_off to 1, or zero out its tap/shift/shunts, to use the QC relaxation on it."
             )
-
         return eqs
 
 
-def create_qc_opf_problem(
-    pmin_default=0.0,
-    pmax_default=None,
-    debug=False,
-):
+def create_qc_opf_problem( pmin_default=0.0, pmax_default=None, debug=False):
     """
-    Builds the paper's generator fuel-cost objective (Eq. 11) as a Monee
-    OptimizationProblem, to be solved together with QCElectricityNodeFormulation
-    / QCElectricityBranchFormulation (Eqs. 12-23/27-35/48-49 above), giving a
-    complete convex QCQP relaxation of AC-OPF:
+    generator fuel-cost objective as a Monee OptimizationProblem, to be solved together with QCElectricityNodeFormulation
+    / QCElectricityBranchFormulation, giving a complete convex QCQP relaxation of AC-OPF:
 
-        min  sum_i c2_i*(pg_i)^2 + c1_i*pg_i + c0_i      (Eq. 11)
-        s.t. QC-relaxed power-flow / voltage / current equations (Sect. 4-5)
-             pg_i^l <= pg_i <= pg_i^u                     (Eq. 6)
+        min  sum_i c2_i*(pg_i)^2 + c1_i*pg_i + c0_i
+        s.t. QC-relaxed power-flow / voltage / current equations
+             pg_i^l <= pg_i <= pg_i^u
 
-    Objective/physics are wired separately on purpose: Monee keeps the
-    objective as a monee.problem.core.Objectives selection over child
-    models (here, PowerGenerator), independent of the Node/BranchFormulation
-    machinery that carries the physics -- the same pattern used by Monee's
-    built-in create_economic_dispatch_problem (which only implements the
-    linear special case, Eq. 10).
-
-    Set each generator's cost coefficients directly, e.g.:
-        gen.model.cost_c0 = 0.0
-        gen.model.cost_c1 = 20.0
-        gen.model.cost_c2 = 0.05
-    Generators without these attributes default to c0=0, c1=1, c2=0, i.e.
-    Eq. (10): plain active-power (loss) minimization.
-
-    pmax_default, if given, uniformly bounds every PowerGenerator's physical
-    output to [pmin_default, pmax_default] (Eq. 6). Leave it None to keep
-    each generator's existing bounds and only set them for generators you
-    bound individually (e.g. via problem.bounds(...) after calling this).
-
-    Sign convention: Monee stores PowerGenerator.p_mw negative for
-    generation (load convention), so the objective and any bounds use
-    -model.p_mw to recover the paper's physical p^g_i >= 0.
+    Gets costs per generated/from external grid impoted p_mw and minimizes cost over all generators and external grids
     """
     problem = OptimizationProblem(debug=debug)
 
-    # Paper Eq. (6): pg^l <= pg <= pg^u -- promote p_mw to a free decision var.
+    # free generator output as decision variable
     problem.controllable_generators(["p_mw"])
-
+    # boundd generator output to [p_min, p_max] (generation as negative p_mw in Monee)
     if pmax_default is not None:
         problem.bounds(
             (-pmax_default, -pmin_default),
@@ -568,9 +505,7 @@ def create_qc_opf_problem(
         )
 
     objectives = Objectives()
-
-    # Paper Eq. (11).
-    objectives.select(lambda m: isinstance(m, PowerGenerator)).calculate(
+    objectives.select(lambda m: isinstance(m, (PowerGenerator, ExtPowerGrid))).calculate(
         lambda models: sum(
             opfmodel.generation_cost(
                 -m.p_mw,
@@ -581,6 +516,5 @@ def create_qc_opf_problem(
             for m in models
         )
     )
-
     problem.objectives = objectives
     return problem
