@@ -456,9 +456,7 @@ def _add_heat_controls(problem, bounds_t_k):
 
     problem.add_hook(_mark_heat_exchangers)
     if bounds_t_k is not None:
-        problem.add_hook(
-            make_water_temperature_bounds_hook(bounds_t_k)
-        )
+        problem.add_hook(make_water_temperature_bounds_hook(bounds_t_k))
 
 
 def _add_heat_objectives(objectives, heat_cost_default):
