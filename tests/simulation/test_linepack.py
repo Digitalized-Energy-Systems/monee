@@ -211,6 +211,34 @@ class _CloseSource(StepHook):
             source.free_pressure_bounds = (0.5, 1.2)
 
 
+class _CloseGate(StepHook):
+    def __init__(self, source_id):
+        self.source_id = source_id
+
+    def pre_run(self, base_net, step, step_state):
+        if step == 1:
+            gate = base_net.child_by_id(self.source_id).model
+            gate.max_import_kgs = gate.max_export_kgs = 0.0
+            gate.free_pressure_bounds = (0.5, 1.2)
+
+
+def test_a_gate_closed_by_its_flow_caps_is_no_free_degree_of_freedom():
+    # GIVEN a source whose import and export caps close it at step 1: its
+    # flow is a variable with equal bounds, the pressure follows from the pack
+    net, pipe_id, _ = _gas_net()
+    net.add_extension(GasLinepack(first_step_steady_state=True))
+    source_id = net.node_by_id(net.branch_by_id(pipe_id).from_node_id).child_ids[0]
+
+    # WHEN
+    result = run(net, steps=2, step_hooks=[_CloseGate(source_id)], dt_h=0.5)
+
+    # THEN the step is square: no dof finding, and the pipe discharges
+    assert not result.failed_steps
+    assert not [w for w in result.raw[1].warnings if w.category == "dof"]
+    lp = result.get_result_for_id(pipe_id, "linepack_kg")
+    assert lp.iloc[0] - lp.iloc[1] == pytest.approx(0.2 * 1800, rel=1e-6)
+
+
 def test_linepack_after_source_cut_off_matches_an_isothermal_tank():
     # GIVEN a DN300 pipe feeding 0.1 kg/s, whose source closes for 30 minutes
     m_kgs, dt_s, d_m, l_m = 0.1, 1800.0, 0.3, 5000.0

@@ -528,7 +528,8 @@ Keyword reference
      - :math:`\omega_k`
      - Callback ``(model) -> float | None`` returning a per-load shed weight
        for priority ordering, used as given (never rescaled by the priority
-       floor). ``None`` falls back to ``demand_weight``.
+       floor). ``None`` falls back to ``demand_weight``. It receives the
+       models of the network passed in.
        Default: ``None``. See
        :ref:`problems/load_shedding:Prioritising individual loads`.
    * - ``bounds_vm``
@@ -623,9 +624,19 @@ priority ordering (keep the hospital, shed the warehouse first), pass
 shed weight, or ``None`` to fall back to ``demand_weight``. A convenient
 pattern is to tag the models with a custom attribute when building the
 network, as the :ref:`worked example <problems/load_shedding:Worked example>`
-does. The solve runs on a copy of the network, so the callback receives the
-copied models: a tag travels with them, a dictionary keyed by the original
-models never matches.
+does. Every entry point solves internal copies of the network
+(``run_energy_flow_optimization`` with ``copy=True`` or ``False``,
+``run_multi_period``, ``run_timeseries`` and the ``Stepper``), but the
+callback always receives the models of the network you passed in, so a
+dictionary keyed by those models works as well (``weight_for_load=weights.get``).
+The trade-off: the callback sees that network as passed in. Values set per
+period or step (a ``TimeseriesData`` series, ``data_overrides``, changes the
+``Stepper`` makes on its working copy) are not visible to it, so a weight
+read from such an attribute, e.g. ``p_mw``, is the base value, and every
+period gets the same weight. Tags and other attributes set on the models
+before the call are visible. A component the network passed in does not
+contain is passed as the solved copy's model. An exception raised by the
+callback propagates to the caller.
 
 .. code-block:: python
 

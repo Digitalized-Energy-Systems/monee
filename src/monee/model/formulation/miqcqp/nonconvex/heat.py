@@ -23,7 +23,13 @@ from monee.model.branch import HeatExchanger
 from monee.model.core import Const, Var, value
 from monee.model.grid import WaterGrid
 
-from ...common import ensure_velocity_report, pipe_outlet_law
+from ...common import (
+    check_segment_length,
+    ensure_heat_loss_cells,
+    ensure_velocity_report,
+    pipe_attenuation_eqs,
+    pipe_outlet_law,
+)
 from ...core import BranchFormulation
 from ..convex.gas import RESTORE_GAP_TOL, RelaxedWeymouthBranchFormulation, _set
 
@@ -93,11 +99,18 @@ class BilinearDarcyWeisbachBranchFormulation(BranchFormulation):
     RELAXATION_GAP_TOL = RelaxedWeymouthBranchFormulation.RELAXATION_GAP_TOL
     relaxation_gap = RelaxedWeymouthBranchFormulation.relaxation_gap
 
+    def __init__(self, segment_length_m: float | None = None):
+        """``segment_length_m``: insulation loss over equal cells of at most
+        this length (:func:`~monee.model.formulation.common.pipe_attenuation_eqs`);
+        ``None`` keeps the one-cell law."""
+        self.segment_length_m = check_segment_length(segment_length_m)
+
     def ensure_var(self, model, simulation=False, grid=None):
         model.t_in_pu = Var(1, min=0.3, max=2, name="t_in_pu")
         model.t_out_pu = Var(1, min=0.3, max=2, name="t_out_pu")
         model.mass_flow_mag_kgs = Var(1, min=0, name="mass_flow_mag_kgs")
         model.alpha = Var(0.01, min=0, max=1, name="alpha")
+        ensure_heat_loss_cells(model, self.segment_length_m)
         ensure_velocity_report(model, grid)
         _pin_friction_const(model)
 
@@ -123,11 +136,10 @@ class BilinearDarcyWeisbachBranchFormulation(BranchFormulation):
             _hydraulic_epigraph_eqs(
                 branch, grid, from_node_model, to_node_model, f_max_local, **kwargs
             )
-            + [
-                branch.alpha * (branch.mass_flow_mag_kgs + UA_C)
-                == branch.mass_flow_mag_kgs,
-                *pipe_outlet_law(branch, grid),
-            ]
+            + pipe_attenuation_eqs(
+                branch, branch.mass_flow_mag_kgs, UA_C, self.segment_length_m
+            )
+            + pipe_outlet_law(branch, grid)
             + _direction_temp_mix_eqs(branch, from_node_model, to_node_model)
         )
         if getattr(branch, "unidirectional", False):
@@ -147,14 +159,16 @@ class PwlDarcyWeisbachBranchFormulation(BranchFormulation):
     MIQCQP.
     """
 
-    def __init__(self, n_breakpoints: int = 12):
+    def __init__(self, n_breakpoints: int = 12, segment_length_m: float | None = None):
         self.n_breakpoints = n_breakpoints
+        self.segment_length_m = check_segment_length(segment_length_m)
 
     def ensure_var(self, model, simulation=False, grid=None):
         model.t_in_pu = Var(1, min=0.3, max=2, name="t_in_pu")
         model.t_out_pu = Var(1, min=0.3, max=2, name="t_out_pu")
         model.mass_flow_mag_kgs = Var(1, min=0, name="mass_flow_mag_kgs")
         model.alpha = Var(0.01, min=0, max=1, name="alpha")
+        ensure_heat_loss_cells(model, self.segment_length_m)
         ensure_velocity_report(model, grid)
         # \varphi = friction \cdot m^2, per flow direction; replaces the squared-mf Vars.
         model.phi_pwl_pos = Var(0, min=0, name="phi_pwl_pos")
@@ -228,8 +242,9 @@ class PwlDarcyWeisbachBranchFormulation(BranchFormulation):
             * grid.pressure_ref_pa
             * branch.on_off
             == K * (branch.phi_pwl_neg - branch.phi_pwl_pos),
-            branch.alpha * (branch.mass_flow_mag_kgs + UA_C)
-            == branch.mass_flow_mag_kgs,
+            *pipe_attenuation_eqs(
+                branch, branch.mass_flow_mag_kgs, UA_C, self.segment_length_m
+            ),
             *pipe_outlet_law(branch, grid),
         ] + _direction_temp_mix_eqs(branch, from_node_model, to_node_model)
 

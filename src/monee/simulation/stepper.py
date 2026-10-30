@@ -280,7 +280,7 @@ class Stepper:
         # pristine baseline and is disabled.
         self._copy_base = copy_base
         self._warm_values = False
-        self._work_net = net.copy() if copy_base else net
+        self._work_net = net._copy_for_solve() if copy_base else net
         self._solver = resolve_solver(solver, backend=backend)
         self._warm_start = (
             getattr(self._solver, "benefits_from_warm_start", True)
@@ -432,7 +432,7 @@ class Stepper:
     def _step_input_net(
         self, ts_index: int | None, data_overrides: Mapping[tuple, float] | None
     ):
-        net_copy = self._work_net.copy()
+        net_copy = self._work_net._copy_for_solve()
         if self._timeseries_data is not None and ts_index is not None:
             self._timeseries_data.apply_to_network(net_copy, ts_index)
         if data_overrides:
@@ -767,7 +767,7 @@ class Stepper:
         self._t_h = 0.0
         self._carry_dt_h = 0.0
         self._warm_values = False
-        self._work_net = self._base_net.copy()
+        self._work_net = self._base_net._copy_for_solve()
         self._changes = []
         self._changes_dropped = 0
         self._prev_topology = (

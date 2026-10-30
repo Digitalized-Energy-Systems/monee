@@ -240,6 +240,8 @@ class MISOCPElectricityBranchFormulation(BranchFormulation):
         return residual / max(abs(lhs), 1e-6)
 
     def ensure_var(self, branch, simulation=False, grid=None):
+        # Off (ell = 0), the cone leaves no series flow: read by the bus balance.
+        branch._off_flow_is_shunt = True
         branch.current_pu_squared = Var(1, min=0)
         branch.i_from_ka = Intermediate(0)
         branch.i_to_ka = Intermediate(0)

@@ -43,6 +43,7 @@ from .bundles import (
     make_gas_nlp_formulation,
     make_heat_convex_milp_formulation,
     make_heat_nlp_formulation,
+    make_heat_nonconvex_miqcqp_formulation,
     make_heat_nonconvex_pwl_formulation,
     make_smooth_nlp_formulation,
 )
@@ -84,6 +85,7 @@ __all__ = [
     "HEAT_NONCONVEX_MIQCQP_FORMULATION",
     "make_heat_nlp_formulation",
     "make_heat_convex_milp_formulation",
+    "make_heat_nonconvex_miqcqp_formulation",
     "make_heat_nonconvex_pwl_formulation",
     "orient_unidirectional_water_pipes",
     # bundles

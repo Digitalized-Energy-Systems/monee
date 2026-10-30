@@ -15,6 +15,7 @@ wholesale when it is not.
 
 import math
 
+import numpy as np
 import pytest
 
 import monee.model as mm
@@ -152,13 +153,24 @@ class _FakeGRB:
 
 class _FakeOptimalModel:
     """What gurobipy 13 returned on a cs_resilience load-shedding MIQCQP: status
-    OPTIMAL, one node, incumbent 894.98 against its own bound -7.20."""
+    OPTIMAL, one node, incumbent 894.98 against its own bound -7.20. *max_coeff*
+    is the largest objective coefficient."""
 
     Status, NumObj, SolCount = _FakeGRB.OPTIMAL, 1, 3
 
-    def __init__(self, obj, bound, mip_gap=1e-3, mip_gap_abs=10.0):
+    def __init__(self, obj, bound, mip_gap=1e-3, mip_gap_abs=10.0, max_coeff=1.0):
         self.ObjVal, self.ObjBound = obj, bound
         self.Params = type("P", (), {"MIPGap": mip_gap, "MIPGapAbs": mip_gap_abs})
+        self._coeffs = [max_coeff, -0.5 * max_coeff]
+
+    def getVars(self):
+        return self._coeffs
+
+    def getAttr(self, _name, objs):
+        return objs
+
+    def getObjective(self):
+        return None
 
 
 def _classify_fake(gm):
@@ -169,12 +181,19 @@ def _classify_fake(gm):
     return solver._classify(gm, phase_label="test")
 
 
-def test_optimal_status_with_open_gap_is_reported_as_feasible():
+@pytest.mark.parametrize("mip_gap_abs", [10.0, 1e-10])
+def test_optimal_status_with_open_gap_is_reported_as_feasible(mip_gap_abs):
     """Regression: an OPTIMAL status whose incumbent is outside MIPGap and
     MIPGapAbs of the final bound was reported as ``optimal``."""
-    # GIVEN / WHEN
+    # GIVEN the cs_resilience instance (largest objective coefficient 6388.5)
+    # WHEN
     success, report, status_str, tc_str = _classify_fake(
-        _FakeOptimalModel(obj=894.9826601379245, bound=-7.202768637527697)
+        _FakeOptimalModel(
+            obj=894.9826601379245,
+            bound=-7.202768637527697,
+            mip_gap_abs=mip_gap_abs,
+            max_coeff=6388.530002882529,
+        )
     )
 
     # THEN the incumbent is kept as a witness, but not called optimal
@@ -184,24 +203,47 @@ def test_optimal_status_with_open_gap_is_reported_as_feasible():
 
 
 @pytest.mark.parametrize(
-    ("obj", "bound", "mip_gap_abs"),
+    ("obj", "bound", "mip_gap_abs", "mip_gap", "max_coeff"),
     [
-        (1502.771203, 1492.774933, 10.0),  # within MIPGapAbs, not MIPGap
-        (2.0e5, 1.999e5 + 1, 10.0),  # within MIPGap, not MIPGapAbs
-        (-7.202775950978321, -7.20279656101593, 10.0),  # closed
+        (1502.771203, 1492.774933, 10.0, 1e-3, 1.0),  # within MIPGapAbs only
+        (2.0e5, 1.999e5 + 1, 10.0, 1e-3, 1.0),  # within MIPGap, not MIPGapAbs
+        (-7.202775950978321, -7.20279656101593, 10.0, 1e-3, 1.0),  # closed
         # uncrushing the presolved incumbent widened a 0.1 % gap to 0.17 %
-        (18.541535651034792, 18.510072954121597, 1e-10),
-        (0.7533848681031718, 0.7558977169568095, 1e-10),  # ... or crossed it
+        (18.541535651034792, 18.510072954121597, 1e-10, 1e-3, 1.0),
+        (0.7533848681031718, 0.7558977169568095, 1e-10, 1e-3, 1.0),  # crossed
+        # optima near zero (cs_waste_heat, electricity price floored at 0):
+        # gaps of a few thousandths of a EUR against EUR 1394 per kg/s of gas
+        (2.900028e-05, 2.900028e-05 - 3.48e-4, 1e-10, 1e-4, 1393.8996),
+        (0.002652, 0.000930, 1e-10, 1e-4, 1393.8996),
+        (0.001587, 0.000129, 1e-10, 1e-4, 1393.8996),
     ],
 )
-def test_optimal_status_within_the_gap_tolerance_stays_optimal(obj, bound, mip_gap_abs):
+def test_optimal_status_within_the_gap_tolerance_stays_optimal(
+    obj, bound, mip_gap_abs, mip_gap, max_coeff
+):
     # GIVEN / WHEN
     _, _, status_str, tc_str = _classify_fake(
-        _FakeOptimalModel(obj, bound, mip_gap_abs=mip_gap_abs)
+        _FakeOptimalModel(
+            obj, bound, mip_gap=mip_gap, mip_gap_abs=mip_gap_abs, max_coeff=max_coeff
+        )
     )
 
     # THEN
     assert (status_str, tc_str) == ("ok", "optimal")
+
+
+def test_open_gap_near_zero_is_unproven_in_a_small_unit_objective():
+    # GIVEN the near-zero gap above, in an objective whose coefficients are
+    # at most 1e-3 (it is then a third of a unit of the dearest decision)
+    gm = _FakeOptimalModel(
+        2.900028e-05, 2.900028e-05 - 3.48e-4, mip_gap_abs=1e-10, max_coeff=1e-3
+    )
+
+    # WHEN
+    _, _, status_str, tc_str = _classify_fake(gm)
+
+    # THEN
+    assert (status_str, tc_str) == ("warning", "feasible")
 
 
 def test_sanitize_name_strips_gurobi_unsafe_chars():
@@ -551,6 +593,44 @@ def test_heat_shedding_bound_is_proven_at_the_root():
     )
     loss = result.get(mm.WaterPipe)["heat_loss_mw"].sum()
     assert duties + loss == pytest.approx(0.0, abs=1e-4)
+
+
+@requires_gurobi
+def test_segmented_heat_loss_holds_in_the_miqcqp():
+    import monee
+    from monee.model.formulation import make_heat_nonconvex_miqcqp_formulation
+    from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
+    from monee.model.phys.nonlinear.wf import pipe_insulation_ua
+    from monee.problem.min_load_shedding import create_min_load_shedding_problem
+
+    # GIVEN 1.5 km pipes split into cells of at most 200 m (8 cells)
+    net = _heat_feeder()
+    formulation = make_heat_nonconvex_miqcqp_formulation(segment_length_m=200)
+
+    # WHEN load shedding runs on the bilinear heat formulation
+    result = monee.run_energy_flow_optimization(
+        net,
+        create_min_load_shedding_problem(
+            check_vm=False,
+            check_pressure=False,
+            bounds_t=(0.9, 1.2),
+            bounds_ext_heat_mw=(0.0, 0.0),
+            bounds_t_k=(283.15, 363.15),
+        ),
+        solver="gurobi",
+        formulation=("nonconvex_miqcqp", formulation),
+    )
+
+    # THEN every pipe attenuates as eight cells in series
+    assert result.termination_condition == "optimal"
+    pipes = result.get(mm.WaterPipe)
+    ua = {
+        br.id: pipe_insulation_ua(br.model) / SPECIFIC_HEAT_CAP_WATER
+        for br in net.branches
+        if isinstance(br.model, mm.WaterPipe)
+    }
+    x = pipes["id"].map(ua).to_numpy() / pipes["mass_flow_mag_kgs"].to_numpy()
+    assert np.allclose(pipes["alpha"], (1 + x / 8) ** -8, atol=1e-6)
 
 
 @requires_gurobi

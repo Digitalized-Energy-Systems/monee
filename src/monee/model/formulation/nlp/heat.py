@@ -8,7 +8,13 @@ import monee.model.phys.nonlinear.smooth as smoothmodel
 import monee.model.phys.nonlinear.wf as owfmodel
 from monee.model.core import Const, Var
 
-from ..common import ensure_velocity_report, pipe_outlet_law
+from ..common import (
+    check_segment_length,
+    ensure_heat_loss_cells,
+    ensure_velocity_report,
+    pipe_attenuation_eqs,
+    pipe_outlet_law,
+)
 from ..core import BranchFormulation
 from ..milp.heat import FixedFlowHeatExchangerFormulation
 from .gas import FRICTION_MODELS, _ensure_friction_vars, _pin, _seed_mag
@@ -133,20 +139,41 @@ class SmoothDarcyWeisbachBranchFormulation(BranchFormulation):
     ``alpha`` attenuation factor. No ``direction`` binary. See
     :class:`monee.model.formulation.nlp.gas.SmoothWeymouthBranchFormulation`
     for the ``friction_model`` options.
+
+    ``heat_loss`` selects the attenuation law: ``"rational"`` (default)
+    :math:`\\alpha = 1/(1+x)`, ``"exact"`` the steady solution
+    :math:`\\alpha = e^{-x}`, :math:`x = UA/(|\\dot m| c_p)`. The rational law
+    loses less heat, noticeably once :math:`x` nears 1 (low flow, long pipes).
+    ``segment_length_m`` instead applies the rational law to equal cells of at
+    most that length (:func:`~monee.model.formulation.common.pipe_attenuation_eqs`),
+    the same law the MIQCQP pipe formulations offer.
     """
 
     def __init__(
         self,
         friction_model="constant",
         smoothing_eps=1e-3,
+        heat_loss="rational",
+        segment_length_m=None,
     ):
         assert friction_model in FRICTION_MODELS, friction_model
+        if heat_loss not in ("rational", "exact"):
+            raise ValueError(
+                f"heat_loss must be 'rational' or 'exact', got {heat_loss!r}."
+            )
+        if heat_loss == "exact" and segment_length_m is not None:
+            raise ValueError(
+                "segment_length_m refines the rational law; the exact law needs none."
+            )
         self.friction_model = friction_model
         self.smoothing_eps = smoothing_eps
+        self.heat_loss = heat_loss
+        self.segment_length_m = check_segment_length(segment_length_m)
 
     def ensure_var(self, model, simulation=False, grid=None):
         _ensure_smooth_flow_vars(model, self.friction_model, simulation, grid)
         model.alpha = Var(0.01, min=0, max=1, name="alpha")
+        ensure_heat_loss_cells(model, self.segment_length_m)
         if simulation:
             _pin(model, "q_mw", "t_inc_pu")
 
@@ -155,7 +182,12 @@ class SmoothDarcyWeisbachBranchFormulation(BranchFormulation):
             self, branch, grid, from_node_model, to_node_model, **kwargs
         )
         UA_C = _ua_per_cp(branch)
-        eqs += [branch.alpha * (mag + UA_C) == mag, *pipe_outlet_law(branch, grid)]
+        if self.heat_loss == "exact":
+            # smooth_abs keeps mag >= eps > 0, so the quotient stays finite
+            eqs.append(branch.alpha == kwargs["exp_impl"](-UA_C / mag))
+        else:
+            eqs += pipe_attenuation_eqs(branch, mag, UA_C, self.segment_length_m)
+        eqs += pipe_outlet_law(branch, grid)
         eqs += _temperature_transport_eqs(branch, from_node_model, to_node_model)
         if getattr(branch, "unidirectional", False) and not kwargs.get(
             "simulation", False

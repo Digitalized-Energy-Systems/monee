@@ -209,7 +209,14 @@ smooth NLP gas and water/heat formulations (`GAS_NLP_FORMULATION`,
 The constant mode depends only on relative roughness ε/D, so friction,
 Reynolds number and the friction-flow bilinear all drop out of the solver
 model. The price is accuracy at low flow: in the laminar regime (Re < 2 300)
-it under-estimates the pressure drop.
+it under-estimates the pressure drop. The bilinear heat MIQCQP
+(`HEAT_NONCONVEX_MIQCQP_FORMULATION`) uses the same constant, so a pressure
+limit it enforces holds for the fully rough drop only; in an optimisation
+that has to hold the Reynolds-dependent drop, use
+`make_heat_nonconvex_pwl_formulation` (a piecewise-linear interpolation of
+the Reynolds-dependent drop term), or
+check the dispatch with an NLP simulation at `friction_model="nonlinear"`
+and tighten the limit.
 
 The pwl mode restores variable friction as one odd cubic spline
 $\psi(\dot{m}) = f\!\big(\mathrm{Re}(\dot{m})\big) \cdot \dot{m} |\dot{m}|$ of the
@@ -262,6 +269,21 @@ $$\alpha = \frac{\dot{m} \, c_p}{\dot{m} \, c_p + UA},
 with λ the insulation conductivity and *r*\_o, *r*\_i the outer and inner
 insulation radii. This rational form is the first-order equivalent of the
 exponential decay law and stays well-defined at zero flow.
+
+With *x* = *UA* / (*ṁ c*\_p), the rational law gives α = 1/(1+*x*) where the
+steady solution is α = e^−*x*. It always loses less heat, by about *x*²/2 of
+the inlet's excess temperature, which matters at low flow in long pipes. Two
+opt-in variants tighten it:
+
+- `make_heat_nlp_formulation(heat_loss="exact")` uses α = e^−*x* (NLP only).
+- `segment_length_m=...` (on `make_heat_nlp_formulation`,
+  `make_heat_nonconvex_miqcqp_formulation` and
+  `make_heat_nonconvex_pwl_formulation`) applies the rational law to equal
+  cells of at most that length, α = (1 + *x*/*n*)^−*n*, with *n* the smallest
+  power of two whose cells are no longer than `segment_length_m` (a value
+  of zero or less raises `ValueError`). The law stays quadratic (log₂ *n* extra
+  bilinear equations per pipe), so it also works in the MIQCQP. The result
+  equals splitting the pipe with `express.split_pipe`, without new junctions.
 
 | Variable | Symbol | Unit |
 |---|---|---|

@@ -105,13 +105,20 @@ def _capacity_diameter(mass_flow_kgs, headroom, density_kg_per_m3, v_mps, floor_
     return max(d, floor_m)
 
 
-def _pressure_budget_diameter(
+def pressure_budget_diameter(
     mass_flow_kgs, length_m, dp_pa, density_kg_per_m3, roughness_m, floor_m
 ):
     """Smallest pipe diameter [m] whose Darcy drop over ``length_m`` at
-    ``mass_flow_kgs`` stays inside ``dp_pa``, floored at ``floor_m``.
+    ``mass_flow_kgs`` stays inside ``dp_pa``, floored at ``floor_m``; the
+    pressure criterion of the automatic diameter sizing
+    (``auto_diameter_pressure_budget_pu``).
 
-    Inverts :math:`\\Delta p = 8 f L m^2 / (\\rho \\pi^2 D^5)`.  The friction
+    The fully rough friction factor
+    (:func:`~monee.model.phys.core.hydraulics.friction_at_high_re`) is a lower
+    bound on the Colebrook factor, so in smooth or transitional flow the
+    actual drop is larger than ``dp_pa``.
+
+    Inverts :math:`\\Delta p = 8 f L m^2 / (\\rho \\pi^2 D^5)`. The friction
     factor depends on the diameter it is being solved for, so the fixed point is
     iterated; it converges in two to three passes because ``f`` moves by a few
     percent per decade of ``D``."""
@@ -135,6 +142,9 @@ def _pressure_budget_diameter(
             return d_next
         d = d_next
     return d
+
+
+_pressure_budget_diameter = pressure_budget_diameter
 
 
 def _warn_if_trunk_undersized(trunk_kgs, diameter_m, heat_grid, v_mps):
@@ -1160,7 +1170,7 @@ def create_heat_supply_return_net_for_power(
             return d
         return max(
             d,
-            _pressure_budget_diameter(
+            pressure_budget_diameter(
                 mass_flow_kgs * auto_diameter_headroom,
                 length_m,
                 dp_gradient_pa_per_m * length_m,

@@ -32,6 +32,9 @@ _PROFILE = "_plug_profile"
 _TINY = 1e-9
 _MERGE_PU = 1e-5  # adjacent parcels this close in entry temperature merge (~4 mK)
 _MAX_PARCELS = 32  # per pipe; merges stay below this fraction of its mass
+# The steady first step fills a pipe with water of one entry temperature whose
+# age spans the whole residence time; one parcel would leave at a single age.
+_INIT_PARCELS = 16
 
 
 class PlugFlowTransport(NetworkAspect):
@@ -112,6 +115,13 @@ class _Pipe:
         held = self.mass * mag
         return self.t_ext + (theta - self.t_ext) * held / (
             held + self.ua_c * (age * mag + centre)
+        )
+
+    def now_t(self, parcel):
+        """Present temperature of a parcel ``(mass, T_entry, age)``."""
+        _, theta, age = parcel
+        return self.t_ext + (theta - self.t_ext) * self.mass / (
+            self.mass + self.ua_c * age
         )
 
     def outlet_equation(self, dt_s, eps):
@@ -235,7 +245,12 @@ def _advance_fn(pipe, pipes, network, dt_s):
         m = abs(signed)
         x = m * dt_s
         if pipe.profile is None:
-            return ((pipe.mass, v.t_in_pu, pipe.mass / (2 * m) if m > 0 else 0.0),)
+            mu = pipe.mass / _INIT_PARCELS
+            seq = [
+                (mu, v.t_in_pu, (j + 0.5) * mu / m if m > 0 else 0.0)
+                for j in range(_INIT_PARCELS)
+            ]  # inlet first
+            return tuple(seq if signed >= 0 else seq[::-1])
         inlet = pipe.branch.from_node_id if signed >= 0 else pipe.branch.to_node_id
         pieces = _inflow(pipe, inlet, m, pipes, network, dt_s) or (
             [(x, v.t_in_pu, dt_s / 2)] if x > _TINY else []
@@ -254,17 +269,18 @@ def _advance_fn(pipe, pipes, network, dt_s):
                 # the part left behind entered later: its centre is younger
                 seq[-1] = (mu - need, theta, age - need / (2 * m))
                 need = 0.0
-        seq = _merge(seq, pipe.mass / _MAX_PARCELS)
+        seq = _merge(seq, pipe.mass / _MAX_PARCELS, pipe.now_t)
         return tuple(seq if signed >= 0 else seq[::-1])
 
     return advance
 
 
-def _merge(seq, max_kg):
+def _merge(seq, max_kg, now_t):
     """Merge neighbours of (almost) the same entry temperature up to ``max_kg``
     (mass-weighted temperature and centre age); beyond ``_MAX_PARCELS`` the
-    neighbours whose merge loses the least heat contrast merge, which keeps
-    fronts and bounds the size of the next outlet equation."""
+    neighbours whose merge loses the least contrast of their present
+    temperature ``now_t(parcel)`` merge, which keeps fronts and the age
+    profile and bounds the size of the next outlet equation."""
     out = []
     for parcel in seq:
         if (
@@ -276,7 +292,10 @@ def _merge(seq, max_kg):
         else:
             out.append(parcel)
     while len(out) > _MAX_PARCELS:
-        j = min(range(len(out) - 1), key=lambda i: _contrast(out[i], out[i + 1]))
+        j = min(
+            range(len(out) - 1),
+            key=lambda i: _contrast(out[i], out[i + 1], now_t),
+        )
         out[j : j + 2] = [_combined(out[j], out[j + 1])]
     return out
 
@@ -286,6 +305,6 @@ def _combined(a, b):
     return (m, (a[0] * a[1] + b[0] * b[1]) / m, (a[0] * a[2] + b[0] * b[2]) / m)
 
 
-def _contrast(a, b):
+def _contrast(a, b, now_t):
     """Loss of temperature variance [kg pu^2] when ``a`` and ``b`` merge."""
-    return a[0] * b[0] / (a[0] + b[0]) * (a[1] - b[1]) ** 2
+    return a[0] * b[0] / (a[0] + b[0]) * (now_t(a) - now_t(b)) ** 2

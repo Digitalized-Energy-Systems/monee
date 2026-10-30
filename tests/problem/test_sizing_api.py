@@ -6,6 +6,7 @@ decision diameter, and shared design decisions across periods."""
 
 from types import SimpleNamespace
 
+import numpy as np
 import pytest
 
 import monee.express as mx
@@ -283,6 +284,111 @@ def test_decision_on_off_stays_out_of_the_heat_balance():
     assert [term.degree for term in fixed] == [2, 2]
 
 
+def test_a_decision_on_off_stays_out_of_a_gated_pipes_mass_balance():
+    import casadi as ca
+
+    m_pos, m_neg, z = (ca.SX.sym(n) for n in ("m_pos", "m_neg", "z"))
+    pipe = SimpleNamespace(
+        vars={"mass_flow_pos_kgs": m_pos, "mass_flow_neg_kgs": m_neg, "on_off": z}
+    )
+    compressor = SimpleNamespace(vars={"mass_flow_neg_kgs": m_neg, "on_off": z})
+
+    pipe_terms = mm.Junction().calc_signed_mass_flow([pipe], [], [], water=True)
+    gas_terms = mm.Junction().calc_signed_mass_flow([pipe], [], [])
+    compressor_terms = mm.Junction().calc_signed_mass_flow(
+        [compressor], [], [], water=True
+    )
+
+    # the water pipe formulations gate the flows themselves in any mode; the
+    # smooth gas pipe does not in a simulation, nor does a compressor
+    assert all(ca.depends_on(t, z) is False for t in pipe_terms)
+    assert all(ca.depends_on(t, z) for t in gas_terms + compressor_terms)
+
+
+def test_a_decision_on_off_keeps_the_bus_balance_linear_in_line_flows():
+    """A switched-off branch-flow line keeps only its charging on its
+    terminals; the bus balance removes that instead of multiplying the flow
+    by on_off, which leaves fractional candidates with no power balance."""
+    import casadi as ca
+
+    p, q, z, w = (ca.SX.sym(n) for n in ("p", "q", "z", "w"))
+    bus = mm.Bus(base_kv=20)
+    bus.vm_pu_squared = w
+    line = SimpleNamespace(
+        vars={"p_from_mw": p, "q_from_mvar": q, "on_off": z},
+        _off_flow_is_shunt=True,
+        g_fr_pu=0.01,
+        b_fr_pu=0.2,
+        tap=1.05,
+    )
+    sn = 10.0
+
+    p_term, q_term = bus._branch_power_terms(line, "from", sn)
+
+    assert ca.jacobian(p_term, p).is_one() and ca.jacobian(q_term, q).is_one()
+    shunt_p, shunt_q = 0.01 * sn * w / 1.05**2, -0.2 * sn * w / 1.05**2
+    off = ca.Function(
+        "off",
+        [w],
+        [
+            ca.substitute(
+                ca.vertcat(p_term, q_term),
+                ca.vertcat(p, q, z),
+                ca.vertcat(shunt_p, shunt_q, 0),
+            )
+        ],
+    )
+    assert np.allclose(np.array(off(1.1)).flatten(), 0.0)
+    on = ca.substitute(ca.vertcat(p_term, q_term), z, ca.SX(1))
+    assert ca.is_equal(ca.simplify(on[0] - p), ca.SX(0), 3)
+
+
+@requires_gurobi
+def test_candidate_lines_with_charging_pick_the_cheapest_fixed_design():
+    def build():
+        net = mm.Network()
+        b0, b1 = mx.create_bus(net, base_kv=20), mx.create_bus(net, base_kv=20)
+        mx.create_ext_power_grid(net, b0)
+        mx.create_power_load(net, b1, p_mw=3.0, q_mvar=1.0)
+        lines = {
+            r: mx.create_line(
+                net,
+                b0,
+                b1,
+                4000,
+                r_ohm_per_m=r,
+                x_ohm_per_m=1e-4,
+                c_nf_per_m=0.3,
+                max_i_ka=0.3,
+            )
+            for r in (3e-4, 1e-4)
+        }
+        return net, lines
+
+    # GIVEN two candidate cables with charging, the better one priced
+    objectives = {}
+    for keep in (None, 3e-4, 1e-4):
+        net, lines = build()
+        prob = mp.create_economic_dispatch_problem(ext_grid_cost_default=50.0)
+        prob.candidate_branches([lines.values()])
+        prob.objectives.select(
+            lambda m, c, b=lines[1e-4]: isinstance(c, mm.Branch) and c.id == b
+        ).calculate(lambda ms: sum(4.0 * m.on_off for m in ms))
+        if keep is not None:
+            prob.constraints.select(
+                lambda m, c, k=lines[keep]: isinstance(c, mm.Branch) and c.id == k
+            ).equation(lambda m: m.on_off == 1)
+        result = run_energy_flow_optimization(
+            net, prob, solver="gurobi", formulation="nonconvex_miqcqp"
+        )
+        assert result.success
+        objectives[keep] = result.objective
+
+    assert objectives[None] == pytest.approx(
+        min(objectives[3e-4], objectives[1e-4]), abs=1e-3
+    )
+
+
 # --- constraints -------------------------------------------------------------
 
 
@@ -474,8 +580,9 @@ def _sizing_horizon(solver_options, solver="gurobi"):
 def test_multi_period_limit_stop_returns_the_incumbent_and_gap():
     """Regression: a multi-period solve stopped at a limit raised RuntimeError
     and discarded its incumbent and gap. NodeLimit stops deterministically
-    after the root, where Gurobi holds an incumbent but no proof."""
-    result = _sizing_horizon({"NodeLimit": 0, "Threads": 1})
+    after the root, where Gurobi holds an incumbent but no proof (without
+    presolve and cuts, which close this small instance at the root)."""
+    result = _sizing_horizon({"NodeLimit": 0, "Threads": 1, "Presolve": 0, "Cuts": 0})
 
     stats = result.solver_stats
     assert result.success

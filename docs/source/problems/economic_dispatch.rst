@@ -401,6 +401,13 @@ and a unit at regulation 0 stays switched off instead of becoming a decision
 fixed to zero. The regulation a unit carries into the dispatch is therefore its
 availability, not its schedule: set it to 1 to let the optimiser choose the
 operating point freely, below 1 for a derating, and 0 for an outage.
+It is also the point a CasADi solve starts from (``start="simulation"``
+simulates the network at these regulations). To start IPOPT from another
+dispatch, set the units' regulations to that dispatch and restore the
+availability in a hook, which runs before the regulations become decisions:
+``prob.add_hook(lambda net: setattr(net.node_by_id(control_node).model,
+"regulation", Var(start, max=availability, min=0, name="regulation")))``
+for the unit's control node, with ``Var`` from ``monee.model.core``.
 With ``ext_grid_cost_default`` unset, power from the external grid is free,
 which makes the merit order of every unit with an electric side degenerate;
 the builder warns in that case. ``dispatch_coupling_points=False`` keeps

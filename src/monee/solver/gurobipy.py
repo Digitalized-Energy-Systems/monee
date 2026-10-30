@@ -558,15 +558,32 @@ class GurobipySolver(SolverInterface):
         """Whether a single-objective (minimised) solve's incumbent lies far
         outside both MIPGap and MIPGapAbs of Gurobi's final bound. Gurobi's
         non-convex branch and bound can empty its tree on numerically pruned
-        nodes and still report OPTIMAL with that gap."""
+        nodes and still report OPTIMAL with that gap. The relative gap is
+        taken of ``max(|obj|, largest objective coefficient)``: near a zero
+        optimum a relative gap means nothing, and the cost of one unit of the
+        dearest decision is the objective's own scale, so the test is the
+        same whatever unit the objective is written in."""
         if gm.NumObj > 1:
             return False
         try:
             obj, bound = gm.ObjVal, gm.ObjBound
         except Exception:  # noqa: BLE001 - no bound: LP or continuous convex model
             return False
-        tol = max(gm.Params.MIPGapAbs, gm.Params.MIPGap * abs(obj))
-        return obj - bound > cls._GAP_SLACK * tol + 1e-6 * max(1.0, abs(obj))
+        scale = max(abs(obj), cls._objective_scale(gm))
+        tol = max(gm.Params.MIPGapAbs, gm.Params.MIPGap * scale)
+        return obj - bound > cls._GAP_SLACK * tol + 1e-6 * scale
+
+    @staticmethod
+    def _objective_scale(gm) -> float:
+        """Largest magnitude of a linear or quadratic objective coefficient."""
+        try:
+            coeffs = [abs(c) for c in gm.getAttr("Obj", gm.getVars())]
+            objective = gm.getObjective()
+            if hasattr(objective, "getLinExpr"):  # QuadExpr
+                coeffs += [abs(objective.getCoeff(i)) for i in range(objective.size())]
+        except Exception:  # noqa: BLE001 - no coefficients to read
+            return 1.0
+        return max(coeffs, default=1.0)
 
     def _classify(self, gm, *, phase_label: str):
         """Map a Gurobi status to ``(success, report, solver_status,

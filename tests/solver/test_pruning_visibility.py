@@ -143,6 +143,38 @@ def test_dropped_island_names_its_loads_and_the_coupler_switched_off():
     )
 
 
+def test_dropped_island_reports_its_unserved_demand_and_a_silent_coupler():
+    # GIVEN a gas island without its city gate, with a bakery and a boiler
+    net, gas_island = _gas_fed_boiler_net(sink_kgs=0.01, boiler_regulation=0.5)
+    hhv = net.node_by_id(next(iter(gas_island))).grid.higher_heating_value_kwh_per_kg
+    bakery_mw = 0.01 * 3.6 * hhv
+
+    # WHEN
+    with pytest.warns(UserWarning, match="unserved"):
+        result = monee.run_energy_flow(net, exclude_unconnected_nodes=True)
+
+    # THEN the solve succeeds, and the result and the warning name the
+    # island's lost demand
+    assert result.success
+    assert result.dropped_demand == [{"Sink(1) 'bakery'": pytest.approx(bakery_mw)}]
+    pruned = next(w for w in result.warnings if w.category == "pruned")
+    assert f"{bakery_mw:.4g} MW of demand unserved" in pruned.message
+    # and the boiler switched off reports no gas draw
+    boiler = result.get(mm.GasToHeatControlNode).iloc[0]
+    assert boiler["gas_mass_flow_kgs"] == 0
+    assert boiler["heat_mw"] == pytest.approx(0.0, abs=1e-6)
+
+
+def test_a_dropped_island_without_demand_reports_none():
+    net, gas_island = _gas_fed_boiler_net()
+
+    result = monee.run_energy_flow(net, exclude_unconnected_nodes=True)
+
+    assert result.dropped_demand == [{}]
+    pruned = next(w for w in result.warnings if w.category == "pruned")
+    assert "unserved" not in pruned.message
+
+
 def test_heat_network_with_every_unit_and_consumer_off_solves():
     """Regression (resilience V1, gas supply cut): every substation shed and
     every producer off. The off producers' heat ports still bridged the return

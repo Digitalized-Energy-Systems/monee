@@ -43,6 +43,8 @@ from monee.model.core import is_plain_number
 from monee.model.storage import ElectricStorage, GasStorage, ThermalStorage
 
 logger = logging.getLogger(__name__)
+# (model type, attribute) pairs whose zero-lock warning was logged already.
+_ZERO_LOCK_WARNED: set[tuple[str, str]] = set()
 
 
 def nan_to_zero(v):
@@ -622,8 +624,10 @@ class OptimizationProblem:
                 f"heat_duty must be one of {_HEAT_DUTY_MODES}, got {heat_duty!r}"
             )
         self._heat_duty = heat_duty
-        # The network being solved while _apply runs the appliables (hooks).
+        # The network being solved while _apply runs the appliables (hooks),
+        # and the caller's network it was copied from.
         self._applying = None
+        self._applying_source = None
         # Constraints declared by the problem's own helpers (design ties,
         # candidate choices); evaluated next to the user's ``constraints``.
         self._own_constraints = Constraints()
@@ -671,13 +675,16 @@ class OptimizationProblem:
                 param.integer,
                 name=attribute,
             )
-        if val == 0.0:  # NOSONAR
+        key = (type(model).__name__, attribute)
+        if val == 0.0 and key not in _ZERO_LOCK_WARNED:  # NOSONAR
+            _ZERO_LOCK_WARNED.add(key)
             logger.warning(
                 "Attribute '%s' on %s has value 0.0 and no "
                 "explicit bounds - inferred bounds [0, 0] "
                 "will lock this variable. Use an "
                 "AttributeParameter or prob.bounds() to "
-                "set meaningful bounds.",
+                "set meaningful bounds. (Reported once per type and "
+                "attribute in this process.)",
                 attribute,
                 type(model).__name__,
             )
@@ -688,7 +695,9 @@ class OptimizationProblem:
             name=attribute,
         )
 
-    def _apply(self, network: Network):
+    def _apply(self, network: Network, source: Network | None = None):
+        """Apply the problem to *network*, the copy of the caller's *source*
+        network that is solved (``None``: *network* itself)."""
         self._controllable_to_attr.clear()
         duty_exact = []
         if self._heat_duty == "exact":
@@ -700,11 +709,12 @@ class OptimizationProblem:
             for model in duty_exact:
                 model._he_duty_exact = True
         self._applying = network
+        self._applying_source = network if source is None else source
         try:
             for appliable in self._controllable_appliables:
                 appliable(network)
         finally:
-            self._applying = None
+            self._applying = self._applying_source = None
         for model, attributes in self._controllable_to_attr.items():
             for attribute_param in attributes:
                 self._promote_attribute(model, attribute_param)

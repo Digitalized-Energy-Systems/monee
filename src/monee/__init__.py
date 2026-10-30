@@ -234,7 +234,7 @@ def run_energy_flow_optimization(
             result = run_energy_flow_optimization(my_network, my_problem, max_iter=1000, tol=1e-6)
     """
     if copy:
-        net = net.copy()
+        net = net._copy_for_solve()
     return solve(net, optimization_problem, solver, **kwargs)
 
 

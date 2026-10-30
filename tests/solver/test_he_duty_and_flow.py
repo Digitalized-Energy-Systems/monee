@@ -1,5 +1,7 @@
 """Heat-exchanger duty reporting (F-020/F-027) and part-load flow (F-018)."""
 
+import logging
+
 import pytest
 
 import monee.express as mx
@@ -7,6 +9,7 @@ import monee.model as mm
 import monee.problem as mp
 from monee import run_energy_flow, run_energy_flow_optimization
 from monee.model.multi import SubHE
+from tests.util import solver_available
 
 Q_SET_MW = 0.2
 
@@ -41,6 +44,28 @@ def test_under_delivering_heat_exchanger_is_reported():
     key = f"HeatExchangerLoad.{hx_id}.q_mw_delivered_shortfall"
     assert key in result.violations
     assert result.violations[key] == pytest.approx(Q_SET_MW, abs=1e-3)
+
+
+@pytest.mark.skipif(not solver_available("gurobi"), reason="needs Gurobi")
+def test_a_failed_solve_judges_no_duty_shortfall(caplog):
+    # GIVEN a problem without a solution: junction temperatures above their box
+    from monee.solver.gurobipy import GurobipySolver
+
+    net, _ = _dhs_net()
+    problem = mp.OptimizationProblem()
+    problem.constraints = mp.Constraints()
+    problem.constraints.select_types(mm.Junction).equation(lambda m: m.t_pu >= 3)
+
+    # WHEN
+    with caplog.at_level(logging.WARNING, logger="monee.solver.core"):
+        result = run_energy_flow_optimization(
+            net, problem, solver=GurobipySolver(iis=False)
+        )
+
+    # THEN the pre-solve values it reports are not read as unmet duties
+    assert not result.success
+    assert not [k for k in result.violations if "shortfall" in k]
+    assert "setpoint" not in caplog.text
 
 
 def _chp_net():

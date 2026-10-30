@@ -53,6 +53,7 @@ from monee.problem.core import (
     Constraints,
     Objectives,
     OptimizationProblem,
+    _counterpart,
     nan_to_zero,
 )
 from monee.problem.utils import (
@@ -509,10 +510,7 @@ def _warn_inverted_priorities(network, weight_for_load, old_demand, floor):
     for component in network.all_components():
         if not component.active or not _is_consuming_demand(component.model):
             continue
-        try:
-            w = weight_for_load(component.model)
-        except Exception:
-            continue
+        w = weight_for_load(component.model)
         if w is not None and old_demand <= float(w) < floor:
             inverted.append(
                 getattr(component, "name", None)
@@ -745,6 +743,26 @@ def create_min_load_shedding_problem(
 
     problem.add_hook(_attach_shed_headroom_validator)
 
+    # weight_for_load is keyed by the caller's models, but the solve runs on a
+    # copy: each load's weight is read off its counterpart in the caller's net.
+    # An exception in the callback propagates: a default weight would hide it.
+    def _resolve_explicit_weights(network):
+        for component in network.all_components():
+            if _is_consuming_demand(component.model):
+                try:
+                    model = _counterpart(problem._applying_source, component).model
+                except (KeyError, ValueError):
+                    model = component.model
+                component.model._explicit_weight = weight_for_load(model)
+
+    def explicit_weight(model):
+        if hasattr(model, "_explicit_weight"):
+            return model._explicit_weight
+        return weight_for_load(model)
+
+    if weight_for_load is not None:
+        problem.add_hook(_resolve_explicit_weights)
+
     if auto_priority_floor:
         problem.add_hook(
             _make_auto_priority_floor_hook(
@@ -752,7 +770,7 @@ def create_min_load_shedding_problem(
                 alpha=priority_safety_factor,
                 debug=debug,
                 max_line_loading=max_line_loading if check_lp else None,
-                weight_for_load=weight_for_load,
+                weight_for_load=None if weight_for_load is None else explicit_weight,
             )
         )
 
@@ -790,10 +808,7 @@ def create_min_load_shedding_problem(
     # Lookups go through _weights so the auto-priority-floor can retune.
     def weight_fn(model):
         if weight_for_load is not None and _is_consuming_demand(model):
-            try:
-                w = weight_for_load(model)
-            except Exception:
-                w = None
+            w = explicit_weight(model)
             if w is not None:
                 return float(w)
         if isinstance(model, _DEMAND_TYPES):

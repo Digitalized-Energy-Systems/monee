@@ -107,7 +107,7 @@ def _prepare_period(
             mark_ignored_components(net_t, ignored_nodes)
 
     if optimization_problem is not None:
-        optimization_problem._apply(net_t)
+        optimization_problem._apply(net_t, source=network._caller)
 
     apply_child_overwrites(net_t, net_t.nodes, ignored_nodes)
 

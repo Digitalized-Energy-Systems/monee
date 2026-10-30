@@ -139,6 +139,52 @@ def test_flat_start_is_kept_on_request_and_as_fallback(monkeypatch):
     fallback = _solve(net, dispatch, solver="ipopt")
     assert fallback.success
     assert fallback.solver_stats["start"] == "flat"
+    assert fallback.solver_stats["start_fallback"] == "simulation_failed"
+
+
+def test_the_start_simulation_reports_its_time(monkeypatch):
+    # GIVEN a start simulation that takes a measurable time and then fails
+    import time
+
+    def slow_failure(*_args):
+        time.sleep(0.05)
+
+    net, dispatch, _, _ = _district()
+    monkeypatch.setattr(CasADiSolver, "_simulation_values", slow_failure)
+
+    # WHEN
+    result = _solve(net, dispatch, solver="ipopt")
+
+    # THEN its cost is visible next to the total solve time
+    stats = result.solver_stats
+    assert 0.05 <= stats["start_s"] <= stats["solve_s"]
+    assert (
+        _solve(net, dispatch, solver="ipopt", start="flat").solver_stats["start_s"]
+        is None
+    )
+
+
+def test_the_start_simulation_keeps_the_ipopt_retry_chain(monkeypatch):
+    # GIVEN a spy on the simulation solves: an explicit mu_strategy skips the
+    # retry chain, and the start then falls back to flat where a retry converges
+    seen = []
+    solve = CasADiSolver.solve
+
+    def spy(self, *args, **kwargs):
+        if kwargs.get("simulation"):
+            seen.append(kwargs.get("solver_options") or {})
+        return solve(self, *args, **kwargs)
+
+    monkeypatch.setattr(CasADiSolver, "solve", spy)
+    net, dispatch, _, _ = _district()
+
+    # WHEN
+    result = _solve(net, dispatch, solver="ipopt")
+
+    # THEN
+    assert result.solver_stats["start"] == "simulation"
+    assert result.solver_stats["start_fallback"] is None
+    assert seen and not [o for o in seen if "ipopt.mu_strategy" in o]
 
 
 @pytest.mark.parametrize("unit", ["boiler", "hp"])
@@ -208,3 +254,25 @@ def test_water_through_an_idle_unit_leaves_unheated(unit):
 def test_unknown_start_is_rejected():
     with pytest.raises(ValueError, match="start"):
         CasADiSolver(start="warm")
+
+
+def test_a_coupler_transfer_flow_no_row_mentions_does_not_drift():
+    # GIVEN the heat pump's power-side transfer branch, whose mass-flow
+    # scratch variables appear in no equation
+    net, dispatch, _, hp = _district()
+    control = net.compound_by_id(hp).model._control_node
+    transfer = next(
+        b
+        for b in net.branches
+        if type(b.model).__name__ == "GenericTransferBranch"
+        and net.node_by_id(b.to_node_id).model is control
+        and isinstance(net.node_by_id(b.from_node_id).model, mm.Bus)
+    )
+
+    # WHEN
+    result = _solve(net, dispatch, solver="ipopt")
+
+    # THEN the scratch flow keeps its start instead of growing under the barrier
+    assert result.success
+    model = result.network.branch_by_id(transfer.id).model
+    assert model._mass_flow_pos.value == pytest.approx(1.0)

@@ -230,7 +230,11 @@ finding is local, a ``component`` and a ``value`` with its magnitude:
        The bound is shaping the answer; check that it is intentional. A
        variable sitting at its own setpoint bound (an islanding gated
        injection, or a load at the served end of a zero to setpoint gate) is
-       the normal fully served state and is not reported.
+       the normal fully served state and is not reported, nor is the free
+       temperature of an idle coupling unit's control node. Bounds a problem
+       sets are reported too (a bus at the voltage band, a generator
+       curtailed to zero, an exchange cap of zero); limits written as
+       constraints, such as ``line_loading_limit``, are not.
    * - ``temperature``
      - A water junction solved outside 0 to 200 degC. The nodal heat model
        has no physical temperature limit (only the loose ``t_pu`` box), so

@@ -482,7 +482,18 @@ Every period of ``result`` then reports the same ``on_off``. Each window of
 ``run_mpc`` decides a design anew; single solves and ``run_timeseries`` treat
 design attributes as ordinary controllables. The branch formulations gate a
 switched-off candidate's flow, so the models stay quadratic and the global
-MIQCQP solvers (``solver="gurobi"`` or ``"scip"``) take them.
+MIQCQP solvers (``solver="gurobi"`` or ``"scip"``) take them; the node
+balances take a candidate's flows without the ``on_off`` factor (a line
+removes only its charging when off), which keeps them linear in the flows.
+
+A joint solve has to prove the chosen design better than every other by the
+optimality gap. With designs whose costs differ by little, that is harder
+than solving each design on its own: on an 8-period district instance with
+12 designs (3 pipe sizes, 2 cables on each of 2 routes), one fixed design
+solves to optimality in about 30 s, while the joint MIQCQP still has a gap of
+42 EUR against a 2.4 EUR margin after 900 s (Gurobi, one thread).
+Enumerating the designs as separate solves is the robust choice there; the
+joint solve confirms them.
 
 ----
 

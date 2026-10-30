@@ -386,7 +386,10 @@ remain importable but are deprecated.
       no division by the flow magnitude), and active/passive heat-exchanger
       formulations with their binaries pinned to constants. Same
       ``friction_model`` options and the same per-branch ``smoothing_eps``
-      scaling as the smooth gas formulation.
+      scaling as the smooth gas formulation. The smooth upwinding mixes a
+      little of the downstream temperature into a near-idle pipe, linear in
+      ``smoothing_eps``: in a district network about 0.1 K at the default
+      ``1e-3``, 0.01 K at ``1e-4``. Lower it when such pipes matter.
 
       *Best for:* GEKKO IPOPT/APOPT solves of heat networks and full MES.
 

@@ -495,3 +495,32 @@ def test_the_unused_voltage_of_a_coupler_control_node_is_not_reported():
     flagged = [w.component for w in _bound_entries(net, set())]
 
     assert flagged == [f"Bus.{bus}"]
+
+
+@pytest.mark.parametrize("regulation, flagged", [(0.0, False), (0.5, True)])
+def test_the_free_temperature_of_an_idle_unit_is_not_reported(regulation, flagged):
+    """Regression: an idle P2H passes no water, so its control node's t_pu is
+    free and Gurobi parked it at its bound 2; a running unit's still counts."""
+    import monee.express as mx
+    from monee.model.core import Var
+    from monee.solver.core import _bound_entries
+
+    net = mm.Network()
+    bus = mx.create_bus(net)
+    cold, hot = mx.create_water_junction(net), mx.create_water_junction(net)
+    mx.create_p2h(
+        net,
+        bus,
+        cold_node_id=cold,
+        hot_node_id=hot,
+        heat_energy_mw=1.0,
+        diameter_m=0.1,
+        efficiency=3.0,
+    )
+    node = next(n for n in net.nodes if isinstance(n.model, mm.PowerToHeatControlNode))
+    node.model.regulation = Var(regulation, min=0, max=1)
+    node.model.t_pu.value = 2.0
+
+    found = [w.component for w in _bound_entries(net, set())]
+
+    assert (f"PowerToHeatControlNode.{node.id}" in found) is flagged

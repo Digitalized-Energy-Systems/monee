@@ -655,6 +655,41 @@ def test_acceptable_level_stop_is_reported_as_a_warning(caplog):
     assert any("Solved_To_Acceptable_Level" in r.message for r in caplog.records)
 
 
+@pytest.mark.parametrize("simulation", [False, True])
+def test_build_once_timeseries_judges_its_status_like_the_per_step_path(
+    simulation, monkeypatch
+):
+    # GIVEN a formulation with objective terms (MISOCP losses), solved by the
+    # build-once driver and by the per-step solver
+    import monee.solver.casadi as casadi_mod
+    from monee.model.formulation import EL_MISOCP_FORMULATION
+
+    seen = []
+    status_fields = casadi_mod._status_fields
+
+    def spy(stats, simulation=False):
+        seen.append(simulation)
+        return status_fields(stats, simulation=simulation)
+
+    monkeypatch.setattr(casadi_mod, "_status_fields", spy)
+    net, _ = _two_bus_net()
+    ts = CasADiTimeseries(
+        net,
+        _load_profile_td(net, 1),
+        formulation=EL_MISOCP_FORMULATION,
+        simulation=simulation,
+    )
+
+    # WHEN
+    ts.step_result(0)
+    CasADiSolver(start="flat").solve(
+        net.copy(), formulation=EL_MISOCP_FORMULATION, simulation=simulation
+    )
+
+    # THEN both treat an acceptable stop as an optimization's only when it is one
+    assert seen == [simulation, simulation]
+
+
 def test_non_converged_solve_is_retried_with_an_adaptive_barrier(monkeypatch, caplog):
     calls = []
 
@@ -865,3 +900,112 @@ def test_water_pipes_report_their_heat_loss():
     )
     assert np.allclose(pipes["heat_loss_mw"], expected)
     assert (pipes["heat_loss_mw"] > 0).all()
+
+
+def _pipe_loss_exponents(net, pipes):
+    from monee.model.phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
+    from monee.model.phys.nonlinear.wf import pipe_insulation_ua
+
+    ua = {
+        br.id: pipe_insulation_ua(br.model) / SPECIFIC_HEAT_CAP_WATER
+        for br in net.branches
+    }
+    return pipes["id"].map(ua).to_numpy() / pipes["mass_flow_mag_kgs"].to_numpy()
+
+
+def test_exact_heat_loss_follows_the_exponential_decay():
+    from monee.model.formulation import make_heat_nlp_formulation
+    from tests.util import create_water_loop
+
+    net, _, _, _ = create_water_loop(source_t_k=330)
+    rational = monee.run_energy_flow(net.copy()).get(mm.WaterPipe)
+
+    result = monee.run_energy_flow(
+        net, formulation=make_heat_nlp_formulation(heat_loss="exact")
+    )
+
+    pipes = result.get(mm.WaterPipe)
+    x = _pipe_loss_exponents(net, pipes)
+    assert result.success
+    assert x.max() > 1  # a near-stagnant pipe, where the two laws differ
+    assert np.allclose(pipes["alpha"], np.exp(-x), atol=1e-8)
+    assert pipes["t_out_pu"].min() < rational["t_out_pu"].min() - 0.01
+
+
+def test_segmented_heat_loss_matches_a_pipe_split_into_cells():
+    from monee.model.formulation import make_heat_nlp_formulation
+    from tests.util import WATER_LOOP_PIPE_L, create_water_loop
+
+    split, _, _, _ = create_water_loop(source_t_k=330)
+    for pipe in [br.id for br in split.branches]:
+        mx.split_pipe(split, pipe, 4)
+    net, n0, n1, n2 = create_water_loop(source_t_k=330)
+
+    result = monee.run_energy_flow(
+        net,
+        formulation=make_heat_nlp_formulation(segment_length_m=WATER_LOOP_PIPE_L / 4),
+    )
+
+    pipes = result.get(mm.WaterPipe)
+    x = _pipe_loss_exponents(net, pipes)
+    assert np.allclose(pipes["alpha"], (1 + x / 4) ** -4, atol=1e-7)
+    t = result.dataframes["Junction"].set_index("id")["t_pu"]
+    t_split = (
+        monee.run_energy_flow(split).dataframes["Junction"].set_index("id")["t_pu"]
+    )
+    assert np.allclose(t.loc[[n0, n1, n2]], t_split.loc[[n0, n1, n2]], atol=1e-6)
+
+
+def test_heat_loss_cells_are_powers_of_two_no_longer_than_asked():
+    from monee.model.formulation import make_heat_nlp_formulation
+    from monee.model.formulation.common import heat_loss_cells
+
+    assert heat_loss_cells(900, None) == 1
+    assert heat_loss_cells(900, 1000) == 1
+    assert heat_loss_cells(900, 300) == 4
+    assert heat_loss_cells(4420, 100) == 64
+    with pytest.raises(ValueError, match="exact law"):
+        make_heat_nlp_formulation(heat_loss="exact", segment_length_m=100)
+    with pytest.raises(ValueError, match="heat_loss"):
+        make_heat_nlp_formulation(heat_loss="exponential")
+
+
+@pytest.mark.parametrize(
+    "factory",
+    [
+        "make_heat_nlp_formulation",
+        "make_heat_nonconvex_miqcqp_formulation",
+        "make_heat_nonconvex_pwl_formulation",
+    ],
+)
+@pytest.mark.parametrize("segment_length_m", [0, -100.0])
+def test_every_segmented_formulation_rejects_a_non_positive_cell(
+    factory, segment_length_m
+):
+    import monee.model.formulation as formulations
+
+    with pytest.raises(ValueError, match="segment_length_m must be > 0"):
+        getattr(formulations, factory)(segment_length_m=segment_length_m)
+
+
+def test_a_variable_no_row_mentions_is_fixed_at_its_start():
+    # GIVEN a flow-like variable bounded below only that appears in no
+    # constraint and no objective term (the barrier would push it upwards)
+    import casadi as ca
+
+    from monee.solver.casadi import CasModel, CasSym, _assemble_nlp_vectors
+
+    used, unused = ca.SX.sym("used"), ca.SX.sym("unused")
+    m = CasModel()
+    m.Equation(CasSym(used) == 1.0)
+    reg = [
+        {"sx": used, "x0": 0.5, "lb": 0.0, "ub": float("inf")},
+        {"sx": unused, "x0": 1.0, "lb": 0.0, "ub": float("inf")},
+    ]
+
+    # WHEN
+    _X, _x0, lbx, ubx, *_ = _assemble_nlp_vectors(reg, m)
+
+    # THEN only the unused one is fixed, at its start
+    assert list(np.array(lbx).flatten()) == [0.0, 1.0]
+    assert list(np.array(ubx).flatten()) == [float("inf"), 1.0]

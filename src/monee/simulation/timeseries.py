@@ -1385,7 +1385,7 @@ def run(  # NOSONAR
             if isinstance(hook, StepHook):
                 hook.pre_run(net, step, step_state)
 
-        net_copy = net.copy()
+        net_copy = net._copy_for_solve()
         timeseries_data.apply_to_network(net_copy, step)
 
         if solve_flag:

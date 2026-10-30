@@ -2,6 +2,7 @@
 
 import math
 
+import numpy as np
 import pytest
 
 import monee.express as mx
@@ -135,7 +136,7 @@ def test_parcel_count_stays_bounded_and_keeps_the_front():
     ]
 
     # WHEN
-    merged = _merge(seq, max_kg=1.0)
+    merged = _merge(seq, max_kg=1.0, now_t=lambda parcel: parcel[1])
 
     # THEN the count is capped, mass and heat are kept, the front survives
     assert len(merged) == _MAX_PARCELS
@@ -155,27 +156,84 @@ def test_lumped_capacitance_smears_the_same_front():
     assert t_out.iloc[3] < _outlet_k(net, pipe, 356.0) - 1.0
 
 
+def _first_water_outlet_k(net, pipe, exit_age_s, x_kg, steps):
+    """Closed-form step means of the outlet temperature while the 356 K water
+    of the steady first step drains, ``x_kg`` per step; the water ``c`` kg from
+    the outlet leaves at the age ``exit_age_s(c)``."""
+    bm = net.branch_by_id(pipe).model
+    ua_c = pipe_insulation_ua(bm) / SPECIFIC_HEAT_CAP_WATER
+    t_ext = bm.temperature_ext_k
+    mass = _pipe_mass(net, pipe)
+    c = [np.linspace(k * x_kg, (k + 1) * x_kg, 2001) for k in range(steps)]
+    return np.array(
+        [
+            (t_ext + (356.0 - t_ext) / (1 + ua_c * exit_age_s(ck) / mass)).mean()
+            for ck in c
+        ]
+    )
+
+
+def _pipe_mass(net, pipe):
+    rho = net.branch_by_id(pipe).grid.fluid_density_kg_per_m3
+    return rho * math.pi / 4 * D_M**2 * L_M
+
+
+def test_outlet_ramps_while_the_first_water_drains_after_a_flow_drop():
+    # GIVEN 10 kg/s in the steady first step, then 2.5 kg/s: the water c kg
+    # from the outlet entered (M - c) / 10 s ago and leaves c / 2.5 s later
+    net, _, n1, pipe = _line(PlugFlowTransport())
+    sink = net.node_by_id(n1).child_ids[0]
+    td = TimeseriesData()
+    td.add_child_series(sink, "mass_flow_kgs", [FLOW_KGS] + [FLOW_KGS / 4] * 30)
+
+    # WHEN
+    ts = run(net, td, steps=31, dt_h=DT_H, solver="ipopt")
+
+    # THEN the outlet follows the closed form instead of holding one value
+    assert not ts.failed_steps
+    mass = _pipe_mass(net, pipe)
+    exact = _first_water_outlet_k(
+        net,
+        pipe,
+        lambda c: (mass - c) / FLOW_KGS + c / (FLOW_KGS / 4),
+        FLOW_KGS / 4 * DT_H * 3600,
+        30,
+    )
+    t_ref_k = net.node_by_id(n1).grid.t_ref_k
+    t_out = ts.get_result_for_id(n1, "t_pu").to_numpy()[1:] * t_ref_k
+    assert exact[0] - exact[-1] > 1.0
+    assert np.abs(t_out - exact).max() < 0.05
+
+
 def test_plug_flow_follows_a_flow_reversal():
     # GIVEN a 340 K source at the far end that outgrows the sink at step 2: the
-    # flow reverses, and the hot water that entered at the supply end leaves
-    # there first (x = 0.13 pipe volumes per step)
+    # flow reverses, and the hot water that entered at the supply end c kg
+    # from it c / 10 s ago leaves there first, c / 10 s later
     net, supply, n1, pipe = _line(
         PlugFlowTransport(), mm.Source(mass_flow_kgs=1e-3, t_k=340)
     )
     source = net.node_by_id(n1).child_ids[1]
     td = TimeseriesData()
     # the series sets the stored (load-convention) attribute: negative injects
-    td.add_child_series(source, "mass_flow_kgs", [-1e-3, -1e-3, -2 * FLOW_KGS])
+    td.add_child_series(source, "mass_flow_kgs", [-1e-3, -1e-3] + [-2 * FLOW_KGS] * 7)
 
     # WHEN
-    ts = run(net, td, steps=3, dt_h=DT_H, solver="ipopt")
+    ts = run(net, td, steps=9, dt_h=DT_H, solver="ipopt")
 
     # THEN
     assert not ts.failed_steps
     flow = ts.get_result_for_id(pipe, "mass_flow_kgs")
     t_out_k = ts.get_result_for_id(pipe, "t_out_pu") * net.node_by_id(n1).grid.t_ref_k
     assert flow.iloc[1] < 0 < flow.iloc[2]  # mass_flow_kgs is positive to -> from
-    assert t_out_k.iloc[2] > 355.0  # a steady pipe would deliver ~340 K
+    exact = _first_water_outlet_k(
+        net,
+        pipe,
+        lambda c: c / (FLOW_KGS - 1e-3) + c / FLOW_KGS,
+        FLOW_KGS * DT_H * 3600,
+        7,
+    )
+    assert exact[0] - exact[-1] > 0.5  # a steady pipe would deliver ~340 K
+    assert np.abs(t_out_k.to_numpy()[2:] - exact).max() < 0.05
 
 
 def _two_pipes(extension, heat):

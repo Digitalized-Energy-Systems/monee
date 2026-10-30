@@ -278,9 +278,12 @@ without lag; a pipe fed by a single pipe receives that pipe's outflow parcels
 in order, so a front keeps its shape across junctions. Behind a mixing
 junction (several feeds, an injection, heat added or taken there, or a pinned
 temperature) the inflow of a step is one parcel at the junction's
-interval-mean temperature, so a front is resolved there at the step size. A
-pipe holds at most 32 parcels; beyond that the neighbours closest in
-temperature merge (mass and heat kept), which keeps fronts and the size of
+interval-mean temperature, so a front is resolved there at the step size.
+The steady first step fills each pipe with 16 equal parcels whose ages follow
+its flow, so after a flow drop or reversal the outlet ramps through the ages
+of the standing water instead of holding one value. A pipe holds at most 32
+parcels; beyond that the neighbours closest in present temperature merge
+(mass and heat kept), which keeps fronts, the age profile and the size of
 each step's equations bounded however small the step.
 
 The attenuation law is the first-order form of the exponential decay

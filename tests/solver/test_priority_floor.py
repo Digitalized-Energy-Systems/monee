@@ -222,6 +222,157 @@ def test_a_tagged_load_weight_reaches_the_solve_on_the_copied_network():
     assert regulation["warehouse"] < 0.5
 
 
+def _two_load_feeder():
+    import monee.express as mx
+
+    net = mx.create_multi_energy_network()
+    sub, b1, b2 = mx.create_bus(net), mx.create_bus(net), mx.create_bus(net)
+    mx.create_line(net, sub, b1, 500, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
+    mx.create_line(net, b1, b2, 500, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
+    mx.create_ext_power_grid(net, sub)
+    ids = {
+        name: mx.create_power_load(net, bus, p_mw=0.4, q_mvar=0.0, name=name)
+        for name, bus in (("hospital", b2), ("warehouse", b1))
+    }
+    return net, ids
+
+
+def _regulations(net, problem, entry):
+    import monee
+    import monee.model as mm
+    from monee.simulation import TimeseriesData, run_multi_period
+
+    def frame(df):
+        return df.set_index("name")["regulation"]
+
+    if entry in ("copy_false", "copy_true"):
+        result = monee.run_energy_flow_optimization(
+            net, problem, copy=entry == "copy_true"
+        )
+        return [frame(result.get(mm.PowerLoad))]
+    if entry == "stepper":
+        stepper = monee.Stepper(net, optimization_problem=problem)
+        return [frame(stepper.step(1.0).result.get(mm.PowerLoad)) for _ in range(2)]
+    td = TimeseriesData()
+    load_id = next(c.id for c in net.childs if c.name == "warehouse")
+    td.add_child_series(load_id, "p_mw", [0.4, 0.4])
+    if entry == "multi_period":
+        result = run_multi_period(net, td, steps=2, optimization_problem=problem)
+        return [
+            frame(result.get_period_result(t).get(mm.PowerLoad))
+            for t in range(result.T)
+        ]
+    result = monee.run_timeseries(net, td, steps=2, optimization_problem=problem)
+    return [frame(r.result.get(mm.PowerLoad)) for r in result.step_results]
+
+
+@pytest.mark.parametrize(
+    "entry", ["copy_false", "copy_true", "multi_period", "timeseries", "stepper"]
+)
+@pytest.mark.parametrize("keep", ["hospital", "warehouse"])
+def test_load_weights_keyed_by_the_callers_models_reach_every_entry_point(keep, entry):
+    # GIVEN a dict keyed by the caller's load models (every entry point solves
+    # internal copies of the network)
+    net, ids = _two_load_feeder()
+    weights = {net.child_by_id(ids[keep]).model: 1e5}
+    problem = create_min_load_shedding_problem(
+        bounds_ext_el=(-0.5, 0.0),
+        weight_for_load=weights.get,
+        check_pressure=False,
+        check_t=False,
+    )
+
+    # WHEN
+    regulations = _regulations(net, problem, entry)
+
+    # THEN the weighted load is kept in every period, whichever it is
+    assert regulations
+    for regulation in regulations:
+        assert regulation[keep] == pytest.approx(1.0, abs=1e-4)
+        assert regulation.drop(keep).iloc[0] < 0.5
+
+
+def test_an_exception_in_the_weight_callback_is_not_swallowed():
+    # GIVEN a callback that fails on every load
+    import monee
+
+    net, _ids = _two_load_feeder()
+
+    def broken(model):
+        raise KeyError(model)
+
+    problem = create_min_load_shedding_problem(
+        bounds_ext_el=(-0.5, 0.0),
+        weight_for_load=broken,
+        check_pressure=False,
+        check_t=False,
+    )
+
+    # WHEN / THEN the error reaches the caller instead of a default weight
+    with pytest.raises(KeyError):
+        monee.run_energy_flow_optimization(net, problem)
+
+
+def test_a_users_own_network_copy_keeps_its_own_model_identities():
+    # GIVEN weights keyed by the models of a copy the caller made and solves
+    import monee
+    import monee.model as mm
+
+    base, ids = _two_load_feeder()
+    net = base.copy()
+    weights = {net.child_by_id(ids["hospital"]).model: 1e5}
+    problem = create_min_load_shedding_problem(
+        bounds_ext_el=(-0.5, 0.0),
+        weight_for_load=weights.get,
+        check_pressure=False,
+        check_t=False,
+    )
+
+    # WHEN
+    result = monee.run_energy_flow_optimization(net, problem, copy=True)
+
+    # THEN the copy is the caller's network, not the base it was copied from
+    regulation = result.get(mm.PowerLoad).set_index("name")["regulation"]
+    assert regulation["hospital"] == pytest.approx(1.0, abs=1e-4)
+
+
+@pytest.mark.parametrize("keep", ["hospital", "warehouse"])
+def test_load_weights_keyed_by_the_callers_models_reach_the_solve(keep):
+    # GIVEN a dict keyed by the caller's load models (the solve runs on a copy)
+    import monee
+    import monee.express as mx
+    import monee.model as mm
+
+    net = mx.create_multi_energy_network()
+    sub, b1, b2 = mx.create_bus(net), mx.create_bus(net), mx.create_bus(net)
+    mx.create_line(net, sub, b1, 500, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
+    mx.create_line(net, b1, b2, 500, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
+    mx.create_ext_power_grid(net, sub)
+    ids = {
+        "hospital": mx.create_power_load(
+            net, b2, p_mw=0.4, q_mvar=0.0, name="hospital"
+        ),
+        "warehouse": mx.create_power_load(
+            net, b1, p_mw=0.4, q_mvar=0.0, name="warehouse"
+        ),
+    }
+    weights = {net.child_by_id(ids[keep]).model: 1e5}
+    problem = create_min_load_shedding_problem(
+        bounds_ext_el=(-0.5, 0.0),
+        weight_for_load=weights.get,
+        check_pressure=False,
+        check_t=False,
+    )
+
+    # WHEN
+    result = monee.run_energy_flow_optimization(net, problem)
+
+    # THEN the weighted load is kept, whichever it is
+    regulation = result.get(mm.PowerLoad).set_index("name")["regulation"]
+    assert regulation[keep] == pytest.approx(1.0, abs=1e-4)
+    assert regulation.drop(keep).iloc[0] < 0.5
+
+
 # --------------------------------------------------------------------------- #
 # 3. Behavioural test - auto floor protects weighted mode under aux scaling
 # --------------------------------------------------------------------------- #

@@ -758,6 +758,21 @@ class GasToHeat(_RegulatedCompound, MultiGridCompoundModel):
         self._old_regulation = self.regulation
         self._active = True
 
+    def set_active(self, activation_flag):
+        # Switched off, the control node reports no gas draw (as the CHP's).
+        if not activation_flag and self._active:
+            self._old_gas_mass_flow_kgs = self._control_node.gas_mass_flow_kgs
+        super().set_active(activation_flag)
+
+    def _restore_controls(self):
+        if is_plain_number(self._control_node.gas_mass_flow_kgs):
+            self._control_node.gas_mass_flow_kgs = self._old_gas_mass_flow_kgs
+        super()._restore_controls()
+
+    def _zero_controls(self):
+        self._control_node.gas_mass_flow_kgs = 0
+        super()._zero_controls()
+
     def create(
         self,
         network: Network,

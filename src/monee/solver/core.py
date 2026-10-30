@@ -28,10 +28,11 @@ from monee.model import (
     Var,
     WaterPipe,
 )
+from monee.model.branch import hx_is_consuming
 from monee.model.child import GridFormingMixin, _is_series_pinned
 from monee.model.formulation.miqcqp.convex.gas import restore_exact_weymouth
 from monee.model.formulation.miqcqp.nonconvex.heat import restore_exact_heat_pressures
-from monee.model.grid import GasGrid, PowerGrid, WaterGrid
+from monee.model.grid import KGPS_KWHPERKG_TO_MW, GasGrid, PowerGrid, WaterGrid
 from monee.model.node import Junction
 from monee.problem.core import OptimizationProblem
 
@@ -222,7 +223,12 @@ class SolverResult:
     excluded because they hold no slack or source (no ``ExtPowerGrid`` /
     ``ExtHydrGrid``, nor a grid-forming child under islanding). Their
     components appear as NaN/ignored in the frames, a coupler with a port in
-    one is switched off, and the ``pruned`` warning names them all.
+    one is switched off (its control node reports no input), and the
+    ``pruned`` warning names them all. ``dropped_demand`` holds, in the same
+    order, ``{component label: MW}`` of the demand each island leaves
+    unserved: loads, gas sinks (at the grid's heating value) and consuming
+    heat exchangers at setpoint times regulation; the ``pruned`` warning
+    names an island with demand and its total. The solve still succeeds.
 
     Frame index
     -----------
@@ -252,6 +258,7 @@ class SolverResult:
     warnings: list = field(default_factory=list)
     solver_stats: dict = field(default_factory=dict)
     dropped_islands: list = field(default_factory=list)
+    dropped_demand: list = field(default_factory=list)
 
     def __post_init__(self):
         _clamp_regulation_noise(self.dataframes)
@@ -1226,7 +1233,7 @@ def prepare_solve_network(  # NOSONAR
             if described is not None:
                 _warnings.warn(described[0], stacklevel=2)
     if optimization_problem is not None:
-        optimization_problem._apply(network)
+        optimization_problem._apply(network, source=input_network._caller)
     return network, ignored_nodes, islanding_config
 
 
@@ -1296,10 +1303,13 @@ def finalize_failed_solution(
     pre-solve values back from the untouched *input_network* instead of
     persisting them (which would clobber warm starts and carried storage
     state), then evaluate post-processes and return the bound-violation
-    report."""
+    report. The pre-solve values are no dispatch, so no duty shortfall is
+    judged on them."""
     persist_solution(input_network, network)
     apply_post_process_all(nodes, branches, compounds, network)
-    return compute_bound_violations(nodes, branches, compounds, network)
+    return compute_bound_violations(
+        nodes, branches, compounds, network, heat_duty=False
+    )
 
 
 def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
@@ -1318,7 +1328,8 @@ def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
     the solve depends on and, on a multi-energy compound, IPOPT's flat start
     with it. An optimisation solve is well posed with them, and dropping them
     there only reshuffles the variable order, moving which local optimum a
-    nonconvex solve reaches.
+    nonconvex solve reaches; the CasADi back-end fixes those bounded on one
+    side only at their start (``casadi._assemble_nlp_vectors``).
     """
     prune = getattr(network, "_solve_simulation", False)
     _inject_branches(inject_fn, branches, network, ignored_nodes, prune)
@@ -1540,11 +1551,11 @@ def _he_duty_shortfall(model, tol: float) -> tuple[float, float] | None:
 
 
 def compute_bound_violations(  # NOSONAR
-    nodes, branches, compounds, network, tol: float = 1e-6
+    nodes, branches, compounds, network, tol: float = 1e-6, heat_duty: bool = True
 ) -> dict[str, float]:
     """``{"<Type>.<id>.<attr>": magnitude}`` for Var.value violations beyond *tol*,
-    plus ``<attr> == "q_mw_delivered_shortfall"`` entries for fixed-duty heat
-    exchangers that did not reach their setpoint."""
+    plus (with ``heat_duty``) ``<attr> == "q_mw_delivered_shortfall"`` entries
+    for fixed-duty heat exchangers that did not reach their setpoint."""
     violations: dict[str, float] = {}
 
     def _check(model, label: str) -> None:
@@ -1562,7 +1573,7 @@ def compute_bound_violations(  # NOSONAR
     for branch in branches:
         label = f"{type(branch.model).__name__}.{branch.id}"
         _check(branch.model, label)
-        if isinstance(branch.model, HeatExchanger):
+        if heat_duty and isinstance(branch.model, HeatExchanger):
             duty_gap = _he_duty_shortfall(branch.model, tol)
             if duty_gap is not None:
                 shortfall, duty = duty_gap
@@ -2060,7 +2071,64 @@ def describe_pruning(network, ignored_nodes) -> tuple[str, int] | None:
         "reports this before solving; the how-to/diagnose_infeasibility docs "
         "page explains the pruning rules"
     )
+    for island, demand in zip(
+        getattr(network, "_dropped_islands", ()),
+        getattr(network, "_dropped_demand", ()),
+    ):
+        if demand:
+            message += ". " + _unserved_island_text(network, island, demand)
     return message, total
+
+
+def _unserved_island_text(network, island, demand) -> str:
+    def shown(labels):
+        text = ", ".join(labels[:_PRUNE_MAX_LABELS])
+        extra = len(labels) - _PRUNE_MAX_LABELS
+        return text + (f" and {extra} more" if extra > 0 else "")
+
+    nodes = shown([_component_label(network.node_by_id(n)) for n in sorted(island)])
+    loads = shown([f"{label} {mw:.4g} MW" for label, mw in demand.items()])
+    return (
+        f"The island {nodes} leaves {sum(demand.values()):.4g} MW of demand "
+        f"unserved: {loads}"
+    )
+
+
+def _island_demand_mw(network, island) -> dict:
+    """``{component label: MW}`` of the demand a dropped *island* leaves
+    unserved (see ``SolverResult.dropped_demand``)."""
+    demand = {}
+    for node_id in island:
+        node = network.node_by_id(node_id)
+        for child in network.childs_by_ids(node.child_ids):
+            mw = _demand_mw(child.model, node.grid) if child.active else 0.0
+            if mw > 0:
+                demand[_component_label(child)] = mw
+    for branch in network.branches:
+        if (
+            branch.active
+            and hx_is_consuming(branch.model)
+            and {branch.from_node_id, branch.to_node_id} <= island
+        ):
+            mw = branch.model.q_mw_set * (_val(branch.model.regulation) or 0.0)
+            if mw > 0:
+                demand[_component_label(branch)] = mw
+    return demand
+
+
+def _demand_mw(model, grid) -> float:
+    regulation = _val(getattr(model, "regulation", 1)) or 0.0
+    for attr in ("p_mw", "q_mw_heat", "mass_flow_kgs"):
+        setpoint = _val(getattr(model, attr, None))
+        if setpoint is None or setpoint <= 0:
+            continue
+        if attr == "mass_flow_kgs":
+            # a water sink is a hydraulic boundary, not a demand
+            if not isinstance(grid, GasGrid):
+                return 0.0
+            setpoint *= KGPS_KWHPERKG_TO_MW * grid.higher_heating_value_kwh_per_kg
+        return setpoint * regulation
+    return 0.0
 
 
 def _pruned_entry(network, ignored_nodes) -> ResultWarning | None:
@@ -2159,6 +2227,10 @@ def _bound_entries(network, ignored_nodes) -> list[ResultWarning]:
             attrs = _GAS_NODE_BOUND_ATTRS
         elif isinstance(node.model, MultiGridNodeModel):
             attrs = _COUPLER_NODE_BOUND_ATTRS
+            # an idle unit passes no water, so its temperature is free
+            regulation = _val(getattr(node.model, "regulation", None))
+            if regulation is not None and abs(regulation) <= 1e-6:
+                attrs = attrs - {"t_pu"}
         else:
             attrs = _NODE_BOUND_ATTRS
         entries += _model_bound_entries(
@@ -2309,8 +2381,8 @@ def uncovered_free_var_entry(reg, m) -> ResultWarning | None:
     used = {s.name() for s in ca.symvar(ca.vertcat(*[c.r for c in m.cons]))}
     # Variables no constraint mentions at all are formulation scratch symbols
     # (e.g. an unused squared-voltage alias); counting them would fire on every
-    # plain optimization-mode flow.
-    n_constrained = sum(1 for r in reg if r["sx"].name() in used)
+    # plain optimization-mode flow. A Var with equal bounds is fixed.
+    n_constrained = sum(1 for r in reg if r["sx"].name() in used and r["lb"] != r["ub"])
     if n_constrained <= n_eq:
         return None
     return ResultWarning(
@@ -2402,6 +2474,7 @@ def validate_result(  # NOSONAR
     """
     ignored_nodes = ignored_nodes or set()
     result.dropped_islands = list(getattr(network, "_dropped_islands", ()))
+    result.dropped_demand = list(getattr(network, "_dropped_demand", ()))
     entries: list[ResultWarning] = list(extra_warnings or [])
     if result.success:
         entries += _carrier_balance_entries(network, ignored_nodes)
@@ -2615,6 +2688,7 @@ def find_ignored_nodes(  # NOSONAR
     pruning_rules: dict = {}
     network._pruning_rules = pruning_rules
     network._dropped_islands = []
+    network._dropped_demand = []
     without_cps = network.copy()
     remove_cps(without_cps)
 
@@ -2661,6 +2735,7 @@ def find_ignored_nodes(  # NOSONAR
         if not component_leading:
             ignored_nodes.update(component)
             network._dropped_islands.append(frozenset(component))
+            network._dropped_demand.append(_island_demand_mw(network, component))
             for node_id in component:
                 pruning_rules[node_id] = _PRUNE_RULE_NO_LEAD
 

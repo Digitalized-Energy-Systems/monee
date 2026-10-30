@@ -10,7 +10,7 @@ from .core import (
     model,
     store_unknown_kwargs,
 )
-from .grid import PowerGrid
+from .grid import PowerGrid, WaterGrid
 from .phys.core.hydraulics import junction_mass_flow_balance
 from .phys.nonlinear.ac import power_balance_equation
 from .phys.nonlinear.hf import SPECIFIC_HEAT_CAP_WATER
@@ -29,23 +29,44 @@ class Bus(NodeModel):
         self.q_mvar = Intermediate()
 
     def calc_signed_power_values(
-        self, from_branch_models, to_branch_models, child_models
+        self, from_branch_models, to_branch_models, child_models, sn_mva=1.0
     ):
-        # model.vars builds a dict per access - fetch once per model.
-        from_vars = [model.vars for model in from_branch_models]
-        to_vars = [model.vars for model in to_branch_models]
+        terms = [
+            self._branch_power_terms(m, side, sn_mva)
+            for side, models in (("from", from_branch_models), ("to", to_branch_models))
+            for m in models
+        ]
         child_vars = [model.vars for model in child_models]
-        signed_active_power = (
-            [vs["p_from_mw"] * vs["on_off"] for vs in from_vars]
-            + [vs["p_to_mw"] * vs["on_off"] for vs in to_vars]
-            + [vs["p_mw"] * vs["regulation"] for vs in child_vars]
-        )
-        signed_reactive_power = (
-            [vs["q_from_mvar"] * vs["on_off"] for vs in from_vars]
-            + [vs["q_to_mvar"] * vs["on_off"] for vs in to_vars]
-            + [vs["q_mvar"] * vs["regulation"] for vs in child_vars]
-        )
+        signed_active_power = [p for p, _ in terms] + [
+            vs["p_mw"] * vs["regulation"] for vs in child_vars
+        ]
+        signed_reactive_power = [q for _, q in terms] + [
+            vs["q_mvar"] * vs["regulation"] for vs in child_vars
+        ]
         return (signed_active_power, signed_reactive_power)
+
+    def _branch_power_terms(self, branch, side, sn_mva):
+        """``(P, Q)`` a branch injects at this bus, its terminal flows times
+        ``on_off``. A branch-flow branch (``_off_flow_is_shunt``) whose
+        ``on_off`` is a decision forces its series flow to zero when off, so
+        only its shunt injection is left to remove: ``flow - shunt * (1 -
+        on_off)`` is the same on every binary point, but linear in the flow,
+        where ``flow * on_off`` gives a relaxation that drops the power
+        balance of a fractional candidate line."""
+        vs = branch.vars
+        p, q, on_off = vs[f"p_{side}_mw"], vs[f"q_{side}_mvar"], vs["on_off"]
+        if isinstance(on_off, numbers.Real) or not getattr(
+            branch, "_off_flow_is_shunt", False
+        ):
+            return p * on_off, q * on_off
+        end, tap = (
+            ("fr", getattr(branch, "tap", 1.0) or 1.0)
+            if side == "from"
+            else ("to", 1.0)
+        )
+        w = self.vm_pu_squared * (sn_mva / (tap * tap))
+        g, b = getattr(branch, f"g_{end}_pu", 0.0), getattr(branch, f"b_{end}_pu", 0.0)
+        return p - g * w * (1 - on_off), q + b * w * (1 - on_off)
 
     def p_mw_equation(self, child_models):
         return IntermediateEq(
@@ -77,11 +98,11 @@ class Bus(NodeModel):
         child_models,
         **kwargs,
     ):
+        sn = grid.sn_mva if isinstance(grid, PowerGrid) else 1.0
         signed_ap, signed_rp = self.calc_signed_power_values(
-            from_branch_models, to_branch_models, child_models
+            from_branch_models, to_branch_models, child_models, sn
         )
         self.va_degree = PostProcess(lambda v: 180 / math.pi * v.va_radians)
-        sn = grid.sn_mva if isinstance(grid, PowerGrid) else 1.0
         return [
             self.p_mw_equation(child_models),
             self.q_mvar_equation(child_models),
@@ -100,6 +121,21 @@ def _heat_gate(branch_vars):
     return on_off if isinstance(on_off, numbers.Real) else 1
 
 
+def _flow_gate(branch_vars, water):
+    """``on_off`` factor of a branch's mass-balance flow terms: on a water
+    grid as :func:`_heat_gate` for pipes and exchangers (they carry both flow
+    directions, and every water formulation gates them in any mode), so a
+    candidate pipe stays linear in the balance; ``on_off`` itself otherwise
+    (the smooth gas pipe drops its gate in a simulation)."""
+    if (
+        water
+        and "mass_flow_pos_kgs" in branch_vars
+        and "mass_flow_neg_kgs" in branch_vars
+    ):
+        return _heat_gate(branch_vars)
+    return branch_vars["on_off"]
+
+
 @model
 class Junction(NodeModel):
     def __init__(self, **kwargs) -> None:
@@ -115,7 +151,9 @@ class Junction(NodeModel):
         self.pressure_pu = Var(1, min=0.5, max=2, name="pressure_pu")
         self.mass_flow_kgs = Intermediate(1)
 
-    def calc_signed_mass_flow(self, from_branch_models, to_branch_models, child_models):
+    def calc_signed_mass_flow(
+        self, from_branch_models, to_branch_models, child_models, water=False
+    ):
         # model.vars builds a dict per access - fetch once per model.
         from_vars = [model.vars for model in from_branch_models]
         to_vars = [model.vars for model in to_branch_models]
@@ -132,22 +170,22 @@ class Junction(NodeModel):
                 if "to_mass_flow_kgs" in vs
             ]
             + [
-                -vs["mass_flow_pos_kgs"] * vs["on_off"]
+                -vs["mass_flow_pos_kgs"] * _flow_gate(vs, water)
                 for vs in from_vars
                 if "mass_flow_pos_kgs" in vs
             ]
             + [
-                vs["mass_flow_pos_kgs"] * vs["on_off"]
+                vs["mass_flow_pos_kgs"] * _flow_gate(vs, water)
                 for vs in to_vars
                 if "mass_flow_pos_kgs" in vs
             ]
             + [
-                vs["mass_flow_neg_kgs"] * vs["on_off"]
+                vs["mass_flow_neg_kgs"] * _flow_gate(vs, water)
                 for vs in from_vars
                 if "mass_flow_neg_kgs" in vs
             ]
             + [
-                -vs["mass_flow_neg_kgs"] * vs["on_off"]
+                -vs["mass_flow_neg_kgs"] * _flow_gate(vs, water)
                 for vs in to_vars
                 if "mass_flow_neg_kgs" in vs
             ]
@@ -268,7 +306,10 @@ class Junction(NodeModel):
         **kwargs,
     ):
         mass_flow_signed_list = self.calc_signed_mass_flow(
-            from_branch_models, to_branch_models, child_models
+            from_branch_models,
+            to_branch_models,
+            child_models,
+            water=isinstance(grid, WaterGrid),
         )
         energy_flow_list = self.calc_signed_heat_flow(
             from_branch_models, to_branch_models, child_models, grid

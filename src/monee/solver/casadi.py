@@ -437,20 +437,36 @@ def _merged_ipopt_opts(
     return opts
 
 
-def _assemble_nlp_vectors(reg, m: CasModel):
+def _assemble_nlp_vectors(reg, m: CasModel, fix_unused: bool = True):
     """``(X, x0, lbx, ubx, g, lbg, ubg, f)`` from the injected variable register
-    and the collected constraints/objective terms."""
+    and the collected constraints/objective terms.
+
+    A variable bounded on one side only that no constraint and no objective
+    term mentions (a scratch attribute of another carrier, such as the flow
+    of a coupler's power-side transfer branch) is fixed at its start: the
+    barrier would push it towards infinity, which can stall IPOPT on a
+    feasible model. Unmentioned variables without bounds stay (IPOPT
+    regularizes them; fixing them too only moves which local optimum a
+    nonconvex solve reaches), as do those with two bounds. The multi-period
+    path keeps them (``fix_unused=False``): no failure there needed it, and
+    fixing them moved a horizon's dispatch by solver noise."""
     X = ca.vertcat(*[r["sx"] for r in reg])
-    x0 = ca.DM([r["x0"] for r in reg])
-    lbx = ca.DM([r["lb"] for r in reg])
-    ubx = ca.DM([r["ub"] for r in reg])
     g = ca.vertcat(*[c.r for c in m.cons]) if m.cons else ca.SX.zeros(0)
     lbg = ca.DM([0.0 if c.op == "eq" else -INF for c in m.cons])
     ubg = ca.DM([0.0 for _ in m.cons])
     f = ca.SX(0)
     for t in m.obj_terms:
         f = f + t
-    return X, x0, lbx, ubx, g, lbg, ubg, f
+    used = {s.name() for s in ca.symvar(ca.vertcat(g, f))}
+    x0, lbx, ubx = [], [], []
+    for r in reg:
+        lb, ub = r["lb"], r["ub"]
+        if fix_unused and r["sx"].name() not in used and (lb == -INF) != (ub == INF):
+            lb = ub = min(max(r["x0"], lb), ub)
+        x0.append(r["x0"])
+        lbx.append(lb)
+        ubx.append(ub)
+    return X, ca.DM(x0), ca.DM(lbx), ca.DM(ubx), g, lbg, ubg, f
 
 
 _IPOPT_RETRY_OPTS = {"ipopt.mu_strategy": "adaptive"}
@@ -613,16 +629,20 @@ def _solve_with_retry(solver, nlp, opts, args, name, what, x0_alt=None):
     return best
 
 
-def _status_fields(stats) -> tuple[str, str | None]:
+def _status_fields(stats, simulation=False) -> tuple[str, str | None]:
     """``(solver_status, termination_condition)`` from IPOPT's return status.
 
     ``stats['success']`` is True for ``Solved_To_Acceptable_Level`` too, so a
     solve that stopped short of the requested tolerance is otherwise
-    indistinguishable from a converged one.
+    indistinguishable from a converged one. A square simulation has no
+    objective to be far from: its residual check (``warn_on_residuals``) is
+    the verdict, so the objective warning is not logged.
     """
     rs = stats.get("return_status")
     if rs == "Solve_Succeeded":
         return "ok", rs
+    if simulation:
+        return "warning", rs
     _log.warning(
         "IPOPT stopped with return status %r instead of 'Solve_Succeeded': the "
         "point satisfies the acceptable tolerance only and its objective can be "
@@ -871,10 +891,12 @@ def _phantom_dof_entry(reg, m) -> ResultWarning | None:
     ``simulation=True`` only reaches the formulations (which square their own
     variables); a Var on a custom child model that appears in no equation stays
     a free degree of freedom and the solver returns an arbitrary point inside
-    its bounds.
+    its bounds. A Var whose bounds are equal (e.g. the flow of a closed gate)
+    is fixed, not free.
     """
     n_eq = sum(1 for c in m.cons if c.op == "eq")
-    if len(reg) == n_eq:
+    n_fixed = sum(1 for r in reg if r["lb"] == r["ub"])
+    if n_eq in (len(reg), len(reg) - n_fixed):
         return None
     used = (
         {s.name() for s in ca.symvar(ca.vertcat(*[c.r for c in m.cons]))}
@@ -1010,6 +1032,8 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         self.solver_options = dict(solver_options) if solver_options else {}
         self.start = _checked_start(start)
         self.last_start = None
+        self.last_start_fallback = None
+        self.last_start_s = None
 
         self._simulation: bool = False
         self._reg: list = []
@@ -1096,6 +1120,8 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             "build_s": self.last_build_s,
             "solve_s": self.last_solve_s,
             "start": self.last_start,
+            "start_fallback": self.last_start_fallback,
+            "start_s": self.last_start_s,
         }
 
     def _simulation_values(self, input_network, formulation, solver_options):
@@ -1108,16 +1134,11 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         try:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore")
-                # An explicit mu_strategy skips the retry chain: a start that
-                # does not converge at once is not worth three more solves.
                 result = CasADiSolver(self.solver_options, start="flat").solve(
                     input_network.copy(),
                     simulation=True,
                     formulation=formulation,
-                    solver_options={
-                        "ipopt.mu_strategy": "monotone",
-                        **(solver_options or {}),
-                    },
+                    solver_options=solver_options,
                 )
         except Exception:  # noqa: BLE001 - any failure falls back to the flat start
             return None
@@ -1332,6 +1353,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         args = {"x0": x0, "lbx": lbx, "ubx": ubx, "lbg": lbg, "ubg": ubg}
         t0 = time.perf_counter()
         sol = None
+        self.last_start_fallback = self.last_start_s = None
         if (
             _checked_start(self.start if start is None else start) == "simulation"
             and optimization_problem is not None
@@ -1339,6 +1361,7 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
             and not warm
         ):
             values = self._simulation_values(input_network, formulation, solver_options)
+            self.last_start_s = time.perf_counter() - t0
             if values is not None:
                 self.last_start = "simulation"
                 sol, stats = _solve_with_retry(
@@ -1351,6 +1374,9 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
                 )
                 if not stats.get("success", False):
                     sol = None  # the established flat-start chain gets its turn
+                    self.last_start_fallback = "optimization_failed"
+            else:
+                self.last_start_fallback = "simulation_failed"
         if sol is None:
             self.last_start = "flat"
             sol, stats = _solve_with_retry(
@@ -1408,7 +1434,9 @@ class CasADiSolver(OperatorEquationAssembly, SolverInterface):
         )
         objective = float(sol["f"]) if m.obj_terms else 0.0
         user_objective = _eval_obj_terms(X, x_opt, m.user_obj_terms)
-        solver_status, termination_condition = _status_fields(stats)
+        solver_status, termination_condition = _status_fields(
+            stats, simulation=simulation or not m.obj_terms
+        )
         residuals = warn_on_residuals(_solution_residual(X, x_opt, g, lbg, ubg))
         result = SolverResult(
             network,
@@ -1721,7 +1749,9 @@ class CasADiTimeseries:
         violations = compute_bound_violations(
             self._nodes, self._branches, self._compounds, self._network
         )
-        solver_status, termination_condition = _status_fields(stats)
+        solver_status, termination_condition = _status_fields(
+            stats, simulation=self._simulation or not self._has_obj
+        )
         residuals = None
         if self._g_fun is not None:
             gv = np.array(self._g_fun(self._x, self._p)).flatten()
@@ -1907,7 +1937,9 @@ class CasADiMultiPeriodSolver:
 
         # Assemble and solve the whole horizon as one NLP.
         reg = cs._reg
-        X, x0, lbx, ubx, g, lbg, ubg, f = _assemble_nlp_vectors(reg, m)
+        X, x0, lbx, ubx, g, lbg, ubg, f = _assemble_nlp_vectors(
+            reg, m, fix_unused=False
+        )
 
         # run_mpc drives every rolling window through the same solver instance,
         # so this counter is the window index in an MPC run.
@@ -1967,7 +1999,9 @@ class CasADiMultiPeriodSolver:
 
         objective = float(sol["f"]) if m.obj_terms else 0.0
         user_objective = _eval_obj_terms(X, x_opt, m.user_obj_terms)
-        solver_status, termination_condition = _status_fields(stats)
+        solver_status, termination_condition = _status_fields(
+            stats, simulation=not m.obj_terms
+        )
         return MultiPeriodResult(
             net_copies,
             objective=objective,

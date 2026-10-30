@@ -411,11 +411,12 @@ def test_scip_time_limit_reports_the_dual_bound():
 
 @requires_pyscipopt
 def test_scip_limit_stop_returns_the_incumbent_with_bound_and_gap():
-    from monee.network.mes import create_monee_benchmark_net
+    from monee.network.mes import create_mv_multi_cigre
 
-    # GIVEN SCIP stopped at its first solution, far from the bound
+    # GIVEN SCIP stopped at its first solution, far from the bound (on the
+    # benchmark net the first solution is already optimal)
     # WHEN
-    result = _nonconvex_shedding({"limits/solutions": 1}, create_monee_benchmark_net)
+    result = _nonconvex_shedding({"limits/solutions": 1}, create_mv_multi_cigre)
 
     # THEN
     stats = result.solver_stats

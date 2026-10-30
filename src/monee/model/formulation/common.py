@@ -7,6 +7,8 @@ PWL) lives entirely on the branch side, so the node formulations are defined
 once here and reused by ``nlp``, ``milp`` and ``miqcqp``.
 """
 
+import math
+
 from monee.model.branch import WaterPipe
 from monee.model.core import Const, Intermediate, IntermediateEq, PostProcess, Var
 from monee.model.phys.core.hydraulics import calc_pipe_area
@@ -81,6 +83,58 @@ def _psq_bounds(model, simulation, grid):
     else:
         hi = getattr(grid, "pressure_squared_pu_max", hi)
     return lo, hi
+
+
+def check_segment_length(segment_length_m):
+    """*segment_length_m* if it is ``None`` or positive; ``ValueError``
+    otherwise (every formulation with the segmented loss law calls it)."""
+    if segment_length_m is not None and segment_length_m <= 0:
+        raise ValueError(f"segment_length_m must be > 0, got {segment_length_m!r}.")
+    return segment_length_m
+
+
+def heat_loss_cells(length_m, segment_length_m) -> int:
+    """Number of equal cells of the segmented insulation loss: the smallest
+    power of two whose cells are no longer than ``segment_length_m``; 1 (the
+    plain one-cell law) for ``None`` or a pipe that is short enough."""
+    if segment_length_m is None or length_m <= segment_length_m:
+        return 1
+    return 2 ** math.ceil(math.log2(length_m / segment_length_m))
+
+
+def _cell_var_name(k: int) -> str:
+    return "alpha_cell" if k == 0 else f"alpha_cell_pow{2**k}"
+
+
+def ensure_heat_loss_cells(model, segment_length_m) -> None:
+    """Declare the cell attenuation ``alpha_cell`` and its repeated squares
+    ``alpha_cell_pow2``, ``alpha_cell_pow4``, ... used by
+    :func:`pipe_attenuation_eqs`; nothing for a one-cell pipe."""
+    n = heat_loss_cells(model.length_m, segment_length_m)
+    for k in range(int(math.log2(n))):
+        setattr(
+            model,
+            _cell_var_name(k),
+            Var(0.01 ** (2**k / n), min=0, max=1, name=_cell_var_name(k)),
+        )
+
+
+def pipe_attenuation_eqs(branch, mag, ua_c, segment_length_m=None) -> list:
+    r"""Insulation attenuation :math:`\alpha` of a water pipe of :math:`n`
+    equal cells (:func:`heat_loss_cells`), each losing heat at its outlet
+    temperature: :math:`\beta (|\dot m| + UA/(n c_p)) = |\dot m|`,
+    :math:`\alpha = \beta^n`. :math:`\alpha` tends to the exact
+    :math:`e^{-UA/(|\dot m| c_p)}` as :math:`n` grows; :math:`n = 1` is the
+    plain law. The power is built by repeated squaring, so the law stays
+    quadratic with :math:`\log_2 n` extra bilinear equations."""
+    n = heat_loss_cells(branch.length_m, segment_length_m)
+    if n == 1:
+        return [branch.alpha * (mag + ua_c) == mag]
+    powers = [getattr(branch, _cell_var_name(k)) for k in range(int(math.log2(n)))]
+    eqs = [powers[0] * (mag + ua_c / n) == mag]
+    eqs += [b == a * a for a, b in zip(powers, powers[1:])]
+    eqs.append(branch.alpha == powers[-1] * powers[-1])
+    return eqs
 
 
 def pipe_outlet_law(branch, grid) -> list:

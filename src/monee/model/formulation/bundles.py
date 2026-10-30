@@ -183,29 +183,47 @@ GAS_NLP_FORMULATION = make_gas_nlp_formulation()
 # Water / heat
 # ---------------------------------------------------------------------------
 
-HEAT_NONCONVEX_MIQCQP_FORMULATION = NetworkFormulation(
-    branch_type_to_formulations={
-        WaterPipe: BilinearDarcyWeisbachBranchFormulation(),
-        HeatExchanger: FixedFlowHeatExchangerFormulation(),
-        PassiveHeatExchanger: BilinearPassiveHeatExchangerFormulation(),
-    },
-    node_type_to_formulations={(Junction, WaterGrid): WaterNodeFormulation()},
-)
+
+def make_heat_nonconvex_miqcqp_formulation(
+    segment_length_m: float | None = None,
+) -> NetworkFormulation:
+    """Bilinear Darcy-Weisbach water/heat formulation (the default MIQCQP heat
+    bundle). ``segment_length_m`` applies the insulation loss to equal cells of
+    at most that length, which brings the outlet temperature towards the exact
+    exponential law at low flow
+    (:func:`~monee.model.formulation.common.pipe_attenuation_eqs`)."""
+    return NetworkFormulation(
+        branch_type_to_formulations={
+            WaterPipe: BilinearDarcyWeisbachBranchFormulation(
+                segment_length_m=segment_length_m
+            ),
+            HeatExchanger: FixedFlowHeatExchangerFormulation(),
+            PassiveHeatExchanger: BilinearPassiveHeatExchangerFormulation(),
+        },
+        node_type_to_formulations={(Junction, WaterGrid): WaterNodeFormulation()},
+    )
+
+
+HEAT_NONCONVEX_MIQCQP_FORMULATION = make_heat_nonconvex_miqcqp_formulation()
 
 
 def make_heat_nonconvex_pwl_formulation(
     n_breakpoints: int = 12,
+    segment_length_m: float | None = None,
 ) -> NetworkFormulation:
     r"""Variable-friction Darcy-Weisbach via per-pipe PWL of :math:`\varphi(m)`.
 
     Opt-in alternative to :data:`HEAT_NONCONVEX_MIQCQP_FORMULATION` for
     laminar-heavy networks (Re < 2300); the default's asymptotic shortcut
     under-estimates pressure drop there. HeatExchanger formulations are
-    unaffected.
+    unaffected. ``segment_length_m`` as in
+    :func:`make_heat_nonconvex_miqcqp_formulation`.
     """
     return NetworkFormulation(
         branch_type_to_formulations={
-            WaterPipe: PwlDarcyWeisbachBranchFormulation(n_breakpoints=n_breakpoints),
+            WaterPipe: PwlDarcyWeisbachBranchFormulation(
+                n_breakpoints=n_breakpoints, segment_length_m=segment_length_m
+            ),
             HeatExchanger: FixedFlowHeatExchangerFormulation(),
             PassiveHeatExchanger: BilinearPassiveHeatExchangerFormulation(),
         },
@@ -250,12 +268,16 @@ HEAT_CONVEX_MILP_FORMULATION = make_heat_convex_milp_formulation(num_partitions=
 def make_heat_nlp_formulation(
     friction_model: str = "constant",
     smoothing_eps: float = 1e-3,
+    heat_loss: str = "rational",
+    segment_length_m: float | None = None,
 ) -> NetworkFormulation:
     """Pure-NLP Darcy-Weisbach water/heat formulation for GEKKO IPOPT/APOPT.
 
     Binary-free smooth signed flow, smooth temperature upwinding and an active /
     passive heat-exchanger pair with their ``direction`` binaries removed.
-    ``friction_model`` selects ``"constant"`` / ``"pwl"`` / ``"nonlinear"``.
+    ``friction_model`` selects ``"constant"`` / ``"pwl"`` / ``"nonlinear"``;
+    ``heat_loss="exact"`` and ``segment_length_m`` select the pipe loss law
+    (:class:`~monee.model.formulation.nlp.heat.SmoothDarcyWeisbachBranchFormulation`).
     Opt-in alternative to :data:`HEAT_NONCONVEX_MIQCQP_FORMULATION`.
     """
     return NetworkFormulation(
@@ -263,6 +285,8 @@ def make_heat_nlp_formulation(
             WaterPipe: SmoothDarcyWeisbachBranchFormulation(
                 friction_model=friction_model,
                 smoothing_eps=smoothing_eps,
+                heat_loss=heat_loss,
+                segment_length_m=segment_length_m,
             ),
             HeatExchanger: SmoothHeatExchangerFormulation(),
             PassiveHeatExchanger: SmoothPassiveHeatExchangerFormulation(

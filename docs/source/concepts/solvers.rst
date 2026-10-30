@@ -516,10 +516,22 @@ monee's back-ends pass their own preset options to each solver:
   non-convex solve with status OPTIMAL while its incumbent lies far outside
   ``MIPGap`` and ``MIPGapAbs`` of its own final bound; monee reports a solve
   whose gap exceeds ten times that tolerance as ``"warning"`` /
-  ``"feasible"``. A gap slightly above the tolerance stays ``"optimal"``:
+  ``"feasible"``. The relative tolerance is taken of the larger of
+  ``|objective|`` and the largest objective coefficient (the cost of one unit
+  of the dearest decision), so an optimum near zero is not called unproven
+  for a gap that is tiny on the objective's own scale, and an objective
+  written in small units is checked as strictly as one in large units. A
+  large penalty coefficient widens the tolerance in the same proportion; the
+  guard is a check for gross false optima, not a certificate of ``MIPGap``.
+  A gap slightly above the tolerance stays ``"optimal"``:
   Gurobi stops on the gap of its presolved model, and mapping the incumbent
   back can widen the reported gap. ``result.solver_stats`` holds the
   objective, bound and gap.
+- pyscipopt: some SCIP builds start OpenMP threads (about one per core) in
+  every solve. Several solves in parallel processes then oversubscribe the
+  machine, and with ``timing/clocktype=1`` a CPU-time limit counts every
+  thread, so it stops after a fraction of the wall time. Set
+  ``OMP_NUM_THREADS=1`` before the worker processes start.
 
 IPOPT's default monotone barrier is sensitive to the starting point: on a model
 that is perfectly feasible it can still fail the step computation or the
@@ -528,7 +540,14 @@ CasADi back-end therefore retries a solve that ends on anything other than
 ``Solve_Succeeded`` once with ``ipopt.mu_strategy=adaptive``, logs that it did,
 and keeps the better of the two outcomes. A solve that only reaches the
 acceptable level after the retry is reported with
-``solver_status="warning"``.
+``solver_status="warning"``. A simulation (a square solve) can end with
+``Feasible_Point_Found``: IPOPT solved the equations in its restoration
+phase, which is the solution of a square system, so the result has
+``success=True``, ``solver_status="warning"`` and ``result.residuals``
+confirms the point. In a single-period or timeseries solve, a variable
+bounded on one side only that no constraint and no objective term mentions
+is fixed at its start value before IPOPT runs; left free, the barrier
+pushes it towards infinity.
 
 The starting point also decides *which* optimum IPOPT finds. An optimization
 on the CasADi back-end therefore first solves the network as a simulation at
@@ -536,7 +555,14 @@ its current setpoints and starts IPOPT there (``start="simulation"``, the
 default of ``CasADiSolver`` and of the per-call keyword); if that simulation,
 or IPOPT from its point, does not converge, the solve falls back to the
 formulations' flat seeds (``start="flat"``), and
-``result.solver_stats["start"]`` says which start was used. The flat start
+``result.solver_stats["start"]`` says which start was used,
+``solver_stats["start_fallback"]`` why a simulation start fell back
+(``"simulation_failed"`` or ``"optimization_failed"``, else ``None``), and
+``solver_stats["start_s"]`` how long the start simulation took (included in
+``solve_s``). The start simulation runs the usual retry chain, so one that
+does not converge costs up to four IPOPT solves (first attempt, adaptive
+retry, and both again from a consistent pipe-flow start) before the flat
+start; pass ``start="flat"`` where that cost matters. The flat start
 puts every pipe at zero flow, where an idle pipe delivers water at ground
 temperature: on district heating networks IPOPT then often stops with pipes
 idle and a penalised slack covering the losses. A better start is no

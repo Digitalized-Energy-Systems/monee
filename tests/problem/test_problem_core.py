@@ -56,6 +56,22 @@ def test_controllable_generators_selects_generating_hx_only():
     assert hx_load not in selected
 
 
+def test_a_zero_setpoint_lock_is_logged_once_per_type_and_attribute(caplog):
+    # GIVEN two generators at 0 MW (PV at night) promoted without bounds
+    from monee.problem import core
+
+    core._ZERO_LOCK_WARNED.clear()
+    models = [mm.PowerGenerator(p_mw=0.0, q_mvar=0.0) for _ in range(2)]
+
+    # WHEN
+    with caplog.at_level(logging.WARNING, logger="monee.problem.core"):
+        for model in models * 2:
+            OptimizationProblem._promote_to_var(model, "p_mw", 0.0, None)
+
+    # THEN
+    assert caplog.text.count("has value 0.0") == 1
+
+
 def test_bounds_requires_attributes():
     problem = OptimizationProblem()
     with pytest.raises(ValueError, match="non-empty list of attribute names"):
