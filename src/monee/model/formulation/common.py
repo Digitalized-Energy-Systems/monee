@@ -86,8 +86,7 @@ def _psq_bounds(model, simulation, grid):
 
 
 def check_segment_length(segment_length_m):
-    """*segment_length_m* if it is ``None`` or positive; ``ValueError``
-    otherwise (every formulation with the segmented loss law calls it)."""
+    """*segment_length_m* if it is ``None`` or positive, else ``ValueError``."""
     if segment_length_m is not None and segment_length_m <= 0:
         raise ValueError(f"segment_length_m must be > 0, got {segment_length_m!r}.")
     return segment_length_m

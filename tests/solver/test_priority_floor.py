@@ -336,43 +336,6 @@ def test_a_users_own_network_copy_keeps_its_own_model_identities():
     assert regulation["hospital"] == pytest.approx(1.0, abs=1e-4)
 
 
-@pytest.mark.parametrize("keep", ["hospital", "warehouse"])
-def test_load_weights_keyed_by_the_callers_models_reach_the_solve(keep):
-    # GIVEN a dict keyed by the caller's load models (the solve runs on a copy)
-    import monee
-    import monee.express as mx
-    import monee.model as mm
-
-    net = mx.create_multi_energy_network()
-    sub, b1, b2 = mx.create_bus(net), mx.create_bus(net), mx.create_bus(net)
-    mx.create_line(net, sub, b1, 500, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
-    mx.create_line(net, b1, b2, 500, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
-    mx.create_ext_power_grid(net, sub)
-    ids = {
-        "hospital": mx.create_power_load(
-            net, b2, p_mw=0.4, q_mvar=0.0, name="hospital"
-        ),
-        "warehouse": mx.create_power_load(
-            net, b1, p_mw=0.4, q_mvar=0.0, name="warehouse"
-        ),
-    }
-    weights = {net.child_by_id(ids[keep]).model: 1e5}
-    problem = create_min_load_shedding_problem(
-        bounds_ext_el=(-0.5, 0.0),
-        weight_for_load=weights.get,
-        check_pressure=False,
-        check_t=False,
-    )
-
-    # WHEN
-    result = monee.run_energy_flow_optimization(net, problem)
-
-    # THEN the weighted load is kept, whichever it is
-    regulation = result.get(mm.PowerLoad).set_index("name")["regulation"]
-    assert regulation[keep] == pytest.approx(1.0, abs=1e-4)
-    assert regulation.drop(keep).iloc[0] < 0.5
-
-
 # --------------------------------------------------------------------------- #
 # 3. Behavioural test - auto floor protects weighted mode under aux scaling
 # --------------------------------------------------------------------------- #

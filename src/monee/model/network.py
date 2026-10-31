@@ -1116,18 +1116,16 @@ class Network:
         return copy.deepcopy(self)
 
     def _copy_for_solve(self):
-        """A copy that a solve uses in place of this network; problem
-        callbacks keyed by models (``weight_for_load``) resolve through it to
-        the network the caller passed in. A plain :meth:`copy` stays a network
-        of its own."""
+        """A solve's internal copy, remembering the caller's network so
+        callbacks keyed by models (``weight_for_load``) still match. A plain
+        :meth:`copy` is a network of its own."""
         new = self.copy()
         new._caller_network = self._caller
         return new
 
     @property
     def _caller(self):
-        """The network the caller passed in when this is a solve's internal
-        copy (:meth:`_copy_for_solve`); otherwise this network."""
+        """The caller's network behind :meth:`_copy_for_solve`, else self."""
         return getattr(self, "_caller_network", self)
 
     def __deepcopy__(self, memo):

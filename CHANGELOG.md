@@ -57,21 +57,14 @@ fixes a wrong or silently dropped result.
   under a callback get `gamma * w_g` instead of `gamma**2 * w_g`. A returned
   weight the lift leaves below the lifted default, so that the load is now
   shed before the default loads, raises a warning naming it.
-- **Load weights reach the solve.** `weight_for_load` is called with the
-  models of the network passed in, on every entry point:
-  `run_energy_flow_optimization` (`copy=True` and `False`), `run_multi_period`,
-  `run_timeseries` and the `Stepper`. It got the models of the solve's copy, so
-  a callback keyed by the caller's models (a dict) matched no load and every
-  load fell back to `demand_weight`. The callback therefore sees the network
-  as passed in: values a timeseries, `data_overrides` or the `Stepper`'s
-  working copy set per period or step are not visible to it (a weight read
-  from `p_mw` is the base value, the same in every period); before, it saw
-  them. A network the caller copied with `Network.copy()` is a network of its
-  own, keyed by its own models.
+- **Load weights reach the solve.** `weight_for_load` gets the models of the
+  network passed in, on every entry point; it got the solve copy's models, so
+  a dict keyed by the caller's models matched no load. It therefore no longer
+  sees per-period or per-step values (timeseries, `data_overrides`, the
+  `Stepper`'s working copy): a weight read from `p_mw` is the base value.
 - **Load-weight errors propagate.** An exception raised by `weight_for_load`
-  reaches the caller. Before, it was swallowed and the load silently got
-  `demand_weight`; a callback such as `lambda m: weights[m]` that raised
-  `KeyError` for unlisted loads now needs `weights.get`.
+  reaches the caller instead of silently giving `demand_weight`;
+  `lambda m: weights[m]` now needs `weights.get` for unlisted loads.
 - **Exact island heat bound in load shedding.** `bounds_ext_heat_mw` of
   `create_min_load_shedding_problem` writes the island heat branch by branch
   (exchanger duties and pipe losses) when every pipe runs a MIQCQP heat
@@ -89,15 +82,10 @@ fixes a wrong or silently dropped result.
   (MISOCP or exact formulation) with a decision `on_off` enters the bus
   balance as `flow - shunt * (1 - on_off)` instead of `flow * on_off`, and a
   water pipe or heat exchanger with a decision `on_off` enters the junction
-  mass balance without the factor (every water formulation gates the flow,
-  as the heat balance already assumed). Both agree on
-  every binary point; the products gave a relaxation in which a fractional
-  candidate line carried power without a balance. On an 8-hour sizing
-  instance (3 pipe sizes, 2 cables on each of 2 routes) the root bound of the
-  joint MIQCQP rises from 17454 to 25715 EUR (25789 with the design fixed)
-  and the gap after 900 s (Gurobi, one thread) falls from 185 to 42 EUR;
-  SCIP's first solution of the benchmark net's load shedding is now its
-  optimum.
+  mass balance without the factor (every water formulation gates the flow).
+  Both agree on every binary point; the products gave a relaxation in which a
+  fractional candidate line carried power without a balance, so root bounds
+  of joint sizing MIQCQPs are much tighter now.
 - **Switchable water branches.** A decision `on_off` on a water branch is left
   out of the nodal heat balance (the branch gates its own flow), so candidate
   pipes stay quadratic and solve on `solver="gurobi"`, with
@@ -110,12 +98,7 @@ fixes a wrong or silently dropped result.
   incumbent lies more than ten times MIPGap/MIPGapAbs from its own bound is
   reported as `"warning"`/`"feasible"`, not optimal. The relative tolerance
   is taken of the larger of `|objective|` and the largest objective
-  coefficient, so an optimum near zero is not called unproven for a gap that
-  is tiny on the objective's scale (a waste-heat dispatch at a zero
-  electricity price: gap 1.7e-3 EUR, coefficients up to 1394 EUR), and an
-  objective in small units is held to the same test (the false optimum this
-  guard was added for: incumbent 894.98 against a bound of -7.20, largest
-  coefficient 6389, is flagged with or without `MIPGapAbs`). A two-phase
+  coefficient, so a tiny gap at an optimum near zero is not flagged. A two-phase
   lexicographic solve, native or on Pyomo, returns phase 1's outcome when
   that was not optimal, and Pyomo's `solver_stats` describe phase 1 (the user
   tier), not the aux objective of phase 2.
@@ -130,13 +113,9 @@ fixes a wrong or silently dropped result.
 - **Unconstrained variables on CasADi.** In a single-period or timeseries
   solve, a variable bounded on one side only that no constraint and no
   objective term mentions (the mass flows of a coupler's power-side transfer
-  branch) is fixed at its start. The barrier
-  pushed it towards infinity (6963 kg/s on a small district) and made IPOPT
-  fail or stop at an acceptable level on feasible dispatches: in a
-  waste-heat dispatch started from a heat-led schedule, 94 instead of 92 of
-  96 hours converge and 90 instead of 86 end within 1 % of Gurobi. IPOPT is
-  a local solver, so a few hours end in a different local optimum than
-  before (here 2 of 96 worse, 7 better).
+  branch) is fixed at its start. The barrier pushed it towards infinity and
+  made IPOPT fail or stop at an acceptable level on feasible dispatches. Some
+  solves now end in a different local optimum.
 - **Idle units in multi-period IPOPT.** The enthalpy row of a CHP, G2H or P2H
   unit at a plain regulation of 0 is replaced by a temperature pin that passes
   the inflowing water through unheated, so multi-period CasADi runs with an
@@ -200,16 +179,11 @@ fixes a wrong or silently dropped result.
   (`t_pu`). A failed solve no longer reports heat exchangers that "deliver
   0 MW of their setpoint" (it judged the pre-solve values). The warning that
   a zero setpoint locks a promoted variable is logged once per model type and
-  attribute in a process, not for every PV unit at night (in a long-lived
-  session a later network's zero lock of the same type and attribute is not
-  logged again). IPOPT's acceptable-level
-  warning about an objective far from optimal is no longer logged for a
-  simulation or a solve without objective; the residual check covers them.
-  The CasADi build-once timeseries and multi-period paths judge this the
-  same way as the per-step solve (the timeseries path muted it for every
-  optimization, the multi-period path logged it for objective-free solves).
-  `segment_length_m` of zero or less raises `ValueError` on every heat
-  formulation that takes it (the MIQCQP and PWL ones failed at solve time).
+  attribute in a process, not for every PV unit at night. IPOPT's
+  acceptable-level warning about an objective far from optimal is no longer
+  logged for a simulation or a solve without objective, on every CasADi path;
+  the residual check covers them. `segment_length_m` of zero or less raises
+  `ValueError` on every heat formulation that takes it.
 
 ### Added
 
@@ -229,8 +203,7 @@ fixes a wrong or silently dropped result.
 - `solver_stats["start_s"]` on CasADi optimizations: the time spent on the
   start simulation.
 - `monee.network.pressure_budget_diameter`, the pressure criterion of the
-  automatic pipe sizing (the private `_pressure_budget_diameter` stays an
-  alias). `SolverResult.dropped_demand`.
+  automatic pipe sizing. `SolverResult.dropped_demand`.
 - `CasADiSolver(start=...)`, `Trafo(tap=...)`, `create_line(c_nf_per_m=...)`,
   `PowerGrid.f_hz`, `SolverResult.dropped_islands`.
 - `monee.__version__`.

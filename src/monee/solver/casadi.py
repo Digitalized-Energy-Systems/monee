@@ -441,15 +441,10 @@ def _assemble_nlp_vectors(reg, m: CasModel, fix_unused: bool = True):
     """``(X, x0, lbx, ubx, g, lbg, ubg, f)`` from the injected variable register
     and the collected constraints/objective terms.
 
-    A variable bounded on one side only that no constraint and no objective
-    term mentions (a scratch attribute of another carrier, such as the flow
-    of a coupler's power-side transfer branch) is fixed at its start: the
-    barrier would push it towards infinity, which can stall IPOPT on a
-    feasible model. Unmentioned variables without bounds stay (IPOPT
-    regularizes them; fixing them too only moves which local optimum a
-    nonconvex solve reaches), as do those with two bounds. The multi-period
-    path keeps them (``fix_unused=False``): no failure there needed it, and
-    fixing them moved a horizon's dispatch by solver noise."""
+    With ``fix_unused``, a variable bounded on one side only that no row and
+    no objective term mentions is fixed at its start: the barrier would push
+    it towards infinity and can stall IPOPT. Free and two-sided ones stay
+    (fixing them only moves which local optimum a nonconvex solve reaches)."""
     X = ca.vertcat(*[r["sx"] for r in reg])
     g = ca.vertcat(*[c.r for c in m.cons]) if m.cons else ca.SX.zeros(0)
     lbg = ca.DM([0.0 if c.op == "eq" else -INF for c in m.cons])
@@ -457,11 +452,13 @@ def _assemble_nlp_vectors(reg, m: CasModel, fix_unused: bool = True):
     f = ca.SX(0)
     for t in m.obj_terms:
         f = f + t
-    used = {s.name() for s in ca.symvar(ca.vertcat(g, f))}
+    used = (
+        {s.name() for s in ca.symvar(ca.vertcat(g, f))} if fix_unused else None
+    )
     x0, lbx, ubx = [], [], []
     for r in reg:
         lb, ub = r["lb"], r["ub"]
-        if fix_unused and r["sx"].name() not in used and (lb == -INF) != (ub == INF):
+        if used is not None and r["sx"].name() not in used and (lb == -INF) != (ub == INF):
             lb = ub = min(max(r["x0"], lb), ub)
         x0.append(r["x0"])
         lbx.append(lb)
@@ -634,9 +631,8 @@ def _status_fields(stats, simulation=False) -> tuple[str, str | None]:
 
     ``stats['success']`` is True for ``Solved_To_Acceptable_Level`` too, so a
     solve that stopped short of the requested tolerance is otherwise
-    indistinguishable from a converged one. A square simulation has no
-    objective to be far from: its residual check (``warn_on_residuals``) is
-    the verdict, so the objective warning is not logged.
+    indistinguishable from a converged one. With ``simulation`` (no objective
+    to be far from) the residual check is the verdict, so nothing is logged.
     """
     rs = stats.get("return_status")
     if rs == "Solve_Succeeded":

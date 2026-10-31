@@ -743,9 +743,7 @@ def create_min_load_shedding_problem(
 
     problem.add_hook(_attach_shed_headroom_validator)
 
-    # weight_for_load is keyed by the caller's models, but the solve runs on a
-    # copy: each load's weight is read off its counterpart in the caller's net.
-    # An exception in the callback propagates: a default weight would hide it.
+    # The solve runs on a copy: weight_for_load gets the caller's model instead.
     def _resolve_explicit_weights(network):
         for component in network.all_components():
             if _is_consuming_demand(component.model):

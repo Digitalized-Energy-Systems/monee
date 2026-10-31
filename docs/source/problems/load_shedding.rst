@@ -624,19 +624,13 @@ priority ordering (keep the hospital, shed the warehouse first), pass
 shed weight, or ``None`` to fall back to ``demand_weight``. A convenient
 pattern is to tag the models with a custom attribute when building the
 network, as the :ref:`worked example <problems/load_shedding:Worked example>`
-does. Every entry point solves internal copies of the network
-(``run_energy_flow_optimization`` with ``copy=True`` or ``False``,
-``run_multi_period``, ``run_timeseries`` and the ``Stepper``), but the
-callback always receives the models of the network you passed in, so a
-dictionary keyed by those models works as well (``weight_for_load=weights.get``).
-The trade-off: the callback sees that network as passed in. Values set per
-period or step (a ``TimeseriesData`` series, ``data_overrides``, changes the
-``Stepper`` makes on its working copy) are not visible to it, so a weight
-read from such an attribute, e.g. ``p_mw``, is the base value, and every
-period gets the same weight. Tags and other attributes set on the models
-before the call are visible. A component the network passed in does not
-contain is passed as the solved copy's model. An exception raised by the
-callback propagates to the caller.
+does. Every entry point solves internal copies of the network, but the
+callback receives the models of the network you passed in, so a dictionary
+keyed by those models works as well (``weight_for_load=weights.get``). It
+therefore sees that network as passed in: values set per period or step (a
+``TimeseriesData`` series, ``data_overrides``, the ``Stepper``'s working copy)
+are not visible, so a weight read from ``p_mw`` is the base value in every
+period. An exception raised by the callback propagates to the caller.
 
 .. code-block:: python
 

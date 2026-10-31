@@ -17,6 +17,7 @@ from monee.model import (
     ExtPowerGrid,
     GenericModel,
     HeatExchanger,
+    HeatLoad,
     Intermediate,
     IntermediateEq,
     MultiGridBranchModel,
@@ -25,6 +26,8 @@ from monee.model import (
     Network,
     Node,
     PostProcess,
+    PowerLoad,
+    Sink,
     Var,
     WaterPipe,
 )
@@ -224,11 +227,10 @@ class SolverResult:
     ``ExtHydrGrid``, nor a grid-forming child under islanding). Their
     components appear as NaN/ignored in the frames, a coupler with a port in
     one is switched off (its control node reports no input), and the
-    ``pruned`` warning names them all. ``dropped_demand`` holds, in the same
+    ``pruned`` warning names them all. ``dropped_demand`` gives, in the same
     order, ``{component label: MW}`` of the demand each island leaves
-    unserved: loads, gas sinks (at the grid's heating value) and consuming
-    heat exchangers at setpoint times regulation; the ``pruned`` warning
-    names an island with demand and its total. The solve still succeeds.
+    unserved (setpoint times regulation; gas at the grid's heating value),
+    which the ``pruned`` warning totals. The solve still succeeds.
 
     Frame index
     -----------
@@ -1303,8 +1305,7 @@ def finalize_failed_solution(
     pre-solve values back from the untouched *input_network* instead of
     persisting them (which would clobber warm starts and carried storage
     state), then evaluate post-processes and return the bound-violation
-    report. The pre-solve values are no dispatch, so no duty shortfall is
-    judged on them."""
+    report (without duty shortfalls: pre-solve values are no dispatch)."""
     persist_solution(input_network, network)
     apply_post_process_all(nodes, branches, compounds, network)
     return compute_bound_violations(
@@ -1328,8 +1329,8 @@ def inject_vars(inject_fn, nodes, branches, compounds, network, ignored_nodes):
     the solve depends on and, on a multi-energy compound, IPOPT's flat start
     with it. An optimisation solve is well posed with them, and dropping them
     there only reshuffles the variable order, moving which local optimum a
-    nonconvex solve reaches; the CasADi back-end fixes those bounded on one
-    side only at their start (``casadi._assemble_nlp_vectors``).
+    nonconvex solve reaches (CasADi fixes the one-sided ones instead, see
+    ``casadi._assemble_nlp_vectors``).
     """
     prune = getattr(network, "_solve_simulation", False)
     _inject_branches(inject_fn, branches, network, ignored_nodes, prune)
@@ -2117,6 +2118,9 @@ def _island_demand_mw(network, island) -> dict:
 
 
 def _demand_mw(model, grid) -> float:
+    # a charging storage or a solved shunt also holds a positive p_mw
+    if not isinstance(model, (PowerLoad, HeatLoad, Sink)):
+        return 0.0
     regulation = _val(getattr(model, "regulation", 1)) or 0.0
     for attr in ("p_mw", "q_mw_heat", "mass_flow_kgs"):
         setpoint = _val(getattr(model, attr, None))

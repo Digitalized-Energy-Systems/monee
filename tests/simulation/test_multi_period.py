@@ -541,6 +541,9 @@ def test_repr_shows_temporal_evolution():
 
 def test_zero_bounds_warning(caplog):
     # GIVEN
+    from monee.problem import core
+
+    core._ZERO_LOCK_WARNED.clear()
     net, b0, b1, load_id = _simple_power_net()
     # override load to 0.0 so bounds inference hits [0, 0]
     for node in net.nodes:

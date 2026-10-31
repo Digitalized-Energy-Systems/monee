@@ -165,6 +165,25 @@ def test_dropped_island_reports_its_unserved_demand_and_a_silent_coupler():
     assert boiler["heat_mw"] == pytest.approx(0.0, abs=1e-6)
 
 
+def test_a_charging_storage_in_a_dropped_island_is_no_demand():
+    # GIVEN a source-less power island with a load and a charging battery
+    net = mm.Network(mm.create_power_grid("power"))
+    b0, b1 = mx.create_bus(net), mx.create_bus(net)
+    mx.create_line(net, b0, b1, length_m=100, r_ohm_per_m=1e-4, x_ohm_per_m=1e-4)
+    mx.create_power_load(net, b1, p_mw=0.5, q_mvar=0.0, name="shop")
+    net.child_to(
+        mm.ElectricStorage(e_mwh_initial=0.5, e_mwh_max=1.0, p_max_mw=1.0, p_mw_initial=0.3),
+        b0,
+    )
+
+    # WHEN
+    with pytest.warns(UserWarning, match="unserved"):
+        result = monee.run_energy_flow(net)
+
+    # THEN only the load is unserved demand
+    assert result.dropped_demand == [{"PowerLoad(0) 'shop'": pytest.approx(0.5)}]
+
+
 def test_a_dropped_island_without_demand_reports_none():
     net, gas_island = _gas_fed_boiler_net()
 

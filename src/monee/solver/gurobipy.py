@@ -559,10 +559,8 @@ class GurobipySolver(SolverInterface):
         outside both MIPGap and MIPGapAbs of Gurobi's final bound. Gurobi's
         non-convex branch and bound can empty its tree on numerically pruned
         nodes and still report OPTIMAL with that gap. The relative gap is
-        taken of ``max(|obj|, largest objective coefficient)``: near a zero
-        optimum a relative gap means nothing, and the cost of one unit of the
-        dearest decision is the objective's own scale, so the test is the
-        same whatever unit the objective is written in."""
+        taken of ``max(|obj|, largest objective coefficient)``, which stays
+        meaningful near a zero optimum and in any objective unit."""
         if gm.NumObj > 1:
             return False
         try:

@@ -1159,7 +1159,7 @@ def test_pressure_budget_diameter_is_public_and_inverts_the_darcy_drop():
     import math
 
     from monee.model.phys.core.hydraulics import friction_at_high_re
-    from monee.network import mes, pressure_budget_diameter
+    from monee.network import pressure_budget_diameter
 
     # GIVEN 40 kg/s over 2 km of water with a 0.5 bar budget
     m, length, dp, rho, eps = 40.0, 2000.0, 5e4, 977.8, 1e-4
@@ -1167,14 +1167,12 @@ def test_pressure_budget_diameter_is_public_and_inverts_the_darcy_drop():
     # WHEN
     d = pressure_budget_diameter(m, length, dp, rho, eps, 0.02)
 
-    # THEN its fully rough Darcy drop meets the budget, and the private name
-    # (used by monee-examples) is the same function
+    # THEN its fully rough Darcy drop meets the budget
     f = friction_at_high_re(d, eps)
     assert 8 * f * length * m**2 / (rho * math.pi**2 * d**5) == pytest.approx(
         dp, rel=1e-4
     )
     assert pressure_budget_diameter(m, length, dp, rho, eps, 0.5) == 0.5
-    assert mes._pressure_budget_diameter is pressure_budget_diameter
 
 
 def _mes_fingerprint(mes):

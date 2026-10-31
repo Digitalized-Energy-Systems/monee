@@ -32,9 +32,7 @@ _PROFILE = "_plug_profile"
 _TINY = 1e-9
 _MERGE_PU = 1e-5  # adjacent parcels this close in entry temperature merge (~4 mK)
 _MAX_PARCELS = 32  # per pipe; merges stay below this fraction of its mass
-# The steady first step fills a pipe with water of one entry temperature whose
-# age spans the whole residence time; one parcel would leave at a single age.
-_INIT_PARCELS = 16
+_INIT_PARCELS = 16  # first fill, so the standing water spans its residence ages
 
 
 class PlugFlowTransport(NetworkAspect):
@@ -120,9 +118,7 @@ class _Pipe:
     def now_t(self, parcel):
         """Present temperature of a parcel ``(mass, T_entry, age)``."""
         _, theta, age = parcel
-        return self.t_ext + (theta - self.t_ext) * self.mass / (
-            self.mass + self.ua_c * age
-        )
+        return self.exit_t(theta, age, 0.0, 1.0)
 
     def outlet_equation(self, dt_s, eps):
         bm = self.model

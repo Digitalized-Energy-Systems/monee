@@ -47,12 +47,10 @@ class Bus(NodeModel):
 
     def _branch_power_terms(self, branch, side, sn_mva):
         """``(P, Q)`` a branch injects at this bus, its terminal flows times
-        ``on_off``. A branch-flow branch (``_off_flow_is_shunt``) whose
-        ``on_off`` is a decision forces its series flow to zero when off, so
-        only its shunt injection is left to remove: ``flow - shunt * (1 -
-        on_off)`` is the same on every binary point, but linear in the flow,
-        where ``flow * on_off`` gives a relaxation that drops the power
-        balance of a fractional candidate line."""
+        ``on_off``. A switched-off branch-flow line (``_off_flow_is_shunt``)
+        carries only its shunt, so a decision ``on_off`` enters as ``flow -
+        shunt * (1 - on_off)``: equal on binary points, but linear in the flow,
+        which keeps a fractional candidate's power balance in the relaxation."""
         vs = branch.vars
         p, q, on_off = vs[f"p_{side}_mw"], vs[f"q_{side}_mvar"], vs["on_off"]
         if isinstance(on_off, numbers.Real) or not getattr(
@@ -122,11 +120,10 @@ def _heat_gate(branch_vars):
 
 
 def _flow_gate(branch_vars, water):
-    """``on_off`` factor of a branch's mass-balance flow terms: on a water
-    grid as :func:`_heat_gate` for pipes and exchangers (they carry both flow
-    directions, and every water formulation gates them in any mode), so a
-    candidate pipe stays linear in the balance; ``on_off`` itself otherwise
-    (the smooth gas pipe drops its gate in a simulation)."""
+    """``on_off`` factor of a branch's mass-balance flow terms: as
+    :func:`_heat_gate` for two-way water branches (every water formulation
+    gates their flow), ``on_off`` otherwise (the smooth gas pipe drops its
+    gate in a simulation)."""
     if (
         water
         and "mass_flow_pos_kgs" in branch_vars

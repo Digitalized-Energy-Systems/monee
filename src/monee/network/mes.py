@@ -144,9 +144,6 @@ def pressure_budget_diameter(
     return d
 
 
-_pressure_budget_diameter = pressure_budget_diameter
-
-
 def _warn_if_trunk_undersized(trunk_kgs, diameter_m, heat_grid, v_mps):
     """Warn when the flat pipe diameter cannot carry the whole design flow at
     the grid's design velocity, which makes the DHS overlay infeasible.
