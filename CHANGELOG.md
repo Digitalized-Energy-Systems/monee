@@ -32,6 +32,12 @@ fixes a wrong or silently dropped result.
   kept and the output scales. Before, the control node kept its old value.
 - **Velocity report.** `velocity_mps` uses the solved diameter when
   `diameter_m` is a decision variable, not the start value.
+- **Charging of an open line.** Under `el_misocp` and `el_nonconvex_miqcqp`,
+  a `PowerLine` opened by a decision `on_off` (a backup tie, load shedding
+  with switching) no longer injects its charging into the bus balance: the
+  balance read the line's `b_*_pu` before the line derived it from the bus
+  voltage, so it saw 0 and the `- shunt * (1 - on_off)` correction never
+  applied.
 - **MISOCP current bound.** The cap of the lifted current at three times the
   thermal rating now applies only to a switchable branch, where it keeps the
   big-M finite. On a fixed branch it cut AC-feasible states, so a power flow
@@ -86,6 +92,19 @@ fixes a wrong or silently dropped result.
   Both agree on every binary point; the products gave a relaxation in which a
   fractional candidate line carried power without a balance, so root bounds
   of joint sizing MIQCQPs are much tighter now.
+- **Bounds on promoted compound subcomponents.** `bounds()` skipped every
+  component a compound creates, so a bound on the `regulation` that
+  `controllable_cps` promotes on a CHP, P2H or G2H control node was dropped
+  (with a "matched no component" warning). It now reaches a subcomponent on
+  the attributes the problem promoted there; the compound's other internal
+  variables stay out of reach of broad selectors.
+- **Decision pipe diameter in the smooth NLP.** A `diameter_m` made a decision
+  (`controllable_design`) under the heat or gas NLP formulations raised a
+  `TypeError`. Its velocity cap now enters as a constraint, the fully-rough
+  friction (`"constant"`, `"hybrid"`) and the insulation conductance follow the
+  solved diameter (before, the friction would have kept the start diameter's
+  value), and `friction_model="pwl"` raises a `ValueError`, since its spline is
+  tabulated for one diameter.
 - **Switchable water branches.** A decision `on_off` on a water branch is left
   out of the nodal heat balance (the branch gates its own flow), so candidate
   pipes stay quadratic and solve on `solver="gurobi"`, with
@@ -102,6 +121,18 @@ fixes a wrong or silently dropped result.
   lexicographic solve, native or on Pyomo, returns phase 1's outcome when
   that was not optimal, and Pyomo's `solver_stats` describe phase 1 (the user
   tier), not the aux objective of phase 2.
+- **Independent periods on Pyomo.** `run_multi_period` on the Pyomo
+  back-end builds each period as a block and solves the groups of periods
+  that no inter-period equation links (storage, linepack, a design variable,
+  a temporal constraint) one at a time. In one model a global solver's branch
+  and bound grows like the product of the periods' trees: 4 district hours
+  with a fixed design hit a 300 s limit at 0.23 % gap and now solve in 9 s.
+  Each solve gets the full `solver_options` (a `TimeLimit` bounds each one);
+  `solver_stats` sums the groups' objectives and bounds.
+- **No zero-lock warning for idle generators.** The economic dispatch states
+  its generator bounds (between 0 and the available output) instead of
+  relying on the inferred bounds, so a generator with no output in a period
+  (PV at night) no longer logs the "inferred bounds [0, 0]" warning.
 - **IPOPT starts from a simulation.** `CasADiSolver` optimizations first solve
   the network as a simulation at its setpoints and start IPOPT there
   (`start="simulation"`, the new default); `start="flat"` and

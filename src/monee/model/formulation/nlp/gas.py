@@ -102,7 +102,7 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         area = hydraulicsmodel.calc_pipe_area(branch.diameter_m)
 
         gas_density_kg_per_m3 = ogfmodel.reference_gas_density(grid)
-        f_max_local = hydraulicsmodel.calc_local_max_mass_flow(
+        f_max_local = smoothmodel.local_max_mass_flow(
             grid, branch, gas_density_kg_per_m3, getattr(grid, "v_max_mps", 20.0)
         )
 
@@ -148,10 +148,14 @@ class SmoothWeymouthBranchFormulation(BranchFormulation):
         if not kwargs.get("simulation", False):
             # Operational flow limits - dropped in simulation mode (their slacks
             # would break a square IMODE=1 solve; limits are checked post-hoc).
-            eqs += [
-                signed <= f_max_local * branch.on_off,
-                -signed <= f_max_local * branch.on_off,
-            ]
+            eqs += smoothmodel.flow_limit_eqs(
+                signed,
+                branch.on_off,
+                f_max_local,
+                branch.diameter_m,
+                gas_density_kg_per_m3,
+                getattr(grid, "v_max_mps", 20.0),
+            )
         eqs += [
             smoothmodel.weymouth_pressure(
                 psq_pu_i=psq_from,

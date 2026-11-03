@@ -1,20 +1,24 @@
 import math
+import numbers
 
 from monee.model.phys.core.hydraulics import calc_pipe_area
 
 
-def pipe_insulation_ua(branch):
+def pipe_insulation_ua(branch, log10_impl=None):
     r"""Cylindrical-conduction insulation conductance :math:`UA = 2\pi\lambda L / \ln(r_{out}/r_{in})`
     [W/K] of a buried/insulated pipe, with :math:`r_{in} = D/2` and
-    :math:`r_{out} = D/2 + \text{insulation\_thickness}`."""
+    :math:`r_{out} = D/2 + \text{insulation\_thickness}`. A decision ``diameter_m``
+    (a solver symbol) needs the backend's ``log10_impl``."""
     pipe_outside_r = branch.diameter_m / 2 + branch.insulation_thickness_m
     pipe_inside_r = branch.diameter_m / 2
+    ratio = pipe_outside_r / pipe_inside_r
+    log_ratio = (
+        math.log(ratio)
+        if isinstance(branch.diameter_m, numbers.Real)
+        else log10_impl(ratio) * math.log(10)
+    )
     return (
-        2
-        * math.pi
-        * branch.lambda_insulation_w_per_m_k
-        * branch.length_m
-        / math.log(pipe_outside_r / pipe_inside_r)
+        2 * math.pi * branch.lambda_insulation_w_per_m_k * branch.length_m / log_ratio
     )
 
 

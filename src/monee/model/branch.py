@@ -115,11 +115,15 @@ class PowerLine(PowerBranch):
         br_x_pu = self.x_ohm_per_m * self.length_m / base_r / self.parallel
         return (br_r_pu, br_x_pu)
 
-    def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
+    def calc_b_pu(self, grid: PowerGrid, from_node_model):
+        """Charging susceptance at each end, per unit."""
         base_r = from_node_model.base_kv**2 / grid.sn_mva
         b_s_per_m = 2 * np.pi * grid.f_hz * self.c_nf_per_m * 1e-9
         b_total_s = b_s_per_m * self.length_m * self.parallel
-        self.b_fr_pu = self.b_to_pu = b_total_s * base_r / 2
+        return b_total_s * base_r / 2
+
+    def equations(self, grid: PowerGrid, from_node_model, to_node_model, **kwargs):
+        self.b_fr_pu = self.b_to_pu = self.calc_b_pu(grid, from_node_model)
         return super().equations(grid, from_node_model, to_node_model, **kwargs)
 
 

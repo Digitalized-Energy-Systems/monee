@@ -49,6 +49,18 @@ _SUPPLY_ONLY = (None, 0.0)
 _CARRIERS = frozenset({"power", "gas", "heat"})
 _ENABLE_GAS = "pass gas_cost_default to dispatch it"
 _ENABLE_HEAT = "pass heat_cost_default to dispatch it"
+# A generator dispatches between 0 and its available output; an output of 0
+# (PV at night) locks it there by design, not by a forgotten bound.
+_AVAILABLE_P_MW = [
+    (
+        "p_mw",
+        AttributeParameter(
+            min=lambda _attr, val: min(val, 0),
+            max=lambda _attr, val: max(val, 0),
+            val=lambda _attr, val: val,
+        ),
+    )
+]
 
 _CP_CARRIERS = (
     (
@@ -354,7 +366,7 @@ def _add_power(
     bounds_vm,
     max_loading,
 ):
-    problem.controllable_generators(["p_mw"], optional=optional)
+    problem.controllable_generators(_AVAILABLE_P_MW, optional=optional)
     include_ext_grid = ext_grid_cost_default is not None
     if include_ext_grid:
         problem.controllable_ext()

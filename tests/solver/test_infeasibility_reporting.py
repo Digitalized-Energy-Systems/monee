@@ -52,6 +52,21 @@ def test_parse_con_name():
     assert _parse_con_name("something_else") is None
 
 
+def test_parse_names_inside_a_multi_period_block():
+    assert _parse_con_name("period_1.branch_3_4_0_t1_eq_13") == {
+        "cat": "branch",
+        "id": (3, 4, 0),
+        "t": 1,
+        "i": 13,
+    }
+    assert _parse_var_name("period_2.child_3_t2__p_mw") == {
+        "cat": "child",
+        "id": 3,
+        "t": 2,
+        "attr": "p_mw",
+    }
+
+
 def test_parse_var_name_branch_tuple_id():
     assert _parse_var_name("branch_3_4_0__mass_flow_kgs") == {
         "cat": "branch",

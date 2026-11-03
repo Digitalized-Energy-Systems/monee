@@ -29,10 +29,10 @@ class Bus(NodeModel):
         self.q_mvar = Intermediate()
 
     def calc_signed_power_values(
-        self, from_branch_models, to_branch_models, child_models, sn_mva=1.0
+        self, from_branch_models, to_branch_models, child_models, sn_mva=1.0, grid=None
     ):
         terms = [
-            self._branch_power_terms(m, side, sn_mva)
+            self._branch_power_terms(m, side, sn_mva, grid)
             for side, models in (("from", from_branch_models), ("to", to_branch_models))
             for m in models
         ]
@@ -45,7 +45,7 @@ class Bus(NodeModel):
         ]
         return (signed_active_power, signed_reactive_power)
 
-    def _branch_power_terms(self, branch, side, sn_mva):
+    def _branch_power_terms(self, branch, side, sn_mva, grid=None):
         """``(P, Q)`` a branch injects at this bus, its terminal flows times
         ``on_off``. A switched-off branch-flow line (``_off_flow_is_shunt``)
         carries only its shunt, so a decision ``on_off`` enters as ``flow -
@@ -64,6 +64,10 @@ class Bus(NodeModel):
         )
         w = self.vm_pu_squared * (sn_mva / (tap * tap))
         g, b = getattr(branch, f"g_{end}_pu", 0.0), getattr(branch, f"b_{end}_pu", 0.0)
+        if isinstance(grid, PowerGrid) and hasattr(branch, "calc_b_pu"):
+            # A line sets b_*_pu in its equations(), which run after the node
+            # balances; its two buses share one base_kv.
+            b = branch.calc_b_pu(grid, self)
         return p - g * w * (1 - on_off), q + b * w * (1 - on_off)
 
     def p_mw_equation(self, child_models):
@@ -98,7 +102,7 @@ class Bus(NodeModel):
     ):
         sn = grid.sn_mva if isinstance(grid, PowerGrid) else 1.0
         signed_ap, signed_rp = self.calc_signed_power_values(
-            from_branch_models, to_branch_models, child_models, sn
+            from_branch_models, to_branch_models, child_models, sn, grid
         )
         self.va_degree = PostProcess(lambda v: 180 / math.pi * v.va_radians)
         return [

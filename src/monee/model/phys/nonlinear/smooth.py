@@ -13,8 +13,10 @@ a single odd cubic spline :math:`\psi(m)` for the PWL model.
 """
 
 import math
+import numbers
 
 import monee.model.phys.core.hydraulics as hyd
+from monee.model.core import PostProcess
 
 from .gf import R_specific as _R_SPECIFIC_DEFAULT
 from .gf import abs_psq_diff_pu, calc_c_squared
@@ -42,6 +44,36 @@ def scaled_smoothing_eps(eps, flow_scale, fraction=SMOOTHING_EPS_FLOW_FRACTION):
     if not flow_scale or flow_scale <= 0:
         return eps
     return min(eps, fraction * flow_scale)
+
+
+def local_max_mass_flow(grid, branch, density, v_max):
+    r""":func:`hyd.calc_local_max_mass_flow`, or ``grid.max_mass_flow_kgs`` alone for a
+    decision ``diameter_m``, whose velocity cap :func:`flow_limit_eqs` adds as rows."""
+    if not isinstance(branch.diameter_m, numbers.Real):
+        return grid.max_mass_flow_kgs
+    return hyd.calc_local_max_mass_flow(grid, branch, density, v_max)
+
+
+def flow_limit_eqs(signed, on_off, f_max_local, diameter_m, density, v_max):
+    r""":math:`|m| \le f_{max} \cdot \text{on\_off}`, plus the velocity cap
+    :math:`\pi/4 \cdot D^2 \cdot \rho \cdot v_{max}` as rows of its own for a decision
+    ``diameter_m``, which :func:`hyd.calc_local_max_mass_flow` cannot fold into ``f_max``."""
+    caps = [f_max_local]
+    if not isinstance(diameter_m, numbers.Real):
+        caps.append(hyd.calc_max_mass_flow(diameter_m, density, v_max))
+    return [
+        row for cap in caps for row in (signed <= cap * on_off, -signed <= cap * on_off)
+    ]
+
+
+def rough_friction(diameter_m, roughness_m, log_impl):
+    r""":func:`hyd.friction_at_high_re`, written with ``log_impl`` for a decision
+    ``diameter_m`` (a solver symbol at equation time)."""
+    if isinstance(diameter_m, numbers.Real):
+        return hyd.friction_at_high_re(diameter_m, roughness_m)
+    if roughness_m <= 0:
+        return 0.0
+    return 0.25 / log_impl(roughness_m / diameter_m / 3.7) ** 2
 
 
 def weymouth_pressure(
@@ -144,7 +176,9 @@ def smooth_friction_blend(
     return (1.0 - w) * f_lam + w * f_turb
 
 
-def hybrid_drop_term(signed, mag, diameter_m, roughness_m, dynamic_visc_pas, area):
+def hybrid_drop_term(
+    signed, mag, diameter_m, roughness_m, dynamic_visc_pas, area, log_impl=None
+):
     r"""Laminar + fully-rough drop term: the QCQP-friendly "in-between" friction.
 
     Mirrors pandapipes' default ``nikuradse`` (:math:`f = 64/Re + \lambda_{rough}`)
@@ -165,7 +199,7 @@ def hybrid_drop_term(signed, mag, diameter_m, roughness_m, dynamic_visc_pas, are
     formulations as well as the smooth NLP.
     """
     k_lam = 64.0 * dynamic_visc_pas * area / diameter_m
-    lambda_rough = hyd.friction_at_high_re(diameter_m, roughness_m)
+    lambda_rough = rough_friction(diameter_m, roughness_m, log_impl)
     return k_lam * signed + lambda_rough * signed * mag
 
 
@@ -197,21 +231,46 @@ def drop_term_and_eqs(
     the quadratic turbulent term (QCQP, no closure); ``pwl`` :math:`\to` an odd
     cubic spline :math:`\psi(\text{signed})`.
     """
+    decision_diameter = not isinstance(model.diameter_m, numbers.Real)
     if friction_model == "pwl":
+        if decision_diameter:
+            raise ValueError(
+                "friction_model='pwl' tabulates the pressure drop for a fixed "
+                "diameter_m; a decision diameter needs 'constant', 'hybrid' or "
+                "'nonlinear'."
+            )
         xs, ys = signed_psi_breakpoints(
             model.diameter_m, model.roughness_m, dynamic_visc_pas, area, m_max
         )
         kwargs["pwl_impl"].piecewise_eq(y=model.psi_pwl, x=signed, xs=xs, ys=ys)
         return model.psi_pwl, []
 
+    if decision_diameter and friction_model in ("constant", "hybrid"):
+        # model.friction was fixed from the initial diameter when the
+        # formulation was attached, before the problem promoted it.
+        model.friction = PostProcess(
+            lambda v: hyd.friction_at_high_re(v.diameter_m, v.roughness_m)
+        )
+
     if friction_model == "hybrid":
         return hybrid_drop_term(
-            signed, mag, model.diameter_m, model.roughness_m, dynamic_visc_pas, area
+            signed,
+            mag,
+            model.diameter_m,
+            model.roughness_m,
+            dynamic_visc_pas,
+            area,
+            kwargs.get("log_impl"),
         ), []
 
-    drop_term = model.friction * signed * mag
     if friction_model == "constant":
-        return drop_term, []
+        friction = (
+            rough_friction(model.diameter_m, model.roughness_m, kwargs["log_impl"])
+            if decision_diameter
+            else model.friction
+        )
+        return friction * signed * mag, []
+    drop_term = model.friction * signed * mag
     reynolds_eq = hyd.reynolds_equation(
         model.reynolds_scaled, mag, model.diameter_m, dynamic_visc_pas, area
     )

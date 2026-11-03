@@ -763,18 +763,32 @@ class OptimizationProblem:
     ):
         matched = False
         for component in network.all_components():
-            if not (
-                component_condition(component.model, component.grid)
-                and component.independent
-            ):
+            if not component_condition(component.model, component.grid):
+                continue
+            # A compound's subcomponents (e.g. the control node whose
+            # regulation controllable_cps promotes) are bounded only on the
+            # attributes this problem promoted; their other Vars are the
+            # compound's internals.
+            names = (
+                attributes
+                if component.independent
+                else [a for a in attributes if a in self._promoted(component.model)]
+            )
+            if not names:
                 continue
             matched = True
             if self._debug:
                 logger.info("From the model %s", component.model)
-                logger.info("The attributes %s are bounded", attributes)
-            for attribute in attributes:
+                logger.info("The attributes %s are bounded", names)
+            for attribute in names:
                 _bound_attribute(component.model, attribute, min_value, max_value)
         return matched
+
+    def _promoted(self, model) -> set[str]:
+        return {
+            a[0] if isinstance(a, tuple) else a
+            for a in self._controllable_to_attr.get(model, ())
+        }
 
     def _unmatched_bounds_message(
         self, index, matched, attributes, optional, looked_for

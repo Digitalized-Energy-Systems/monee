@@ -14,20 +14,21 @@ import pyomo.environ as pyo
 _log = logging.getLogger(__name__)
 _MIS_FAILED_MSG = "MIS computation failed: %s"
 
-# Pyomo var name: {cat}_{id}__{attr} or {cat}_{id}_t{period}__{attr}.
+# Pyomo var name: {cat}_{id}__{attr} or {cat}_{id}_t{period}__{attr}, the
+# latter inside a multi-period model's period_{t} block.
 _VAR_NAME_RE = re.compile(
-    r"^(?P<cat>[a-z]+)_(?P<id>\d+)(?:_t(?P<t>\d+))?__(?P<attr>\w+)$"
+    r"^(?:period_\d+\.)?(?P<cat>[a-z]+)_(?P<id>\d+)(?:_t(?P<t>\d+))?__(?P<attr>\w+)$"
 )
 # Branch ids are (from, to, key) tuples, sanitized to three segments.
 _BRANCH_VAR_NAME_RE = re.compile(
-    r"^branch_(?P<f>\d+)_(?P<to>\d+)_(?P<k>\d+)(?:_t(?P<t>\d+))?__(?P<attr>\w+)$"
+    r"^(?:period_\d+\.)?branch_(?P<f>\d+)_(?P<to>\d+)_(?P<k>\d+)(?:_t(?P<t>\d+))?__(?P<attr>\w+)$"
 )
 # Constraint names from the solver's _add_equations: {prefix}[_t{period}]_eq_{i}.
 _CON_NAME_RE = re.compile(
-    r"^(?P<cat>node|child|compound)_(?P<id>\d+)(?:_t(?P<t>\d+))?_eq_(?P<i>\d+)$"
+    r"^(?:period_\d+\.)?(?P<cat>node|child|compound)_(?P<id>\d+)(?:_t(?P<t>\d+))?_eq_(?P<i>\d+)$"
 )
 _BRANCH_CON_NAME_RE = re.compile(
-    r"^branch_(?P<f>\d+)_(?P<to>\d+)_(?P<k>\d+)(?:_t(?P<t>\d+))?_eq_(?P<i>\d+)$"
+    r"^(?:period_\d+\.)?branch_(?P<f>\d+)_(?P<to>\d+)_(?P<k>\d+)(?:_t(?P<t>\d+))?_eq_(?P<i>\d+)$"
 )
 
 

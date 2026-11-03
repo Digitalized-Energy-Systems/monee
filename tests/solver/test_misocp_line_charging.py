@@ -135,3 +135,42 @@ def test_loading_limit_caps_the_terminal_current_like_ac(formulation):
     branch_flow = _charged_line_dispatch(solver="gurobi", formulation=formulation)
 
     assert branch_flow == pytest.approx(ac, abs=1e-6)
+
+
+def _ext_grid_q_with_open_tie(tie, formulation):
+    from monee.problem.core import AttributeParameter
+
+    net = mm.Network(el_model=mm.create_power_grid("power", sn_mva=10.0))
+    b0, b1 = mx.create_bus(net, base_kv=20.0), mx.create_bus(net, base_kv=20.0)
+    mx.create_ext_power_grid(net, b0, vm_pu=1.0, cost=10)
+    line = {"length_m": 2000, "r_ohm_per_m": 1.61e-4, "x_ohm_per_m": 1.17e-4}
+    mx.create_line(net, b0, b1, max_i_ka=0.5, **line)
+    if tie:
+        mx.create_line(net, b0, b1, c_nf_per_m=1.5, max_i_ka=0.5, backup=True, **line)
+    mx.create_power_load(net, b1, p_mw=3.0, q_mvar=1.0)
+    problem = create_economic_dispatch_problem(ext_grid_cost_default=10)
+    off = AttributeParameter(
+        min=lambda a, v: 0, max=lambda a, v: 0, val=lambda a, v: 0, integer=True
+    )
+    problem.controllable(
+        component_condition=lambda c: getattr(c.model, "backup", False),
+        attributes=[("on_off", off)],
+        optional=True,
+    )
+    result = monee.run_energy_flow_optimization(
+        net, problem, solver="gurobi", formulation=formulation
+    )
+    assert result.success
+    return result.get(mm.ExtPowerGrid)["q_mvar"].iloc[0]
+
+
+@requires_gurobi
+@pytest.mark.parametrize("formulation", ["el_misocp", "el_nonconvex_miqcqp"])
+def test_a_switched_off_line_injects_no_charging(formulation):
+    """The bus balance is built before the line derives its charging from the
+    bus voltage base, so a line opened by a decision kept injecting it."""
+    without_tie = _ext_grid_q_with_open_tie(False, formulation)
+
+    assert _ext_grid_q_with_open_tie(True, formulation) == pytest.approx(
+        without_tie, abs=1e-4
+    )

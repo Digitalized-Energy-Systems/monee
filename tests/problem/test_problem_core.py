@@ -214,6 +214,79 @@ def test_bounds_on_a_non_var_attribute_warns(caplog):
     assert any("base_kv" in record.message for record in caplog.records)
 
 
+def _p2h_network():
+    net = mx.create_multi_energy_network()
+    bus = mx.create_bus(net)
+    mx.create_ext_power_grid(net, bus)
+    cold, hot = mx.create_water_junction(net), mx.create_water_junction(net)
+    mx.create_p2h(net, bus, cold, hot, heat_energy_mw=0.2, diameter_m=0.1, efficiency=3)
+    network = net.copy()
+    attach_formulations(network, None)
+    return network
+
+
+def _subcomponent_models(network, model_type):
+    return [
+        c.model
+        for c in network.all_components()
+        if isinstance(c.model, model_type) and not c.independent
+    ]
+
+
+def test_bounds_reach_the_regulation_controllable_cps_promotes():
+    network = _p2h_network()
+    problem = OptimizationProblem()
+    problem.controllable_cps(REGULATION_ATTR)
+    problem.bounds(
+        (0.0, 0.1),
+        lambda m, _g: isinstance(m, mm.PowerToHeatControlNode),
+        ["regulation"],
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        problem._apply(network)
+
+    (node,) = _subcomponent_models(network, mm.PowerToHeatControlNode)
+    assert (node.regulation.min, node.regulation.max) == (0.0, 0.1)
+
+
+def test_bounds_leave_a_compounds_internal_vars_alone():
+    network = _p2h_network()
+    (sub_he,) = _subcomponent_models(network, mm.HeatExchanger)
+    before = (sub_he.q_mw.min, sub_he.q_mw.max)
+    problem = OptimizationProblem()
+    problem.bounds(
+        (0.0, 0.0),
+        lambda m, _g: isinstance(m, mm.HeatExchanger),
+        ["q_mw"],
+        optional=True,
+    )
+    problem._apply(network)
+
+    assert (sub_he.q_mw.min, sub_he.q_mw.max) == before
+
+
+def test_economic_dispatch_locks_an_idle_generator_without_warning(caplog, monkeypatch):
+    monkeypatch.setattr("monee.problem.core._ZERO_LOCK_WARNED", set())
+    net = mx.create_multi_energy_network()
+    bus = mx.create_bus(net)
+    mx.create_ext_power_grid(net, bus)
+    idle = mx.create_power_generator(net, bus, p_mw=0.0, q_mvar=0.0)
+    running = mx.create_power_generator(net, bus, p_mw=0.3, q_mvar=0.0)
+    network = net.copy()
+    attach_formulations(network, None)
+    available = network.child_by_id(running).model.p_mw
+
+    with caplog.at_level(logging.WARNING, logger="monee.problem.core"):
+        create_economic_dispatch_problem()._apply(network)
+
+    assert not [r for r in caplog.records if "inferred bounds" in r.message]
+    p_idle = network.child_by_id(idle).model.p_mw
+    p_running = network.child_by_id(running).model.p_mw
+    assert (p_idle.min, p_idle.max) == (0, 0)
+    assert (p_running.min, p_running.max) == (min(available, 0), max(available, 0))
+
+
 def test_misocp_bus_keeps_the_grid_voltage_floor():
     net = _small_power_net()
     net.apply_formulation(EL_MISOCP_FORMULATION)

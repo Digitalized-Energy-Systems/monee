@@ -45,7 +45,7 @@ def _flow_and_pressure_eqs(
     Returns ``(eqs, signed, mag)`` for the caller to append temperature physics.
     """
     sqrt_impl = kwargs["sqrt_impl"]
-    f_max_local = hydraulicsmodel.calc_local_max_mass_flow(
+    f_max_local = smoothmodel.local_max_mass_flow(
         grid, branch, grid.fluid_density_kg_per_m3, grid.v_max_mps
     )
     signed = branch.mass_flow_kgs
@@ -65,10 +65,14 @@ def _flow_and_pressure_eqs(
     if not kwargs.get("simulation", False) or not isinstance(
         branch.on_off, numbers.Real
     ):
-        eqs += [
-            signed <= f_max_local * branch.on_off,
-            -signed <= f_max_local * branch.on_off,
-        ]
+        eqs += smoothmodel.flow_limit_eqs(
+            signed,
+            branch.on_off,
+            f_max_local,
+            branch.diameter_m,
+            grid.fluid_density_kg_per_m3,
+            grid.v_max_mps,
+        )
 
     loss_coefficient = getattr(branch, "loss_coefficient", None)
     if loss_coefficient is not None:
@@ -128,8 +132,10 @@ def _temperature_transport_eqs(branch, from_node_model, to_node_model):
     ]
 
 
-def _ua_per_cp(branch):
-    return owfmodel.pipe_insulation_ua(branch) / ohfmodel.SPECIFIC_HEAT_CAP_WATER
+def _ua_per_cp(branch, log_impl):
+    return (
+        owfmodel.pipe_insulation_ua(branch, log_impl) / ohfmodel.SPECIFIC_HEAT_CAP_WATER
+    )
 
 
 class SmoothDarcyWeisbachBranchFormulation(BranchFormulation):
@@ -181,7 +187,7 @@ class SmoothDarcyWeisbachBranchFormulation(BranchFormulation):
         eqs, signed, mag = _flow_and_pressure_eqs(
             self, branch, grid, from_node_model, to_node_model, **kwargs
         )
-        UA_C = _ua_per_cp(branch)
+        UA_C = _ua_per_cp(branch, kwargs["log_impl"])
         if self.heat_loss == "exact":
             # smooth_abs keeps mag >= eps > 0, so the quotient stays finite
             eqs.append(branch.alpha == kwargs["exp_impl"](-UA_C / mag))

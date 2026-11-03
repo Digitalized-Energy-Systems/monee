@@ -419,11 +419,13 @@ class MultiPeriodResult:
 @dataclass
 class _TwoPassBackend:
     """Backend-specific callbacks of :func:`_assemble_two_pass`:
-    ``inject(net_t, ignored_t, t)``, ``process_branches(net_t, ignored_t) ->
-    ctx`` (may collect objective expressions), ``sink_objective(ctx)`` (called
-    between the OXF components and the inter-period equations),
-    ``add_equations(eqs)``, ``add_terminal(var, target)`` and the optional
-    ``begin_period(t)``, invoked before each period's equation pass."""
+    ``inject(net_t, ignored_t, t)``, ``process_branches(m_t, net_t, ignored_t)
+    -> ctx`` (may collect objective expressions), ``sink_objective(ctx)``
+    (called between the OXF components and the inter-period equations),
+    ``add_equations(eqs)``, ``add_terminal(var, target)``, the optional
+    ``begin_period(t)``, invoked before each period's equation pass, and the
+    optional ``period_model(t)``, the container of period t's own equations
+    (default: the model itself; inter-period equations always go there)."""
 
     inject: Callable
     process_branches: Callable
@@ -431,6 +433,7 @@ class _TwoPassBackend:
     add_equations: Callable
     add_terminal: Callable
     begin_period: Callable | None = None
+    period_model: Callable | None = None
 
 
 def _prepare_periods(
@@ -527,18 +530,19 @@ def _assemble_two_pass(
             dt_h=dt_h_list[t],
             initial_state=initial_state,
         )
+        m_t = m if backend.period_model is None else backend.period_model(t)
 
         single.init_branches(net_t.branches)
-        single.process_equations_nodes_childs(m, net_t, net_t.nodes, ignored_t)
-        branch_ctx = backend.process_branches(net_t, ignored_t)
-        single.process_equations_compounds(m, net_t, net_t.compounds, ignored_t)
+        single.process_equations_nodes_childs(m_t, net_t, net_t.nodes, ignored_t)
+        branch_ctx = backend.process_branches(m_t, net_t, ignored_t)
+        single.process_equations_compounds(m_t, net_t, net_t.compounds, ignored_t)
 
         if optimization_problem is not None:
             single.process_oxf_components(
-                m, net_t, optimization_problem, period_index=t
+                m_t, net_t, optimization_problem, period_index=t
             )
         else:
-            single.process_internal_oxf_components(m, net_t)
+            single.process_internal_oxf_components(m_t, net_t)
 
         backend.sink_objective(branch_ctx)
 
@@ -630,10 +634,10 @@ class GekkoMultiPeriodSolver:
                 ignored_t,
             )
 
-        def _process_branches(net_t, ignored_t):
+        def _process_branches(m_t, net_t, ignored_t):
             objs_exprs: list = []
             _single.process_equations_branches(
-                m, net_t, net_t.branches, ignored_t, objs_exprs
+                m_t, net_t, net_t.branches, ignored_t, objs_exprs
             )
             return objs_exprs
 
@@ -712,6 +716,58 @@ class GekkoMultiPeriodSolver:
 # Pyomo multi-period solver
 
 
+def _period_groups(pm, blocks) -> tuple[list[set[int]], list[tuple]]:
+    """The groups of periods that the model-level constraints (inter-period
+    and extension equations, terminal pins) link, and each such constraint
+    with the periods it reads. A constraint on a variable outside the period
+    blocks links all periods."""
+    import pyomo.environ as pyo
+    from pyomo.core.expr import identify_variables
+
+    owner = {id(block): t for t, block in enumerate(blocks)}
+    root = list(range(len(blocks)))
+
+    def find(t):
+        while root[t] != t:
+            root[t] = root[root[t]]
+            t = root[t]
+        return t
+
+    links = []
+    for con in pm.component_data_objects(
+        pyo.Constraint, active=True, descend_into=False
+    ):
+        reads = {
+            owner.get(id(var.parent_block()))
+            for var in identify_variables(con.body, include_fixed=False)
+        }
+        if None in reads:
+            return [set(range(len(blocks)))], []
+        for t in reads:
+            root[find(t)] = find(min(reads))
+        links.append((con, reads))
+    groups: dict = {}
+    for t in range(len(blocks)):
+        groups.setdefault(find(t), set()).add(t)
+    return list(groups.values()), links
+
+
+def _select_periods(blocks, links, periods) -> None:
+    for t, block in enumerate(blocks):
+        (block.activate if t in periods else block.deactivate)()
+    for con, reads in links:
+        (con.activate if reads <= periods else con.deactivate)()
+
+
+def _period_objective(blocks, periods):
+    terms = [
+        e
+        for t in sorted(periods)
+        for e in blocks[t].user_obj_exprs + blocks[t].aux_obj_exprs
+    ]
+    return sum(terms) if terms else 0
+
+
 class PyomoMultiPeriodSolver:
     """Multi-period optimizer on Pyomo + pluggable MILP/NLP. Same two-pass
     structure as :class:`GekkoMultiPeriodSolver`.
@@ -722,7 +778,15 @@ class PyomoMultiPeriodSolver:
     :class:`~monee.solver.pyo.PyomoSolver`, no module presets apply. A solve
     stopped at a limit with an incumbent returns it with ``success=True``, its
     ``termination_condition`` (e.g. ``maxTimeLimit``) and ``obj``/``bound``/
-    ``gap`` in ``solver_stats``."""
+    ``gap`` in ``solver_stats``.
+
+    Each period is a Pyomo block; periods that no inter-period equation links
+    (no storage, linepack, design variable, temporal constraint, ...) are
+    solved one group at a time, each solve with the full ``solver_options``.
+    The ``solver_stats`` then sum the groups' objectives and bounds, so a
+    relative gap limit holds for the horizon as well when the groups'
+    objectives share a sign; the termination is that of the first group
+    stopped at a limit, if any."""
 
     def __init__(self, solver_name: str = "scip", solver_options: dict | None = None):
         self._solver_name = solver_name
@@ -761,17 +825,26 @@ class PyomoMultiPeriodSolver:
         pm = pyo.ConcreteModel()
         pm.cons = pyo.ConstraintList()
         pm._monee_network = network
-        # Split user vs aux objectives so a future lex extension can separate
-        # them; multi-period currently solves the single-phase sum.
-        pm.user_obj_exprs: list = []
-        pm.aux_obj_exprs: list = []
+        blocks: list = []
+
+        def _period_block(t):
+            while len(blocks) <= t:
+                block = pyo.Block(concrete=True)
+                pm.add_component(f"period_{len(blocks)}", block)
+                block.cons = pyo.ConstraintList()
+                # Split user vs aux objectives so a future lex extension can
+                # separate them; multi-period currently solves their sum.
+                block.user_obj_exprs = []
+                block.aux_obj_exprs = []
+                blocks.append(block)
+            return blocks[t]
 
         _single = PyomoSolver()
 
         def _inject(net_t, ignored_t, t):
             inject_vars(
                 lambda model, comp, cat, _t=t: PyomoSolver.inject_pyomo_vars_attr(
-                    pm,
+                    _period_block(_t),
                     model,
                     prefix=f"{cat}_{comp.id}_t{_t}",
                 ),
@@ -799,39 +872,64 @@ class PyomoMultiPeriodSolver:
             formulation,
             _TwoPassBackend(
                 inject=_inject,
-                process_branches=lambda net_t, ignored_t: (
+                process_branches=lambda m_t, net_t, ignored_t: (
                     _single.process_equations_branches(
-                        pm, net_t, net_t.branches, ignored_t
+                        m_t, net_t, net_t.branches, ignored_t
                     )
                 ),
                 sink_objective=lambda _ctx: None,
                 add_equations=lambda eqs: _single._add_equations(pm, eqs),
                 add_terminal=lambda var, target: pm.cons.add(var == target),
                 begin_period=_begin_period,
+                period_model=_period_block,
             ),
         )
 
-        all_exprs = pm.user_obj_exprs + pm.aux_obj_exprs
-        obj_expr = sum(all_exprs) if all_exprs else 0
-        pm.obj = pyo.Objective(expr=obj_expr, sense=pyo.minimize)
+        groups, links = _period_groups(pm, blocks)
+        pm.obj = pyo.Objective(expr=0, sense=pyo.minimize)
 
-        _log.info("Solving multi-period problem (T=%d) ...", steps)
+        _log.info(
+            "Solving multi-period problem (T=%d, %d independent period group(s)) ...",
+            steps,
+            len(groups),
+        )
         # Same resolution as the single-period backend: falls back to the
         # pyscipopt bridge when only the SCIP Python bindings are installed.
         solver = PyomoSolver._make_solver(self._solver_name)
         for key, value in {**self._solver_options, **(solver_options or {})}.items():
             if value is not None:
                 solver.options[key] = value
-        solve_result = _solve_and_load(solver, pm)
 
-        status = solve_result.solver.status
-        tc = solve_result.solver.termination_condition
-        _failed = status not in (
-            SolverStatus.ok,
-            SolverStatus.warning,
-            SolverStatus.aborted,
-        ) or not _has_witness(solve_result)
-        stats = _solver_stats(solve_result, pm, not _failed)
+        # A global solver's branch-and-bound over independent periods grows
+        # like the product of their trees, so each group is solved on its own.
+        solved = []
+        for periods in groups:
+            _select_periods(blocks, links, periods)
+            pm.obj.set_value(_period_objective(blocks, periods))
+            solve_result = _solve_and_load(solver, pm)
+            status = solve_result.solver.status
+            tc = solve_result.solver.termination_condition
+            _failed = status not in (
+                SolverStatus.ok,
+                SolverStatus.warning,
+                SolverStatus.aborted,
+            ) or not _has_witness(solve_result)
+            solved.append((status, tc, _solver_stats(solve_result, pm, not _failed)))
+            if _failed:
+                break
+        else:
+            status, tc = next(
+                ((s, c) for s, c, _ in solved if s != SolverStatus.ok), (status, tc)
+            )
+            _select_periods(blocks, links, set(range(steps)))
+            pm.obj.set_value(_period_objective(blocks, range(steps)))
+        obj = sum(st["obj"] for *_, st in solved)
+        bound = sum(st["bound"] for *_, st in solved)
+        stats = {
+            "obj": obj,
+            "bound": bound,
+            "gap": abs(obj - bound) / max(abs(obj), 1e-10),
+        }
         if not _failed and status == SolverStatus.aborted:
             _log.warning(
                 "Multi-period Pyomo/%s solve stopped at a limit (termination=%s); "
@@ -890,9 +988,10 @@ class PyomoMultiPeriodSolver:
             restore_exact_heat_pressures(net_t)
             apply_post_process_all(net_t.nodes, net_t.branches, net_t.compounds, net_t)
 
+        user_exprs = [e for block in blocks for e in block.user_obj_exprs]
         user_objective = None
-        if pm.user_obj_exprs:
-            user_objective = pyo.value(sum(pm.user_obj_exprs), exception=False)
+        if user_exprs:
+            user_objective = pyo.value(sum(user_exprs), exception=False)
 
         return MultiPeriodResult(
             net_copies,

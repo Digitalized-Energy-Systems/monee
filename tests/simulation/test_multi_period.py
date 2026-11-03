@@ -1167,6 +1167,72 @@ def test_pyomo_multi_period_backend_solves():
     _assert_soc_recursion(result, bat_id, 3)
 
 
+@pytest.mark.skipif(
+    not solver_available("gurobi"),
+    reason="no Pyomo MIQCP solver (gurobi) available",
+)
+@pytest.mark.parametrize(
+    ("linked", "solves"), [(False, [[0], [1], [2]]), (True, [[0, 1, 2]])]
+)
+def test_pyomo_multi_period_solves_unlinked_periods_apart(monkeypatch, linked, solves):
+    import pyomo.environ as pyo
+
+    import monee.solver.pyo as pyo_mod
+    from monee.model.formulation import EL_MISOCP_FORMULATION
+    from monee.problem.core import Objectives
+    from monee.simulation.multi_period import PyomoMultiPeriodSolver
+
+    if linked:
+        net, _b0, _b1, load_id, _bat_id = _storage_net()
+        prob = _storage_problem()
+    else:
+        net, _b0, _b1, load_id = _simple_power_net()
+        prob = OptimizationProblem()
+    net.apply_formulation(EL_MISOCP_FORMULATION)
+    ext_id = _child_id_by_type(net, ExtPowerGrid)
+    td = TimeseriesData()
+    td.add_child_series(load_id, "p_mw", [0.2, 0.5, 0.8])
+    td.add_objective_data(ext_id, "price", [10.0, 30.0, 20.0])
+    obj = Objectives()
+    obj.select(lambda m: isinstance(m, ExtPowerGrid)).calculate(
+        lambda models: sum(m.price * -m.p_mw for m in models)
+    )
+    prob.objectives = obj
+
+    solved = []
+    solve_and_load = pyo_mod._solve_and_load
+
+    def _record(solver, pm, **kwargs):
+        solved.append(
+            [
+                int(block.local_name.removeprefix("period_"))
+                for block in pm.component_objects(
+                    pyo.Block, active=True, descend_into=False
+                )
+            ]
+        )
+        return solve_and_load(solver, pm, **kwargs)
+
+    monkeypatch.setattr(pyo_mod, "_solve_and_load", _record)
+    result = run_multi_period(
+        net,
+        td,
+        steps=3,
+        dt_h=1.0,
+        optimization_problem=prob,
+        solver=PyomoMultiPeriodSolver(solver_name="gurobi"),
+    )
+
+    assert result.success
+    assert solved == solves
+    ext_p = result.get_result_for(ExtPowerGrid, "p_mw")[ext_id]
+    cost = sum(price * -p for price, p in zip([10.0, 30.0, 20.0], ext_p))
+    assert result.user_objective == pytest.approx(cost, rel=1e-6)
+    assert result.solver_stats["obj"] == pytest.approx(result.objective, rel=1e-6)
+    if not linked:
+        assert list(-ext_p) == pytest.approx([0.2, 0.5, 0.8], rel=0.02)
+
+
 # --------------------------------------------------------------------------- #
 # Objective-level when_period (distinct from the constraint-level filter)
 # --------------------------------------------------------------------------- #

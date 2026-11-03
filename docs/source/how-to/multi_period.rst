@@ -487,13 +487,15 @@ balances take a candidate's flows without the ``on_off`` factor (a line
 removes only its charging when off), which keeps them linear in the flows.
 
 A joint solve has to prove the chosen design better than every other by the
-optimality gap. With designs whose costs differ by little, that is harder
-than solving each design on its own: on an 8-period district instance with
-12 designs (3 pipe sizes, 2 cables on each of 2 routes), one fixed design
-solves to optimality in about 30 s, while the joint MIQCQP still has a gap of
-42 EUR against a 2.4 EUR margin after 900 s (Gurobi, one thread).
-Enumerating the designs as separate solves is the robust choice there; the
-joint solve confirms them.
+optimality gap, and its design variables link all periods into one branch and
+bound. A fixed design leaves the periods independent, and the Pyomo back-end
+then solves them one at a time (see *Solver selection* below). On a district
+instance with 4 representative hours and 8 designs (4 pipe sizes, 2 cables),
+one fixed design solves in about 10 s, while the joint MIQCQP still has a gap
+of 0.3 to 0.6 % after 300 s (Gurobi, one thread). Enumerating the designs as
+separate solves is the robust choice; the joint solve confirms them. Build a
+fixed design into the network instead of passing a group with one candidate:
+that group's design tie still links the periods.
 
 ----
 
@@ -550,6 +552,15 @@ incumbent returns it instead of raising: ``success`` is ``True``,
 ``PyomoMultiPeriodSolver("gurobi", {"TimeLimit": 900})`` keeps the options on
 the solver instance. A limit stop without an incumbent raises a
 ``RuntimeError`` that names the termination.
+
+Periods that no inter-period equation links (no storage, linepack, design
+variable or temporal constraint) are independent problems, and the Pyomo
+back-end solves each group of linked periods on its own. One model would cost
+far more: a global solver's branch and bound over independent periods grows
+like the product of their search trees. Each of these solves gets the full
+``solver_options``, so a ``TimeLimit`` bounds each one; ``solver_stats`` sums
+their objectives and bounds, and ``termination_condition`` reports the first
+limit stop.
 
 ----
 

@@ -1,8 +1,9 @@
 """Regressions of the optimization API found while building a pipe/cable
 sizing study: heat-duty semantics, switchable water branches on quadratic
 solvers, list-returning constraints, decision ratings in loading limits,
-add_to_controllable, multi-period post-processing, the velocity report of a
-decision diameter, and shared design decisions across periods."""
+add_to_controllable, multi-period post-processing, the velocity report and the
+smooth-NLP physics of a decision diameter, and shared design decisions across
+periods."""
 
 from types import SimpleNamespace
 
@@ -13,8 +14,12 @@ import monee.express as mx
 import monee.model as mm
 import monee.problem as mp
 from monee import run_energy_flow_optimization
+from monee.model.formulation import make_gas_nlp_formulation, make_heat_nlp_formulation
 from monee.model.formulation.common import ensure_velocity_report
-from monee.model.phys.core.hydraulics import calc_pipe_area
+from monee.model.phys.core.hydraulics import (
+    calc_min_diameter_for_mass_flow,
+    calc_pipe_area,
+)
 from monee.problem.core import REGULATION_ATTR
 from monee.problem.utils import line_loading_limit
 from monee.simulation import run_multi_period
@@ -658,6 +663,96 @@ def test_velocity_uses_the_solved_diameter():
 
     expected = -10.0 / (grid.fluid_density_kg_per_m3 * calc_pipe_area(0.2))
     assert pipe.velocity_mps.value == pytest.approx(expected)
+
+
+# --- decision diameter in the smooth NLP ---------------------------------------
+
+
+def _feeder(carrier, diameter_m):
+    """One pipe from a slack to a fixed sink."""
+    if carrier == "heat":
+        net = mm.Network(mm.create_water_grid("water"))
+        slack, sink, pipe = mm.ExtHydrGrid(pressure_pu=1.0, t_k=356), 5.0, mm.WaterPipe
+    else:
+        net = mm.Network(mm.create_gas_grid("gas"))
+        slack, sink, pipe = mm.ExtHydrGrid(pressure_pu=1.0), 0.2, mm.GasPipe
+    n0 = net.node(mm.Junction(), child_ids=[net.child(slack)])
+    n1 = net.node(mm.Junction(), child_ids=[net.child(mm.Sink(mass_flow_kgs=sink))])
+    pid = net.branch(pipe(diameter_m=diameter_m, length_m=500), n0, n1)
+    net.branch_by_id(pid).grid.v_max_mps = 2.0
+    return net, pid
+
+
+def _smallest_diameter(pid):
+    problem = mp.OptimizationProblem()
+    problem.controllable_design(
+        [
+            (
+                "diameter_m",
+                mp.AttributeParameter(
+                    min=lambda a, v: 0.01, max=lambda a, v: 0.3, val=lambda a, v: 0.15
+                ),
+            )
+        ],
+        lambda _m, c: isinstance(c, mm.Branch) and c.id == pid,
+    )
+    objectives = mp.Objectives()
+    objectives.select(lambda _m, c: isinstance(c, mm.Branch) and c.id == pid).calculate(
+        lambda ms: sum(100 * m.diameter_m for m in ms)
+    )
+    problem.objectives = objectives
+    return problem
+
+
+@pytest.mark.parametrize(
+    "carrier, friction",
+    [
+        ("heat", "constant"),
+        ("heat", "hybrid"),
+        ("heat", "nonlinear"),
+        ("gas", "constant"),
+    ],
+)
+def test_decision_diameter_solves_like_the_fixed_one(carrier, friction):
+    make = make_heat_nlp_formulation if carrier == "heat" else make_gas_nlp_formulation
+    frame = "WaterPipe" if carrier == "heat" else "GasPipe"
+    net, pid = _feeder(carrier, 0.15)
+
+    sized = run_energy_flow_optimization(
+        net, _smallest_diameter(pid), formulation=make(friction)
+    )
+    diameter = float(sized.dataframes[frame]["diameter_m"].iloc[0])
+    fixed = run_energy_flow_optimization(
+        _feeder(carrier, diameter)[0],
+        mp.OptimizationProblem(),
+        formulation=make(friction),
+    )
+
+    assert sized.success and fixed.success
+    if carrier == "heat":
+        grid = net.branch_by_id(pid).grid
+        assert diameter == pytest.approx(
+            calc_min_diameter_for_mass_flow(5.0, grid.fluid_density_kg_per_m3, 2.0),
+            rel=1e-4,
+        )
+    for table, column in (
+        (frame, "friction"),
+        (frame, "t_out_pu"),
+        ("Junction", "pressure_pa"),
+    ):
+        if column in sized.dataframes[table]:
+            assert sized.dataframes[table][column].to_numpy() == pytest.approx(
+                fixed.dataframes[table][column].to_numpy(), rel=1e-5
+            )
+
+
+def test_pwl_friction_rejects_a_decision_diameter():
+    net, pid = _feeder("heat", 0.15)
+
+    with pytest.raises(ValueError, match="fixed diameter_m"):
+        run_energy_flow_optimization(
+            net, _smallest_diameter(pid), formulation=make_heat_nlp_formulation("pwl")
+        )
 
 
 # --- design decisions shared across periods -----------------------------------
