@@ -81,12 +81,16 @@ class Bus(NodeModel):
         )
         self.va_degree = PostProcess(lambda v: 180 / math.pi * v.va_radians)
         sn = grid.sn_mva if isinstance(grid, PowerGrid) else 1.0
-        return [
+        eqs = [
             self.p_mw_equation(child_models),
             self.q_mvar_equation(child_models),
             power_balance_equation(signed_ap, sn),
-            power_balance_equation(signed_rp, sn),
         ]
+        # Active-power-only formulations (the linear DC model) carry no
+        # reactive power and set this flag in their ensure_var().
+        if not getattr(self, "_active_power_only", False):
+            eqs.append(power_balance_equation(signed_rp, sn))
+        return eqs
 
 
 @model

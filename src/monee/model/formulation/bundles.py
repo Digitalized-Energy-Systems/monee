@@ -26,7 +26,8 @@ from monee.model.branch import (
     WaterPipe,
 )
 from monee.model.child import PowerShunt
-from monee.model.grid import GasGrid, WaterGrid
+from monee.model.core import ChildModel
+from monee.model.grid import GasGrid, PowerGrid, WaterGrid
 from monee.model.node import Bus, Junction
 
 from .common import GasNodeFormulation, WaterNodeFormulation
@@ -71,6 +72,12 @@ from .quadratic_convex.cq_with_switch import (
     QCElectricityNodeFormulation,
 )
 from .quadratic_convex.qc_mixed_int import (MIQCBranchFormulation, MIQCNodeFormulation)
+from .linear.DC import (
+    DcLinearBranchFormulation,
+    DcLinearChildFormulation,
+    DcLinearNodeFormulation,
+    DcLinearShuntFormulation,
+)
 
 def combine(*network_formulations: NetworkFormulation) -> NetworkFormulation:
     """Merge per-sector :class:`NetworkFormulation` objects into one apply.
@@ -132,6 +139,22 @@ EL_MIQC_FORMULATION = NetworkFormulation(
     },
     node_type_to_formulations={Bus: MIQCNodeFormulation()},
 )
+
+# Lossless linear DC power flow (MATPOWER manual v8.1, Sect. 3.7): active
+# power and bus angles only, |V| = 1 p.u., no reactive power. An LP.
+EL_DC_FORMULATION = NetworkFormulation(
+    branch_type_to_formulations={
+        GenericPowerBranch: DcLinearBranchFormulation()
+    },
+    node_type_to_formulations={Bus: DcLinearNodeFormulation()},
+    # Order matters: on multiple matches the last registration wins, so the
+    # shunt-specific formulation must come after the generic power-grid child.
+    child_type_to_formulations={
+        (ChildModel, PowerGrid): DcLinearChildFormulation(),
+        PowerShunt: DcLinearShuntFormulation(),
+    },
+)
+
 # ---------------------------------------------------------------------------
 # Gas
 # ---------------------------------------------------------------------------

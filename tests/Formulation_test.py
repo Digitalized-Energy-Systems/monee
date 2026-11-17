@@ -22,6 +22,7 @@ from monee.model.formulation import (
     EL_NLP_FORMULATION,
     EL_QC_FORMULATION,
     EL_MIQC_FORMULATION,
+    EL_DC_FORMULATION,
 
 )
 from monee.model.grid import DEFAULT_GAS_HHV_MJ_PER_KG
@@ -1011,6 +1012,70 @@ def compare_currents(
     plt.show()
 
     return result
+def va_diff_and_analysis_dc(ac_result, dc_result, line_buses, tol_degree=0.05):
+    """AC vs DC angle differences across each line.
+
+    DC has no lifted variables (va_diff, ws, wc, ...) like QC: the angle
+    difference comes straight from the bus angles. Also checks the DC branch
+    equation p_f = sn / x * (theta_f - theta_t) (MATPOWER manual Eq. (3.23))
+    by fitting the per-line susceptance p_f / delta and reporting it.
+    """
+    ac_bus = solver_result_to_tables(ac_result)["Bus"].set_index("id")
+    dc_tables = solver_result_to_tables(dc_result)
+    dc_bus = dc_tables["Bus"].set_index("id")
+    dc_line = dc_tables["PowerLine"].set_index("id")
+    pairs = list(line_buses.values() if isinstance(line_buses, dict) else line_buses)
+
+    def delta(bus):
+        return pd.Series(
+            [bus.loc[i, "va_radians"] - bus.loc[j, "va_radians"] for i, j in pairs],
+            index=dc_line.index,
+        )
+
+    va_diff_ac = np.rad2deg(delta(ac_bus))
+    va_diff_dc = np.rad2deg(delta(dc_bus))
+    d = va_diff_dc - va_diff_ac
+
+    print("\nVoltage angle difference comparison AC vs DC [degree]")
+    print(
+        f"{'AC vs DC va_diff':20s} max diff = {d.abs().max():.6g}°, "
+        f"mean diff = {d.abs().mean():.6g}°, "
+        f"{'MISMATCH' if (d.abs() > tol_degree).any() else 'OK'}"
+    )
+
+    table = pd.DataFrame(
+        {
+            "va_diff_ac_deg": va_diff_ac,
+            "va_diff_dc_deg": va_diff_dc,
+            "diff_deg": d,
+            "p_from_dc_mw": dc_line["p_from_mw"],
+            "p_from_dc / delta [MW/rad]": dc_line["p_from_mw"] / np.deg2rad(va_diff_dc),
+        }
+    )
+    print(table.to_string())
+    return table
+
+
+def compare_currents_dc(ac_result, dc_result, rel_tol=0.05):
+    """AC vs DC branch currents. DC reports i = |P| / (sqrt(3) V_base),
+    i.e. |V| = 1 p.u. and Q = 0, so it ignores the reactive current part."""
+    ac = solver_result_to_tables(ac_result)["PowerLine"].set_index("id")
+    dc = solver_result_to_tables(dc_result)["PowerLine"].set_index("id")
+    result = pd.DataFrame(
+        {"AC i_from_ka": ac["i_from_ka"], "DC i_from_ka": dc["i_from_ka"]}
+    )
+    d = result["DC i_from_ka"] - result["AC i_from_ka"]
+    result["diff_ka"] = d
+    tol = rel_tol * result["AC i_from_ka"].abs().mean()
+    print("\nCurrent comparison AC vs DC [kA]")
+    print(
+        f"max diff = {d.abs().max():.6g} kA, mean diff = {d.abs().mean():.6g} kA, "
+        f"{'MISMATCH' if (d.abs() > tol).any() else 'OK'} (tol {rel_tol:.0%} of mean AC)"
+    )
+    print(result.to_string())
+    return result
+
+
 def solver_result_to_tables(result):
     tables = {}
 
@@ -1115,23 +1180,35 @@ def compare_extracted_tables_more_than_percent( MISCOP_result,QC_result,tol=0.05
 #PP_net = pp_create_66bus_high_meshed()
 #PP_results = PP_test_power_network(PP_net, AC = True, show_results = False)
 print("--------------Monee AC--------------------------")
-monee_net_NLP_AC, line_buses_AC = monee_create_grid(bus_number =11, meshed= 2, n_feeders = 4, show_plot=True)
+monee_net_NLP_AC, line_buses_AC = monee_create_grid(bus_number =11, meshed=0, n_feeders = 4, show_plot=True)
 monee_net_NLP_AC.apply_formulation(EL_NLP_FORMULATION)
 monee_result_NLP_AC = monee_test_power_network(monee_net_NLP_AC, show_results = False)
-#For result table comparison
 
+monee_net_DC, line_buses_DC = monee_create_grid(bus_number =11, meshed= 0, n_feeders = 4, show_plot=True)
+monee_net_DC.apply_formulation(EL_DC_FORMULATION)
+monee_result_DC = monee_test_power_network(monee_net_DC, show_results = False)
+
+#For result table comparison
+'''
 print("--------------Monee QC--------------------------")
 monee_net_QC, line_buses_QC = monee_create_grid(bus_number = 11, meshed= 2, n_feeders = 4, show_plot=True)
 monee_net_QC.apply_formulation(EL_QC_FORMULATION)
 monee_result_QC = monee_test_power_network(monee_net_QC, show_results = False)
-#For result table comparison
-
 result_plots(monee_result_NLP_AC, monee_result_QC, "Bus")
 result_plots(monee_result_NLP_AC, monee_result_QC, "PowerLine")
 result_plots(monee_result_NLP_AC, monee_result_QC, "PowerLoad")
 result_plots(monee_result_NLP_AC, monee_result_QC, "PowerGenerator")
 va_diff_and_analysis(monee_result_NLP_AC, monee_result_QC, line_buses_AC)
 current_comparison = compare_currents(monee_result_NLP_AC, monee_result_QC, sn_mva=1.0, base_kv=1.0)
+'''
+#For result table comparison
+
+result_plots(monee_result_NLP_AC, monee_result_DC, "Bus")
+result_plots(monee_result_NLP_AC, monee_result_DC, "PowerLine")
+result_plots(monee_result_NLP_AC, monee_result_DC, "PowerLoad")
+result_plots(monee_result_NLP_AC, monee_result_DC, "PowerGenerator")
+va_diff_and_analysis_dc(monee_result_NLP_AC, monee_result_DC, line_buses_AC)
+current_comparison = compare_currents_dc(monee_result_NLP_AC, monee_result_DC)
 #column_comparison = compare_extracted_tables_more_than_percent(monee_result_AC, monee_result_QC)
 #print(column_comparison)
 
